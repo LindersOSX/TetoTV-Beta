@@ -73,7 +73,7 @@ jobs:
       - name: Resolve Dart package metadata
         run: flutter pub get
 
-      - uses: android-actions/setup-android@v3
+      - uses: android-actions/setup-android@v4
 
       - name: Install APK inspection tools
         shell: bash

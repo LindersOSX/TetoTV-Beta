@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<lint>
+    <!-- Android TV launcher banners are specified as one 320x180 xhdpi asset. -->
+    <issue id="IconDensities" severity="ignore" />
+</lint>

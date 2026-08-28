@@ -1,0 +1,3 @@
+HSPLdev/animetv/anime_tv/MainActivity;->**(**)**
+HSPLio/flutter/embedding/android/FlutterActivity;->**(**)**
+HSPLio/flutter/embedding/engine/FlutterEngine;->**(**)**

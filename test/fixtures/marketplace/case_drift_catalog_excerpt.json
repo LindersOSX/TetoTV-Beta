@@ -1,0 +1,22 @@
+[
+  {
+    "id": "fixtureCase",
+    "name": "Example Case Provider",
+    "description": "Synthetic provider used to test casing-only identity drift.",
+    "manifestURI": "https://catalog.example/case/manifest.json",
+    "author": "Fixture Author",
+    "type": "onlinestream-provider",
+    "language": "javascript",
+    "lang": "es"
+  },
+  {
+    "id": "fixture-case-control",
+    "name": "Example Case Control",
+    "description": "Synthetic control provider with a stable identity.",
+    "manifestURI": "https://catalog.example/case-control/manifest.json",
+    "author": "Fixture Author",
+    "type": "onlinestream-provider",
+    "language": "javascript",
+    "lang": "en"
+  }
+]

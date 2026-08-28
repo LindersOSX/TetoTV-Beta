@@ -1,0 +1,18 @@
+{
+  "private": true,
+  "scripts": {
+    "build": "npm run notices && npm run build:runtime && npm run build:compiler",
+    "notices": "node generate-notices.mjs",
+    "notices:check": "node generate-notices.mjs --check",
+    "build:runtime": "esbuild dom-entry.js --bundle --minify --legal-comments=none --platform=browser --target=es2020 --format=iife --outfile=../../assets/addon_runtime/linkedom.js",
+    "build:compiler": "esbuild compiler-entry.js --bundle --minify --legal-comments=none --platform=browser --target=es2020 --format=iife --outfile=../../assets/typescript/sucrase.js"
+  },
+  "dependencies": {
+    "crypto-js": "4.2.0",
+    "linkedom": "0.18.12",
+    "sucrase": "3.35.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.11"
+  }
+}

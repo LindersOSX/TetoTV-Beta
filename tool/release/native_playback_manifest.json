@@ -1,0 +1,168 @@
+{
+  "schemaVersion": 1,
+  "scope": "TetoTV Android ARM universal release",
+  "binaryArtifacts": [
+    {
+      "id": "libmpv-default-arm64-v8a",
+      "provider": "media-kit/libmpv-android-video-build",
+      "version": "v1.1.7",
+      "fileName": "default-arm64-v8a.jar",
+      "url": "https://github.com/media-kit/libmpv-android-video-build/releases/download/v1.1.7/default-arm64-v8a.jar",
+      "size": 5729978,
+      "sha256": "4363dfa5d3d415b91c1f16f6fb90c3fe59a77dfd3f9b824d2b24b492d6b09df9",
+      "upstreamMd5": "83df25b61193af8fa815e373143ac9af"
+    },
+    {
+      "id": "libmpv-default-armeabi-v7a",
+      "provider": "media-kit/libmpv-android-video-build",
+      "version": "v1.1.7",
+      "fileName": "default-armeabi-v7a.jar",
+      "url": "https://github.com/media-kit/libmpv-android-video-build/releases/download/v1.1.7/default-armeabi-v7a.jar",
+      "size": 5499353,
+      "sha256": "8ead114fc5a43348d89dc0eb8f41823e549b15115c29f73ee26973f973620995",
+      "upstreamMd5": "22e21526fefc0a2b8f17adbec9f57590"
+    },
+    {
+      "id": "libtorrent4j-core",
+      "provider": "Maven Central",
+      "version": "2.1.0-38",
+      "fileName": "libtorrent4j-2.1.0-38.jar",
+      "url": "https://repo1.maven.org/maven2/org/libtorrent4j/libtorrent4j/2.1.0-38/libtorrent4j-2.1.0-38.jar",
+      "size": 833350,
+      "sha256": "bf8ebde8d9fc20af129f26f28c01d8cfd91d87b831b44dabbe0705d9dc910243"
+    },
+    {
+      "id": "libtorrent4j-android-arm",
+      "provider": "Maven Central",
+      "version": "2.1.0-38",
+      "fileName": "libtorrent4j-android-arm-2.1.0-38.jar",
+      "url": "https://repo1.maven.org/maven2/org/libtorrent4j/libtorrent4j-android-arm/2.1.0-38/libtorrent4j-android-arm-2.1.0-38.jar",
+      "size": 5429948,
+      "sha256": "46b417c525c35ebd45b225b4e002ab13629cffc1ec8d8290ece02a686491952b"
+    },
+    {
+      "id": "libtorrent4j-android-arm64",
+      "provider": "Maven Central",
+      "version": "2.1.0-38",
+      "fileName": "libtorrent4j-android-arm64-2.1.0-38.jar",
+      "url": "https://repo1.maven.org/maven2/org/libtorrent4j/libtorrent4j-android-arm64/2.1.0-38/libtorrent4j-android-arm64-2.1.0-38.jar",
+      "size": 6249092,
+      "sha256": "d9ea7d3d82e7484e07260d063a73c8f9fe5778cc06299717eba49858a44045ef"
+    }
+  ],
+  "sourceRoots": [
+    {
+      "id": "libmpv-android-video-build",
+      "repository": "https://github.com/media-kit/libmpv-android-video-build.git",
+      "revision": "fe8c3ac1a91c09aa6fb1deccbc833f1bafa54768",
+      "declaredTag": "v1.1.7",
+      "purpose": "build scripts, patches, default-flavor configuration and bundling"
+    },
+    {
+      "id": "media-kit-android-helper",
+      "repository": "https://github.com/media-kit/media-kit-android-helper.git",
+      "revision": "42054e5d479f39ccbb0ae604862e2bcaf59b74c2",
+      "purpose": "Android JNI helper included in each libmpv JAR"
+    },
+    {
+      "id": "mpv",
+      "repository": "https://github.com/mpv-player/mpv.git",
+      "revision": "78d43740f52db817d98bcf24fb30a76ab6fa13ff",
+      "purpose": "libmpv source selected by the v1.1.7 build scripts"
+    },
+    {
+      "id": "libtorrent4j",
+      "repository": "https://github.com/aldenml/libtorrent4j.git",
+      "revision": "09ffd391d4ef12e668cc032bffcbab47d9e2d5cb",
+      "declaredTag": "v2.1.0-38",
+      "purpose": "Java/JNI wrapper, Android build scripts, and native dependency configuration"
+    },
+    {
+      "id": "libtorrent-rasterbar",
+      "repository": "https://github.com/arvidn/libtorrent.git",
+      "revision": "a01469c8d1f88dd83bed458ffccffab2727b9d2a",
+      "purpose": "torrent engine source pinned by libtorrent4j"
+    },
+    {
+      "id": "libdatachannel",
+      "repository": "https://github.com/paullouisageneau/libdatachannel.git",
+      "revision": "6ab310b5887eab78cf0c0767a8ced2ebff8c7479",
+      "purpose": "MPL-covered WebTorrent transport statically linked into libtorrent4j.so"
+    },
+    {
+      "id": "libjuice",
+      "repository": "https://github.com/paullouisageneau/libjuice.git",
+      "revision": "2de35247f0b15fa385406f3e2020d0e3d4d5cfcc",
+      "purpose": "MPL-covered ICE dependency pinned by libdatachannel"
+    },
+    {
+      "id": "usrsctp",
+      "repository": "https://github.com/sctplab/usrsctp.git",
+      "revision": "ebb18adac6501bad4501b1f6dccb67a1c85cc299",
+      "purpose": "SCTP dependency pinned by libdatachannel"
+    },
+    {
+      "id": "libsrtp",
+      "repository": "https://github.com/cisco/libsrtp.git",
+      "revision": "a566a9cfcd619e8327784aa7cff4a1276dc1e895",
+      "purpose": "SRTP dependency pinned by libdatachannel"
+    },
+    {
+      "id": "plog",
+      "repository": "https://github.com/SergiusTheBest/plog.git",
+      "revision": "e21baecd4753f14da64ede979c5a19302618b752",
+      "purpose": "logging dependency pinned by libdatachannel"
+    }
+  ],
+  "sourceArchives": [
+    {
+      "id": "boost-1.89.0",
+      "fileName": "boost_1_89_0.tar.gz",
+      "url": "https://archives.boost.io/release/1.89.0/source/boost_1_89_0.tar.gz",
+      "size": 190099283,
+      "sha256": "9de758db755e8330a01d995b0a24d09798048400ac25c03fc5ea9be364b13c93"
+    },
+    {
+      "id": "openssl-3.5.2",
+      "fileName": "openssl-3.5.2.tar.gz",
+      "url": "https://github.com/openssl/openssl/releases/download/openssl-3.5.2/openssl-3.5.2.tar.gz",
+      "size": 53180161,
+      "sha256": "c53a47e5e441c930c3928cf7bf6fb00e5d129b630e0aa873b08258656e7345ec"
+    }
+  ],
+  "libmpvDeclaredDependencyRefs": [
+    {"name": "Mbed TLS", "ref": "v3.4.0", "repository": "https://github.com/Mbed-TLS/mbedtls.git"},
+    {"name": "dav1d", "ref": "1.2.0", "repository": "https://code.videolan.org/videolan/dav1d.git"},
+    {"name": "libxml2", "ref": "v2.10.3", "repository": "https://gitlab.gnome.org/GNOME/libxml2.git"},
+    {"name": "FreeType", "ref": "VER-2-13-0", "repository": "https://gitlab.freedesktop.org/freetype/freetype.git"},
+    {"name": "FriBidi", "ref": "v1.0.12", "repository": "https://github.com/fribidi/fribidi.git"},
+    {"name": "HarfBuzz", "ref": "7.2.0", "repository": "https://github.com/harfbuzz/harfbuzz.git"},
+    {"name": "libass", "ref": "0.17.1", "repository": "https://github.com/libass/libass.git"},
+    {"name": "FFmpeg", "ref": "n6.0", "repository": "https://github.com/FFmpeg/FFmpeg.git"}
+  ],
+  "licenseAssets": [
+    {"path": "assets/legal/native/GPL-2.0.txt", "sha256": "7028be43b0ebd3635042ad122ddf310dcd079d2929102f4c957223a093c26695"},
+    {"path": "assets/legal/native/GPL-3.0.txt", "sha256": "7fe14716ed31cc71fc3bf9af293c368d464a853a70ea86e9995388f6b9e929e5"},
+    {"path": "assets/legal/native/LGPL-2.1.txt", "sha256": "734e901d33d7e5000b7e5260ccebef8591754615f2fbe7c36390a435a2741598"},
+    {"path": "assets/legal/native/LGPL-3.0.txt", "sha256": "dd983fe376f82d06b33a700497f437fdf3a78fd786eb961aa05b34adc5ca077c"},
+    {"path": "assets/legal/native/LIBMPV_ANDROID_BUILD_DEFAULT_LICENSE.txt", "sha256": "216523bfbc525c22e49988f3640c54fc40114673112893257956f605c953c3ab"},
+    {"path": "assets/legal/native/LIBTORRENT4J_LICENSE.txt", "sha256": "2e9e1fc1ea3cb3fb2431c5250b653c29e2977545fa7e77ae6f741a0611767f04"},
+    {"path": "assets/legal/native/LIBTORRENT_RASTERBAR_LICENSE.txt", "sha256": "2487bd80f7ea66eb558961de45ecd381bfb15e565e9eb3a12aebe44f58a65c20"},
+    {"path": "assets/legal/native/BOOST_LICENSE_1_0.txt", "sha256": "c9bff75738922193e67fa726fa225535870d2aa1059f91452c411736284ad566"},
+    {"path": "assets/legal/native/OPENSSL_LICENSE.txt", "sha256": "7d5450cb2d142651b8afa315b5f238efc805dad827d91ba367d8516bc9d49e7a"},
+    {"path": "assets/legal/native/LIBDATACHANNEL_LICENSE.txt", "sha256": "fab3dd6bdab226f1c08630b1dd917e11fcb4ec5e1e020e2c16f83a0a13863e85"},
+    {"path": "assets/legal/native/LIBJUICE_LICENSE.txt", "sha256": "fab3dd6bdab226f1c08630b1dd917e11fcb4ec5e1e020e2c16f83a0a13863e85"},
+    {"path": "assets/legal/native/USRSCTP_LICENSE.txt", "sha256": "fa53711b25af4b9a9b8dadfea3cb38166ec4b96760c8d62b284055554537d9ef"},
+    {"path": "assets/legal/native/LIBSRTP_LICENSE.txt", "sha256": "8e19d42a1eec9561f3f347253ddf2e385c55f392f025bb0fd41b88dbf38db5ae"},
+    {"path": "assets/legal/native/PLOG_LICENSE.txt", "sha256": "e4d01796524cbc13b1571a1f0914823c6a23b316ba039e7014f47a4eef7fd4c3"},
+    {"path": "assets/legal/native/DIRECT_TORRENT_NATIVE_NOTICE.txt", "sha256": "93f19999d6f3b7492cbbe2584865470fe22e6f52a94e0d993b2d8dceba49daac"},
+    {"path": "assets/legal/native/NATIVE_PLAYBACK_NOTICE.txt"}
+  ],
+  "knownProvenanceLimits": [
+    "The libmpv v1.1.7 build scripts identify several dependencies by mutable Git tag rather than immutable commit and do not record source-archive SHA-256 values.",
+    "The libmpv v1.1.7 download script also clones media_kit main without pinning it, although the release bundling script uses the separately pinned media-kit-android-helper revision.",
+    "The upstream records establish a practical source/rebuild path but do not establish that a fresh rebuild will be bit-for-bit identical to the published JARs.",
+    "The pinned libtorrent4j sources and dependency archives establish a rebuild and source-availability path, but the upstream project does not publish reproducibility evidence tying its Android JNI JARs bit-for-bit to those inputs."
+  ],
+  "releaseReadyWithoutStagedBundle": false
+}

@@ -1,0 +1,89 @@
+name: anime_tv
+description: A TV-first anime tracking and playback client.
+publish_to: 'none'
+# Public and Beta artifacts built from the same source use one monotonically
+# increasing Android versionCode. The project default carries the Beta display
+# version; the Public universal APK overrides the build name to the 1.x line.
+version: 2.0.40+410017
+
+environment:
+  sdk: ^3.12.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+  dio: ^5.11.0
+  flutter_riverpod: ^2.6.1
+  flutter_secure_storage: ^10.3.1
+  go_router: ^17.3.0
+  media_kit: ^1.2.6
+  media_kit_libs_android_video: ^1.3.8
+  media_kit_video: ^2.0.1
+  qr_flutter: ^4.1.0
+  cached_network_image: ^3.4.1
+  flutter_cache_manager: ^3.4.2
+  crypto: ^3.0.6
+  cryptography: ^2.7.0
+  xml: ^6.6.1
+  path: ^1.9.1
+  path_provider: ^2.1.5
+  sqflite: ^2.4.2
+  # Local compatibility and security patch: QuickJS 2026-06-04 is built from
+  # pinned source, while the bridge preserves flutter_js's FFI ABI, bounded
+  # execution, and addon sandbox memory limit.
+  flutter_js:
+    path: third_party/flutter_js
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  integration_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.14.3
+  sqflite_common_ffi: ^2.3.6
+
+flutter_launcher_icons:
+  android: "ic_launcher"
+  image_path: "assets/branding/tetotv_icon.png"
+  adaptive_icon_background: "#030303"
+  adaptive_icon_foreground: "assets/branding/tetotv_icon.png"
+  adaptive_icon_monochrome: "assets/branding/tetotv_icon.png"
+  adaptive_icon_foreground_inset: 18
+  min_sdk_android: 21
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/branding/tetotv_icon.png
+    - assets/fonts/NotoSans-Regular.ttf
+    - assets/fonts/OFL.txt
+    - assets/legal/native/GPL-2.0.txt
+    - assets/legal/native/GPL-3.0.txt
+    - assets/legal/native/LGPL-2.1.txt
+    - assets/legal/native/LGPL-3.0.txt
+    - assets/legal/native/LIBMPV_ANDROID_BUILD_DEFAULT_LICENSE.txt
+    - assets/legal/native/LIBTORRENT4J_LICENSE.txt
+    - assets/legal/native/LIBTORRENT_RASTERBAR_LICENSE.txt
+    - assets/legal/native/BOOST_LICENSE_1_0.txt
+    - assets/legal/native/OPENSSL_LICENSE.txt
+    - assets/legal/native/LIBDATACHANNEL_LICENSE.txt
+    - assets/legal/native/LIBJUICE_LICENSE.txt
+    - assets/legal/native/USRSCTP_LICENSE.txt
+    - assets/legal/native/LIBSRTP_LICENSE.txt
+    - assets/legal/native/PLOG_LICENSE.txt
+    - assets/legal/native/DIRECT_TORRENT_NATIVE_NOTICE.txt
+    - assets/legal/native/NATIVE_PLAYBACK_NOTICE.txt
+    - assets/typescript/sucrase.js
+    - assets/typescript/SUCRASE_LICENSE.txt
+    - assets/addon_runtime/linkedom.js
+    - assets/addon_runtime/LINKEDOM_LICENSE.txt
+    - assets/addon_runtime/CRYPTO_JS_LICENSE.txt
+    - assets/addon_runtime/ANDROID_JS_RUNTIMES_LICENSE.txt
+    - assets/addon_runtime/QUICKJS_LICENSE.txt
+    - assets/addon_runtime/JS_RUNTIME_NOTICES.txt
+    - assets/subtitles/libass_smoke.ass
+    - assets/videos/mpv_smoke.mp4
+    - third_party/discord_social_sdk/License-Notices.txt
+    - docs/PRIVACY.md
+    - docs/THIRD_PARTY_NOTICES.md

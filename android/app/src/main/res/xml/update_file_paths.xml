@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <cache-path
+        name="tetotv_updates"
+        path="updates/" />
+    <files-path
+        name="tetotv_offline_downloads"
+        path="offline_downloads/" />
+</paths>

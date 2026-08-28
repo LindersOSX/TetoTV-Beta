@@ -1,0 +1,23 @@
+[
+  {
+    "id": "fixture-es",
+    "name": "Example Spanish Provider",
+    "description": "Synthetic Spanish provider used to test locale filtering.",
+    "author": "Fixture Author",
+    "manifestURI": "https://catalog.example/locales/es/manifest.json",
+    "type": "onlinestream-provider",
+    "language": "typescript",
+    "lang": "es"
+  },
+  {
+    "id": "fixture-en-secondary",
+    "name": "Example English Provider C",
+    "description": "Synthetic English provider used to test locale sorting.",
+    "author": "Fixture Author",
+    "manifestURI": "https://catalog.example/locales/en/manifest.json",
+    "payloadURI": "https://runtime.example/locales/en/provider.js",
+    "type": "onlinestream-provider",
+    "language": "javascript",
+    "lang": "en"
+  }
+]

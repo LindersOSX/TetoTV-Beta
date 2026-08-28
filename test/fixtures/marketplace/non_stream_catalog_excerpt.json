@@ -1,0 +1,32 @@
+[
+  {
+    "id": "fixture-grid-plugin",
+    "name": "Example Grid Plugin",
+    "description": "Synthetic UI plugin that must not be treated as a stream provider.",
+    "author": "Fixture Author",
+    "manifestURI": "https://catalog.example/plugins/grid/manifest.json",
+    "type": "plugin",
+    "language": "typescript",
+    "lang": "en"
+  },
+  {
+    "id": "fixture-local-catalog",
+    "name": "Example Local Catalog",
+    "description": "Synthetic custom metadata source for parser tests.",
+    "author": "Fixture Author",
+    "manifestURI": "https://catalog.example/custom/local/manifest.json",
+    "type": "custom-source",
+    "language": "typescript",
+    "lang": "en"
+  },
+  {
+    "id": "fixture-catalog-manager",
+    "name": "Example Catalog Manager",
+    "description": "Synthetic management plugin for parser tests.",
+    "author": "Fixture Author",
+    "manifestURI": "https://catalog.example/plugins/manager/manifest.json",
+    "type": "plugin",
+    "language": "typescript",
+    "lang": "en"
+  }
+]

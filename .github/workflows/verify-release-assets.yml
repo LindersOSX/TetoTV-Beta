@@ -1,0 +1,159 @@
+name: Verify release assets
+
+on:
+  release:
+    types: [published, edited]
+
+permissions:
+  contents: read
+
+jobs:
+  verify-assets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          fetch-depth: 0
+
+      - name: Select and validate release channel
+        id: channel
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          case "${GITHUB_REPOSITORY}:${RELEASE_TAG}" in
+            LindersOSX/TetoTV-Beta:v2.*.*)
+              echo "name=Beta" >> "${GITHUB_OUTPUT}"
+              ;;
+            *)
+              echo "Only the Beta channel is enabled for publication."
+              exit 1
+              ;;
+          esac
+          if [[ ! "${RELEASE_TAG}" =~ ^v[12]\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release tag is not canonical semantic version syntax."
+            exit 1
+          fi
+
+      - name: Require release tag at main HEAD
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          tag_commit="$(git rev-parse "${RELEASE_TAG}^{commit}")"
+          main_commit="$(git rev-parse FETCH_HEAD^{commit})"
+          if [[ "${tag_commit}" != "${main_commit}" ]]; then
+            echo "Release tag ${RELEASE_TAG} must resolve to main HEAD."
+            exit 1
+          fi
+
+      - name: Enforce public source boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdk_path="android/app/libs/discord_partner_sdk.aar"
+          if git ls-files --error-unmatch "${sdk_path}" >/dev/null 2>&1; then
+            echo "The proprietary Discord Social SDK AAR must not be tracked in public source."
+            exit 1
+          fi
+          if [[ -e "${sdk_path}" ]]; then
+            echo "The proprietary Discord Social SDK AAR must not exist in a public checkout."
+            exit 1
+          fi
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Resolve Dart package metadata
+        run: flutter pub get
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install APK inspection tools
+        shell: bash
+        run: sdkmanager "cmdline-tools;latest" "build-tools;36.0.0"
+
+      - name: Download and verify complete release payload
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ github.event.release.id }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_TITLE: ${{ github.event.release.name }}
+          CHANNEL: ${{ steps.channel.outputs.name }}
+        run: |
+          set -euo pipefail
+
+          version="${RELEASE_TAG#v}"
+          apk_name="TetoTV-${RELEASE_TAG}-universal.apk"
+          source_name="TetoTV-${RELEASE_TAG}-native-playback-sources.zip"
+          checksums_name="SHA256SUMS"
+          expected_title="TetoTV ${version} Beta - Android TV / Google TV / Fire TV"
+
+          release_json="$(gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}")"
+          if [[ "$(jq -r '.draft' <<<"${release_json}")" != "false" ]]; then
+            echo "Completed releases must not be drafts."
+            exit 1
+          fi
+          if [[ "$(jq -r '.prerelease' <<<"${release_json}")" != "false" ]]; then
+            echo "Releases must be normal GitHub releases so /releases/latest can find them."
+            exit 1
+          fi
+          if [[ "${RELEASE_TITLE}" != "${expected_title}" ]]; then
+            echo "Expected release title '${expected_title}', got '${RELEASE_TITLE}'."
+            exit 1
+          fi
+
+          mapfile -t actual_assets < <(jq -r '.assets[].name' <<<"${release_json}" | sort)
+          mapfile -t expected_assets < <(printf '%s\n' "${apk_name}" "${source_name}" "${checksums_name}" | sort)
+          if [[ "${#actual_assets[@]}" -ne 3 ]] || ! diff -u \
+              <(printf '%s\n' "${expected_assets[@]}") \
+              <(printf '%s\n' "${actual_assets[@]}"); then
+            echo "Release must contain exactly the universal APK, native source ZIP, and SHA256SUMS."
+            exit 1
+          fi
+          if jq -e '.assets[] | select(.size <= 0)' <<<"${release_json}" >/dev/null; then
+            echo "Release contains an empty asset."
+            exit 1
+          fi
+
+          download_dir="${RUNNER_TEMP}/tetotv-release"
+          mkdir -p "${download_dir}"
+          for asset_name in "${apk_name}" "${source_name}" "${checksums_name}"; do
+            gh release download "${RELEASE_TAG}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --pattern "${asset_name}" \
+              --dir "${download_dir}"
+            local_digest="$(sha256sum "${download_dir}/${asset_name}" | awk '{print $1}')"
+            hosted_digest="$(jq -r --arg name "${asset_name}" '.assets[] | select(.name == $name) | .digest // ""' <<<"${release_json}")"
+            if [[ -n "${hosted_digest}" && "sha256:${local_digest}" != "${hosted_digest}" ]]; then
+              echo "GitHub asset digest mismatch for ${asset_name}."
+              exit 1
+            fi
+            local_size="$(stat -c '%s' "${download_dir}/${asset_name}")"
+            hosted_size="$(jq -r --arg name "${asset_name}" '.assets[] | select(.name == $name) | .size' <<<"${release_json}")"
+            if [[ "${local_size}" != "${hosted_size}" ]]; then
+              echo "GitHub asset size mismatch for ${asset_name}."
+              exit 1
+            fi
+          done
+
+          jq -r '.body // ""' <<<"${release_json}" > "${download_dir}/RELEASE_NOTES.md"
+          pwsh -File ./tool/release/verify_release_payloads.ps1 \
+            -Channel "${CHANNEL}" \
+            -ApkPath "${download_dir}/${apk_name}" \
+            -NativeSourcePath "${download_dir}/${source_name}" \
+            -ChecksumsPath "${download_dir}/${checksums_name}" \
+            -ReleaseNotesPath "${download_dir}/RELEASE_NOTES.md"
+
+          latest_tag="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq '.tag_name')"
+          if [[ "${latest_tag}" != "${RELEASE_TAG}" ]]; then
+            echo "${RELEASE_TAG} is not exposed through /releases/latest."
+            exit 1
+          fi

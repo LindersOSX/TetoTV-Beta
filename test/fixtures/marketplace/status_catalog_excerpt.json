@@ -1,0 +1,41 @@
+[
+  {
+    "id": "fixture-broken-en",
+    "name": "Example English Provider A",
+    "version": "1.0.0",
+    "author": "Fixture Author",
+    "description": "Synthetic English provider used to test advisory broken status.",
+    "type": "onlinestream-provider",
+    "language": "typescript",
+    "lang": "en",
+    "manifestURI": "https://catalog.example/status/broken/manifest.json",
+    "payloadURI": "https://runtime.example/status/broken/provider.js",
+    "workingTag": false,
+    "brokenTag": true,
+    "deprecatedTag": false,
+    "lastWorkingVersion": null
+  },
+  {
+    "id": "fixture-working-en",
+    "name": "Example English Provider B",
+    "version": "1.0.1",
+    "author": "Fixture Author",
+    "description": "Synthetic English provider used to test advisory working status.",
+    "type": "onlinestream-provider",
+    "language": "javascript",
+    "lang": "en",
+    "manifestURI": "https://catalog.example/status/working/manifest.json",
+    "payloadURI": "https://runtime.example/status/working/provider.js",
+    "workingTag": true,
+    "brokenTag": false,
+    "deprecatedTag": false,
+    "lastWorkingVersion": "3.10.2"
+  },
+  {
+    "id": "fixture-ui-plugin",
+    "name": "Example UI Plugin",
+    "manifestURI": "https://catalog.example/plugins/ui/manifest.json",
+    "type": "plugin",
+    "language": "javascript"
+  }
+]

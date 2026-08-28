@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+        Launch theme: shown while Flutter engine is initializing.
+        Use a dark, no-title-bar base so the TV splash matches the app palette.
+    -->
+    <style name="LaunchTheme" parent="@android:style/Theme.Black.NoTitleBar">
+        <item name="android:windowBackground">@drawable/launch_background</item>
+        <!-- Full-screen: hide the status bar on TV. -->
+        <item name="android:windowFullscreen">true</item>
+    </style>
+
+    <!--
+        Normal theme: applied once the Flutter engine has drawn its first frame.
+        Keeps the window dark and full-screen throughout the session.
+    -->
+    <style name="NormalTheme" parent="@android:style/Theme.Black.NoTitleBar">
+        <item name="android:windowBackground">?android:colorBackground</item>
+        <item name="android:windowFullscreen">true</item>
+    </style>
+
+</resources>

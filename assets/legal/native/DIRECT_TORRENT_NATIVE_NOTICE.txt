@@ -1,0 +1,40 @@
+TetoTV direct-torrent native component provenance
+==================================================
+
+The Android direct-torrent engine resolves these Maven Central artifacts at
+version 2.1.0-38:
+
+- org.libtorrent4j:libtorrent4j
+- org.libtorrent4j:libtorrent4j-android-arm
+- org.libtorrent4j:libtorrent4j-android-arm64
+
+The libtorrent4j tag v2.1.0-38 resolves to commit
+09ffd391d4ef12e668cc032bffcbab47d9e2d5cb. Its libtorrent-rasterbar
+submodule resolves to a01469c8d1f88dd83bed458ffccffab2727b9d2a.
+
+The native binary also statically incorporates WebTorrent support from
+libdatachannel commit 6ab310b5887eab78cf0c0767a8ced2ebff8c7479 and its
+following pinned dependencies:
+
+- libjuice 2de35247f0b15fa385406f3e2020d0e3d4d5cfcc
+- usrsctp ebb18adac6501bad4501b1f6dccb67a1c85cc299
+- libsrtp a566a9cfcd619e8327784aa7cff4a1276dc1e895
+- plog e21baecd4753f14da64ede979c5a19302618b752
+
+The upstream Android build uses Boost 1.89.0 and OpenSSL 3.5.2. Exact license
+texts for every component named above are bundled beside this notice.
+
+Corresponding source is available from these exact revisions:
+
+https://github.com/aldenml/libtorrent4j/tree/v2.1.0-38
+https://github.com/arvidn/libtorrent/tree/a01469c8d1f88dd83bed458ffccffab2727b9d2a
+https://github.com/paullouisageneau/libdatachannel/tree/6ab310b5887eab78cf0c0767a8ced2ebff8c7479
+https://github.com/paullouisageneau/libjuice/tree/2de35247f0b15fa385406f3e2020d0e3d4d5cfcc
+https://github.com/sctplab/usrsctp/tree/ebb18adac6501bad4501b1f6dccb67a1c85cc299
+https://github.com/cisco/libsrtp/tree/a566a9cfcd619e8327784aa7cff4a1276dc1e895
+https://github.com/SergiusTheBest/plog/tree/e21baecd4753f14da64ede979c5a19302618b752
+https://archives.boost.io/release/1.89.0/source/
+https://github.com/openssl/openssl/tree/openssl-3.5.2
+
+Distributors must retain these notices and keep MPL-covered source available
+as required by the Mozilla Public License 2.0.

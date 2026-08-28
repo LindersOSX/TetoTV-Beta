@@ -1,0 +1,63 @@
+group 'io.abner.flutter_js'
+version '1.0-SNAPSHOT'
+
+buildscript {
+    ext.kotlin_version = '1.7.20'
+    repositories {
+        google()
+        mavenCentral()
+    }
+
+    dependencies {
+        classpath 'com.android.tools.build:gradle:7.3.1'
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+    }
+}
+
+apply plugin: 'com.android.library'
+apply plugin: 'kotlin-android'
+
+android {
+    compileSdkVersion 34
+
+    namespace "io.abner.flutter_js"
+
+    kotlinOptions {
+        jvmTarget = JavaVersion.VERSION_1_8.toString()
+    }
+
+    // Build the pinned QuickJS sources in-tree. Pulling the legacy prebuilt
+    // runtime from JitPack left the app on QuickJS 2021-03-27 and made the
+    // native engine impossible to audit or reproduce from this checkout.
+    externalNativeBuild {
+        cmake {
+            path "CMakeLists.txt"
+            version "3.22.1"
+        }
+    }
+
+
+    sourceSets {
+        main.java.srcDirs += 'src/main/kotlin'
+        main.jniLibs.srcDirs = ['jniLibs']
+    }
+    defaultConfig {
+        minSdkVersion 21
+        ndk {
+            abiFilters "armeabi-v7a", "arm64-v8a", "x86", "x86_64"
+        }
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+    }
+    lintOptions {
+        disable 'InvalidPackage'
+    }
+}
+
+dependencies {
+    implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk7:$kotlin_version"
+
+    // implementation using platform-channel with oasis jsbridge
+    // implementation 'com.github.p7s1digital.oasis-jsbridge-android:oasis-jsbridge-quickjs:0.12.0'
+    // compile group: 'org.nanohttpd', name: 'nanohttpd', version: '2.3.0'
+
+}

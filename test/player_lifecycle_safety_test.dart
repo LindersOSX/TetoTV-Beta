@@ -114,7 +114,7 @@ void main() {
       '_watchPartyRouteHandoff = ref.read',
     );
     expectInOrder(hostBinding, [
-      'seekTo: (position) async',
+      'seekTo: (position) => _trackPlayerMutation',
       '_pendingInheritedResume = null',
       'await _player.seek(position)',
     ]);
@@ -127,6 +127,54 @@ void main() {
       'final target = _queuedSeekTarget!',
       '_pendingInheritedResume = null',
       'await _player.seek(target)',
+    ]);
+  });
+
+  test('watch party player commands join the native release barrier', () {
+    final hostBinding = method(
+      '_watchPartyHandle = _watchPartyPlayback.bindEngine(',
+      '_watchPartyRouteHandoff = ref.read',
+    );
+    expect(hostBinding, contains('play: () => _trackPlayerMutation'));
+    expect(hostBinding, contains('pause: () => _trackPlayerMutation'));
+    expect(hostBinding, contains('seekTo: (position) => _trackPlayerMutation'));
+
+    final handoff = method(
+      'Future<bool> _prepareForEngineHandoff',
+      'void _showAutomaticFailoverNotice',
+    );
+    expectInOrder(handoff, [
+      '_engineHandoffInProgress = true',
+      'await _waitForPlayerMutations()',
+      'await _detachAndroidVideoOutputBeforeRelease()',
+      'await _player.dispose()',
+    ]);
+    expect(
+      RegExp(
+        r'_waitForPlayerMutations\(\)\.timeout\(\s*'
+        r'_playerMutationReleaseTimeout',
+      ).allMatches(source),
+      hasLength(2),
+      reason: 'handoff and unexpected disposal must both have a bounded drain',
+    );
+  });
+
+  test('router detaches watch party before closing its playback port', () {
+    final routerClass = source.substring(
+      source.indexOf('class _TvPlayerScreenRouterState'),
+      source.indexOf('class _MpvTvPlayerScreen'),
+    );
+    final routerDisposeStart = routerClass.indexOf('void dispose()');
+    final routerDispose = routerClass.substring(
+      routerDisposeStart,
+      routerClass.indexOf(
+        'Future<void> _adoptPlaybackStream',
+        routerDisposeStart,
+      ),
+    );
+    expectInOrder(routerDispose, [
+      'await _watchPartyController.detachPlayback(_watchPartyPlayback)',
+      'await _watchPartyPlayback.dispose()',
     ]);
   });
 

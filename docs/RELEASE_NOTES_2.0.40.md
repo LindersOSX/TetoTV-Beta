@@ -10,6 +10,11 @@ This Beta refreshes TetoTV's public-source and release boundaries without changi
 - Added public security and content-reporting policies.
 - Release verification now requires the signed universal APK, the corresponding native playback source bundle, and an exact checksum manifest.
 - The Beta repository starts from a clean public root so the locally supplied proprietary Discord SDK archive is not reachable through public source history or pull-request refs.
+- Watch Party guests no longer remain locked behind a stalled playback command when a host disconnects or crashes. Room polling continues independently, reconnecting guests regain local controls, recovered-host state can be applied, and Watch Party player mutations now join the native-player teardown barrier.
+- The Home featured area now always uses the language-selected text title and omits the synopsis, without requesting title-logo artwork.
+- The player shows a larger seek-target timestamp above the progress bar while scrubbing.
+- Episode-detail actions now share one aligned, responsive action strip for trailer, cast, related-series, and season-download controls.
+- Active offline downloads retain Android's foreground data-transfer lease while TetoTV is in the background, and explicit cancellation releases that lease immediately.
 
 ## Release assets
 

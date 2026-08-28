@@ -245,10 +245,12 @@ void main() {
     'cancel removes partial data and delete removes the database row',
     () async {
       final transfer = _BlockingFirstTransferClient(totalBytes: 20);
+      final keepAlive = _RecordingKeepAlive();
       final controller = DownloadManagerController(
         repository: repository,
         storage: storage,
         transferClient: transfer,
+        keepAlive: keepAlive,
         autoInitialize: false,
       );
       addTearDown(controller.dispose);
@@ -261,6 +263,8 @@ void main() {
       expect(controller.state.job(job.id)?.sourceUri, isNull);
       expect((await repository.job(job.id))?.sourceUri, isNull);
       expect(await storage.partLength(job), 0);
+      expect(keepAlive.active, 0);
+      expect(keepAlive.releases, 1);
       await controller.delete(job.id);
       expect(controller.state.job(job.id), isNull);
       expect(await repository.job(job.id), isNull);

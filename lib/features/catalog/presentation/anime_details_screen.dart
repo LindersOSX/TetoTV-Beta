@@ -1245,44 +1245,119 @@ class _InformationActions extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return FocusTraversalGroup(
-      policy: ReadingOrderTraversalPolicy(),
-      child: Wrap(
-        key: const ValueKey('anime-details-information-actions'),
-        spacing: 10,
-        runSpacing: 8,
-        children: [
+    final actions =
+        <
+          ({
+            Key? key,
+            String label,
+            IconData icon,
+            VoidCallback onPressed,
+            bool primary,
+            double preferredWidth,
+          })
+        >[
           if (onTrailer != null)
-            _InformationButton(
+            (
               key: const ValueKey('anime-details-watch-trailer'),
               label: 'Watch trailer',
-              icon: Icons.play_circle_outline_rounded,
+              icon: Icons.play_arrow_rounded,
               onPressed: onTrailer!,
-              large: large,
+              primary: true,
+              preferredWidth: large ? 154 : 112,
             ),
           if (onCredits != null)
-            _InformationButton(
+            (
+              key: const ValueKey('anime-details-cast-crew'),
               label: 'Cast & crew',
               icon: Icons.groups_rounded,
               onPressed: onCredits!,
-              large: large,
+              primary: false,
+              preferredWidth: large ? 146 : 105,
             ),
           if (onFranchise != null)
-            _InformationButton(
+            (
+              key: const ValueKey('anime-details-related-series'),
               label: 'Related series',
               icon: Icons.account_tree_rounded,
               onPressed: onFranchise!,
-              large: large,
+              primary: false,
+              preferredWidth: large ? 165 : 119,
             ),
           if (onDownloadSeason != null)
-            _InformationButton(
+            (
               key: const ValueKey('anime-details-download-season'),
               label: downloadSeasonLabel,
               icon: Icons.download_for_offline_rounded,
               onPressed: onDownloadSeason!,
-              large: large,
+              primary: false,
+              preferredWidth: large ? 190 : 145,
             ),
-        ],
+        ];
+    final spacing = large ? 12.0 : 8.0;
+    final panelPadding = large ? 8.0 : 6.0;
+    final preferredButtonsWidth = actions.fold<double>(
+      0,
+      (total, action) => total + action.preferredWidth,
+    );
+    final preferredStripWidth =
+        preferredButtonsWidth + (spacing * (actions.length - 1));
+
+    return FocusTraversalGroup(
+      policy: ReadingOrderTraversalPolicy(),
+      child: Container(
+        key: const ValueKey('anime-details-information-actions'),
+        padding: EdgeInsets.all(panelPadding),
+        decoration: BoxDecoration(
+          color: const Color(0xC9111111),
+          borderRadius: BorderRadius.circular(large ? 14 : 12),
+          border: Border.all(color: Colors.white.withValues(alpha: .16)),
+        ),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            // Keep the controls on one visual baseline like the TV reference.
+            // If a compact device cannot show their readable widths at once,
+            // the strip scrolls horizontally as focus (or touch) moves rather
+            // than wrapping or overflowing the screen.
+            final minimumReadableScale = large ? .84 : .90;
+            final minimumStripWidth =
+                preferredStripWidth * minimumReadableScale;
+            final stripWidth = constraints.maxWidth >= preferredStripWidth
+                ? preferredStripWidth
+                : constraints.maxWidth >= minimumStripWidth
+                ? constraints.maxWidth
+                : minimumStripWidth;
+            final widthScale = preferredStripWidth == 0
+                ? 1.0
+                : (stripWidth - (spacing * (actions.length - 1))) /
+                      preferredButtonsWidth;
+
+            return SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: SizedBox(
+                width: stripWidth,
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    for (var index = 0; index < actions.length; index++) ...[
+                      if (index > 0) SizedBox(width: spacing),
+                      SizedBox(
+                        width: actions[index].preferredWidth * widthScale,
+                        child: _InformationButton(
+                          key: actions[index].key,
+                          label: actions[index].label,
+                          icon: actions[index].icon,
+                          onPressed: actions[index].onPressed,
+                          primary: actions[index].primary,
+                          large: large,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            );
+          },
+        ),
       ),
     );
   }
@@ -1295,45 +1370,46 @@ class _InformationButton extends StatelessWidget {
     required this.icon,
     required this.onPressed,
     required this.large,
+    this.primary = false,
   });
 
   final String label;
   final IconData icon;
   final VoidCallback onPressed;
   final bool large;
+  final bool primary;
 
   @override
   Widget build(BuildContext context) {
     return TvFocusable(
       onPressed: onPressed,
-      focusScale: 1.025,
+      focusScale: 1.02,
       borderRadius: BorderRadius.circular(10),
       child: Container(
         height: large ? 58 : 42,
-        padding: EdgeInsets.symmetric(horizontal: large ? 20 : 13),
+        alignment: Alignment.center,
+        padding: EdgeInsets.symmetric(horizontal: large ? 16 : 11),
         decoration: BoxDecoration(
-          color: const Color(0xEE171717),
+          color: primary ? context.appPalette.accent : const Color(0xEE171717),
           border: Border.all(color: Colors.white.withValues(alpha: .15)),
         ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: large ? 23 : 18),
-            SizedBox(width: large ? 10 : 7),
-            Flexible(
-              child: Text(
+        child: FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: large ? 23 : 18),
+              SizedBox(width: large ? 9 : 7),
+              Text(
                 label,
                 maxLines: 1,
-                overflow: TextOverflow.ellipsis,
                 style: TextStyle(
                   fontSize: large ? 16 : 12,
                   fontWeight: FontWeight.w800,
                 ),
               ),
-            ),
-            SizedBox(width: large ? 12 : 7),
-            Icon(Icons.chevron_right_rounded, size: large ? 22 : 17),
-          ],
+            ],
+          ),
         ),
       ),
     );

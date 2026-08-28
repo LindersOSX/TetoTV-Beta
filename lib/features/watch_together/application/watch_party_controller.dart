@@ -89,7 +89,9 @@ class WatchPartyState {
   /// is attached. Browsing the lobby before choosing matching media remains
   /// fully interactive.
   bool get guestPlaybackControlsLocked =>
-      session?.role == WatchPartyRole.guest && attachedMedia != null;
+      connection == WatchPartyConnection.connected &&
+      session?.role == WatchPartyRole.guest &&
+      attachedMedia != null;
 
   WatchPartyState copyWith({
     WatchPartyConnection? connection,
@@ -648,6 +650,11 @@ class WatchPartyController extends StateNotifier<WatchPartyState> {
         return;
       }
       _consecutivePollFailures = (_consecutivePollFailures + 1).clamp(0, 3);
+      _recordDiagnostics('Watch Party poll interrupted', {
+        'event': 'poll_failed',
+        'error_code': error.code,
+        'consecutive_failures': _consecutivePollFailures,
+      });
       state = state.copyWith(
         connection: WatchPartyConnection.reconnecting,
         message: watchPartyFriendlyError(error),
@@ -686,6 +693,10 @@ class WatchPartyController extends StateNotifier<WatchPartyState> {
       _guestReady = false;
       _guestReadySession = null;
       _lastPublishedAt = null;
+      _recordDiagnostics('Watch Party role changed', {
+        'event': 'role_changed',
+        'role': snapshot.role.name,
+      });
     }
     state = state.copyWith(
       connection: WatchPartyConnection.connected,
@@ -722,7 +733,11 @@ class WatchPartyController extends StateNotifier<WatchPartyState> {
           force: true,
         );
       }
-      await _applyGuestSnapshot(snapshot);
+      // Room liveness must never depend on a native player command finishing.
+      // A decoder or Surface transition can leave seek/play/pause pending; the
+      // next poll still needs to observe host recovery and release guest-only
+      // controls. Guest reconciliation owns its own serialized queue.
+      unawaited(_applyGuestSnapshot(snapshot));
     } else if (_lastSample != null &&
         (_resyncPublishPending ||
             roleChanged ||
@@ -1018,7 +1033,7 @@ class WatchPartyController extends StateNotifier<WatchPartyState> {
         }
         issuedCommand = true;
       }
-    } catch (_) {
+    } catch (error) {
       if (_guestCommandContextIsCurrent(
         snapshot: snapshot,
         port: port,
@@ -1030,6 +1045,11 @@ class WatchPartyController extends StateNotifier<WatchPartyState> {
         state = state.copyWith(
           message: 'Watch Party could not resync playback. Retrying shortly.',
         );
+        _recordDiagnostics('Watch Party guest command failed', {
+          'event': 'guest_command_failed',
+          'reason': 'player_error',
+          'revision': snapshot.revision,
+        });
       }
       return;
     }
@@ -1062,6 +1082,7 @@ class WatchPartyController extends StateNotifier<WatchPartyState> {
     final session = state.session;
     final currentSnapshot = state.snapshot;
     return !_disposed &&
+        state.connection == WatchPartyConnection.connected &&
         controllerGeneration == _generation &&
         attachmentGeneration == _playbackAttachmentGeneration &&
         identical(_playbackPort, port) &&

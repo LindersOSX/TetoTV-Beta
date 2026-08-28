@@ -122,6 +122,7 @@ void main() {
   test('cancelling a season also cancels its active transfer', () async {
     final enqueueStarted = Completer<void>();
     final releaseEnqueue = Completer<void>();
+    final keepAlive = _RecordingKeepAlive();
     var cancelCalls = 0;
     final controller = SeasonDownloadController.withActions(
       initializeDownloads: () async {},
@@ -137,18 +138,19 @@ void main() {
       pinCatalog: (_) async {},
       saveEpisodeMetadata: (_) async {},
       sourceResolver: _FakeResolver(),
+      keepAlive: keepAlive,
     );
     addTearDown(controller.dispose);
 
     await controller.start(_plan(episodeCount: 2));
     await enqueueStarted.future;
     controller.cancel();
-    await _waitFor(() => cancelCalls == 1);
-    await Future<void>.delayed(const Duration(milliseconds: 20));
+    await _waitFor(() => cancelCalls == 1 && keepAlive.releases == 1);
 
     expect(controller.state.phase, SeasonDownloadPhase.idle);
     expect(controller.state.queued, 0);
     expect(cancelCalls, 1);
+    expect(keepAlive.active, 0);
   });
 
   test('a slow cancel clear cannot erase the next season plan', () async {

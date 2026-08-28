@@ -201,7 +201,7 @@ void main() {
     );
   });
 
-  testWidgets('featured carousel rotates the title and matching metadata', (
+  testWidgets('featured carousel rotates text titles without descriptions', (
     tester,
   ) async {
     FlutterSecureStorage.setMockInitialValues({
@@ -248,13 +248,15 @@ void main() {
     await tester.pump();
     await tester.pump();
     expect(find.text('First Trending Show'), findsOneWidget);
-    expect(find.text('First description'), findsOneWidget);
+    expect(find.text('First description'), findsNothing);
+    expect(find.byKey(const ValueKey('hero-description-1')), findsNothing);
 
     await tester.pump(const Duration(seconds: 8));
     await tester.pump(const Duration(milliseconds: 500));
     expect(find.text('Second Trending Show'), findsWidgets);
-    expect(find.text('Second description'), findsOneWidget);
+    expect(find.text('Second description'), findsNothing);
     expect(find.text('First description'), findsNothing);
+    expect(find.byKey(const ValueKey('hero-description-2')), findsNothing);
   });
 
   testWidgets('featured carousel uses cover art when a banner is missing', (

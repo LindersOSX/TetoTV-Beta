@@ -14,7 +14,6 @@ import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
 import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
-import 'package:anime_tv/features/catalog/presentation/anime_title_logo_view.dart';
 import 'package:anime_tv/features/settings/application/display_preferences_controller.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:anime_tv/features/settings/application/setup_progress_controller.dart';
@@ -1120,7 +1119,7 @@ class _HeroPanel extends StatelessWidget {
     final copyWidth = compact
         // Compact Home wraps the hero in the screen gutter, then the hero
         // adds its own 15dp copy gutter. Account for both so a portrait phone
-        // never lays out its logo or description beyond the visible card.
+        // never lays out its title beyond the visible card.
         ? screenWidth - 62
         : screenWidth >= 1400
         ? 660.0
@@ -1241,22 +1240,23 @@ class _HeroPanel extends StatelessWidget {
                     duration: const Duration(milliseconds: 260),
                     transitionBuilder: (child, animation) =>
                         FadeTransition(opacity: animation, child: child),
-                    child: AnimeTitleLogoView(
-                      key: ValueKey('hero-title-logo-${anime?.id ?? 0}'),
-                      aniListId: anime?.id ?? 0,
-                      fallbackTitle: displayTitle,
-                      maxWidth: copyWidth,
-                      maxHeight: titleHeight,
-                      maxTextLines: 2,
-                      textStyle: Theme.of(context).textTheme.displaySmall
-                          ?.copyWith(
-                            color: context.appPalette.primaryText,
-                            fontSize: cinematicTv
-                                ? (shortTvHero ? 33 : (dense ? 39 : 46))
-                                : (compact ? 29 : 39),
-                            height: .98,
-                            fontWeight: FontWeight.w900,
-                          ),
+                    child: Align(
+                      key: ValueKey('hero-title-text-${anime?.id ?? 0}'),
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        displayTitle,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.displaySmall
+                            ?.copyWith(
+                              color: context.appPalette.primaryText,
+                              fontSize: cinematicTv
+                                  ? (shortTvHero ? 33 : (dense ? 39 : 46))
+                                  : (compact ? 29 : 39),
+                              height: .98,
+                              fontWeight: FontWeight.w900,
+                            ),
+                      ),
                     ),
                   ),
                 ),
@@ -1266,31 +1266,6 @@ class _HeroPanel extends StatelessWidget {
                   SizedBox(height: shortTvHero ? 6 : 8),
                   _HeroLabelLine(labels: labels),
                 ],
-                SizedBox(height: shortTvHero ? 9 : 13),
-                SizedBox(
-                  width: copyWidth,
-                  child: AnimatedSwitcher(
-                    duration: const Duration(milliseconds: 260),
-                    transitionBuilder: (child, animation) =>
-                        FadeTransition(opacity: animation, child: child),
-                    child: Text(
-                      key: ValueKey('hero-description-${anime?.id ?? 0}'),
-                      anime?.description.isNotEmpty == true
-                          ? anime!.description
-                          : 'An elven mage retraces a legendary journey and '
-                                'discovers what the brief lives of her friends meant.',
-                      maxLines: shortTvHero ? 1 : 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                        color: context.appPalette.primaryText.withValues(
-                          alpha: .78,
-                        ),
-                        fontSize: shortTvHero ? 13 : (compact ? 15 : 16),
-                        height: 1.42,
-                      ),
-                    ),
-                  ),
-                ),
                 const Spacer(),
                 Wrap(
                   spacing: shortTvHero ? 8 : 12,

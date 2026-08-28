@@ -980,12 +980,86 @@ void main() {
       find.byKey(const ValueKey('target-time-player-seek-target-time')),
       findsOneWidget,
     );
-    expect(find.text('Seek 23:59'), findsOneWidget);
+    final seekTextFinder = find.text('Seek 23:59');
+    expect(seekTextFinder, findsOneWidget);
+    final seekText = tester.widget<Text>(seekTextFinder);
+    expect(seekText.style?.fontSize, 18);
+    final seekRect = tester.getRect(
+      find.byKey(const ValueKey('target-time-player-seek-target-time')),
+    );
+    final progressRect = tester.getRect(sliderFinder);
+    expect(seekRect.bottom, lessThan(progressRect.top));
     expect(seeks, isEmpty);
 
     await tester.sendKeyUpEvent(LogicalKeyboardKey.arrowRight);
     await tester.pump();
     expect(seeks, [const Duration(minutes: 23, seconds: 59)]);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('compact seek target stays above progress with scaled text', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(640, 360);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final playFocus = FocusNode();
+    final progressFocus = FocusNode();
+    final seeks = <Duration>[];
+    addTearDown(playFocus.dispose);
+    addTearDown(progressFocus.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: TetoPlayerChrome(
+            engineKey: 'compact-target-time',
+            title: 'Episode',
+            streamLabel: 'Stream',
+            position: const Duration(minutes: 3),
+            duration: const Duration(minutes: 24),
+            isPlaying: true,
+            playFocusNode: playFocus,
+            progressFocusNode: progressFocus,
+            seekBackSeconds: 10,
+            seekForwardSeconds: 30,
+            onSeek: seeks.add,
+            onRewind: () {},
+            onPlayPause: () {},
+            onForward: () {},
+            onAudio: () {},
+            onSubtitles: () {},
+            onPicture: () {},
+            onOptions: () {},
+            onDismiss: () {},
+          ),
+        ),
+      ),
+    );
+
+    progressFocus.requestFocus();
+    await tester.pump();
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.arrowRight);
+    await tester.pump();
+
+    final seekFinder = find.byKey(
+      const ValueKey('compact-target-time-player-seek-target-time'),
+    );
+    final progressFinder = find.byKey(
+      const ValueKey('compact-target-time-player-progress-bar'),
+    );
+    expect(seekFinder, findsOneWidget);
+    final seekText = tester.widget<Text>(find.text('Seek 03:30'));
+    expect(seekText.style?.fontSize, 14);
+    expect(
+      tester.getRect(seekFinder).bottom,
+      lessThan(tester.getRect(progressFinder).top),
+    );
+
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.arrowRight);
+    await tester.pump();
+    expect(seeks, [const Duration(minutes: 3, seconds: 30)]);
     expect(tester.takeException(), isNull);
   });
 

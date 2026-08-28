@@ -54,8 +54,14 @@ void main() {
   });
 
   test('only an attached guest yields playback authority to the host', () {
-    final guestLobby = WatchPartyState(session: _session(WatchPartyRole.guest));
+    final guestLobby = WatchPartyState(
+      connection: WatchPartyConnection.connected,
+      session: _session(WatchPartyRole.guest),
+    );
     final attachedGuest = guestLobby.copyWith(attachedMedia: _media);
+    final reconnectingGuest = attachedGuest.copyWith(
+      connection: WatchPartyConnection.reconnecting,
+    );
     final attachedHost = WatchPartyState(
       session: _session(WatchPartyRole.host),
       attachedMedia: _media,
@@ -63,6 +69,7 @@ void main() {
 
     expect(guestLobby.guestPlaybackControlsLocked, isFalse);
     expect(attachedGuest.guestPlaybackControlsLocked, isTrue);
+    expect(reconnectingGuest.guestPlaybackControlsLocked, isFalse);
     expect(attachedHost.guestPlaybackControlsLocked, isFalse);
     expect(const WatchPartyState().guestPlaybackControlsLocked, isFalse);
   });
@@ -525,6 +532,88 @@ void main() {
       }
     },
   );
+
+  testWidgets('a room outage unlocks guest controls until polling recovers', (
+    tester,
+  ) async {
+    final client = _FakeWatchPartyClient();
+    final controller = WatchPartyController(client);
+    final port = _FakePlaybackPort();
+    try {
+      expect(await controller.join('23456789'), isTrue);
+      await controller.attachPlayback(port: port, media: _media);
+      expect(controller.state.guestPlaybackControlsLocked, isTrue);
+
+      client.snapshotError = const WatchPartyClientException(
+        'network_unavailable',
+      );
+      await tester.pump(const Duration(milliseconds: 1200));
+      await tester.pump();
+
+      expect(controller.state.isActive, isTrue);
+      expect(controller.state.connection, WatchPartyConnection.reconnecting);
+      expect(controller.state.guestPlaybackControlsLocked, isFalse);
+
+      client.snapshotError = null;
+      await tester.pump(const Duration(milliseconds: 2400));
+      await tester.pump();
+
+      expect(controller.state.connection, WatchPartyConnection.connected);
+      expect(controller.state.guestPlaybackControlsLocked, isTrue);
+    } finally {
+      controller.dispose();
+      port.dispose();
+    }
+  });
+
+  testWidgets('reconnecting invalidates an in-flight guest follow-up command', (
+    tester,
+  ) async {
+    final client = _FakeWatchPartyClient()
+      ..joinSnapshot = _snapshot(
+        role: WatchPartyRole.guest,
+        revision: 7,
+        playing: true,
+        position: const Duration(seconds: 50),
+        media: _media,
+      );
+    final controller = WatchPartyController(client);
+    final seekGate = Completer<void>();
+    final port = _FakePlaybackPort()..seekGate = seekGate;
+    try {
+      expect(await controller.join('23456789'), isTrue);
+      await controller.attachPlayback(port: port, media: _media);
+      port.emit(
+        WatchPartyPlaybackSample(
+          media: _media,
+          position: const Duration(seconds: 5),
+          duration: const Duration(minutes: 24),
+          playing: false,
+          ready: true,
+          sampledAt: DateTime.now().toUtc(),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 20));
+      expect(port.seekTargets, hasLength(1));
+
+      client.snapshotError = const WatchPartyClientException(
+        'network_unavailable',
+      );
+      await tester.pump(const Duration(milliseconds: 1200));
+      await tester.pump();
+      expect(controller.state.connection, WatchPartyConnection.reconnecting);
+      expect(controller.state.guestPlaybackControlsLocked, isFalse);
+
+      seekGate.complete();
+      await tester.pump();
+      expect(port.playCalls, 0, reason: 'the stale host play is invalid');
+    } finally {
+      if (!seekGate.isCompleted) seekGate.complete();
+      await tester.pump();
+      controller.dispose();
+      port.dispose();
+    }
+  });
 
   test('viewer count includes the host for hosts and guests', () {
     expect(watchPartyViewerCount(const WatchPartyState()), 0);
@@ -1549,6 +1638,122 @@ void main() {
     expect(client.updateCalls, 0, reason: 'guests never echo host state');
   });
 
+  testWidgets(
+    'polling survives a stuck guest command and accepts host recovery',
+    (tester) async {
+      final client = _FakeWatchPartyClient()
+        ..joinSnapshot = _snapshot(
+          role: WatchPartyRole.guest,
+          revision: 9,
+          playing: true,
+          position: const Duration(seconds: 50),
+          media: _media,
+        );
+      final controller = WatchPartyController(client);
+      final seekGate = Completer<void>();
+      final port = _FakePlaybackPort()..seekGate = seekGate;
+      try {
+        await controller.attachPlayback(port: port, media: _media);
+        port.emit(
+          WatchPartyPlaybackSample(
+            media: _media,
+            position: const Duration(seconds: 5),
+            duration: const Duration(minutes: 24),
+            playing: false,
+            ready: true,
+            sampledAt: DateTime.now().toUtc(),
+          ),
+        );
+        expect(await controller.join('23456789'), isTrue);
+
+        await tester.pump(const Duration(milliseconds: 1200));
+        await tester.pump();
+        expect(port.seekTargets, hasLength(1));
+        expect(controller.state.guestPlaybackControlsLocked, isTrue);
+
+        client.joinSnapshot = _snapshot(
+          role: WatchPartyRole.host,
+          revision: 9,
+          playing: true,
+          position: const Duration(seconds: 50),
+          media: _media,
+        );
+        await tester.pump(const Duration(milliseconds: 1200));
+        await tester.pump();
+
+        expect(client.snapshotCalls, greaterThanOrEqualTo(2));
+        expect(controller.state.isHost, isTrue);
+        expect(controller.state.guestPlaybackControlsLocked, isFalse);
+      } finally {
+        if (!seekGate.isCompleted) seekGate.complete();
+        await tester.pump();
+        controller.dispose();
+        port.dispose();
+      }
+    },
+  );
+
+  testWidgets('a stuck guest command stays single-flight until it settles', (
+    tester,
+  ) async {
+    final client = _FakeWatchPartyClient()
+      ..joinSnapshot = _snapshot(
+        role: WatchPartyRole.guest,
+        revision: 11,
+        playing: true,
+        position: const Duration(seconds: 50),
+        media: _media,
+      );
+    final controller = WatchPartyController(client);
+    final seekGate = Completer<void>();
+    final port = _FakePlaybackPort()..seekGate = seekGate;
+    try {
+      expect(await controller.join('23456789'), isTrue);
+      await controller.attachPlayback(port: port, media: _media);
+      final behind = WatchPartyPlaybackSample(
+        media: _media,
+        position: const Duration(seconds: 5),
+        duration: const Duration(minutes: 24),
+        playing: false,
+        ready: true,
+        sampledAt: DateTime.now().toUtc(),
+      );
+      port.emit(behind);
+      await tester.pump(const Duration(milliseconds: 20));
+      expect(port.seekTargets, hasLength(1));
+      expect(port.maximumConcurrentSeeks, 1);
+
+      client.joinSnapshot = _snapshot(
+        role: WatchPartyRole.guest,
+        revision: 12,
+        playing: true,
+        position: const Duration(seconds: 55),
+        media: _media,
+      );
+      await tester.pump(const Duration(milliseconds: 1200));
+      await tester.pump();
+      port.emit(behind);
+      await tester.pump();
+      expect(port.seekTargets, hasLength(1));
+      expect(port.maximumConcurrentSeeks, 1);
+      expect(port.playCalls, 0);
+      expect(controller.state.snapshot?.revision, 12);
+
+      port.seekGate = null;
+      seekGate.complete();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      expect(port.seekTargets.length, greaterThanOrEqualTo(2));
+      expect(port.maximumConcurrentSeeks, 1);
+      expect(port.playCalls, greaterThanOrEqualTo(1));
+    } finally {
+      if (!seekGate.isCompleted) seekGate.complete();
+      await tester.pump();
+      controller.dispose();
+      port.dispose();
+    }
+  });
+
   test(
     'promotion during an in-flight guest seek cannot issue stale play',
     () async {
@@ -1902,6 +2107,7 @@ class _FakeWatchPartyClient extends WatchPartyClient {
   WatchPartyMedia? lastPublishedMedia;
   Duration? lastPublishedPosition;
   int updateCalls = 0;
+  int snapshotCalls = 0;
   int? minimumUpdateRevision;
   final forceResyncValues = <bool>[];
   final readyValues = <bool>[];
@@ -1932,6 +2138,7 @@ class _FakeWatchPartyClient extends WatchPartyClient {
 
   @override
   Future<WatchPartySnapshot> snapshot(WatchPartySession session) async {
+    snapshotCalls += 1;
     if (snapshotError case final error?) throw error;
     final value = session.role == WatchPartyRole.host
         ? hostSnapshot
@@ -2036,6 +2243,8 @@ class _FakePlaybackPort implements WatchPartyPlaybackPort {
   final seekTargets = <Duration>[];
   int playCalls = 0;
   int pauseCalls = 0;
+  int activeSeekCommands = 0;
+  int maximumConcurrentSeeks = 0;
   Completer<void>? seekGate;
   Object? seekError;
 
@@ -2054,7 +2263,16 @@ class _FakePlaybackPort implements WatchPartyPlaybackPort {
   Future<void> seekTo(Duration position) async {
     seekTargets.add(position);
     if (seekError case final error?) throw error;
-    await seekGate?.future;
+    final gate = seekGate;
+    activeSeekCommands += 1;
+    if (activeSeekCommands > maximumConcurrentSeeks) {
+      maximumConcurrentSeeks = activeSeekCommands;
+    }
+    try {
+      await gate?.future;
+    } finally {
+      activeSeekCommands -= 1;
+    }
   }
 
   void dispose() => unawaited(_controller.close());

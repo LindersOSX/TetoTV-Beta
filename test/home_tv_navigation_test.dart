@@ -5,7 +5,6 @@ import 'package:anime_tv/core/preferences/title_language_preference.dart';
 import 'package:anime_tv/features/catalog/application/anime_title_logo_provider.dart';
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
 import 'package:anime_tv/features/catalog/data/anilist_catalog_client.dart';
-import 'package:anime_tv/features/catalog/domain/anime_title_logo.dart';
 import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
 import 'package:anime_tv/features/catalog/presentation/discover_screen.dart';
 import 'package:anime_tv/features/catalog/presentation/search_screen.dart';
@@ -27,7 +26,6 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:cached_network_image/cached_network_image.dart';
 
 void main() {
   test('Modern Layout rail metrics scale on common TV canvases', () {
@@ -296,7 +294,7 @@ void main() {
   });
 
   testWidgets(
-    'featured TV hero uses English logo, bounded actions, and explicit D-pad graph',
+    'featured TV hero always uses localized text without synopsis and preserves explicit D-pad navigation',
     (tester) async {
       FlutterSecureStorage.setMockInitialValues({
         initialSetupCompletedStorageKey: 'true',
@@ -341,13 +339,7 @@ void main() {
             ),
             animeTitleLogoProvider.overrideWith((_, request) async {
               logoRequests.add(request.titleLanguage);
-              return AnimeTitleLogo(
-                url: Uri.parse(
-                  'https://assets.fanart.tv/fanart/tv/english-featured.png',
-                ),
-                source: AnimeTitleLogoSource.fanartTvHd,
-                languageCode: 'en',
-              );
+              return null;
             }),
             trackingAccountsControllerProvider.overrideWith(
               (_) => _StaticTrackingAccountsController(
@@ -395,17 +387,11 @@ void main() {
       expect(find.text('My List'), findsOneWidget);
       expect(find.text('More info'), findsNothing);
       expect(find.byKey(const ValueKey('home-hero-more-info')), findsNothing);
-      expect(logoRequests, contains(TitleLanguagePreference.english));
-      final logoImage = tester.widget<CachedNetworkImage>(
-        find.descendant(
-          of: titleFinder,
-          matching: find.byType(CachedNetworkImage),
-        ),
-      );
-      expect(
-        logoImage.imageUrl,
-        'https://assets.fanart.tv/fanart/tv/english-featured.png',
-      );
+      expect(logoRequests, isEmpty);
+      expect(find.byKey(const ValueKey('hero-title-text-314')), findsOneWidget);
+      expect(find.text('English featured title'), findsOneWidget);
+      expect(find.text(hero.description), findsNothing);
+      expect(find.byKey(const ValueKey('hero-description-314')), findsNothing);
 
       final screenRect = Offset.zero & tester.view.physicalSize;
       final heroRect = tester.getRect(heroFinder);
@@ -486,7 +472,7 @@ void main() {
     },
   );
 
-  testWidgets('featured Home hero falls back to the localized Romaji title', (
+  testWidgets('featured Home hero uses the localized Romaji title as text', (
     tester,
   ) async {
     FlutterSecureStorage.setMockInitialValues({
@@ -549,16 +535,11 @@ void main() {
     await tester.pump(const Duration(milliseconds: 180));
 
     final titleFinder = find.byKey(const ValueKey('hero-title-2718'));
-    expect(logoRequests, contains(TitleLanguagePreference.romaji));
+    expect(logoRequests, isEmpty);
     expect(find.text('Romaji localized title'), findsOneWidget);
     expect(find.text('English localized title'), findsNothing);
-    expect(
-      find.descendant(
-        of: titleFinder,
-        matching: find.byType(CachedNetworkImage),
-      ),
-      findsNothing,
-    );
+    expect(find.byKey(const ValueKey('hero-title-text-2718')), findsOneWidget);
+    expect(find.text(hero.description), findsNothing);
     final titleRect = tester.getRect(titleFinder);
     final heroRect = tester.getRect(find.byKey(const ValueKey('home-hero')));
     expect(titleRect.width, lessThanOrEqualTo(570));

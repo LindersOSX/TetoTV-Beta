@@ -796,7 +796,7 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
 
-    const anime = AnimeSummary(
+    final anime = AnimeSummary(
       id: 1,
       title: 'Black Torch',
       description:
@@ -810,6 +810,22 @@ void main() {
       durationMinutes: 24,
       seasonYear: 2026,
       staff: [AnimePerson(id: 10, name: 'Example Director')],
+      trailer: AnimeTrailer.tryCreate(
+        provider: 'youtube',
+        videoId: 'abcDEF_12-3',
+      ),
+      relatedAnime: [
+        RelatedAnime(
+          relationType: 'SEQUEL',
+          anime: AnimeSummary(
+            id: 2,
+            title: 'Black Torch Season 2',
+            description: '',
+            episodes: 12,
+            score: 8,
+          ),
+        ),
+      ],
     );
 
     await tester.pumpWidget(
@@ -833,7 +849,10 @@ void main() {
     expect(find.text('Start watching'), findsOneWidget);
     expect(find.text('Play from beginning'), findsOneWidget);
     expect(find.text('Play selected'), findsOneWidget);
+    expect(find.text('Watch trailer'), findsOneWidget);
     expect(find.text('Cast & crew'), findsOneWidget);
+    expect(find.text('Related series'), findsOneWidget);
+    expect(find.text('Download season'), findsOneWidget);
     expect(find.text('2026'), findsWidgets);
     expect(find.text('24m'), findsWidgets);
     expect(find.text('7.8 / 10'), findsOneWidget);
@@ -849,6 +868,17 @@ void main() {
     await tester.pump();
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
     await tester.pump();
+    final relatedControl = tester.widget<FocusableActionDetector>(
+      find
+          .descendant(
+            of: find.byKey(const ValueKey('anime-details-related-series')),
+            matching: find.byType(FocusableActionDetector),
+          )
+          .first,
+    );
+    expect(relatedControl.focusNode?.hasFocus, isTrue);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    await tester.pump();
     final downloadControl = tester.widget<FocusableActionDetector>(
       find
           .descendant(
@@ -858,6 +888,30 @@ void main() {
           .first,
     );
     expect(downloadControl.focusNode?.hasFocus, isTrue);
+    final informationActionRects = <Rect>[
+      for (final key in const [
+        ValueKey('anime-details-watch-trailer'),
+        ValueKey('anime-details-cast-crew'),
+        ValueKey('anime-details-related-series'),
+        ValueKey('anime-details-download-season'),
+      ])
+        tester.getRect(find.byKey(key)),
+    ];
+    for (var index = 1; index < informationActionRects.length; index++) {
+      expect(
+        informationActionRects[index].top,
+        closeTo(informationActionRects.first.top, .01),
+      );
+      expect(
+        informationActionRects[index].bottom,
+        closeTo(informationActionRects.first.bottom, .01),
+      );
+      expect(
+        informationActionRects[index].left,
+        greaterThan(informationActionRects[index - 1].right),
+      );
+    }
+    expect(informationActionRects.first.height, 58);
     final posterCenter = tester.getCenter(
       find.byKey(const ValueKey('anime-details-poster')),
     );
@@ -958,7 +1012,7 @@ void main() {
         addTearDown(tester.view.resetPhysicalSize);
         addTearDown(tester.view.resetDevicePixelRatio);
 
-        const anime = AnimeSummary(
+        final anime = AnimeSummary(
           id: 21,
           title: 'Responsive Mid Width Anime With a Long Title',
           description:
@@ -1068,7 +1122,7 @@ void main() {
         addTearDown(tester.view.resetPhysicalSize);
         addTearDown(tester.view.resetDevicePixelRatio);
 
-        const anime = AnimeSummary(
+        final anime = AnimeSummary(
           id: 1,
           title: 'A Long Example Anime Title for a Small Mobile Screen',
           description:
@@ -1081,6 +1135,11 @@ void main() {
           status: 'RELEASING',
           durationMinutes: 24,
           seasonYear: 2026,
+          staff: [AnimePerson(id: 10, name: 'Example Director')],
+          trailer: AnimeTrailer.tryCreate(
+            provider: 'youtube',
+            videoId: 'abcDEF_12-3',
+          ),
           relatedAnime: [
             RelatedAnime(
               relationType: 'SEQUEL',
@@ -1115,8 +1174,23 @@ void main() {
         expect(find.text('Start watching'), findsOneWidget);
         expect(find.text('Play from beginning'), findsOneWidget);
         expect(find.text('Play selected'), findsOneWidget);
+        expect(find.text('Watch trailer'), findsOneWidget);
+        expect(find.text('Cast & crew'), findsOneWidget);
         expect(find.text('Related series'), findsOneWidget);
+        expect(find.text('Download season'), findsOneWidget);
         expect(find.text('EP 1 / 12'), findsOneWidget);
+        final informationActionTops = <double>[
+          for (final key in const [
+            ValueKey('anime-details-watch-trailer'),
+            ValueKey('anime-details-cast-crew'),
+            ValueKey('anime-details-related-series'),
+            ValueKey('anime-details-download-season'),
+          ])
+            tester.getTopLeft(find.byKey(key)).dy,
+        ];
+        for (final top in informationActionTops.skip(1)) {
+          expect(top, closeTo(informationActionTops.first, .01));
+        }
         final posterSize = tester.getSize(
           find.byKey(const ValueKey('anime-details-poster')),
         );

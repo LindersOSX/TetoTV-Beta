@@ -1048,6 +1048,39 @@ class _TetoPlayerProgressScrubberState
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
+        if (_interacting) ...[
+          Align(
+            alignment: Alignment.centerRight,
+            child: IgnorePointer(
+              child: DecoratedBox(
+                key: ValueKey('${widget.engineKey}-player-seek-target-time'),
+                decoration: BoxDecoration(
+                  color: widget.palette.background.withValues(alpha: .94),
+                  borderRadius: BorderRadius.circular(7),
+                  border: Border.all(
+                    color: widget.palette.accent.withValues(alpha: .7),
+                  ),
+                ),
+                child: Padding(
+                  padding: EdgeInsets.symmetric(
+                    horizontal: widget.compact ? 8 : 10,
+                    vertical: widget.compact ? 3 : 4,
+                  ),
+                  child: Text(
+                    'Seek ${formatPlayerChromeDuration(displayPosition)}',
+                    style: TextStyle(
+                      color: _playerPrimaryTextColor(widget.palette),
+                      fontSize: widget.compact ? 14 : 18,
+                      height: 1.1,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          SizedBox(height: widget.compact ? 3 : 4),
+        ],
         Semantics(
           hint: widget.showSupplementalRow ? null : widget.footerHint,
           child: Focus(
@@ -1077,92 +1110,47 @@ class _TetoPlayerProgressScrubberState
                   width: 1.4,
                 ),
               ),
-              child: Stack(
-                alignment: Alignment.center,
-                children: [
-                  SliderTheme(
-                    data: SliderTheme.of(context).copyWith(
-                      trackHeight: widget.compact ? 3 : 4,
-                      activeTrackColor: widget.palette.accentBright,
-                      inactiveTrackColor: _playerProgressTrackColor(
-                        widget.palette,
-                      ),
-                      thumbColor: widget.palette.accentBright,
-                      overlayColor: widget.palette.focusGlow.withValues(
-                        alpha: .28,
-                      ),
-                      thumbShape: RoundSliderThumbShape(
-                        enabledThumbRadius: _focused ? 6 : 4.5,
-                        disabledThumbRadius: 3.5,
-                      ),
-                      overlayShape: const RoundSliderOverlayShape(
-                        overlayRadius: 12,
-                      ),
-                      showValueIndicator: ShowValueIndicator.onDrag,
-                    ),
-                    child: Slider(
-                      key: ValueKey('${widget.engineKey}-player-progress-bar'),
-                      focusNode: _sliderGestureFocus,
-                      value: durationAvailable ? _displayMilliseconds : 0,
-                      min: 0,
-                      max: durationAvailable ? _scrubMaximumMilliseconds : 1,
-                      label: formatPlayerChromeDuration(displayPosition),
-                      activeColor: widget.palette.accentBright,
-                      inactiveColor: _playerProgressTrackColor(widget.palette),
-                      onChangeStart: enabled
-                          ? (_) {
-                              _keyboardCommitTimer?.cancel();
-                              _previewSettleTimer?.cancel();
-                              _setInteracting(true);
-                            }
-                          : null,
-                      onChanged: enabled ? _setPreview : null,
-                      onChangeEnd: enabled
-                          ? (value) {
-                              _setPreview(value);
-                              _commitPreview();
-                              _setInteracting(false);
-                            }
-                          : null,
-                    ),
+              child: SliderTheme(
+                data: SliderTheme.of(context).copyWith(
+                  trackHeight: widget.compact ? 3 : 4,
+                  activeTrackColor: widget.palette.accentBright,
+                  inactiveTrackColor: _playerProgressTrackColor(widget.palette),
+                  thumbColor: widget.palette.accentBright,
+                  overlayColor: widget.palette.focusGlow.withValues(alpha: .28),
+                  thumbShape: RoundSliderThumbShape(
+                    enabledThumbRadius: _focused ? 6 : 4.5,
+                    disabledThumbRadius: 3.5,
                   ),
-                  if (_interacting)
-                    Positioned(
-                      right: widget.compact ? 8 : 12,
-                      child: IgnorePointer(
-                        child: DecoratedBox(
-                          key: ValueKey(
-                            '${widget.engineKey}-player-seek-target-time',
-                          ),
-                          decoration: BoxDecoration(
-                            color: widget.palette.background.withValues(
-                              alpha: .94,
-                            ),
-                            borderRadius: BorderRadius.circular(5),
-                            border: Border.all(
-                              color: widget.palette.accent.withValues(
-                                alpha: .7,
-                              ),
-                            ),
-                          ),
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 5,
-                              vertical: 1,
-                            ),
-                            child: Text(
-                              'Seek ${formatPlayerChromeDuration(displayPosition)}',
-                              style: TextStyle(
-                                color: _playerPrimaryTextColor(widget.palette),
-                                fontSize: widget.compact ? 9 : 10,
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                ],
+                  overlayShape: const RoundSliderOverlayShape(
+                    overlayRadius: 12,
+                  ),
+                  showValueIndicator: ShowValueIndicator.onDrag,
+                ),
+                child: Slider(
+                  key: ValueKey('${widget.engineKey}-player-progress-bar'),
+                  focusNode: _sliderGestureFocus,
+                  value: durationAvailable ? _displayMilliseconds : 0,
+                  min: 0,
+                  max: durationAvailable ? _scrubMaximumMilliseconds : 1,
+                  label: formatPlayerChromeDuration(displayPosition),
+                  activeColor: widget.palette.accentBright,
+                  inactiveColor: _playerProgressTrackColor(widget.palette),
+                  onChangeStart: enabled
+                      ? (_) {
+                          _keyboardCommitTimer?.cancel();
+                          _previewSettleTimer?.cancel();
+                          _setInteracting(true);
+                        }
+                      : null,
+                  onChanged: enabled ? _setPreview : null,
+                  onChangeEnd: enabled
+                      ? (value) {
+                          _setPreview(value);
+                          _commitPreview();
+                          _setInteracting(false);
+                        }
+                      : null,
+                ),
               ),
             ),
           ),

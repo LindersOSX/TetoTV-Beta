@@ -73,6 +73,11 @@ const tetoTvVideoControllerConfiguration = VideoControllerConfiguration(
   androidAttachSurfaceAfterVideoParameters: true,
 );
 
+// Native playback commands normally complete immediately, but a broken
+// platform callback must not keep an engine handoff or route disposal pending
+// forever. New mutations are already closed before either drain begins.
+const _playerMutationReleaseTimeout = Duration(seconds: 5);
+
 enum PlaybackDecoderMode { hardwareSafe, hardwareDirect, software }
 
 String _mpvColor(Color color) =>
@@ -467,8 +472,13 @@ class _TvPlayerScreenRouterState extends ConsumerState<TvPlayerScreen> {
         _watchPartyAffinity.unbind(_watchPartyAffinityOwner);
       }),
     );
-    unawaited(_watchPartyController.detachPlayback(_watchPartyPlayback));
-    unawaited(_watchPartyPlayback.dispose());
+    unawaited(() async {
+      try {
+        await _watchPartyController.detachPlayback(_watchPartyPlayback);
+      } finally {
+        await _watchPartyPlayback.dispose();
+      }
+    }());
     unawaited(_activeLaunch.stream.playbackLease?.close());
     super.dispose();
   }
@@ -1232,21 +1242,21 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     );
     _watchPartyHandle = _watchPartyPlayback.bindEngine(
       engine: 'mpv',
-      play: () async {
-        if (_engineHandoffInProgress || _playerReleasedForHandoff) return;
+      play: () => _trackPlayerMutation(() async {
+        if (_playerReleasedForHandoff) return;
         await _player.play();
-      },
-      pause: () async {
-        if (_engineHandoffInProgress || _playerReleasedForHandoff) return;
+      }),
+      pause: () => _trackPlayerMutation(() async {
+        if (_playerReleasedForHandoff) return;
         await _player.pause();
-      },
-      seekTo: (position) async {
-        if (_engineHandoffInProgress || _playerReleasedForHandoff) return;
+      }),
+      seekTo: (position) => _trackPlayerMutation(() async {
+        if (_playerReleasedForHandoff) return;
         _pendingInheritedResume = null;
         _trickplayGeneration++;
         await _player.seek(position);
         _recordCommittedSeek(position);
-      },
+      }),
     );
     _watchPartyRouteHandoff = ref.read(watchPartyPlayerRouteHandoffProvider)
       ..bind(
@@ -3631,7 +3641,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       // Starting another native engine while mpv still owns its Surface/audio
       // session can terminate the process on resource-constrained TV firmware.
       await WidgetsBinding.instance.endOfFrame;
-      await _waitForPlayerMutations();
+      await _waitForPlayerMutations().timeout(_playerMutationReleaseTimeout);
       _videoWatchdog?.cancel();
       _performanceWatchdog?.cancel();
       _queuedSeekTarget = null;
@@ -5543,7 +5553,9 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       unawaited(
         _handoffRelease.release(() async {
           try {
-            await _waitForPlayerMutations();
+            await _waitForPlayerMutations().timeout(
+              _playerMutationReleaseTimeout,
+            );
             final trickplayOperations = List<Future<void>>.of(
               _trickplayOperations,
             );

@@ -262,9 +262,9 @@ dependencies {
     // Pinned to the last libtorrent4j Android build targeting API 24. The
     // subsequent 2.1.0-39 artifacts require API 28, which would drop Fire OS
     // 6 and Android 7 devices currently supported by TetoTV.
-    implementation("org.libtorrent4j:libtorrent4j:2.1.0-38")
-    implementation("org.libtorrent4j:libtorrent4j-android-arm:2.1.0-38")
-    implementation("org.libtorrent4j:libtorrent4j-android-arm64:2.1.0-38")
+    implementation("org.libtorrent4j:libtorrent4j:2.1.0-39")
+    implementation("org.libtorrent4j:libtorrent4j-android-arm:2.1.0-39")
+    implementation("org.libtorrent4j:libtorrent4j-android-arm64:2.1.0-39")
     implementation("androidx.media:media:1.8.0")
     implementation("androidx.profileinstaller:profileinstaller:1.4.1")
     implementation("androidx.tvprovider:tvprovider:1.1.0")

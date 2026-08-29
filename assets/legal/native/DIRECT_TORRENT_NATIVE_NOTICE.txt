@@ -1,40 +1,34 @@
-TetoTV direct-torrent native component provenance
-==================================================
+TetoTV self-built direct-torrent native component notice
+========================================================
 
-The Android direct-torrent engine resolves these Maven Central artifacts at
-version 2.1.0-38:
+The optional Android direct-torrent engine is compiled by TetoTV from these
+immutable sources; release builds do not resolve the upstream prebuilt
+libtorrent4j Maven JNI JARs:
 
-- org.libtorrent4j:libtorrent4j
-- org.libtorrent4j:libtorrent4j-android-arm
-- org.libtorrent4j:libtorrent4j-android-arm64
+- libtorrent4j 09ffd391d4ef12e668cc032bffcbab47d9e2d5cb (MIT)
+- libtorrent-rasterbar a01469c8d1f88dd83bed458ffccffab2727b9d2a
+  (BSD-3-Clause and the additional notices in its full LICENSE file)
+- try_signal 105cce59972f925a33aa6b1c3109e4cd3caf583d (BSD-3-Clause)
+- libtorrent's bundled Ed25519 implementation (the public-domain/permissive
+  notice shipped as LIBTORRENT_ED25519_LICENSE.txt)
+- libdatachannel 6ab310b5887eab78cf0c0767a8ced2ebff8c7479 (MPL-2.0)
+- libjuice 2de35247f0b15fa385406f3e2020d0e3d4d5cfcc (MPL-2.0)
+- usrsctp ebb18adac6501bad4501b1f6dccb67a1c85cc299 (BSD-style)
+- plog e21baecd4753f14da64ede979c5a19302618b752 (MIT)
+- Boost 1.89.0 (Boost Software License 1.0)
+- OpenSSL 3.5.2 (Apache-2.0)
 
-The libtorrent4j tag v2.1.0-38 resolves to commit
-09ffd391d4ef12e668cc032bffcbab47d9e2d5cb. Its libtorrent-rasterbar
-submodule resolves to a01469c8d1f88dd83bed458ffccffab2727b9d2a.
+This build uses WebTorrent with RTC_ENABLE_MEDIA=0. libsrtp and the media-only
+nested sources are therefore not linked into libtorrent4j.so. They must not be
+described as shipped binary components merely because their gitlinks exist in
+the upstream recursive source graph.
 
-The native binary also statically incorporates WebTorrent support from
-libdatachannel commit 6ab310b5887eab78cf0c0767a8ced2ebff8c7479 and its
-following pinned dependencies:
+Android NDK r28c runtime/toolchain notices are included because libc++ and
+compiler runtime portions can be statically incorporated. Exact source
+snapshots, source archive hashes, build instructions, and output hashes are in
+the release's native playback source ZIP and
+tool/release/native_playback_manifest.json. MPL-covered source snapshots and
+any TetoTV modifications remain available in that ZIP.
 
-- libjuice 2de35247f0b15fa385406f3e2020d0e3d4d5cfcc
-- usrsctp ebb18adac6501bad4501b1f6dccb67a1c85cc299
-- libsrtp a566a9cfcd619e8327784aa7cff4a1276dc1e895
-- plog e21baecd4753f14da64ede979c5a19302618b752
-
-The upstream Android build uses Boost 1.89.0 and OpenSSL 3.5.2. Exact license
-texts for every component named above are bundled beside this notice.
-
-Corresponding source is available from these exact revisions:
-
-https://github.com/aldenml/libtorrent4j/tree/v2.1.0-38
-https://github.com/arvidn/libtorrent/tree/a01469c8d1f88dd83bed458ffccffab2727b9d2a
-https://github.com/paullouisageneau/libdatachannel/tree/6ab310b5887eab78cf0c0767a8ced2ebff8c7479
-https://github.com/paullouisageneau/libjuice/tree/2de35247f0b15fa385406f3e2020d0e3d4d5cfcc
-https://github.com/sctplab/usrsctp/tree/ebb18adac6501bad4501b1f6dccb67a1c85cc299
-https://github.com/cisco/libsrtp/tree/a566a9cfcd619e8327784aa7cff4a1276dc1e895
-https://github.com/SergiusTheBest/plog/tree/e21baecd4753f14da64ede979c5a19302618b752
-https://archives.boost.io/release/1.89.0/source/
-https://github.com/openssl/openssl/tree/openssl-3.5.2
-
-Distributors must retain these notices and keep MPL-covered source available
-as required by the Mozilla Public License 2.0.
+This notice is not legal advice or an independent legal review. The component
+software is supplied without warranty to the extent permitted by its license.

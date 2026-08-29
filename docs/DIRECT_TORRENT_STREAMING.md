@@ -6,28 +6,32 @@ and legal-use warning. A connected Debrid service remains preferred.
 
 ## Pinned engine and provenance
 
-TetoTV resolves these Maven Central artifacts at version `2.1.0-38`:
+TetoTV compiles the 2.1.0-38 wrapper and both Android JNI libraries from
+source. The app module consumes the three JARs produced by
+`tool/native/build_native_playback.sh`; it has no Maven JNI binary fallback.
+Their exact output hashes are recorded in
+`tool/release/native_playback_manifest.json` and the build's
+`NATIVE_BUILD_PROVENANCE.json`.
 
-| Artifact | SHA-256 |
-| --- | --- |
-| `org.libtorrent4j:libtorrent4j` | `bf8ebde8d9fc20af129f26f28c01d8cfd91d87b831b44dabbe0705d9dc910243` |
-| `org.libtorrent4j:libtorrent4j-android-arm` | `46b417c525c35ebd45b225b4e002ab13629cffc1ec8d8290ece02a686491952b` |
-| `org.libtorrent4j:libtorrent4j-android-arm64` | `d9ea7d3d82e7484e07260d063a73c8f9fe5778cc06299717eba49858a44045ef` |
+The immutable build graph starts with libtorrent4j commit
+`09ffd391d4ef12e668cc032bffcbab47d9e2d5cb` and libtorrent-rasterbar commit
+`a01469c8d1f88dd83bed458ffccffab2727b9d2a`. Rasterbar unconditionally
+compiles its separate `try_signal` gitlink at
+`105cce59972f925a33aa6b1c3109e4cd3caf583d`; TetoTV pins and archives that
+source explicitly because ordinary Git archives omit submodule contents. The
+build uses hash-verified Android NDK r28c, Boost 1.89.0, and OpenSSL 3.5.2
+archives and targets API 24 for `armeabi-v7a` and `arm64-v8a`.
 
-Upstream tag `v2.1.0-38` resolves to libtorrent4j commit
-`09ffd391d4ef12e668cc032bffcbab47d9e2d5cb`. Its libtorrent submodule is
-`a01469c8d1f88dd83bed458ffccffab2727b9d2a`. The Android workflow uses NDK
-r28c, Boost 1.89.0, and OpenSSL 3.5.2 and targets API 24 for both
-`armeabi-v7a` and `arm64-v8a`. Gradle dependency verification pins the
-downloaded POMs and JARs.
-
-The libtorrent4j wrapper is MIT licensed. Its native build also incorporates
-libtorrent-rasterbar (BSD-3-Clause), Boost (Boost Software License 1.0),
-OpenSSL (Apache License 2.0), and WebTorrent support from libdatachannel
-`6ab310b5887eab78cf0c0767a8ced2ebff8c7479` (MPL-2.0). The latter statically
-includes the pinned libjuice, usrsctp, libsrtp, and plog revisions recorded in
-`DIRECT_TORRENT_NATIVE_NOTICE.txt`. Retain all bundled notices and keep the
-MPL-covered source available when redistributing the APK.
+The linked native graph is libtorrent4j (MIT), libtorrent-rasterbar and
+`try_signal` (BSD-3-Clause), rasterbar's bundled Ed25519 implementation,
+Boost (Boost Software License 1.0), OpenSSL (Apache-2.0), libdatachannel
+`6ab310b5887eab78cf0c0767a8ced2ebff8c7479` and libjuice
+`2de35247f0b15fa385406f3e2020d0e3d4d5cfcc` (MPL-2.0), usrsctp
+`ebb18adac6501bad4501b1f6dccb67a1c85cc299` (BSD-style), and plog
+`e21baecd4753f14da64ede979c5a19302618b752` (MIT). The build sets
+`RTC_ENABLE_MEDIA=0`, so libsrtp and other media-only nested sources are not
+linked. Retain the exact bundled notices, the NDK runtime/toolchain notices,
+and the MPL-covered source snapshots when redistributing the APK.
 
 ## Security and lifecycle boundary
 
@@ -59,6 +63,8 @@ Build the universal APK, run Android SDK
 `zipalign -c -P 16 -v 4 <apk>`, and inspect every ABI's
 `libtorrent4j.so` program headers with NDK `llvm-readelf -l`. Do not claim
 Android 15/16 16-KiB-page compatibility unless every LOAD segment and packaged
-entry passes. Archive the resolved dependency graph, verification metadata,
-upstream tag/submodule sources, MPL-covered corresponding source, and license
-notices with the release evidence.
+entry passes. Archive the TetoTV-built input JAR hashes, final APK `.so`
+hashes, build provenance, immutable source/submodule snapshots, MPL-covered
+corresponding source, NDK notices, and component license notices with the
+release evidence. Verification must reject a compiled gitlink such as
+`try_signal` when its independent source snapshot or notice is absent.

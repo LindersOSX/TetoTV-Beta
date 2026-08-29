@@ -65,13 +65,15 @@ the same as legal, store, or codec certification.
   fails and that the raw AAR is absent from the public checkout and source
   archives. Shipping the verified SDK integrated into the APK does not authorize
   distributing the standalone AAR through the source repository.
-- Verify the three pinned libtorrent4j 2.1.0-38 Maven artifacts against Gradle
-  verification metadata, retain the source tag/commit and libtorrent submodule
-  revision listed in `DIRECT_TORRENT_STREAMING.md`, and bundle its MIT notice
-  plus the complete libtorrent, Boost, OpenSSL, libdatachannel, libjuice,
-  usrsctp, libsrtp, and plog notices. Make the pinned MPL-covered source
-  available to APK recipients. Confirm the feature is off by default and its
-  peer-IP/upload/cache warning still appears before use.
+- Build the three libtorrent4j 2.1.0-38 inputs from the pinned source graph with
+  `tool/native/build_native_playback.sh`; do not resolve the retired Maven JNI
+  artifacts. Verify the output hashes and provenance, retain the exact
+  libtorrent, `try_signal`, Boost, OpenSSL, libdatachannel, libjuice, usrsctp,
+  and plog source snapshots, and bundle their complete applicable notices plus
+  libtorrent's ed25519 and Android NDK runtime notices. Label libsrtp as
+  source-only because media support is disabled. Make the pinned MPL-covered
+  source and modifications available to APK recipients. Confirm the feature is
+  off by default and its peer-IP/upload/cache warning still appears before use.
 - Verify the vendored QuickJS 2026-06-04 archive and reviewed FFI bridge with
   `powershell -ExecutionPolicy Bypass -File tool/android/verify_vendored_quickjs.ps1`, then run the packaged runtime and
   infinite-loop interruption tests on a 16 KiB-page Android device. Do not

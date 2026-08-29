@@ -32,6 +32,8 @@ $expectedMinimumSdk = "24"
 # Public certificate fingerprint from the production signer used by v2.0.25.
 # This is not a private signing credential.
 $expectedSignerSha256 = "008ef69468023edcf1009d2ae999ef57d91e5411ff62bd37194fd91fad12fb5c"
+$nativeManifestPath = Join-Path $repositoryRoot "tool\release\native_playback_manifest.json"
+$nativeManifest = Get-Content -Raw -LiteralPath $nativeManifestPath | ConvertFrom-Json
 
 function Resolve-AndroidSdkRoot {
     foreach ($candidate in @($env:ANDROID_SDK_ROOT, $env:ANDROID_HOME)) {
@@ -154,6 +156,63 @@ if ($abiDifference.Count -ne 0) {
     throw "Expected only ARM32 and ARM64 Flutter ABIs. Found: $($abis -join ', ')."
 }
 
+# Bind every final APK native entry, including AGP's post-input stripping, to
+# one checked-in origin and notice record. JAR names do not survive DEX/native
+# merging, so inspecting only release inputs would miss packaging changes.
+Add-Type -AssemblyName System.IO.Compression
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$expectedNativeEntries = @($nativeManifest.apkNativeLibraries)
+if ($expectedNativeEntries.Count -ne 18) {
+    throw "The Android native BOM must contain exactly 18 ABI-specific entries."
+}
+$archive = [IO.Compression.ZipFile]::OpenRead($resolvedApk)
+try {
+    $actualNativeEntries = @(
+        $archive.Entries |
+            Where-Object { $_.FullName -match '^lib/[^/]+/[^/]+\.so$' }
+    )
+    $actualNativeNames = @($actualNativeEntries | ForEach-Object FullName)
+    $expectedNativeNames = @($expectedNativeEntries | ForEach-Object path)
+    $nativeDifference = @(Compare-Object $expectedNativeNames $actualNativeNames)
+    if ($nativeDifference.Count -ne 0) {
+        throw "Final APK native entries differ from the checked-in BOM."
+    }
+
+    foreach ($expected in $expectedNativeEntries) {
+        if (
+            [string]::IsNullOrWhiteSpace([string]$expected.origin) -or
+            [string]::IsNullOrWhiteSpace([string]$expected.license) -or
+            [string]::IsNullOrWhiteSpace([string]$expected.sourceLocator) -or
+            [string]::IsNullOrWhiteSpace([string]$expected.noticeLocator)
+        ) {
+            throw "Native BOM mapping is incomplete: $($expected.path)"
+        }
+        $entry = $actualNativeEntries |
+            Where-Object FullName -CEQ ([string]$expected.path) |
+            Select-Object -First 1
+        if ([long]$entry.Length -ne [long]$expected.size) {
+            throw "Native size mismatch for $($expected.path)."
+        }
+        $algorithm = [Security.Cryptography.SHA256]::Create()
+        $entryStream = $entry.Open()
+        try {
+            $actualHash = ([BitConverter]::ToString(
+                $algorithm.ComputeHash($entryStream)
+            ) -replace '-', '').ToLowerInvariant()
+        }
+        finally {
+            $entryStream.Dispose()
+            $algorithm.Dispose()
+        }
+        if ($actualHash -cne [string]$expected.sha256) {
+            throw "Native SHA-256 mismatch for $($expected.path): $actualHash"
+        }
+    }
+}
+finally {
+    $archive.Dispose()
+}
+
 $certificateMatch = [regex]::Match(
     $signer,
     '(?i)certificate\s+SHA-?256\s+digest[^0-9a-f]*(?<fingerprint>(?:[0-9a-f]{2}[:\s-]?){31}[0-9a-f]{2})'
@@ -172,4 +231,5 @@ Write-Host "  Package:    $packageId"
 Write-Host "  Version:    $versionName ($versionCode)"
 Write-Host "  Minimum SDK: $minimumSdk"
 Write-Host "  ABIs:       $($abis -join ', ')"
+Write-Host "  Native BOM: $($expectedNativeEntries.Count) exact entries"
 Write-Host "  SHA-256:    $apkSha256"

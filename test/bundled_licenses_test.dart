@@ -59,11 +59,19 @@ void main() {
       contains('Mozilla Public License Version 2.0'),
     );
     expect(byPackage['usrsctp ebb18ad'], contains('Copyright (c) 2015'));
-    expect(byPackage['libsrtp a566a9c'], contains('Copyright (c) 2001-2017'));
     expect(byPackage['plog e21baec'], contains('MIT License'));
     expect(
+      byPackage['try_signal 105cce5'],
+      contains('Copyright (c) 2016, Arvid Norberg'),
+    );
+    expect(
+      byPackage.containsKey('libsrtp a566a9c'),
+      isFalse,
+      reason: 'RTC_ENABLE_MEDIA=0 excludes the media-only libsrtp graph',
+    );
+    expect(
       byPackage['Direct torrent native component provenance'],
-      contains('libdatachannel commit 6ab310b'),
+      contains('libdatachannel 6ab310b'),
     );
   });
 }

@@ -13,45 +13,63 @@ void main() {
     final artifacts = (manifest['binaryArtifacts'] as List<dynamic>)
         .cast<Map<String, dynamic>>();
 
-    expect(manifest['schemaVersion'], 1);
+    expect(manifest['schemaVersion'], 2);
     expect(
       artifacts.singleWhere(
         (item) => item['id'] == 'libmpv-default-arm64-v8a',
       )['sha256'],
-      '4363dfa5d3d415b91c1f16f6fb90c3fe59a77dfd3f9b824d2b24b492d6b09df9',
+      'dbbf4c9adf6351904f5d50337d3afb78bbd77891376df1363e8908911e94d132',
     );
     expect(
       artifacts.singleWhere(
         (item) => item['id'] == 'libmpv-default-armeabi-v7a',
       )['sha256'],
-      '8ead114fc5a43348d89dc0eb8f41823e549b15115c29f73ee26973f973620995',
+      '07361e222d73dd60db69133e60b0fc7c8db44b5b3654f4f2d0798be039edcc23',
     );
     expect(
       artifacts.singleWhere(
         (item) => item['id'] == 'libtorrent4j-core',
       )['sha256'],
-      'bf8ebde8d9fc20af129f26f28c01d8cfd91d87b831b44dabbe0705d9dc910243',
+      'cb86224533873de990b24360a8ba26cb66286a0842eac3b4facc58a7370fcf91',
     );
     expect(
       artifacts.singleWhere(
         (item) => item['id'] == 'libtorrent4j-android-arm',
       )['sha256'],
-      '46b417c525c35ebd45b225b4e002ab13629cffc1ec8d8290ece02a686491952b',
+      '5a98e854b8f7e338a3746600be5cf22a13055853f88f7894592d62e1681865f6',
     );
     expect(
       artifacts.singleWhere(
         (item) => item['id'] == 'libtorrent4j-android-arm64',
       )['sha256'],
-      'd9ea7d3d82e7484e07260d063a73c8f9fe5778cc06299717eba49858a44045ef',
+      '223e27338fb0a9dad9b6a6db6add7ec791c8633698a69e958757571c63e7de23',
     );
     expect(artifacts, hasLength(5));
     final sourceRoots = (manifest['sourceRoots'] as List<dynamic>)
         .cast<Map<String, dynamic>>();
+    expect(sourceRoots, hasLength(19));
+    expect(
+      sourceRoots.every(
+        (item) =>
+            RegExp(r'^[0-9a-f]{40}$').hasMatch(item['revision'] as String),
+      ),
+      isTrue,
+    );
     expect(
       sourceRoots.singleWhere(
         (item) => item['id'] == 'libdatachannel',
       )['revision'],
       '6ab310b5887eab78cf0c0767a8ced2ebff8c7479',
+    );
+    expect(
+      sourceRoots.singleWhere((item) => item['id'] == 'try-signal')['revision'],
+      '105cce59972f925a33aa6b1c3109e4cd3caf583d',
+    );
+    expect(
+      sourceRoots.singleWhere(
+        (item) => item['id'] == 'gas-preprocessor',
+      )['revision'],
+      'ac1836309c2e77023c228b7184485597286289d3',
     );
     final sourceArchives = (manifest['sourceArchives'] as List<dynamic>)
         .cast<Map<String, dynamic>>();
@@ -69,6 +87,15 @@ void main() {
     );
     expect(manifest['releaseReadyWithoutStagedBundle'], isFalse);
     expect(manifest['knownProvenanceLimits'], isNotEmpty);
+    expect(manifest['libmpvDeclaredDependencyRefs'], isEmpty);
+    expect(
+      (manifest['build'] as Map<String, dynamic>)['scriptSha256'],
+      sha256
+          .convert(
+            File('tool/native/build_native_playback.sh').readAsBytesSync(),
+          )
+          .toString(),
+    );
     expect(
       (manifest['licenseAssets'] as List<dynamic>)
           .cast<Map<String, dynamic>>()
@@ -77,7 +104,7 @@ void main() {
                 item['path'] ==
                 'assets/legal/native/NATIVE_PLAYBACK_NOTICE.txt',
           )['sha256'],
-      '9ea7144b3fd11e3ddcef26074d0d05876990e43d4fe731c447e9a7fa5d5e1a8b',
+      'a68d117fbee0945ccfb5354b71eef6548d715556ce815aa38af0b467ad7d9d16',
     );
   });
 
@@ -122,11 +149,12 @@ void main() {
     ).readAsStringSync();
 
     expect(lock, contains('media_kit_libs_android_video:'));
-    expect(lock, contains('version: "1.3.8"'));
+    expect(lock, contains('version: "1.3.8+tetotv.1"'));
     expect(lock, isNot(contains('flutter_vlc_player:')));
     expect(verification, isNot(contains('name="libvlc-all"')));
-    expect(documentation, matches(RegExp(r'not reproducible-build\s+claims')));
-    expect(documentation, contains('mutable tag'));
+    expect(documentation, contains('second isolated build'));
+    expect(documentation, contains('does not claim byte identity'));
+    expect(documentation, contains('independent native-license review'));
     expect(documentation, contains('zipalign'));
     expect(documentation, contains('apksigner'));
   });

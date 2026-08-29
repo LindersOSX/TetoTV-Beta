@@ -316,32 +316,6 @@ jobs:
               -NativeSourcePath "${download_dir}/${source_name}"
           fi
 
-          artifact_dir="${RUNNER_TEMP}/tetotv-pinned-native-artifacts"
-          mkdir -p "${artifact_dir}"
-          while IFS=$'\t' read -r artifact_name artifact_url artifact_size artifact_sha256; do
-            if [[ ! "${artifact_name}" =~ ^[A-Za-z0-9._-]+$ ]] || \
-               [[ ! "${artifact_url}" =~ ^https:// ]] || \
-               [[ ! "${artifact_size}" =~ ^[1-9][0-9]*$ ]] || \
-               [[ ! "${artifact_sha256}" =~ ^[0-9a-f]{64}$ ]]; then
-              echo "Invalid pinned native artifact metadata."
-              exit 1
-            fi
-            curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error \
-              --retry 3 --output "${artifact_dir}/${artifact_name}" "${artifact_url}"
-            if [[ "$(stat -c '%s' "${artifact_dir}/${artifact_name}")" != "${artifact_size}" ]]; then
-              echo "Pinned native artifact size mismatch: ${artifact_name}."
-              exit 1
-            fi
-            printf '%s  %s\n' "${artifact_sha256}" "${artifact_dir}/${artifact_name}" | sha256sum --check --strict
-          done < <(
-            jq -r '.binaryArtifacts[] | [.fileName, .url, (.size | tostring), .sha256] | @tsv' \
-              tool/release/native_playback_manifest.json
-          )
-          if [[ "$(find "${artifact_dir}" -maxdepth 1 -type f | wc -l)" -ne 5 ]]; then
-            echo "Exactly five pinned native binary artifacts are required."
-            exit 1
-          fi
-
           evidence_arguments=()
           if [[ "${review_status}" == "independently-reviewed" ]]; then
             evidence_arguments+=( -NativeLicenseReviewSha256 "${review_digest}" )
@@ -354,7 +328,6 @@ jobs:
             -NativeSourcePath "${download_dir}/${source_name}" \
             -ChecksumsPath "${download_dir}/${checksums_name}" \
             -ReleaseNotesPath "${download_dir}/RELEASE_NOTES.md" \
-            -ResolvedBinaryDirectory "${artifact_dir}" \
             "${evidence_arguments[@]}"
 
           jq -n \

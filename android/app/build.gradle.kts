@@ -256,15 +256,61 @@ tasks.named("preBuild").configure {
     dependsOn(verifyDiscordSocialSdk)
 }
 
+val nativeArtifactDirectory = run {
+    val configured = System.getenv("TETOTV_NATIVE_ARTIFACT_DIR")
+    if (configured.isNullOrBlank()) {
+        rootProject.projectDir.parentFile.resolve("build/native-playback/outputs")
+    } else {
+        file(configured)
+    }.canonicalFile
+}
+val selfBuiltLibtorrentArtifacts = listOf(
+    "libtorrent4j-2.1.0-38.jar",
+    "libtorrent4j-android-arm-2.1.0-38.jar",
+    "libtorrent4j-android-arm64-2.1.0-38.jar",
+).map(nativeArtifactDirectory::resolve)
+
+val verifySelfBuiltNativePlayback by tasks.registering {
+    inputs.files(selfBuiltLibtorrentArtifacts)
+    inputs.file(nativeArtifactDirectory.resolve("NATIVE_BUILD_PROVENANCE.json"))
+    doLast {
+        val provenance = nativeArtifactDirectory.resolve(
+            "NATIVE_BUILD_PROVENANCE.json",
+        )
+        if (!provenance.isFile || !provenance.readText().contains("\"selfBuilt\": true")) {
+            throw GradleException(
+                "TetoTV self-built native provenance is missing from " +
+                    "$nativeArtifactDirectory. Run " +
+                    "tool/native/build_native_playback.sh first.",
+            )
+        }
+        selfBuiltLibtorrentArtifacts.forEach { artifact ->
+            if (!artifact.isFile) {
+                throw GradleException(
+                    "Missing TetoTV self-built native artifact: $artifact",
+                )
+            }
+            val sha256 = MessageDigest.getInstance("SHA-256")
+                .digest(artifact.readBytes())
+                .joinToString("") { byte -> "%02x".format(byte) }
+            logger.lifecycle(
+                "Using TetoTV self-built ${artifact.name} (sha256:$sha256)",
+            )
+        }
+    }
+}
+
+tasks.named("preBuild").configure {
+    dependsOn(verifySelfBuiltNativePlayback)
+}
+
 dependencies {
     implementation(files(discordSocialSdkAar))
     implementation("androidx.browser:browser:1.8.0")
-    // Pinned to the last libtorrent4j Android build targeting API 24. The
-    // subsequent 2.1.0-39 artifacts require API 28, which would drop Fire OS
-    // 6 and Android 7 devices currently supported by TetoTV.
-    implementation("org.libtorrent4j:libtorrent4j:2.1.0-38")
-    implementation("org.libtorrent4j:libtorrent4j-android-arm:2.1.0-38")
-    implementation("org.libtorrent4j:libtorrent4j-android-arm64:2.1.0-38")
+    // Version 2.1.0-38 remains the last API-24-compatible libtorrent4j line,
+    // but TetoTV now compiles it from the pinned upstream source instead of
+    // resolving Maven Central's prebuilt JNI artifacts.
+    implementation(files(selfBuiltLibtorrentArtifacts))
     implementation("androidx.media:media:1.8.0")
     implementation("androidx.profileinstaller:profileinstaller:1.4.1")
     implementation("androidx.tvprovider:tvprovider:1.1.0")

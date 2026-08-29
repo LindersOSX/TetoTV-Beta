@@ -1,0 +1,15 @@
+gas-preprocessor build-tool notice
+
+TetoTV's native playback build uses gas-preprocessor.pl from:
+https://github.com/FFmpeg/gas-preprocessor
+
+Pinned revision:
+ac1836309c2e77023c228b7184485597286289d3
+
+The upstream file identifies David Conrad as its author and states that the
+code is licensed under GPL version 2 or later. It is used only while compiling
+FFmpeg assembly and is not linked into or distributed as part of TetoTV's
+runtime native libraries.
+
+The complete GPL version 2 text is bundled separately as GPL-2.0.txt. The
+exact source snapshot is included in each native playback source bundle.

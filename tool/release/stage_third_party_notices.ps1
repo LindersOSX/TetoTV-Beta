@@ -20,7 +20,7 @@ $noticeFiles = @(
     [pscustomobject]@{ Source = "docs/THIRD_PARTY_NOTICES.md"; Destination = "docs/THIRD_PARTY_NOTICES.md"; Marker = "libtorrent4j 2.1.0-38" }
     [pscustomobject]@{ Source = "docs/NATIVE_PLAYBACK_REDISTRIBUTION.md"; Destination = "docs/NATIVE_PLAYBACK_REDISTRIBUTION.md"; Marker = "native playback" }
     [pscustomobject]@{ Source = "docs/DIRECT_TORRENT_STREAMING.md"; Destination = "docs/DIRECT_TORRENT_STREAMING.md"; Marker = "libtorrent4j" }
-    [pscustomobject]@{ Source = "tool/release/native_playback_manifest.json"; Destination = "provenance/native_playback_manifest.json"; Marker = '"schemaVersion": 1' }
+    [pscustomobject]@{ Source = "tool/release/native_playback_manifest.json"; Destination = "provenance/native_playback_manifest.json"; Marker = '"schemaVersion": 2' }
     [pscustomobject]@{ Source = "assets/addon_runtime/ANDROID_JS_RUNTIMES_LICENSE.txt"; Destination = "assets/addon_runtime/ANDROID_JS_RUNTIMES_LICENSE.txt"; Marker = "MIT License" }
     [pscustomobject]@{ Source = "assets/addon_runtime/CRYPTO_JS_LICENSE.txt"; Destination = "assets/addon_runtime/CRYPTO_JS_LICENSE.txt"; Marker = "MIT License" }
     [pscustomobject]@{ Source = "assets/addon_runtime/JS_RUNTIME_NOTICES.txt"; Destination = "assets/addon_runtime/JS_RUNTIME_NOTICES.txt"; Marker = "Package: linkedom" }
@@ -33,8 +33,23 @@ $noticeFiles = @(
     [pscustomobject]@{ Source = "assets/legal/native/LGPL-2.1.txt"; Destination = "assets/legal/native/LGPL-2.1.txt"; Marker = "GNU LESSER GENERAL PUBLIC LICENSE" }
     [pscustomobject]@{ Source = "assets/legal/native/LGPL-3.0.txt"; Destination = "assets/legal/native/LGPL-3.0.txt"; Marker = "GNU LESSER GENERAL PUBLIC LICENSE" }
     [pscustomobject]@{ Source = "assets/legal/native/LIBMPV_ANDROID_BUILD_DEFAULT_LICENSE.txt"; Destination = "assets/legal/native/LIBMPV_ANDROID_BUILD_DEFAULT_LICENSE.txt"; Marker = "Permission is hereby granted" }
+    [pscustomobject]@{ Source = "assets/legal/native/MBEDTLS_LICENSE.txt"; Destination = "assets/legal/native/MBEDTLS_LICENSE.txt"; Marker = "Apache License" }
+    [pscustomobject]@{ Source = "assets/legal/native/DAV1D_COPYING.txt"; Destination = "assets/legal/native/DAV1D_COPYING.txt"; Marker = "Redistribution and use" }
+    [pscustomobject]@{ Source = "assets/legal/native/LIBXML2_COPYRIGHT.txt"; Destination = "assets/legal/native/LIBXML2_COPYRIGHT.txt"; Marker = "Permission is hereby granted" }
+    [pscustomobject]@{ Source = "assets/legal/native/FFMPEG_LICENSE.md"; Destination = "assets/legal/native/FFMPEG_LICENSE.md"; Marker = "GNU Lesser General Public License" }
+    [pscustomobject]@{ Source = "assets/legal/native/FREETYPE_LICENSE.txt"; Destination = "assets/legal/native/FREETYPE_LICENSE.txt"; Marker = "FREETYPE LICENSES" }
+    [pscustomobject]@{ Source = "assets/legal/native/FREETYPE_FTL.txt"; Destination = "assets/legal/native/FREETYPE_FTL.txt"; Marker = "FreeType Project LICENSE" }
+    [pscustomobject]@{ Source = "assets/legal/native/FRIBIDI_COPYING.txt"; Destination = "assets/legal/native/FRIBIDI_COPYING.txt"; Marker = "GNU LESSER GENERAL PUBLIC LICENSE" }
+    [pscustomobject]@{ Source = "assets/legal/native/HARFBUZZ_COPYING.txt"; Destination = "assets/legal/native/HARFBUZZ_COPYING.txt"; Marker = "Permission is hereby granted" }
+    [pscustomobject]@{ Source = "assets/legal/native/LIBASS_COPYING.txt"; Destination = "assets/legal/native/LIBASS_COPYING.txt"; Marker = "Permission to use, copy, modify" }
+    [pscustomobject]@{ Source = "assets/legal/native/MPV_COPYRIGHT.txt"; Destination = "assets/legal/native/MPV_COPYRIGHT.txt"; Marker = "mpv is a fork of mplayer2" }
+    [pscustomobject]@{ Source = "assets/legal/native/MPV_LICENSE_LGPL.txt"; Destination = "assets/legal/native/MPV_LICENSE_LGPL.txt"; Marker = "GNU LESSER GENERAL PUBLIC LICENSE" }
+    [pscustomobject]@{ Source = "assets/legal/native/MEDIA_KIT_ANDROID_HELPER_LICENSE.txt"; Destination = "assets/legal/native/MEDIA_KIT_ANDROID_HELPER_LICENSE.txt"; Marker = "Permission is hereby granted" }
+    [pscustomobject]@{ Source = "assets/legal/native/GAS_PREPROCESSOR_NOTICE.txt"; Destination = "assets/legal/native/GAS_PREPROCESSOR_NOTICE.txt"; Marker = "build-tool notice" }
     [pscustomobject]@{ Source = "assets/legal/native/LIBTORRENT4J_LICENSE.txt"; Destination = "assets/legal/native/LIBTORRENT4J_LICENSE.txt"; Marker = "Copyright (c) 2018-2025 Alden Torres" }
     [pscustomobject]@{ Source = "assets/legal/native/LIBTORRENT_RASTERBAR_LICENSE.txt"; Destination = "assets/legal/native/LIBTORRENT_RASTERBAR_LICENSE.txt"; Marker = "Copyright (c) 2003-2020, Arvid Norberg" }
+    [pscustomobject]@{ Source = "assets/legal/native/TRY_SIGNAL_LICENSE.txt"; Destination = "assets/legal/native/TRY_SIGNAL_LICENSE.txt"; Marker = "Copyright (c) 2016, Arvid Norberg" }
+    [pscustomobject]@{ Source = "assets/legal/native/LIBTORRENT_ED25519_LICENSE.txt"; Destination = "assets/legal/native/LIBTORRENT_ED25519_LICENSE.txt"; Marker = "public domain" }
     [pscustomobject]@{ Source = "assets/legal/native/BOOST_LICENSE_1_0.txt"; Destination = "assets/legal/native/BOOST_LICENSE_1_0.txt"; Marker = "Boost Software License - Version 1.0" }
     [pscustomobject]@{ Source = "assets/legal/native/OPENSSL_LICENSE.txt"; Destination = "assets/legal/native/OPENSSL_LICENSE.txt"; Marker = "Apache License" }
     [pscustomobject]@{ Source = "assets/legal/native/LIBDATACHANNEL_LICENSE.txt"; Destination = "assets/legal/native/LIBDATACHANNEL_LICENSE.txt"; Marker = "Mozilla Public License Version 2.0" }
@@ -42,7 +57,11 @@ $noticeFiles = @(
     [pscustomobject]@{ Source = "assets/legal/native/USRSCTP_LICENSE.txt"; Destination = "assets/legal/native/USRSCTP_LICENSE.txt"; Marker = "Copyright (c) 2015" }
     [pscustomobject]@{ Source = "assets/legal/native/LIBSRTP_LICENSE.txt"; Destination = "assets/legal/native/LIBSRTP_LICENSE.txt"; Marker = "Copyright (c) 2001-2017" }
     [pscustomobject]@{ Source = "assets/legal/native/PLOG_LICENSE.txt"; Destination = "assets/legal/native/PLOG_LICENSE.txt"; Marker = "MIT License" }
-    [pscustomobject]@{ Source = "assets/legal/native/DIRECT_TORRENT_NATIVE_NOTICE.txt"; Destination = "assets/legal/native/DIRECT_TORRENT_NATIVE_NOTICE.txt"; Marker = "TetoTV direct-torrent native component provenance" }
+    [pscustomobject]@{ Source = "assets/legal/native/ANDROID_NDK_R25C_NOTICE.txt"; Destination = "assets/legal/native/ANDROID_NDK_R25C_NOTICE.txt"; Marker = "Apache License" }
+    [pscustomobject]@{ Source = "assets/legal/native/ANDROID_NDK_R25C_NOTICE_TOOLCHAIN.txt"; Destination = "assets/legal/native/ANDROID_NDK_R25C_NOTICE_TOOLCHAIN.txt"; Marker = "Apache License" }
+    [pscustomobject]@{ Source = "assets/legal/native/ANDROID_NDK_R28C_NOTICE.txt"; Destination = "assets/legal/native/ANDROID_NDK_R28C_NOTICE.txt"; Marker = "Apache License" }
+    [pscustomobject]@{ Source = "assets/legal/native/ANDROID_NDK_R28C_NOTICE_TOOLCHAIN.txt"; Destination = "assets/legal/native/ANDROID_NDK_R28C_NOTICE_TOOLCHAIN.txt"; Marker = "Apache License" }
+    [pscustomobject]@{ Source = "assets/legal/native/DIRECT_TORRENT_NATIVE_NOTICE.txt"; Destination = "assets/legal/native/DIRECT_TORRENT_NATIVE_NOTICE.txt"; Marker = "TetoTV self-built direct-torrent" }
     [pscustomobject]@{ Source = "assets/legal/native/NATIVE_PLAYBACK_NOTICE.txt"; Destination = "assets/legal/native/NATIVE_PLAYBACK_NOTICE.txt"; Marker = "native playback" }
     [pscustomobject]@{ Source = "third_party/discord_social_sdk/License-Notices.txt"; Destination = "third_party/discord_social_sdk/License-Notices.txt"; Marker = "Open Source Software Disclosure" }
     [pscustomobject]@{ Source = "third_party/discord_social_sdk/README.md"; Destination = "third_party/discord_social_sdk/README.md"; Marker = "85A5B0C9B2B828C84D27A7D7839D834BD7DAC323895A691E2A19E056543D2FAA" }

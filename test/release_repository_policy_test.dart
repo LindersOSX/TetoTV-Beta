@@ -85,7 +85,7 @@ void main() {
     expect(publisher, contains('immutable future releases must be enabled'));
     expect(publisher, contains('sha_pinning_required'));
     expect(publisher, contains('android-actions/setup-android@*'));
-    expect(publisher, contains('subosito/flutter-action@*'));
+    expect(publisher, isNot(contains('subosito/flutter-action@*')));
     expect(publisher, contains(r'$selectedActionsPolicy.verified_allowed'));
     expect(publisher, contains('default_workflow_permissions'));
     expect(
@@ -144,6 +144,15 @@ void main() {
     expect(hostedReleaseVerifier, contains('--signer-workflow'));
     expect(hostedReleaseVerifier, contains('--source-ref'));
     expect(hostedReleaseVerifier, contains('--deny-self-hosted-runners'));
+    expect(hostedReleaseVerifier, contains('workflow_dispatch:'));
+    expect(hostedReleaseVerifier, contains("sed -i 's/\\r\$//'"));
+    expect(
+      hostedReleaseVerifier,
+      contains(
+        '447878859d01ca9bfdb99a85f245af07ed8a15fedcd9d189c4749e8e92d1f185',
+      ),
+    );
+    expect(hostedReleaseVerifier, isNot(contains('subosito/flutter-action@')));
 
     final activeReviewers = reviewerAllowlist
         .map((line) => line.trim())

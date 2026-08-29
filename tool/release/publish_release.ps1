@@ -374,8 +374,7 @@ function Assert-GitHubReleaseAuthorityBoundary(
     }
     $selectedActionsPolicy = Get-GitHubApiJson "repos/$Repository/actions/permissions/selected-actions"
     $expectedExternalActionPatterns = @(
-        "android-actions/setup-android@*",
-        "subosito/flutter-action@*"
+        "android-actions/setup-android@*"
     ) | Sort-Object
     $actualExternalActionPatterns = @($selectedActionsPolicy.patterns_allowed | Sort-Object)
     if (
@@ -384,7 +383,7 @@ function Assert-GitHubReleaseAuthorityBoundary(
         $actualExternalActionPatterns.Count -ne $expectedExternalActionPatterns.Count -or
         (Compare-Object $expectedExternalActionPatterns $actualExternalActionPatterns)
     ) {
-        throw "GitHub Actions must allow GitHub-owned actions plus only the two pinned external setup actions required by the hosted verifier."
+        throw "GitHub Actions must allow GitHub-owned actions plus only the pinned external Android setup action required by the hosted verifier."
     }
     $workflowPermissions = Get-GitHubApiJson "repos/$Repository/actions/permissions/workflow"
     if (

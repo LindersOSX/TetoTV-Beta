@@ -171,6 +171,9 @@ void main() {
     final declarationVerifier = File(
       'tool/release/verify_unreviewed_beta_release_declaration.ps1',
     ).readAsStringSync();
+    final reviewedAttestationVerifier = File(
+      'tool/release/verify_native_license_review.ps1',
+    ).readAsStringSync();
     final hostedReleaseVerifier = File(
       '.github/workflows/verify-release-assets.yml',
     ).readAsStringSync();
@@ -234,6 +237,32 @@ void main() {
     expect(
       declarationVerifier,
       contains("ReleaseTag must be a canonical Beta v2.x.y tag."),
+    );
+    expect(
+      declarationVerifier,
+      contains('function Get-CanonicalUtcJsonString('),
+      reason:
+          'timestamp validation must inspect the exact JSON string instead of '
+          'PowerShell\'s culture-formatted DateTime conversion',
+    );
+    expect(
+      declarationVerifier,
+      contains(r'$declaredAtText = Get-CanonicalUtcJsonString `'),
+    );
+    expect(
+      declarationVerifier,
+      contains(r'if ($keyOccurrences.Count -ne 1)'),
+      reason: 'duplicate timestamp properties must fail closed',
+    );
+    expect(declarationVerifier, isNot(contains('[Text.Json.JsonDocument]')));
+    expect(
+      reviewedAttestationVerifier,
+      contains('function Get-CanonicalUtcJsonString('),
+      reason: 'the reviewed path must preserve exact timestamp text too',
+    );
+    expect(
+      reviewedAttestationVerifier,
+      isNot(contains(r'$reviewedAtText = [string]$attestation.reviewedAtUtc')),
     );
 
     expect(

@@ -206,6 +206,11 @@ void main() {
     expect(publisher, contains('"repos/\$Repository/releases?per_page=100"'));
     expect(
       publisher,
+      contains(r'$releases = @($pages | ForEach-Object { @($_) })'),
+      reason: 'slurped release pages must be flattened before exact tag lookup',
+    );
+    expect(
+      publisher,
       isNot(contains('"repos/\$Repository/releases/tags/\$encodedTag"')),
       reason: 'GitHub\'s release-by-tag endpoint hides drafts',
     );

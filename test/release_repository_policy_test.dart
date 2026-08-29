@@ -87,6 +87,15 @@ void main() {
     expect(publisher, contains('immutable future releases must be enabled'));
     expect(publisher, contains('sha_pinning_required'));
     expect(publisher, contains('android-actions/setup-android@*'));
+    expect(
+      RegExp(
+        r'\$expectedExternalActionPatterns\s*=\s*@\(\s*@\([\s\S]*?"android-actions/setup-android@\*"[\s\S]*?\)\s*\|\s*Sort-Object\s*\)',
+      ).hasMatch(publisher),
+      isTrue,
+      reason:
+          'sorting a single expected action pattern must remain array-wrapped '
+          'under PowerShell strict mode',
+    );
     expect(publisher, isNot(contains('subosito/flutter-action@*')));
     expect(publisher, contains(r'$selectedActionsPolicy.verified_allowed'));
     expect(publisher, contains('default_workflow_permissions'));

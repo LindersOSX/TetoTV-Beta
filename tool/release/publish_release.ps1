@@ -374,8 +374,10 @@ function Assert-GitHubReleaseAuthorityBoundary(
     }
     $selectedActionsPolicy = Get-GitHubApiJson "repos/$Repository/actions/permissions/selected-actions"
     $expectedExternalActionPatterns = @(
-        "android-actions/setup-android@*"
-    ) | Sort-Object
+        @(
+            "android-actions/setup-android@*"
+        ) | Sort-Object
+    )
     $actualExternalActionPatterns = @($selectedActionsPolicy.patterns_allowed | Sort-Object)
     if (
         -not [bool]$selectedActionsPolicy.github_owned_allowed -or

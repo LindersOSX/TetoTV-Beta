@@ -3,6 +3,16 @@ name: Verify release assets
 on:
   release:
     types: [published, edited]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Immutable release tag to verify after a recoverable workflow failure
+        required: true
+        type: string
+      expected_tag_commit:
+        description: Exact 40-character commit resolved by the immutable release tag
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -12,17 +22,18 @@ permissions:
 jobs:
   verify-assets:
     runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release_tag }}
+      EXPECTED_TAG_COMMIT: ${{ inputs.expected_tag_commit }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ format('refs/tags/{0}', github.event.release.tag_name || inputs.release_tag) }}
           fetch-depth: 0
 
       - name: Select and validate release channel
         id: channel
         shell: bash
-        env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           set -euo pipefail
           case "${GITHUB_REPOSITORY}:${RELEASE_TAG}" in
@@ -39,18 +50,41 @@ jobs:
             exit 1
           fi
 
-      - name: Require release tag at main HEAD
+      - name: Require trustworthy release tag
         shell: bash
         env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
           git fetch --no-tags origin main
-          tag_commit="$(git rev-parse "${RELEASE_TAG}^{commit}")"
+          tag_commit="$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")"
           main_commit="$(git rev-parse FETCH_HEAD^{commit})"
-          if [[ "${tag_commit}" != "${main_commit}" ]]; then
-            echo "Release tag ${RELEASE_TAG} must resolve to main HEAD."
-            exit 1
+          if [[ "${EVENT_NAME}" == "release" ]]; then
+            if [[ "${tag_commit}" != "${main_commit}" ]]; then
+              echo "Release tag ${RELEASE_TAG} must resolve to main HEAD."
+              exit 1
+            fi
+          else
+            if [[ "${GITHUB_REF}" != "refs/heads/main" ]]; then
+              echo "Manual release verification must be dispatched from the protected main branch."
+              exit 1
+            fi
+            if [[ ! "${EXPECTED_TAG_COMMIT}" =~ ^[0-9a-f]{40}$ ]] || \
+               [[ "${tag_commit}" != "${EXPECTED_TAG_COMMIT}" ]]; then
+              echo "The immutable release tag does not resolve to the explicitly confirmed commit."
+              exit 1
+            fi
+            if ! git merge-base --is-ancestor "${tag_commit}" "${main_commit}"; then
+              echo "Manually verified release tags must remain in the published main history."
+              exit 1
+            fi
+            release_json="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}")"
+            if [[ "$(jq -r '.draft' <<<"${release_json}")" != "false" ]] || \
+               [[ "$(jq -r '.immutable' <<<"${release_json}")" != "true" ]]; then
+              echo "Manual recovery is allowed only for a published immutable release."
+              exit 1
+            fi
           fi
 
       - name: Enforce public source boundary
@@ -67,10 +101,24 @@ jobs:
             exit 1
           fi
 
-      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
-        with:
-          channel: stable
-          cache: true
+      - name: Install pinned Flutter SDK
+        shell: bash
+        env:
+          FLUTTER_ARCHIVE: stable/linux/flutter_linux_3.47.2-stable.tar.xz
+          FLUTTER_ARCHIVE_SHA256: 447878859d01ca9bfdb99a85f245af07ed8a15fedcd9d189c4749e8e92d1f185
+        run: |
+          set -euo pipefail
+          archive_path="${RUNNER_TEMP}/flutter.tar.xz"
+          curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error \
+            --retry 3 \
+            --output "${archive_path}" \
+            "https://storage.googleapis.com/flutter_infra_release/releases/${FLUTTER_ARCHIVE}"
+          printf '%s  %s\n' "${FLUTTER_ARCHIVE_SHA256}" "${archive_path}" | \
+            sha256sum --check --strict
+          tar -xJf "${archive_path}" -C "${RUNNER_TEMP}"
+          echo "${RUNNER_TEMP}/flutter/bin" >> "${GITHUB_PATH}"
+          "${RUNNER_TEMP}/flutter/bin/flutter" config --no-analytics
+          "${RUNNER_TEMP}/flutter/bin/flutter" --version
 
       - name: Resolve Dart package metadata
         run: flutter pub get
@@ -85,9 +133,6 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_ID: ${{ github.event.release.id }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-          RELEASE_TITLE: ${{ github.event.release.name }}
           CHANNEL: ${{ steps.channel.outputs.name }}
         run: |
           set -euo pipefail
@@ -98,7 +143,7 @@ jobs:
           checksums_name="SHA256SUMS"
           expected_title="TetoTV ${version} Beta - Android TV / Google TV / Fire TV"
 
-          release_json="$(gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}")"
+          release_json="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}")"
           if [[ "$(jq -r '.draft' <<<"${release_json}")" != "false" ]]; then
             echo "Completed releases must not be drafts."
             exit 1
@@ -107,8 +152,9 @@ jobs:
             echo "Releases must be normal GitHub releases so /releases/latest can find them."
             exit 1
           fi
-          if [[ "${RELEASE_TITLE}" != "${expected_title}" ]]; then
-            echo "Expected release title '${expected_title}', got '${RELEASE_TITLE}'."
+          release_title="$(jq -r '.name // ""' <<<"${release_json}")"
+          if [[ "${release_title}" != "${expected_title}" ]]; then
+            echo "Expected release title '${expected_title}', got '${release_title}'."
             exit 1
           fi
 
@@ -147,7 +193,8 @@ jobs:
           done
 
           jq -r '.body // ""' <<<"${release_json}" > "${download_dir}/RELEASE_NOTES.md"
-          tag_commit="$(git rev-parse "${RELEASE_TAG}^{commit}")"
+          sed -i 's/\r$//' "${download_dir}/RELEASE_NOTES.md"
+          tag_commit="$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")"
           review_status="independently-reviewed"
           review_digest=""
           declaration_digest=""
@@ -376,8 +423,8 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
           ATTESTATION_BUNDLE: ${{ steps.release-attestation.outputs.bundle-path }}
+          ATTESTATION_SOURCE_REF: ${{ github.event_name == 'release' && format('refs/tags/{0}', github.event.release.tag_name) || github.ref }}
         run: |
           set -euo pipefail
           verified_release=false
@@ -401,6 +448,8 @@ jobs:
               --bundle "${ATTESTATION_BUNDLE}" \
               --predicate-type "https://github.com/LindersOSX/TetoTV-Beta/attestations/release-verification/v2" \
               --signer-workflow "LindersOSX/TetoTV-Beta/.github/workflows/verify-release-assets.yml" \
-              --source-ref "refs/tags/${RELEASE_TAG}" \
+              --source-digest "${GITHUB_SHA}" \
+              --source-ref "${ATTESTATION_SOURCE_REF}" \
+              --signer-digest "${GITHUB_SHA}" \
               --deny-self-hosted-runners
           done

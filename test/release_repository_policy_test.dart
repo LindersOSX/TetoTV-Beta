@@ -145,6 +145,10 @@ void main() {
     expect(hostedReleaseVerifier, contains('--source-ref'));
     expect(hostedReleaseVerifier, contains('--deny-self-hosted-runners'));
     expect(hostedReleaseVerifier, contains('workflow_dispatch:'));
+    expect(hostedReleaseVerifier, contains('expected_tag_commit:'));
+    expect(hostedReleaseVerifier, contains('refs/heads/main'));
+    expect(hostedReleaseVerifier, contains('--source-digest'));
+    expect(hostedReleaseVerifier, contains('--signer-digest'));
     expect(hostedReleaseVerifier, contains("sed -i 's/\\r\$//'"));
     expect(
       hostedReleaseVerifier,

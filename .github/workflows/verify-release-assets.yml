@@ -9,6 +9,10 @@ on:
         description: Immutable release tag to verify after a recoverable workflow failure
         required: true
         type: string
+      expected_tag_commit:
+        description: Exact 40-character commit resolved by the immutable release tag
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -20,10 +24,11 @@ jobs:
     runs-on: ubuntu-latest
     env:
       RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release_tag }}
+      EXPECTED_TAG_COMMIT: ${{ inputs.expected_tag_commit }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ github.event.release.tag_name || inputs.release_tag }}
+          ref: ${{ format('refs/tags/{0}', github.event.release.tag_name || inputs.release_tag) }}
           fetch-depth: 0
 
       - name: Select and validate release channel
@@ -53,7 +58,7 @@ jobs:
         run: |
           set -euo pipefail
           git fetch --no-tags origin main
-          tag_commit="$(git rev-parse "${RELEASE_TAG}^{commit}")"
+          tag_commit="$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")"
           main_commit="$(git rev-parse FETCH_HEAD^{commit})"
           if [[ "${EVENT_NAME}" == "release" ]]; then
             if [[ "${tag_commit}" != "${main_commit}" ]]; then
@@ -61,6 +66,15 @@ jobs:
               exit 1
             fi
           else
+            if [[ "${GITHUB_REF}" != "refs/heads/main" ]]; then
+              echo "Manual release verification must be dispatched from the protected main branch."
+              exit 1
+            fi
+            if [[ ! "${EXPECTED_TAG_COMMIT}" =~ ^[0-9a-f]{40}$ ]] || \
+               [[ "${tag_commit}" != "${EXPECTED_TAG_COMMIT}" ]]; then
+              echo "The immutable release tag does not resolve to the explicitly confirmed commit."
+              exit 1
+            fi
             if ! git merge-base --is-ancestor "${tag_commit}" "${main_commit}"; then
               echo "Manually verified release tags must remain in the published main history."
               exit 1
@@ -180,7 +194,7 @@ jobs:
 
           jq -r '.body // ""' <<<"${release_json}" > "${download_dir}/RELEASE_NOTES.md"
           sed -i 's/\r$//' "${download_dir}/RELEASE_NOTES.md"
-          tag_commit="$(git rev-parse "${RELEASE_TAG}^{commit}")"
+          tag_commit="$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")"
           review_status="independently-reviewed"
           review_digest=""
           declaration_digest=""
@@ -434,6 +448,8 @@ jobs:
               --bundle "${ATTESTATION_BUNDLE}" \
               --predicate-type "https://github.com/LindersOSX/TetoTV-Beta/attestations/release-verification/v2" \
               --signer-workflow "LindersOSX/TetoTV-Beta/.github/workflows/verify-release-assets.yml" \
+              --source-digest "${GITHUB_SHA}" \
               --source-ref "${ATTESTATION_SOURCE_REF}" \
+              --signer-digest "${GITHUB_SHA}" \
               --deny-self-hosted-runners
           done

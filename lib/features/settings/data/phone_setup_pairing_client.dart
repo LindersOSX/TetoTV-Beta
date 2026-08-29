@@ -363,10 +363,7 @@ class PhoneSetupPairingClient implements PhoneSetupPairingApi {
   final digest = sha256.convert(<int>[0x04, ...key.publicX, ...key.publicY]);
   final bytes = digest.bytes;
   final value =
-      (bytes[0] << 24) |
-      (bytes[1] << 16) |
-      (bytes[2] << 8) |
-      bytes[3];
+      (bytes[0] << 24) | (bytes[1] << 16) | (bytes[2] << 8) | bytes[3];
   return (
     fingerprint: base64UrlEncode(bytes).replaceAll('=', ''),
     confirmationCode: (value % 1000000).toString().padLeft(6, '0'),

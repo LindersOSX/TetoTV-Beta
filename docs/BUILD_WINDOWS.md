@@ -259,11 +259,13 @@ plugin build output and exact-name Gradle transform outputs, and the three
 libtorrent4j inputs in the Gradle module cache. A missing or digest-mismatched
 artifact blocks release preparation.
 
-Before `-Publish`, complete the separate qualified-reviewer procedure in
+Before `-Publish`, choose exactly one evidence path documented in
 [`NATIVE_LICENSE_RELEASE_REVIEW.md`](NATIVE_LICENSE_RELEASE_REVIEW.md). The
-publisher requires that SSH-signed attestation, creates a private GitHub draft,
-re-downloads and fully verifies the hosted draft payload, and only then makes
-the release public. No fourth custom release asset is added.
+default path requires an SSH-signed qualified-review attestation. A separate,
+explicit Beta-only exception requires a fresh unsigned owner declaration and a
+prominent warning that independent review was not performed. Both paths create
+a private GitHub draft, re-download and fully verify the hosted payload, and
+only then make the release public. No fourth custom release asset is added.
 
 The Beta GitHub release has exactly three custom assets: the universal APK, the
 versioned native playback source ZIP, and `SHA256SUMS`. GitHub also adds its

@@ -18,7 +18,9 @@ param(
 
     [string]$ResolvedBinaryDirectory = "",
 
-    [string]$NativeLicenseReviewSha256 = ""
+    [string]$NativeLicenseReviewSha256 = "",
+
+    [string]$UnreviewedBetaDeclarationSha256 = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -120,7 +122,12 @@ foreach ($assetName in @($expectedApkName, $expectedNativeSourceName, $expectedC
         throw "Release notes must name the exact release asset '$assetName'."
     }
 }
-if (-not [string]::IsNullOrWhiteSpace($NativeLicenseReviewSha256)) {
+$hasReviewedEvidence = -not [string]::IsNullOrWhiteSpace($NativeLicenseReviewSha256)
+$hasUnreviewedEvidence = -not [string]::IsNullOrWhiteSpace($UnreviewedBetaDeclarationSha256)
+if ($hasReviewedEvidence -and $hasUnreviewedEvidence) {
+    throw "Release notes cannot contain both reviewed and unreviewed native-license evidence."
+}
+if ($hasReviewedEvidence) {
     if ($NativeLicenseReviewSha256 -notmatch '^[0-9a-f]{64}$') {
         throw "NativeLicenseReviewSha256 must be a lowercase SHA-256 digest."
     }
@@ -130,6 +137,59 @@ if (-not [string]::IsNullOrWhiteSpace($NativeLicenseReviewSha256)) {
     }
     if (@([regex]::Matches($releaseNotesText, '(?im)<!--\s*tetotv-native-license-review-sha256:')).Count -ne 1) {
         throw "Release notes must not contain another native-license review marker."
+    }
+    if ($releaseNotesText -match '(?im)tetotv-(?:native-license-review-status:\s*unreviewed-beta|unreviewed-beta-declaration-)') {
+        throw "Reviewed release notes must not contain unreviewed Beta evidence."
+    }
+    $unreviewedDisclosure = "No independent native-license review: This Beta has not received independent native-library licensing review. Automated checks verify the APK, native-source bundle, notices, pinned inputs, and checksums, but do not establish legal compliance or reproducible builds."
+    if ($releaseNotesText.Contains($unreviewedDisclosure)) {
+        throw "Reviewed release notes must not claim that independent native-license review was not performed."
+    }
+}
+if ($hasUnreviewedEvidence) {
+    if ($Channel -cne "Beta") {
+        throw "Unreviewed native-license evidence is permitted only for the Beta channel."
+    }
+    if ($UnreviewedBetaDeclarationSha256 -notmatch '^[0-9a-f]{64}$') {
+        throw "UnreviewedBetaDeclarationSha256 must be a lowercase SHA-256 digest."
+    }
+    if ($releaseNotesText -match '(?im)<!--\s*tetotv-native-license-review-(?:sha256|attestation-base64|signature-base64):') {
+        throw "Unreviewed Beta release notes must not contain qualified-review evidence."
+    }
+    $disclosure = "No independent native-license review: This Beta has not received independent native-library licensing review. Automated checks verify the APK, native-source bundle, notices, pinned inputs, and checksums, but do not establish legal compliance or reproducible builds."
+    $visibleWarningPrefix = "# TetoTV $versionName Beta`n`n> [!WARNING]`n> $disclosure`n"
+    $normalizedReleaseNotesText = $releaseNotesText.Replace("`r`n", "`n")
+    if (
+        @([regex]::Matches($normalizedReleaseNotesText, [regex]::Escape($disclosure))).Count -ne 1 -or
+        -not $normalizedReleaseNotesText.StartsWith(
+            $visibleWarningPrefix,
+            [StringComparison]::Ordinal
+        )
+    ) {
+        throw "Unreviewed Beta release notes must begin with the exact visible warning block."
+    }
+    $statusMarker = "<!-- tetotv-native-license-review-status: unreviewed-beta -->"
+    if (@([regex]::Matches($releaseNotesText, [regex]::Escape($statusMarker))).Count -ne 1) {
+        throw "Unreviewed Beta release notes must contain the exact status marker once."
+    }
+    if (@([regex]::Matches($releaseNotesText, '(?im)<!--\s*tetotv-native-license-review-status:')).Count -ne 1) {
+        throw "Unreviewed Beta release notes must not contain another review-status marker."
+    }
+    $declarationMarker = "<!-- tetotv-unreviewed-beta-declaration-sha256: $UnreviewedBetaDeclarationSha256 -->"
+    if (@([regex]::Matches($releaseNotesText, [regex]::Escape($declarationMarker))).Count -ne 1) {
+        throw "Release notes must contain the exact unreviewed Beta declaration digest marker once."
+    }
+    if (@([regex]::Matches($releaseNotesText, '(?im)<!--\s*tetotv-unreviewed-beta-declaration-sha256:')).Count -ne 1) {
+        throw "Release notes must not contain another unreviewed Beta declaration marker."
+    }
+    if (@([regex]::Matches(
+        $releaseNotesText,
+        '(?im)<!--\s*tetotv-unreviewed-beta-declaration-base64:\s*[A-Za-z0-9+/]+={0,2}\s*-->'
+    )).Count -ne 1 -or @([regex]::Matches(
+        $releaseNotesText,
+        '(?im)<!--\s*tetotv-unreviewed-beta-declaration-base64:'
+    )).Count -ne 1) {
+        throw "Unreviewed Beta release notes must contain exactly one encoded declaration."
     }
 }
 

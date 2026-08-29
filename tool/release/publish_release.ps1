@@ -19,6 +19,12 @@ param(
 
     [string]$NativeLicenseReviewSignaturePath = "",
 
+    [string]$UnreviewedBetaDeclarationPath = "",
+
+    [switch]$PublishWithoutIndependentNativeLicenseReview,
+
+    [string]$UnreviewedBetaAcknowledgement = "",
+
     [switch]$Publish
 )
 
@@ -46,14 +52,71 @@ if ($versionMajor -ne $expectedMajor) {
 $releaseTag = "v$versionName"
 $repository = "LindersOSX/TetoTV-Beta"
 $releaseTitle = "TetoTV $versionName Beta - Android TV / Google TV / Fire TV"
+$unreviewedBetaAcknowledgementText = "PUBLISH UNREVIEWED BETA"
+$unreviewedBetaStatusMarker = "<!-- tetotv-native-license-review-status: unreviewed-beta -->"
+$unreviewedBetaDisclosureText = "No independent native-license review: This Beta has not received independent native-library licensing review. Automated checks verify the APK, native-source bundle, notices, pinned inputs, and checksums, but do not establish legal compliance or reproducible builds."
+$unreviewedBetaVisibleWarningPrefix = "# TetoTV $versionName Beta`n`n> [!WARNING]`n> $unreviewedBetaDisclosureText`n"
 if ([string]::IsNullOrWhiteSpace($ReleaseNotesPath)) {
     $ReleaseNotesPath = Join-Path $repositoryRoot "docs\RELEASE_NOTES_$versionName.md"
+}
+
+$releaseEvidenceMode = if ($PublishWithoutIndependentNativeLicenseReview) {
+    "UnreviewedBeta"
+}
+else {
+    "Reviewed"
+}
+if ($releaseEvidenceMode -ceq "UnreviewedBeta") {
+    if (
+        -not [string]::Equals(
+            $UnreviewedBetaAcknowledgement,
+            $unreviewedBetaAcknowledgementText,
+            [StringComparison]::Ordinal
+        )
+    ) {
+        throw "Unreviewed Beta publication requires the exact acknowledgement '$unreviewedBetaAcknowledgementText'."
+    }
+    if (
+        -not [string]::IsNullOrWhiteSpace($NativeLicenseReviewPath) -or
+        -not [string]::IsNullOrWhiteSpace($NativeLicenseReviewSignaturePath)
+    ) {
+        throw "Reviewed native-license evidence and the unreviewed Beta exception are mutually exclusive."
+    }
+}
+elseif (
+    -not [string]::IsNullOrWhiteSpace($UnreviewedBetaDeclarationPath) -or
+    -not [string]::IsNullOrWhiteSpace($UnreviewedBetaAcknowledgement)
+) {
+    throw "Unreviewed Beta inputs require -PublishWithoutIndependentNativeLicenseReview."
 }
 
 $resolvedApk = (Resolve-Path -LiteralPath $ApkPath).Path
 $resolvedNativeSource = (Resolve-Path -LiteralPath $NativeSourcePath).Path
 $resolvedChecksums = (Resolve-Path -LiteralPath $ChecksumsPath).Path
 $resolvedNotes = (Resolve-Path -LiteralPath $ReleaseNotesPath).Path
+$sourceNotesText = [IO.File]::ReadAllText($resolvedNotes)
+$normalizedSourceNotesText = $sourceNotesText.Replace("`r`n", "`n")
+if ($sourceNotesText -match '(?im)<!--\s*tetotv-(?:native-license-review-(?:sha256|attestation-base64|signature-base64|status)|unreviewed-beta-declaration-(?:sha256|base64)):') {
+    throw "The source release-notes file must not contain publisher-added native-license evidence markers."
+}
+$sourceDisclosureCount = @([regex]::Matches(
+    $sourceNotesText,
+    [regex]::Escape($unreviewedBetaDisclosureText)
+)).Count
+if ($releaseEvidenceMode -ceq "UnreviewedBeta") {
+    if (
+        $sourceDisclosureCount -ne 1 -or
+        -not $normalizedSourceNotesText.StartsWith(
+            $unreviewedBetaVisibleWarningPrefix,
+            [StringComparison]::Ordinal
+        )
+    ) {
+        throw "Unreviewed Beta source release notes must begin with the exact visible warning block."
+    }
+}
+elseif ($sourceDisclosureCount -ne 0) {
+    throw "Reviewed release notes must not claim that independent native-license review was not performed."
+}
 
 & (Join-Path $PSScriptRoot "verify_release_payloads.ps1") `
     -Channel $Channel `
@@ -226,18 +289,11 @@ function Get-GitHubApiJson([string]$Path) {
 function Assert-GitHubReleaseAuthorityBoundary(
     [string]$Repository,
     [string]$ExpectedOwner,
-    [string]$SignedReviewAttestationPath
+    [object]$GitHubAppInventory
 ) {
-    try {
-        $signedReview = Get-Content -Raw -LiteralPath $SignedReviewAttestationPath |
-            ConvertFrom-Json
-    }
-    catch {
-        throw "Could not read the already verified signed release-authority review evidence."
-    }
-    $appInventory = $signedReview.githubAppInventory
+    $appInventory = $GitHubAppInventory
     if ($null -eq $appInventory) {
-        throw "The signed release-authority review is missing its GitHub App inventory."
+        throw "The verified release evidence is missing its GitHub App inventory."
     }
     $appInventoryProperties = @($appInventory.PSObject.Properties.Name | Sort-Object)
     $expectedAppInventoryProperties = @(
@@ -254,7 +310,12 @@ function Assert-GitHubReleaseAuthorityBoundary(
         $appInventory.inventoryComplete -ne $true -or
         @($appInventory.installations).Count -ne 0
     ) {
-        throw "The signed release-authority review must contain a complete empty GitHub App inventory for $Repository."
+        throw "The verified release evidence must contain a complete empty GitHub App inventory for $Repository."
+    }
+
+    $authenticatedUser = Get-GitHubApiJson "user"
+    if ([string]$authenticatedUser.login -cne $ExpectedOwner) {
+        throw "The authenticated GitHub publisher must be exactly $ExpectedOwner."
     }
 
     $metadata = Get-GitHubApiJson "repos/$Repository"
@@ -279,6 +340,13 @@ function Assert-GitHubReleaseAuthorityBoundary(
     if (@(Get-GitHubApiJson "repos/$Repository/invitations").Count -ne 0) {
         throw "Publication is blocked while repository collaborator invitations are pending."
     }
+    if (@(Get-GitHubApiJson "repos/$Repository/hooks").Count -ne 0) {
+        throw "Publication is blocked while a repository webhook is configured."
+    }
+    $runners = Get-GitHubApiJson "repos/$Repository/actions/runners"
+    if ([long]$runners.total_count -ne 0 -or @($runners.runners).Count -ne 0) {
+        throw "Publication is blocked while a self-hosted repository runner is registered."
+    }
     $writeDeployKeys = @(
         @(Get-GitHubApiJson "repos/$Repository/keys") |
             Where-Object { -not [bool]$_.read_only }
@@ -299,6 +367,20 @@ function Assert-GitHubReleaseAuthorityBoundary(
     ) {
         throw "GitHub Actions must allow only selected actions and require full commit-SHA pins before publication."
     }
+    $selectedActionsPolicy = Get-GitHubApiJson "repos/$Repository/actions/permissions/selected-actions"
+    $expectedExternalActionPatterns = @(
+        "android-actions/setup-android@*",
+        "subosito/flutter-action@*"
+    ) | Sort-Object
+    $actualExternalActionPatterns = @($selectedActionsPolicy.patterns_allowed | Sort-Object)
+    if (
+        -not [bool]$selectedActionsPolicy.github_owned_allowed -or
+        [bool]$selectedActionsPolicy.verified_allowed -or
+        $actualExternalActionPatterns.Count -ne $expectedExternalActionPatterns.Count -or
+        (Compare-Object $expectedExternalActionPatterns $actualExternalActionPatterns)
+    ) {
+        throw "GitHub Actions must allow GitHub-owned actions plus only the two pinned external setup actions required by the hosted verifier."
+    }
     $workflowPermissions = Get-GitHubApiJson "repos/$Repository/actions/permissions/workflow"
     if (
         [string]$workflowPermissions.default_workflow_permissions -cne "read" -or
@@ -316,7 +398,8 @@ function Assert-GitHubRelease {
         [string]$ExpectedTagCommit,
         [object[]]$ExpectedAssets,
         [string]$BuildCode,
-        [string]$NativeLicenseReviewSha256,
+        [string]$NativeLicenseReviewSha256 = "",
+        [string]$UnreviewedBetaDeclarationSha256 = "",
         [bool]$ExpectedDraft
     )
 
@@ -334,38 +417,99 @@ function Assert-GitHubRelease {
     if (@([regex]::Matches([string]$release.body, [regex]::Escape($buildMarker))).Count -ne 1) {
         throw "Release notes do not contain the exact Android build-code marker once."
     }
-    $reviewMarker = "<!-- tetotv-native-license-review-sha256: $NativeLicenseReviewSha256 -->"
-    if (@([regex]::Matches([string]$release.body, [regex]::Escape($reviewMarker))).Count -ne 1) {
-        throw "Release notes do not contain the exact native-license review digest marker once."
+    $hasReviewedEvidence = -not [string]::IsNullOrWhiteSpace($NativeLicenseReviewSha256)
+    $hasUnreviewedEvidence = -not [string]::IsNullOrWhiteSpace($UnreviewedBetaDeclarationSha256)
+    if ($hasReviewedEvidence -eq $hasUnreviewedEvidence) {
+        throw "Release verification requires exactly one native-license evidence mode."
     }
-    if (@([regex]::Matches([string]$release.body, '(?im)<!--\s*tetotv-native-license-review-sha256:')).Count -ne 1) {
-        throw "Release notes contain an unexpected native-license review marker."
-    }
-    $attestationEvidenceMatches = @([regex]::Matches(
-        [string]$release.body,
-        '(?im)<!--\s*tetotv-native-license-review-attestation-base64:\s*(?<data>[A-Za-z0-9+/]+={0,2})\s*-->'
-    ))
-    if (
-        $attestationEvidenceMatches.Count -ne 1 -or
-        @([regex]::Matches(
+    $attestationEvidenceMatches = @()
+    $signatureEvidenceMatches = @()
+    $unreviewedDeclarationMatches = @()
+    if ($hasReviewedEvidence) {
+        $normalizedReleaseBody = ([string]$release.body).Replace("`r`n", "`n")
+        if (@([regex]::Matches($normalizedReleaseBody, [regex]::Escape($unreviewedBetaDisclosureText))).Count -ne 0) {
+            throw "Reviewed release notes must not claim that independent native-license review was not performed."
+        }
+        $reviewMarker = "<!-- tetotv-native-license-review-sha256: $NativeLicenseReviewSha256 -->"
+        if (@([regex]::Matches([string]$release.body, [regex]::Escape($reviewMarker))).Count -ne 1) {
+            throw "Release notes do not contain the exact native-license review digest marker once."
+        }
+        if (@([regex]::Matches([string]$release.body, '(?im)<!--\s*tetotv-native-license-review-sha256:')).Count -ne 1) {
+            throw "Release notes contain an unexpected native-license review marker."
+        }
+        $attestationEvidenceMatches = @([regex]::Matches(
             [string]$release.body,
-            '(?im)<!--\s*tetotv-native-license-review-attestation-base64:'
-        )).Count -ne 1
-    ) {
-        throw "Release notes must contain exactly one encoded native-license review attestation."
-    }
-    $signatureEvidenceMatches = @([regex]::Matches(
-        [string]$release.body,
-        '(?im)<!--\s*tetotv-native-license-review-signature-base64:\s*(?<data>[A-Za-z0-9+/]+={0,2})\s*-->'
-    ))
-    if (
-        $signatureEvidenceMatches.Count -ne 1 -or
-        @([regex]::Matches(
+            '(?im)<!--\s*tetotv-native-license-review-attestation-base64:\s*(?<data>[A-Za-z0-9+/]+={0,2})\s*-->'
+        ))
+        if (
+            $attestationEvidenceMatches.Count -ne 1 -or
+            @([regex]::Matches(
+                [string]$release.body,
+                '(?im)<!--\s*tetotv-native-license-review-attestation-base64:'
+            )).Count -ne 1
+        ) {
+            throw "Release notes must contain exactly one encoded native-license review attestation."
+        }
+        $signatureEvidenceMatches = @([regex]::Matches(
             [string]$release.body,
-            '(?im)<!--\s*tetotv-native-license-review-signature-base64:'
-        )).Count -ne 1
-    ) {
-        throw "Release notes must contain exactly one encoded native-license review signature."
+            '(?im)<!--\s*tetotv-native-license-review-signature-base64:\s*(?<data>[A-Za-z0-9+/]+={0,2})\s*-->'
+        ))
+        if (
+            $signatureEvidenceMatches.Count -ne 1 -or
+            @([regex]::Matches(
+                [string]$release.body,
+                '(?im)<!--\s*tetotv-native-license-review-signature-base64:'
+            )).Count -ne 1
+        ) {
+            throw "Release notes must contain exactly one encoded native-license review signature."
+        }
+        if ([string]$release.body -match '(?im)tetotv-(?:native-license-review-status:\s*unreviewed-beta|unreviewed-beta-declaration-)') {
+            throw "Reviewed release notes must not contain unreviewed Beta evidence."
+        }
+    }
+    else {
+        $normalizedReleaseBody = ([string]$release.body).Replace("`r`n", "`n")
+        if ($UnreviewedBetaDeclarationSha256 -notmatch '^[0-9a-f]{64}$') {
+            throw "Unreviewed Beta declaration digest must be lowercase SHA-256."
+        }
+        if ([string]$release.body -match '(?im)<!--\s*tetotv-native-license-review-(?:sha256|attestation-base64|signature-base64):') {
+            throw "Unreviewed Beta release notes must not contain qualified-review evidence."
+        }
+        if (@([regex]::Matches([string]$release.body, [regex]::Escape($unreviewedBetaStatusMarker))).Count -ne 1) {
+            throw "Unreviewed Beta release notes must contain the exact status marker once."
+        }
+        if (@([regex]::Matches([string]$release.body, '(?im)<!--\s*tetotv-native-license-review-status:')).Count -ne 1) {
+            throw "Unreviewed Beta release notes contain an unexpected review-status marker."
+        }
+        if (
+            @([regex]::Matches($normalizedReleaseBody, [regex]::Escape($unreviewedBetaDisclosureText))).Count -ne 1 -or
+            -not $normalizedReleaseBody.StartsWith(
+                $unreviewedBetaVisibleWarningPrefix,
+                [StringComparison]::Ordinal
+            )
+        ) {
+            throw "Unreviewed Beta release notes must begin with the exact visible warning block."
+        }
+        $declarationMarker = "<!-- tetotv-unreviewed-beta-declaration-sha256: $UnreviewedBetaDeclarationSha256 -->"
+        if (@([regex]::Matches([string]$release.body, [regex]::Escape($declarationMarker))).Count -ne 1) {
+            throw "Release notes do not contain the exact unreviewed Beta declaration digest once."
+        }
+        if (@([regex]::Matches([string]$release.body, '(?im)<!--\s*tetotv-unreviewed-beta-declaration-sha256:')).Count -ne 1) {
+            throw "Release notes contain an unexpected unreviewed Beta declaration marker."
+        }
+        $unreviewedDeclarationMatches = @([regex]::Matches(
+            [string]$release.body,
+            '(?im)<!--\s*tetotv-unreviewed-beta-declaration-base64:\s*(?<data>[A-Za-z0-9+/]+={0,2})\s*-->'
+        ))
+        if (
+            $unreviewedDeclarationMatches.Count -ne 1 -or
+            @([regex]::Matches(
+                [string]$release.body,
+                '(?im)<!--\s*tetotv-unreviewed-beta-declaration-base64:'
+            )).Count -ne 1
+        ) {
+            throw "Release notes must contain exactly one encoded unreviewed Beta declaration."
+        }
     }
     foreach ($expected in $ExpectedAssets) {
         if (-not ([string]$release.body).Contains($expected.Name)) {
@@ -420,45 +564,80 @@ function Assert-GitHubRelease {
             [string]$release.body,
             [Text.UTF8Encoding]::new($false)
         )
-        $downloadedAttestationPath = Join-Path $downloadRoot "native-license-review.json"
-        $downloadedSignaturePath = Join-Path $downloadRoot "native-license-review.json.sig"
-        try {
-            [IO.File]::WriteAllBytes(
-                $downloadedAttestationPath,
-                [Convert]::FromBase64String(
-                    $attestationEvidenceMatches[0].Groups['data'].Value
+        if ($hasReviewedEvidence) {
+            $downloadedAttestationPath = Join-Path $downloadRoot "native-license-review.json"
+            $downloadedSignaturePath = Join-Path $downloadRoot "native-license-review.json.sig"
+            try {
+                [IO.File]::WriteAllBytes(
+                    $downloadedAttestationPath,
+                    [Convert]::FromBase64String(
+                        $attestationEvidenceMatches[0].Groups['data'].Value
+                    )
                 )
-            )
-            [IO.File]::WriteAllBytes(
-                $downloadedSignaturePath,
-                [Convert]::FromBase64String(
-                    $signatureEvidenceMatches[0].Groups['data'].Value
+                [IO.File]::WriteAllBytes(
+                    $downloadedSignaturePath,
+                    [Convert]::FromBase64String(
+                        $signatureEvidenceMatches[0].Groups['data'].Value
+                    )
                 )
-            )
+            }
+            catch {
+                throw "Release notes contain invalid encoded native-license review evidence."
+            }
+            $downloadedAttestationSha256 = (
+                Get-FileHash -Algorithm SHA256 -LiteralPath $downloadedAttestationPath
+            ).Hash.ToLowerInvariant()
+            if ($downloadedAttestationSha256 -cne $NativeLicenseReviewSha256) {
+                throw "Encoded native-license review attestation does not match its digest marker."
+            }
+            & (Join-Path $PSScriptRoot "verify_native_license_review.ps1") `
+                -AttestationPath $downloadedAttestationPath `
+                -SignaturePath $downloadedSignaturePath `
+                -ReleaseTag $Tag `
+                -GitCommit $ExpectedTagCommit `
+                -ApkPath (Join-Path $downloadRoot ([IO.Path]::GetFileName($resolvedApk))) `
+                -NativeSourcePath (Join-Path $downloadRoot ([IO.Path]::GetFileName($resolvedNativeSource)))
+            & (Join-Path $PSScriptRoot "verify_release_payloads.ps1") `
+                -Channel $Channel `
+                -ApkPath (Join-Path $downloadRoot ([IO.Path]::GetFileName($resolvedApk))) `
+                -NativeSourcePath (Join-Path $downloadRoot ([IO.Path]::GetFileName($resolvedNativeSource))) `
+                -ChecksumsPath (Join-Path $downloadRoot ([IO.Path]::GetFileName($resolvedChecksums))) `
+                -ReleaseNotesPath $downloadedNotesPath `
+                -NativeLicenseReviewSha256 $NativeLicenseReviewSha256
         }
-        catch {
-            throw "Release notes contain invalid encoded native-license review evidence."
+        else {
+            $downloadedDeclarationPath = Join-Path $downloadRoot "unreviewed-beta-release-declaration.json"
+            try {
+                [IO.File]::WriteAllBytes(
+                    $downloadedDeclarationPath,
+                    [Convert]::FromBase64String(
+                        $unreviewedDeclarationMatches[0].Groups['data'].Value
+                    )
+                )
+            }
+            catch {
+                throw "Release notes contain invalid encoded unreviewed Beta evidence."
+            }
+            $downloadedDeclarationSha256 = (
+                Get-FileHash -Algorithm SHA256 -LiteralPath $downloadedDeclarationPath
+            ).Hash.ToLowerInvariant()
+            if ($downloadedDeclarationSha256 -cne $UnreviewedBetaDeclarationSha256) {
+                throw "Encoded unreviewed Beta declaration does not match its digest marker."
+            }
+            & (Join-Path $PSScriptRoot "verify_unreviewed_beta_release_declaration.ps1") `
+                -DeclarationPath $downloadedDeclarationPath `
+                -ReleaseTag $Tag `
+                -GitCommit $ExpectedTagCommit `
+                -ApkPath (Join-Path $downloadRoot ([IO.Path]::GetFileName($resolvedApk))) `
+                -NativeSourcePath (Join-Path $downloadRoot ([IO.Path]::GetFileName($resolvedNativeSource)))
+            & (Join-Path $PSScriptRoot "verify_release_payloads.ps1") `
+                -Channel $Channel `
+                -ApkPath (Join-Path $downloadRoot ([IO.Path]::GetFileName($resolvedApk))) `
+                -NativeSourcePath (Join-Path $downloadRoot ([IO.Path]::GetFileName($resolvedNativeSource))) `
+                -ChecksumsPath (Join-Path $downloadRoot ([IO.Path]::GetFileName($resolvedChecksums))) `
+                -ReleaseNotesPath $downloadedNotesPath `
+                -UnreviewedBetaDeclarationSha256 $UnreviewedBetaDeclarationSha256
         }
-        $downloadedAttestationSha256 = (
-            Get-FileHash -Algorithm SHA256 -LiteralPath $downloadedAttestationPath
-        ).Hash.ToLowerInvariant()
-        if ($downloadedAttestationSha256 -cne $NativeLicenseReviewSha256) {
-            throw "Encoded native-license review attestation does not match its digest marker."
-        }
-        & (Join-Path $PSScriptRoot "verify_native_license_review.ps1") `
-            -AttestationPath $downloadedAttestationPath `
-            -SignaturePath $downloadedSignaturePath `
-            -ReleaseTag $Tag `
-            -GitCommit $ExpectedTagCommit `
-            -ApkPath (Join-Path $downloadRoot ([IO.Path]::GetFileName($resolvedApk))) `
-            -NativeSourcePath (Join-Path $downloadRoot ([IO.Path]::GetFileName($resolvedNativeSource)))
-        & (Join-Path $PSScriptRoot "verify_release_payloads.ps1") `
-            -Channel $Channel `
-            -ApkPath (Join-Path $downloadRoot ([IO.Path]::GetFileName($resolvedApk))) `
-            -NativeSourcePath (Join-Path $downloadRoot ([IO.Path]::GetFileName($resolvedNativeSource))) `
-            -ChecksumsPath (Join-Path $downloadRoot ([IO.Path]::GetFileName($resolvedChecksums))) `
-            -ReleaseNotesPath $downloadedNotesPath `
-            -NativeLicenseReviewSha256 $NativeLicenseReviewSha256
     }
     finally {
         $safeTempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
@@ -492,14 +671,28 @@ foreach ($asset in $expectedAssets) {
 
 if (-not $Publish) {
     Write-Host "Dry run only. No GitHub changes were made."
-    Write-Host "Publication additionally requires an SSH-signed, allowlisted native-license review attestation bound to the final tag, commit, APK, source ZIP, manifest, and native notice."
+    if ($releaseEvidenceMode -ceq "Reviewed") {
+        Write-Host "Reviewed publication additionally requires an SSH-signed, allowlisted native-license review attestation bound to the final tag, commit, APK, source ZIP, manifest, and native notice."
+    }
+    else {
+        Write-Warning "Unreviewed Beta mode selected. Publication requires a fresh owner declaration that explicitly records no independent native-license or corresponding-source review."
+    }
     exit 0
 }
 if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
     throw "GitHub CLI (gh) is required to publish."
 }
-if ([string]::IsNullOrWhiteSpace($NativeLicenseReviewPath)) {
-    throw "-Publish requires -NativeLicenseReviewPath. Publication fails closed without a signed qualified-reviewer attestation."
+if (
+    $releaseEvidenceMode -ceq "Reviewed" -and
+    [string]::IsNullOrWhiteSpace($NativeLicenseReviewPath)
+) {
+    throw "Reviewed publication requires -NativeLicenseReviewPath and fails closed without a signed qualified-reviewer attestation."
+}
+if (
+    $releaseEvidenceMode -ceq "UnreviewedBeta" -and
+    [string]::IsNullOrWhiteSpace($UnreviewedBetaDeclarationPath)
+) {
+    throw "Unreviewed Beta publication requires -UnreviewedBetaDeclarationPath."
 }
 
 Push-Location $repositoryRoot
@@ -512,31 +705,60 @@ try {
         throw "Could not resolve local HEAD."
     }
     Assert-TagMatchesHead $repository $releaseTag $headCommit
-    $reviewArguments = @{
-        AttestationPath = $NativeLicenseReviewPath
-        ReleaseTag = $releaseTag
-        GitCommit = $headCommit
-        ApkPath = $resolvedApk
-        NativeSourcePath = $resolvedNativeSource
+    $resolvedReview = ""
+    $resolvedReviewSignature = ""
+    $nativeLicenseReviewSha256 = ""
+    $resolvedUnreviewedDeclaration = ""
+    $unreviewedBetaDeclarationSha256 = ""
+    $githubAppInventory = $null
+    if ($releaseEvidenceMode -ceq "Reviewed") {
+        $reviewArguments = @{
+            AttestationPath = $NativeLicenseReviewPath
+            ReleaseTag = $releaseTag
+            GitCommit = $headCommit
+            ApkPath = $resolvedApk
+            NativeSourcePath = $resolvedNativeSource
+        }
+        if (-not [string]::IsNullOrWhiteSpace($NativeLicenseReviewSignaturePath)) {
+            $reviewArguments.SignaturePath = $NativeLicenseReviewSignaturePath
+        }
+        & (Join-Path $PSScriptRoot "verify_native_license_review.ps1") @reviewArguments
+        $resolvedReview = (Resolve-Path -LiteralPath $NativeLicenseReviewPath).Path
+        $reviewEvidence = Get-Content -Raw -LiteralPath $resolvedReview | ConvertFrom-Json
+        $githubAppInventory = $reviewEvidence.githubAppInventory
+        $resolvedReviewSignature = if (
+            [string]::IsNullOrWhiteSpace($NativeLicenseReviewSignaturePath)
+        ) {
+            (Resolve-Path -LiteralPath "$resolvedReview.sig").Path
+        }
+        else {
+            (Resolve-Path -LiteralPath $NativeLicenseReviewSignaturePath).Path
+        }
+        $nativeLicenseReviewSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $resolvedReview).Hash.ToLowerInvariant()
     }
-    if (-not [string]::IsNullOrWhiteSpace($NativeLicenseReviewSignaturePath)) {
-        $reviewArguments.SignaturePath = $NativeLicenseReviewSignaturePath
+    else {
+        $unreviewedArguments = @{
+            DeclarationPath = $UnreviewedBetaDeclarationPath
+            ReleaseTag = $releaseTag
+            GitCommit = $headCommit
+            ApkPath = $resolvedApk
+            NativeSourcePath = $resolvedNativeSource
+        }
+        & (Join-Path $PSScriptRoot "verify_unreviewed_beta_release_declaration.ps1") @unreviewedArguments
+        $resolvedUnreviewedDeclaration = (
+            Resolve-Path -LiteralPath $UnreviewedBetaDeclarationPath
+        ).Path
+        $unreviewedEvidence = Get-Content -Raw -LiteralPath $resolvedUnreviewedDeclaration |
+            ConvertFrom-Json
+        $githubAppInventory = $unreviewedEvidence.githubAppInventory
+        $unreviewedBetaDeclarationSha256 = (
+            Get-FileHash -Algorithm SHA256 -LiteralPath $resolvedUnreviewedDeclaration
+        ).Hash.ToLowerInvariant()
     }
-    & (Join-Path $PSScriptRoot "verify_native_license_review.ps1") @reviewArguments
-    $resolvedReview = (Resolve-Path -LiteralPath $NativeLicenseReviewPath).Path
     Assert-GitHubReleaseAuthorityBoundary `
         -Repository $repository `
         -ExpectedOwner "LindersOSX" `
-        -SignedReviewAttestationPath $resolvedReview
-    $resolvedReviewSignature = if (
-        [string]::IsNullOrWhiteSpace($NativeLicenseReviewSignaturePath)
-    ) {
-        (Resolve-Path -LiteralPath "$resolvedReview.sig").Path
-    }
-    else {
-        (Resolve-Path -LiteralPath $NativeLicenseReviewSignaturePath).Path
-    }
-    $nativeLicenseReviewSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $resolvedReview).Hash.ToLowerInvariant()
+        -GitHubAppInventory $githubAppInventory
 
     if ($null -ne (Get-GitHubRelease $repository $releaseTag -AllowMissing)) {
         throw "Release $releaseTag already exists in $repository."
@@ -566,31 +788,53 @@ try {
         }
     }
 
-    $notesText = [IO.File]::ReadAllText($resolvedNotes)
-    if ($notesText -match '(?im)<!--\s*tetotv-native-license-review-(?:sha256|attestation-base64|signature-base64):') {
-        throw "The source release-notes file must not contain native-license review markers; the publisher adds verified evidence."
+    $notesText = $sourceNotesText
+    if ($releaseEvidenceMode -ceq "Reviewed") {
+        $reviewMarker = "<!-- tetotv-native-license-review-sha256: $nativeLicenseReviewSha256 -->"
+        $reviewAttestationBase64 = [Convert]::ToBase64String(
+            [IO.File]::ReadAllBytes($resolvedReview)
+        )
+        $reviewSignatureBase64 = [Convert]::ToBase64String(
+            [IO.File]::ReadAllBytes($resolvedReviewSignature)
+        )
+        $reviewAttestationMarker = "<!-- tetotv-native-license-review-attestation-base64: $reviewAttestationBase64 -->"
+        $reviewSignatureMarker = "<!-- tetotv-native-license-review-signature-base64: $reviewSignatureBase64 -->"
+        $verifiedReleaseNotes = (
+            $notesText.TrimEnd() + "`n`n" +
+            $reviewMarker + "`n" +
+            $reviewAttestationMarker + "`n" +
+            $reviewSignatureMarker + "`n"
+        )
     }
-    $reviewMarker = "<!-- tetotv-native-license-review-sha256: $nativeLicenseReviewSha256 -->"
-    $reviewAttestationBase64 = [Convert]::ToBase64String(
-        [IO.File]::ReadAllBytes($resolvedReview)
-    )
-    $reviewSignatureBase64 = [Convert]::ToBase64String(
-        [IO.File]::ReadAllBytes($resolvedReviewSignature)
-    )
-    $reviewAttestationMarker = "<!-- tetotv-native-license-review-attestation-base64: $reviewAttestationBase64 -->"
-    $reviewSignatureMarker = "<!-- tetotv-native-license-review-signature-base64: $reviewSignatureBase64 -->"
-    $releaseNotesWithReview = (
-        $notesText.TrimEnd() + "`n`n" +
-        $reviewMarker + "`n" +
-        $reviewAttestationMarker + "`n" +
-        $reviewSignatureMarker + "`n"
-    )
+    else {
+        $normalizedNotesText = $notesText.Replace("`r`n", "`n")
+        if (
+            @([regex]::Matches($normalizedNotesText, [regex]::Escape($unreviewedBetaDisclosureText))).Count -ne 1 -or
+            -not $normalizedNotesText.StartsWith(
+                $unreviewedBetaVisibleWarningPrefix,
+                [StringComparison]::Ordinal
+            )
+        ) {
+            throw "The source release notes must begin with the exact visible unreviewed Beta warning block."
+        }
+        $declarationMarker = "<!-- tetotv-unreviewed-beta-declaration-sha256: $unreviewedBetaDeclarationSha256 -->"
+        $declarationBase64 = [Convert]::ToBase64String(
+            [IO.File]::ReadAllBytes($resolvedUnreviewedDeclaration)
+        )
+        $declarationEvidenceMarker = "<!-- tetotv-unreviewed-beta-declaration-base64: $declarationBase64 -->"
+        $verifiedReleaseNotes = (
+            $notesText.TrimEnd() + "`n`n" +
+            $unreviewedBetaStatusMarker + "`n" +
+            $declarationMarker + "`n" +
+            $declarationEvidenceMarker + "`n"
+        )
+    }
     $releaseTempRoot = Join-Path ([IO.Path]::GetTempPath()) ("tetotv-release-notes-" + [Guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $releaseTempRoot | Out-Null
     $verifiedNotesPath = Join-Path $releaseTempRoot "RELEASE_NOTES.md"
     [IO.File]::WriteAllText(
         $verifiedNotesPath,
-        $releaseNotesWithReview,
+        $verifiedReleaseNotes,
         [Text.UTF8Encoding]::new($false)
     )
 
@@ -618,6 +862,7 @@ try {
             -ExpectedAssets $expectedAssets `
             -BuildCode $buildCode `
             -NativeLicenseReviewSha256 $nativeLicenseReviewSha256 `
+            -UnreviewedBetaDeclarationSha256 $unreviewedBetaDeclarationSha256 `
             -ExpectedDraft $true
 
         Invoke-GitHubCli -Arguments @(
@@ -636,6 +881,7 @@ try {
             -ExpectedAssets $expectedAssets `
             -BuildCode $buildCode `
             -NativeLicenseReviewSha256 $nativeLicenseReviewSha256 `
+            -UnreviewedBetaDeclarationSha256 $unreviewedBetaDeclarationSha256 `
             -ExpectedDraft $false
     }
     catch {

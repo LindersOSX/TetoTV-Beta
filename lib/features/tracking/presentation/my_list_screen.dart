@@ -304,7 +304,8 @@ class _MyListScreenState extends ConsumerState<MyListScreen> {
                         _SortButton(
                           sort: sort,
                           compact: true,
-                          iconOnly: layout.usesPhoneBottomNavigation &&
+                          iconOnly:
+                              layout.usesPhoneBottomNavigation &&
                               constraints.maxWidth < 420,
                           focusNode: _sortFocus,
                           onKeyEvent: (_, event) =>

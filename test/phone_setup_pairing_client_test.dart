@@ -124,53 +124,53 @@ void main() {
       );
     });
 
-    test('derives the QR identity locally instead of trusting the relay', () async {
-      for (final field in const [
-        'device_key_fingerprint',
-        'confirmation_code',
-      ]) {
-        final harness = _Harness((_) {
-          final response = _sessionResponse();
-          response[field] = field == 'confirmation_code'
-              ? '000000'
-              : List.filled(43, 'A').join();
-          if (field == 'device_key_fingerprint') {
-            response['verification_uri_complete'] =
-                'https://setup.example/setup#code=ABCD-EFGH&key=${response[field]}';
-          }
-          return response;
-        });
-        await expectLater(
-          harness.client.createSession(_keyMaterial()),
-          throwsFormatException,
-          reason: field,
-        );
-      }
-    });
-
     test(
-      'requires same-origin fragment-only verification completion',
+      'derives the QR identity locally instead of trusting the relay',
       () async {
-        final mutations = <String>[
-          'https://evil.example/setup#code=ABCD-EFGH&key=${_testIdentity.fingerprint}',
-          'https://setup.example/setup?code=ABCD-EFGH&key=${_testIdentity.fingerprint}',
-          'https://setup.example/setup#code=WXYZ-2345&key=${_testIdentity.fingerprint}',
-          'https://setup.example/setup#code=ABCD-EFGH&key=WRONG_KEY',
-          'https://setup.example/setup#code=ABCD-EFGH&key=${_testIdentity.fingerprint}&extra=1',
-          'https://setup.example/other#code=ABCD-EFGH&key=${_testIdentity.fingerprint}',
-        ];
-        for (final uri in mutations) {
-          final harness = _Harness(
-            (_) => _sessionResponse(verificationUriComplete: uri),
-          );
+        for (final field in const [
+          'device_key_fingerprint',
+          'confirmation_code',
+        ]) {
+          final harness = _Harness((_) {
+            final response = _sessionResponse();
+            response[field] = field == 'confirmation_code'
+                ? '000000'
+                : List.filled(43, 'A').join();
+            if (field == 'device_key_fingerprint') {
+              response['verification_uri_complete'] =
+                  'https://setup.example/setup#code=ABCD-EFGH&key=${response[field]}';
+            }
+            return response;
+          });
           await expectLater(
             harness.client.createSession(_keyMaterial()),
             throwsFormatException,
-            reason: uri,
+            reason: field,
           );
         }
       },
     );
+
+    test('requires same-origin fragment-only verification completion', () async {
+      final mutations = <String>[
+        'https://evil.example/setup#code=ABCD-EFGH&key=${_testIdentity.fingerprint}',
+        'https://setup.example/setup?code=ABCD-EFGH&key=${_testIdentity.fingerprint}',
+        'https://setup.example/setup#code=WXYZ-2345&key=${_testIdentity.fingerprint}',
+        'https://setup.example/setup#code=ABCD-EFGH&key=WRONG_KEY',
+        'https://setup.example/setup#code=ABCD-EFGH&key=${_testIdentity.fingerprint}&extra=1',
+        'https://setup.example/other#code=ABCD-EFGH&key=${_testIdentity.fingerprint}',
+      ];
+      for (final uri in mutations) {
+        final harness = _Harness(
+          (_) => _sessionResponse(verificationUriComplete: uri),
+        );
+        await expectLater(
+          harness.client.createSession(_keyMaterial()),
+          throwsFormatException,
+          reason: uri,
+        );
+      }
+    });
 
     test(
       'poll sends device capability in header and parses a 65-byte envelope',
@@ -312,9 +312,7 @@ class _Harness {
   late final PhoneSetupPairingClient client;
 }
 
-Map<String, Object?> _sessionResponse({
-  String? verificationUriComplete,
-}) {
+Map<String, Object?> _sessionResponse({String? verificationUriComplete}) {
   final now = DateTime.now().toUtc();
   return {
     'version': 1,
@@ -371,14 +369,13 @@ final _testIdentity = _keyIdentity(_keyMaterial());
 ({String fingerprint, String confirmationCode}) _keyIdentity(
   PhoneSetupKeyMaterial key,
 ) {
-  final bytes = sha256
-      .convert(<int>[0x04, ...key.publicX, ...key.publicY])
-      .bytes;
+  final bytes = sha256.convert(<int>[
+    0x04,
+    ...key.publicX,
+    ...key.publicY,
+  ]).bytes;
   final value =
-      (bytes[0] << 24) |
-      (bytes[1] << 16) |
-      (bytes[2] << 8) |
-      bytes[3];
+      (bytes[0] << 24) | (bytes[1] << 16) | (bytes[2] << 8) | bytes[3];
   return (
     fingerprint: _b64(bytes),
     confirmationCode: (value % 1000000).toString().padLeft(6, '0'),

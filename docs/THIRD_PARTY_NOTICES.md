@@ -79,11 +79,14 @@ texts under `assets/legal/native/`. Exact binary hashes, source revisions, rebui
 relink instructions, and known evidence limits are in
 [`NATIVE_PLAYBACK_REDISTRIBUTION.md`](NATIVE_PLAYBACK_REDISTRIBUTION.md).
 A distributor must run the verifier and stage the corresponding-source bundle
-as release evidence. Before using the one-APK GitHub asset policy, a qualified
-reviewer must confirm that GitHub's tagged source archives and the durable
-public source locations referenced by this repository satisfy every applicable
-source obligation. Neither this summary nor the in-APK notice is, by itself, a
-source-code offer.
+as release evidence. The default release path requires a qualified reviewer to
+confirm that GitHub's tagged source archives and the durable public source
+locations referenced by this repository satisfy every applicable source
+obligation. A prominently disclosed Beta-only exception can instead record
+that independent native-license and corresponding-source review was deferred;
+automated verification and an owner declaration do not establish compliance
+or cure an incomplete source offer. Neither this summary nor the in-APK notice
+is, by itself, a source-code offer.
 
 The direct-torrent JNI artifacts are ordinary Maven dependencies rather than
 part of the libmpv corresponding-source bundle. A distributor must separately

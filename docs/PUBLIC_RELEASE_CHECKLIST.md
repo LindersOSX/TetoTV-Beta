@@ -40,16 +40,19 @@ the same as legal, store, or codec certification.
   `powershell -ExecutionPolicy Bypass -File tool/release/verify_native_redistribution.ps1`
   before building, then run it with `-StageBundle` and retain the generated
   native source bundle as release evidence. Review every reported upstream
-  provenance limit before approving distribution. A qualified release reviewer
-  must confirm that the tagged repository archive and linked public source
-  locations satisfy the exact binary's source obligations; if they do not, the
-  three-asset GitHub release contract is a release blocker.
-  Record that approval with the SSH-signed attestation in
-  `NATIVE_LICENSE_RELEASE_REVIEW.md`. Publication must remain blocked when the
-  reviewer allowlist is empty, the signature is invalid, the review is stale,
-  or any tag, commit, APK, source ZIP, manifest, notice, or provenance-limit
-  digest differs from the signed statement. This evidence is not itself a
-  legal-compliance claim.
+  provenance limit before approving distribution. Every Public release requires
+  a qualified release reviewer to confirm that the tagged repository archive
+  and linked public source locations satisfy the exact binary's source
+  obligations; if they do not, the three-asset GitHub release contract is a
+  release blocker. Record that approval with the SSH-signed attestation in
+  `NATIVE_LICENSE_RELEASE_REVIEW.md`. Public publication must remain blocked
+  when the reviewer allowlist is empty, the signature is invalid, the review is
+  stale, or any tag, commit, APK, source ZIP, manifest, notice, or
+  provenance-limit digest differs from the signed statement. This evidence is
+  not itself a legal-compliance claim. A Beta may instead use only the explicit,
+  prominently disclosed owner-declaration exception documented there. That
+  exception records that independent review did not occur; it never satisfies
+  this Public-release checklist or establishes compliance.
 - Run
   `powershell -ExecutionPolicy Bypass -File tool/release/stage_third_party_notices.ps1 -StageBundle -RequireDiscordSdkBinary`
   from the release revision. Retain the generated notices ZIP with the release
@@ -198,12 +201,17 @@ must use phishing-resistant two-factor authentication (preferably a passkey or
 hardware security key), offline recovery codes, and narrowly scoped/revocable
 credentials.
 
-The publisher automatically verifies collaborators, invitations, write deploy
-keys, immutable-release settings, and Actions permissions. A normal GitHub CLI
-OAuth token cannot enumerate the complete GitHub App installation inventory for
-a personal account, so the signed release review must also contain a complete,
-empty inventory confirmed from **Repository settings > Integrations > GitHub
-Apps** within the previous 24 hours. Any installed App blocks publication.
+The publisher automatically verifies collaborators, invitations, webhooks,
+write deploy keys, self-hosted runners, immutable-release settings, and Actions
+permissions. Actions must require full commit-SHA pins and allow GitHub-owned
+actions plus only `subosito/flutter-action` and `android-actions/setup-android`,
+which the hosted verifier pins to exact commits. A normal GitHub CLI OAuth token cannot enumerate the complete
+GitHub App installation inventory for a personal account, so the selected
+release evidence must also contain a complete, empty inventory confirmed from
+**Repository settings > Integrations > GitHub Apps** within the previous 24
+hours. For a reviewed release that inventory is part of the signed statement;
+for the explicit unreviewed Beta exception it is an owner confirmation and is
+not represented as independent review. Any installed App blocks publication.
 
 If release creation must be technically independent of the owner, transfer the
 repositories to a GitHub organization, enforce immutable releases at the
@@ -211,8 +219,9 @@ organization level, and place publication behind an organization-controlled
 environment/custom role with a separate reviewer. Branch and tag rules cannot
 govern GitHub release creation, and a post-publication workflow cannot erase
 the brief visibility window of an unauthorized manual release. Never announce
-a release unless its signed native review, payload verification workflow, and
-GitHub verification attestation all pass.
+a release unless its exact selected evidence mode, payload verification
+workflow, and GitHub verification attestation all pass. Public releases always
+require the signed native review; the owner-declared exception is Beta-only.
 
 ## Content/source policy
 

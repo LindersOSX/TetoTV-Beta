@@ -105,17 +105,22 @@ this Android rule.
 
 Before publishing either channel:
 
-1. Start from a reviewed clean public root and verify the proprietary Discord
+1. Start from a clean public-source checkout and verify the proprietary Discord
    SDK AAR is absent from every public branch, tag, pull-request ref, archive,
    release asset, and reachable Git object.
 2. Build one production-signed universal APK with ARM32 and ARM64.
 3. Stage and verify the versioned native source bundle.
 4. Generate `SHA256SUMS` from the final APK and native source ZIP.
 5. Run `tool/release/verify_release_payloads.ps1` (which requires all five
-   pinned native binary artifacts) and the full checklist in
-   `PUBLIC_RELEASE_CHECKLIST.md`.
-6. Obtain and verify the SSH-signed, artifact-bound qualified-reviewer record
-   described in `NATIVE_LICENSE_RELEASE_REVIEW.md`.
+   pinned native binary artifacts) and every applicable common technical check
+   in `PUBLIC_RELEASE_CHECKLIST.md`. A Public release must satisfy that complete
+   checklist. An explicitly unreviewed Beta does not satisfy its independent
+   review gate and must use the warning and evidence path in step 6 instead.
+6. Use exactly one evidence path from `NATIVE_LICENSE_RELEASE_REVIEW.md`:
+   either obtain the SSH-signed, artifact-bound qualified-reviewer record, or
+   for an explicitly unreviewed Beta only, create the fresh owner declaration
+   and publish the required warning. The exception is not legal review and is
+   never permitted for Public.
 7. Let the publisher create a private draft with exactly the three named
    assets. It re-downloads and fully verifies the hosted draft before making it
    a normal release, then verifies `/releases/latest`. Install that result over
@@ -123,8 +128,8 @@ Before publishing either channel:
    TV devices.
 
 For Beta, use `tool/release/publish_beta_release.ps1`; it is a dry run unless
-`-Publish` and the signed native-license review are passed, and publishes only
-to `LindersOSX/TetoTV-Beta`. Public
+`-Publish` and exactly one explicit reviewed or unreviewed evidence mode are
+passed, and publishes only to `LindersOSX/TetoTV-Beta`. Public
 publication is intentionally absent from the release scripts and rejected by
 the release workflow. Re-enabling it requires a separately reviewed source
 change after the Public channel is approved.

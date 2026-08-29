@@ -94,6 +94,7 @@ final phoneSetupBundleImporterProvider = Provider<PhoneSetupBundleImporter>((
             expiresAt: credentials.expiresAt,
             scopes: credentials.scopes.join(' '),
           ),
+          credentials.minimumAgeConfirmation,
           connectAfterStore: false,
         ),
     snapshotDiscord: () => ref
@@ -221,7 +222,9 @@ class PhoneSetupBundleImporter {
       );
     }
     if (discordCredentials != null &&
-        (discordCredentials.expiresAt.isBefore(DateTime.now().toUtc()) ||
+        (bundle.protocolVersion < 3 ||
+            !discordCredentials.minimumAgeConfirmation.isCurrentAndAccepted ||
+            discordCredentials.expiresAt.isBefore(DateTime.now().toUtc()) ||
             importDiscord == null ||
             snapshotDiscord == null ||
             restoreDiscord == null)) {

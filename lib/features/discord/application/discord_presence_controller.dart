@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/core/storage/secure_storage_snapshot.dart';
 import 'package:anime_tv/features/auth/application/pairing_controller.dart';
+import 'package:anime_tv/features/discord/domain/discord_minimum_age_confirmation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -146,6 +147,8 @@ class DiscordPresenceController extends StateNotifier<DiscordPresenceState> {
   static const _tokenTypeKey = 'discord_rich_presence_token_type';
   static const _expiresAtKey = 'discord_rich_presence_expires_at';
   static const _scopesKey = 'discord_rich_presence_scopes';
+  static const _minimumAgeConfirmationKey =
+      'discord_rich_presence_minimum_age_confirmation_v1';
   static const _refreshWindow = Duration(hours: 24);
 
   final FlutterSecureStorage _storage;
@@ -191,17 +194,18 @@ class DiscordPresenceController extends StateNotifier<DiscordPresenceState> {
     }
   }
 
-  Future<void> linkAccount() async {
+  Future<void> linkAccount(
+    DiscordMinimumAgeConfirmation minimumAgeConfirmation,
+  ) async {
     if (!mounted || state.busy || !state.available) return;
+    _validateMinimumAgeConfirmation(minimumAgeConfirmation);
     final generation = ++_authenticationGeneration;
     state = state.copyWith(busy: true, clearError: true);
     try {
       final token = await _authenticateWithTimeout(generation);
       if (!_isCurrentAuthentication(generation)) return;
       _validateToken(token);
-      await _storeToken(token);
-      if (!_isCurrentAuthentication(generation)) return;
-      await _storage.write(key: _enabledKey, value: 'true');
+      await _storeNewToken(token, minimumAgeConfirmation);
       if (!_isCurrentAuthentication(generation)) return;
       state = state.copyWith(linked: true, enabled: true);
       await _connect(token);
@@ -228,26 +232,36 @@ class DiscordPresenceController extends StateNotifier<DiscordPresenceState> {
   ///
   /// The same secure-storage and native connection path used by mobile OAuth
   /// is retained. Concurrent native or device linking attempts cannot race.
-  Future<void> acceptLinkedToken(DiscordTokenBundle token) async {
-    return _acceptLinkedToken(token, requireAvailable: true);
+  Future<void> acceptLinkedToken(
+    DiscordTokenBundle token,
+    DiscordMinimumAgeConfirmation minimumAgeConfirmation,
+  ) async {
+    return _acceptLinkedToken(
+      token,
+      minimumAgeConfirmation,
+      requireAvailable: true,
+    );
   }
 
   /// Imports an end-to-end encrypted token bundle from first-time phone setup.
   /// The credentials are saved even when the native Discord SDK is not ready
   /// yet; the normal initialization/retry path connects it when available.
   Future<void> importLinkedToken(
-    DiscordTokenBundle token, {
+    DiscordTokenBundle token,
+    DiscordMinimumAgeConfirmation minimumAgeConfirmation, {
     bool connectAfterStore = true,
   }) {
     return _acceptLinkedToken(
       token,
+      minimumAgeConfirmation,
       requireAvailable: false,
       connectAfterStore: connectAfterStore,
     );
   }
 
   Future<void> _acceptLinkedToken(
-    DiscordTokenBundle token, {
+    DiscordTokenBundle token,
+    DiscordMinimumAgeConfirmation minimumAgeConfirmation, {
     required bool requireAvailable,
     bool connectAfterStore = true,
   }) async {
@@ -257,6 +271,7 @@ class DiscordPresenceController extends StateNotifier<DiscordPresenceState> {
     final generation = ++_authenticationGeneration;
     state = state.copyWith(busy: true, clearError: true);
     try {
+      _validateMinimumAgeConfirmation(minimumAgeConfirmation);
       _validateToken(token);
       final scopes = token.scopes
           .split(RegExp(r'\s+'))
@@ -267,10 +282,7 @@ class DiscordPresenceController extends StateNotifier<DiscordPresenceState> {
           !scopes.contains('sdk.social_layer_presence')) {
         throw StateError('Discord returned an invalid device-linking token.');
       }
-      await runSecureStorageTransaction(_storage, _credentialKeys, () async {
-        await _storeTokenUnchecked(token);
-        await _storage.write(key: _enabledKey, value: 'true');
-      });
+      await _storeNewToken(token, minimumAgeConfirmation);
       if (!_isCurrentAuthentication(generation)) return;
       state = state.copyWith(linked: true, enabled: true);
       if (!state.available || !connectAfterStore) return;
@@ -549,6 +561,21 @@ class DiscordPresenceController extends StateNotifier<DiscordPresenceState> {
     );
   }
 
+  Future<void> _storeNewToken(
+    DiscordTokenBundle token,
+    DiscordMinimumAgeConfirmation minimumAgeConfirmation,
+  ) async {
+    _validateMinimumAgeConfirmation(minimumAgeConfirmation);
+    await runSecureStorageTransaction(_storage, _credentialKeys, () async {
+      await _storeTokenUnchecked(token);
+      await _storage.write(
+        key: _minimumAgeConfirmationKey,
+        value: minimumAgeConfirmation.encodeForStorage(),
+      );
+      await _storage.write(key: _enabledKey, value: 'true');
+    });
+  }
+
   Future<void> _storeTokenUnchecked(DiscordTokenBundle token) async {
     await _storage.write(key: _accessTokenKey, value: token.accessToken);
     await _storage.write(key: _refreshTokenKey, value: token.refreshToken);
@@ -649,6 +676,7 @@ class DiscordPresenceController extends StateNotifier<DiscordPresenceState> {
       _tokenTypeKey,
       _expiresAtKey,
       _scopesKey,
+      _minimumAgeConfirmationKey,
     ]) {
       await _storage.delete(key: key);
     }
@@ -657,6 +685,16 @@ class DiscordPresenceController extends StateNotifier<DiscordPresenceState> {
   void _validateToken(DiscordTokenBundle token) {
     if (token.accessToken.isEmpty || token.refreshToken.isEmpty) {
       throw StateError('Discord did not return a usable account token.');
+    }
+  }
+
+  void _validateMinimumAgeConfirmation(
+    DiscordMinimumAgeConfirmation confirmation,
+  ) {
+    if (!confirmation.isCurrentAndAccepted) {
+      throw StateError(
+        'Confirm that you meet Discord\'s minimum age requirement before linking.',
+      );
     }
   }
 
@@ -695,6 +733,7 @@ const _credentialKeys = [
   DiscordPresenceController._tokenTypeKey,
   DiscordPresenceController._expiresAtKey,
   DiscordPresenceController._scopesKey,
+  DiscordPresenceController._minimumAgeConfirmationKey,
 ];
 
 class _DiscordAuthenticationAbandoned implements Exception {

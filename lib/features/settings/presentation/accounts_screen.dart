@@ -14,6 +14,7 @@ import 'package:anime_tv/core/widgets/copyable_qr_interaction.dart';
 import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
 import 'package:anime_tv/features/discord/application/discord_account_link_resolver.dart';
 import 'package:anime_tv/features/discord/application/discord_presence_controller.dart';
+import 'package:anime_tv/features/discord/presentation/discord_minimum_age_confirmation_dialog.dart';
 import 'package:anime_tv/features/downloads/application/download_manager_controller.dart';
 import 'package:anime_tv/features/settings/application/all_debrid_settings_controller.dart';
 import 'package:anime_tv/features/settings/application/real_debrid_settings_controller.dart';
@@ -2139,7 +2140,13 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                         if (flow == DiscordAccountLinkFlow.deviceQr) {
                           await context.push('/pair/discord');
                         } else {
-                          await controller.linkAccount();
+                          final confirmation =
+                              await showDiscordMinimumAgeConfirmationDialog(
+                                context,
+                              );
+                          if (confirmation != null) {
+                            await controller.linkAccount(confirmation);
+                          }
                         }
                       },
                       onToggle: () => ref

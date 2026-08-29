@@ -20,7 +20,7 @@ void main() {
       var acceptedTokens = 0;
       final controller = DiscordDevicePairingController(
         DiscordDeviceAuthClient(),
-        (_) async => acceptedTokens++,
+        (_, _) async => acceptedTokens++,
       );
       final router = GoRouter(
         initialLocation: '/pair/discord',
@@ -52,6 +52,10 @@ void main() {
           ),
         ),
       );
+
+      expect(find.text('Discord age requirement'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('discord-age-confirm')));
+      await tester.pump();
 
       await _pumpUntil(
         tester,

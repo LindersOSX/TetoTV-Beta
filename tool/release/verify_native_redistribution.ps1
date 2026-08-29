@@ -3,6 +3,7 @@ param(
     [switch]$StageBundle,
     [string]$OutputDirectory = "",
     [switch]$RequireResolvedBinaries,
+    [string]$ResolvedBinaryDirectory = "",
     [string]$BundlePath = "",
     [string]$ReleaseTag = ""
 )
@@ -25,6 +26,15 @@ if ([string]::IsNullOrWhiteSpace($gradleUserHome)) {
     }
     if (-not [string]::IsNullOrWhiteSpace($userProfileRoot)) {
         $gradleUserHome = Join-Path $userProfileRoot ".gradle"
+    }
+}
+if (-not [string]::IsNullOrWhiteSpace($ResolvedBinaryDirectory)) {
+    if (-not [IO.Path]::IsPathRooted($ResolvedBinaryDirectory)) {
+        $ResolvedBinaryDirectory = Join-Path $repoRoot $ResolvedBinaryDirectory
+    }
+    $ResolvedBinaryDirectory = [IO.Path]::GetFullPath($ResolvedBinaryDirectory)
+    if (-not (Test-Path -LiteralPath $ResolvedBinaryDirectory -PathType Container)) {
+        throw "ResolvedBinaryDirectory does not exist: $ResolvedBinaryDirectory"
     }
 }
 
@@ -239,6 +249,16 @@ Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 
 Test-Condition ($manifest.schemaVersion -eq 1) "Unsupported native manifest schema"
+Test-Condition (@($manifest.binaryArtifacts).Count -eq 5) "Native manifest must pin exactly five release binary artifacts"
+Test-Condition (@($manifest.binaryArtifacts.id | Sort-Object -Unique).Count -eq 5) "Native binary artifact IDs must be unique"
+Test-Condition (@($manifest.binaryArtifacts.fileName | Sort-Object -Unique).Count -eq 5) "Native binary artifact file names must be unique"
+foreach ($artifact in $manifest.binaryArtifacts) {
+    Test-Condition ([string]$artifact.id -match '^[a-z0-9][a-z0-9-]+$') "Native artifact ID is invalid: $($artifact.id)"
+    Test-Condition ([string]$artifact.fileName -match '^[A-Za-z0-9._-]+$') "Native artifact file name is invalid: $($artifact.id)"
+    Test-Condition ([string]$artifact.url -like 'https://*') "Native artifact URL must use HTTPS: $($artifact.id)"
+    Test-Condition ([long]$artifact.size -gt 0) "Native artifact size is invalid: $($artifact.id)"
+    Test-Condition ([string]$artifact.sha256 -match '^[0-9a-f]{64}$') "Native artifact SHA-256 is invalid: $($artifact.id)"
+}
 Test-FileText "pubspec.lock" "media_kit_libs_android_video:"
 Test-FileText "pubspec.lock" 'version: "1.3.8"'
 Test-FileText "pubspec.yaml" "assets/legal/native/NATIVE_PLAYBACK_NOTICE.txt"
@@ -251,6 +271,7 @@ foreach ($license in $manifest.licenseAssets) {
     $path = Join-Path $repoRoot $license.path
     Test-Condition (Test-Path -LiteralPath $path -PathType Leaf) "Missing license asset $($license.path)"
     $hashProperty = $license.PSObject.Properties["sha256"]
+    Test-Condition ($null -ne $hashProperty -and [string]$hashProperty.Value -match '^[0-9a-f]{64}$') "License asset is not SHA-256 pinned: $($license.path)"
     if ($null -ne $hashProperty -and $hashProperty.Value -ne "" -and (Test-Path -LiteralPath $path)) {
         Test-Hash $path $hashProperty.Value $license.path
     }
@@ -289,9 +310,28 @@ if (Test-Path -LiteralPath $packageConfigPath) {
 $resolved = 0
 foreach ($artifact in $manifest.binaryArtifacts) {
     $candidates = @()
+    if (-not [string]::IsNullOrWhiteSpace($ResolvedBinaryDirectory)) {
+        $candidates += Join-Path $ResolvedBinaryDirectory $artifact.fileName
+    }
     if ($artifact.id -like "libmpv-*") {
         $candidates += Join-Path $repoRoot "build\media_kit_libs_android_video\v1.1.7\$($artifact.fileName)"
         $candidates += Join-Path $repoRoot "build\media_kit_libs_android_video\output\$($artifact.fileName)"
+        if (-not [string]::IsNullOrWhiteSpace($gradleUserHome)) {
+            # Gradle versions differ in whether transformed file dependencies
+            # retain the original JAR. Search only exact artifact names under
+            # transform outputs; size and SHA-256 are checked below before a
+            # candidate can satisfy this release gate.
+            $gradleCacheRoot = Join-Path $gradleUserHome "caches"
+            if (Test-Path -LiteralPath $gradleCacheRoot -PathType Container) {
+                $transformRoots = Get-ChildItem -LiteralPath $gradleCacheRoot -Directory -ErrorAction SilentlyContinue |
+                    ForEach-Object { Join-Path $_.FullName "transforms" } |
+                    Where-Object { Test-Path -LiteralPath $_ -PathType Container }
+                foreach ($transformRoot in $transformRoots) {
+                    $candidates += Get-ChildItem -LiteralPath $transformRoot -Recurse -File -Filter $artifact.fileName -ErrorAction SilentlyContinue |
+                        Select-Object -ExpandProperty FullName
+                }
+            }
+        }
     } elseif ($artifact.id -like "libtorrent4j-*") {
         if (-not [string]::IsNullOrWhiteSpace($gradleUserHome)) {
             $gradleModuleRoot = Join-Path $gradleUserHome "caches\modules-2\files-2.1\org.libtorrent4j"
@@ -301,13 +341,28 @@ foreach ($artifact in $manifest.binaryArtifacts) {
             }
         }
     }
-    $candidate = $candidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+    $existingCandidates = @(
+        $candidates |
+            Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
+            Sort-Object -Unique
+    )
+    $candidate = $null
+    foreach ($possible in $existingCandidates) {
+        if ((Get-Item -LiteralPath $possible).Length -ne $artifact.size) { continue }
+        $possibleHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $possible).Hash.ToLowerInvariant()
+        if ($possibleHash -ceq [string]$artifact.sha256) {
+            $candidate = $possible
+            break
+        }
+    }
     if ($null -ne $candidate) {
-        Test-Hash $candidate $artifact.sha256 $artifact.id
-        Test-Condition ((Get-Item -LiteralPath $candidate).Length -eq $artifact.size) "$($artifact.id) size mismatch"
         $resolved++
     } elseif ($RequireResolvedBinaries) {
-        $failures.Add("Resolved binary not found: $($artifact.id)")
+        if ($existingCandidates.Count -gt 0) {
+            $failures.Add("No resolved candidate matched the pinned size and SHA-256: $($artifact.id)")
+        } else {
+            $failures.Add("Resolved binary not found: $($artifact.id)")
+        }
     } else {
         Write-Warning "Resolved binary not present locally; hash not checked: $($artifact.id)"
     }
@@ -315,6 +370,9 @@ foreach ($artifact in $manifest.binaryArtifacts) {
 
 if ($failures.Count -gt 0) {
     throw ("Native redistribution verification failed:`n - " + ($failures -join "`n - "))
+}
+if ($RequireResolvedBinaries -and $resolved -ne 5) {
+    throw "Native redistribution verification requires all five pinned binary artifacts; verified $resolved."
 }
 
 Write-Host "Native redistribution metadata verified; $resolved resolved binary artifact(s) checked."

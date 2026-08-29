@@ -544,7 +544,8 @@ void main() {
     expect(find.text(hero.description), findsNothing);
     final titleRect = tester.getRect(titleFinder);
     final heroRect = tester.getRect(find.byKey(const ValueKey('home-hero')));
-    expect(titleRect.width, lessThanOrEqualTo(570));
+    expect(titleRect.width, closeTo(1280 * .48, .01));
+    expect(titleRect.right, lessThan(heroRect.left + heroRect.width * .58));
     expect(titleRect.height, lessThan(heroRect.height * .3));
     expect(heroRect.contains(titleRect.topLeft), isTrue);
     expect(
@@ -608,7 +609,10 @@ void main() {
       final slotRect = tester.getRect(titleSlot);
       final renderedTextRect = tester.getRect(titleText);
       final heroRect = tester.getRect(find.byKey(const ValueKey('home-hero')));
-      expect(slotRect.size, const Size(310, 68));
+      expect(slotRect.height, 68);
+      expect(slotRect.width, closeTo(960 * .48, .01));
+      expect(slotRect.right, lessThan(heroRect.left + heroRect.width * .58));
+      expect(find.byKey(const ValueKey('hero-art-1618')), findsOneWidget);
       expect(slotRect.contains(renderedTextRect.topLeft), isTrue);
       expect(
         slotRect.contains(renderedTextRect.bottomRight - const Offset(.1, .1)),

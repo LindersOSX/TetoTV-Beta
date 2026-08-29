@@ -29,6 +29,10 @@ void main() {
 
     expect(find.byType(AccountsScreen), findsOneWidget);
     expect(find.text('TV DISCORD PAIRING'), findsNothing);
+    expect(find.text('Discord age requirement'), findsOneWidget);
+    expect(discord.authenticateCalls, 0);
+    await tester.tap(find.byKey(const ValueKey('discord-age-confirm')));
+    await tester.pumpAndSettle();
     expect(discord.authenticateCalls, 1);
     expect(tester.takeException(), isNull);
   });

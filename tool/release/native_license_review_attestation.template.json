@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "statementType": "tetotv-native-license-review",
+  "releaseTag": "v2.x.y",
+  "gitCommit": "<40-lowercase-hex-commit>",
+  "reviewedAtUtc": "YYYY-MM-DDTHH:MM:SSZ",
+  "reviewerIdentity": "<exact-allowlisted-principal>",
+  "reviewerRole": "<qualification relevant to native-license review>",
+  "decision": "approved",
+  "qualifiedReviewer": true,
+  "correspondingSourceReviewed": true,
+  "knownProvenanceLimitsAcknowledged": true,
+  "knownProvenanceLimitsSha256": "<64-lowercase-hex-digest>",
+  "artifacts": {
+    "apkSha256": "<64-lowercase-hex-digest>",
+    "nativeSourceSha256": "<64-lowercase-hex-digest>",
+    "nativeManifestSha256": "<64-lowercase-hex-digest>",
+    "nativePlaybackNoticeSha256": "<64-lowercase-hex-digest>"
+  }
+}

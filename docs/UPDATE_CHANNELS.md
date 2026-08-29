@@ -35,11 +35,11 @@ Beta reads completed 2.x releases from:
 https://api.github.com/repos/LindersOSX/TetoTV-Beta/releases/latest
 ```
 
-The current Beta source build is `v2.0.41` with Android build code `410018`.
+The current Beta source build is `v2.0.42` with Android build code `410019`.
 Its release title is:
 
 ```text
-TetoTV 2.0.41 Beta - Android TV / Google TV / Fire TV
+TetoTV 2.0.42 Beta - Android TV / Google TV / Fire TV
 ```
 
 Publish it as a normal, non-draft, non-prerelease GitHub release so
@@ -72,7 +72,7 @@ proxy.
 Release notes must include the exact asset names and this build-code marker:
 
 ```html
-<!-- tetotv-android-version-code: 410018 -->
+<!-- tetotv-android-version-code: 410019 -->
 ```
 
 When build-code metadata is present, the updater rejects a known lower build
@@ -94,10 +94,10 @@ These rules apply equally on phones, Android TV, Google TV, and Fire TV.
 
 ## Switching and rollback
 
-The current Beta uses build code `410018`. No Public counterpart is available.
+The current Beta uses build code `410019`. No Public counterpart is available.
 An older Public install can move to this Beta when Android accepts the higher
 build code, but it cannot move back in place until a future Public build uses
-code `410018` or higher. Uninstalling first permits an older APK but deletes
+code `410019` or higher. Uninstalling first permits an older APK but deletes
 local application data. Developer Mode and in-app settings cannot override
 this Android rule.
 
@@ -111,15 +111,20 @@ Before publishing either channel:
 2. Build one production-signed universal APK with ARM32 and ARM64.
 3. Stage and verify the versioned native source bundle.
 4. Generate `SHA256SUMS` from the final APK and native source ZIP.
-5. Run `tool/release/verify_release_payloads.ps1` and the full checklist in
+5. Run `tool/release/verify_release_payloads.ps1` (which requires all five
+   pinned native binary artifacts) and the full checklist in
    `PUBLIC_RELEASE_CHECKLIST.md`.
-6. Publish a normal completed release with exactly the three named assets.
-7. Download every hosted asset again, compare sizes and SHA-256 digests, verify
-   `/releases/latest`, and install over the preceding Beta on representative
-   phone, Android TV/Google TV, and Fire TV devices.
+6. Obtain and verify the SSH-signed, artifact-bound qualified-reviewer record
+   described in `NATIVE_LICENSE_RELEASE_REVIEW.md`.
+7. Let the publisher create a private draft with exactly the three named
+   assets. It re-downloads and fully verifies the hosted draft before making it
+   a normal release, then verifies `/releases/latest`. Install that result over
+   the preceding Beta on representative phone, Android TV/Google TV, and Fire
+   TV devices.
 
 For Beta, use `tool/release/publish_beta_release.ps1`; it is a dry run unless
-`-Publish` is passed and publishes only to `LindersOSX/TetoTV-Beta`. Public
+`-Publish` and the signed native-license review are passed, and publishes only
+to `LindersOSX/TetoTV-Beta`. Public
 publication is intentionally absent from the release scripts and rejected by
 the release workflow. Re-enabling it requires a separately reviewed source
 change after the Public channel is approved.

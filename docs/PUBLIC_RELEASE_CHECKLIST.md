@@ -44,6 +44,12 @@ the same as legal, store, or codec certification.
   must confirm that the tagged repository archive and linked public source
   locations satisfy the exact binary's source obligations; if they do not, the
   three-asset GitHub release contract is a release blocker.
+  Record that approval with the SSH-signed attestation in
+  `NATIVE_LICENSE_RELEASE_REVIEW.md`. Publication must remain blocked when the
+  reviewer allowlist is empty, the signature is invalid, the review is stale,
+  or any tag, commit, APK, source ZIP, manifest, notice, or provenance-limit
+  digest differs from the signed statement. This evidence is not itself a
+  legal-compliance claim.
 - Run
   `powershell -ExecutionPolicy Bypass -File tool/release/stage_third_party_notices.ps1 -StageBundle -RequireDiscordSdkBinary`
   from the release revision. Retain the generated notices ZIP with the release
@@ -177,7 +183,29 @@ in-place updates.
    additional generated archives; GitHub supplies the tagged source ZIP and
    tarball automatically. Immediately download all three hosted assets, verify
    their exact sizes and SHA-256 digests, and rerun the payload verifier before
-   announcing the release.
+   announcing the release. Require the pinned release workflow to succeed and
+   create the GitHub verification attestation for all three payloads.
+
+## Repository-administrator trust boundary
+
+GitHub personal repositories do not provide a release-specific role or an
+owner-enforced protected environment that can prevent the owner from manually
+publishing. TetoTV therefore treats the sole repository owner as a trusted
+release authority and treats any additional administrator, release-capable
+collaborator, deploy key, webhook, GitHub App, or self-hosted runner as a
+release blocker until it is explicitly reviewed. The owner's GitHub account
+must use phishing-resistant two-factor authentication (preferably a passkey or
+hardware security key), offline recovery codes, and narrowly scoped/revocable
+credentials.
+
+If release creation must be technically independent of the owner, transfer the
+repositories to a GitHub organization, enforce immutable releases at the
+organization level, and place publication behind an organization-controlled
+environment/custom role with a separate reviewer. Branch and tag rules cannot
+govern GitHub release creation, and a post-publication workflow cannot erase
+the brief visibility window of an unauthorized manual release. Never announce
+a release unless its signed native review, payload verification workflow, and
+GitHub verification attestation all pass.
 
 ## Content/source policy
 

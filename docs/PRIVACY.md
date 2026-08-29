@@ -238,6 +238,17 @@ TetoTV never asks for or stores the user's Discord password. Playback opened
 from USB, internal storage, Jellyfin, or Plex is excluded from Rich Presence so
 private filenames and media-library titles are not shared.
 
+Before TetoTV starts a new Discord authorization, the user must confirm that
+they meet Discord's minimum age of at least 13, or the older minimum required
+where they live. TetoTV records only a versioned `confirmed: true` marker with
+the new Discord token in Keystore-backed secure storage. It does not ask for or
+retain the user's birth date, actual age, or jurisdiction. The marker is
+deleted with the Discord token when the user unlinks Discord. Token refresh,
+presence toggles, retry, and reconnect do not ask for or derive additional age
+information. In unified phone setup, the same narrow confirmation object is
+carried only inside the encrypted protocol-v3 setup bundle when Discord
+credentials are present; older setup versions cannot import Discord tokens.
+
 On Android TV and Fire TV, Discord linking uses Discord's limited-input device
 authorization directly. TetoTV sends a one-time authorization request to
 Discord and polls Discord only until the link succeeds, expires, or is
@@ -303,10 +314,13 @@ The host and its reverse proxy process ordinary connection information such as
 IP address, time, route, status, user agent, and rate-limit counters for TLS
 delivery, security, abuse prevention, and operations. Short-lived keyed
 address hashes or counters can be used for capacity and rate limits. These are
-not used for advertising or cross-service tracking. Exact infrastructure-log
-retention is controlled by Wispbyte and must be confirmed before each public
-release. Pairing records themselves are held in process memory rather than a
-user-profile database; a broker restart can end an active pairing session.
+not used for advertising or cross-service tracking. Wispbyte's handling and
+retention of infrastructure logs is governed by
+<https://wispbyte.com/privacy>; TetoTV does not claim a fixed Wispbyte
+retention period. Infrastructure logs are separate from the shorter
+application-level expiries described above. Pairing records themselves are
+held in process memory rather than a user-profile database; a broker restart
+can end an active pairing session.
 
 ## Optional Beta aggregate live count
 
@@ -452,13 +466,21 @@ without connecting an anime-list account.
 ## Children and changes
 
 TetoTV is not directed to children and does not knowingly collect a child's
-personal information. This disclosure may change when features or hosting
-change. The effective date will be updated for material changes.
+personal information. Discord linking is unavailable unless the user confirms
+the eligibility requirement described above; that confirmation is not proof
+of age and TetoTV does not collect a birth date. This disclosure may change
+when features or hosting change. The effective date will be updated for
+material changes.
 
 ## Contact
 
-Privacy questions, support requests, and deletion requests can be sent to the
-TetoTV maintainer through the public TetoTV Discord community:
-<https://discord.gg/juC6k7d4WY>. Before any broad public or store release, the
-distributor must ensure this contact and a public HTTPS copy of this disclosure
-remain accessible.
+Privacy access, correction, deletion, and question requests can be sent through
+the account-free private form at
+<https://tetotv-bot.wisp.uno/privacy/request>. The form collects only the
+request type, the reply contact supplied by the requester, and bounded request
+details. It is rate-limited and delivers the request only to the configured
+private TetoTV staff channel through Discord. Discord processes that staff
+message under its own terms, and the request remains there until staff resolves
+and deletes it. Do not include passwords, tokens, payment information, or a
+date of birth. Before any broad public or store release, the distributor must
+ensure this route and a public HTTPS copy of this disclosure remain accessible.

@@ -1124,6 +1124,11 @@ class _HeroPanel extends StatelessWidget {
         // adds its own 15dp copy gutter. Account for both so a portrait phone
         // never lays out its title beyond the visible card.
         ? screenWidth - 62
+        : isTelevision
+        // Keep the complete title within roughly the left half of the TV hero
+        // so even long localized titles can wrap without covering the subject
+        // artwork on the right.
+        ? (screenWidth * .48).clamp(360.0, 920.0)
         : screenWidth >= 1400
         ? 660.0
         : screenWidth >= 1100

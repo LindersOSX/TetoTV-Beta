@@ -146,7 +146,7 @@ class OfflineCatalogSnapshotService {
     try {
       validatePublicArtworkUriSyntax(uri);
       final artwork = await _artworkFetcher.fetch(uri);
-      return _writeArtworkAtomically(mediaId, kind, artwork);
+      return await _writeArtworkAtomically(mediaId, kind, artwork);
     } on PublicCatalogArtworkException catch (error) {
       warnings.add(OfflineArtworkWarning(kind: kind, code: error.code));
     } on FileSystemException {

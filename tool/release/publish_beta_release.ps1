@@ -11,6 +11,10 @@ param(
 
     [string]$ReleaseNotesPath = "",
 
+    [string]$NativeLicenseReviewPath = "",
+
+    [string]$NativeLicenseReviewSignaturePath = "",
+
     [switch]$Publish
 )
 
@@ -23,6 +27,12 @@ $arguments = @{
 }
 if (-not [string]::IsNullOrWhiteSpace($ReleaseNotesPath)) {
     $arguments.ReleaseNotesPath = $ReleaseNotesPath
+}
+if (-not [string]::IsNullOrWhiteSpace($NativeLicenseReviewPath)) {
+    $arguments.NativeLicenseReviewPath = $NativeLicenseReviewPath
+}
+if (-not [string]::IsNullOrWhiteSpace($NativeLicenseReviewSignaturePath)) {
+    $arguments.NativeLicenseReviewSignaturePath = $NativeLicenseReviewSignaturePath
 }
 
 & (Join-Path $PSScriptRoot "publish_release.ps1") @arguments

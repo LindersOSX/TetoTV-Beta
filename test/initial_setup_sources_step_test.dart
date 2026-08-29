@@ -282,6 +282,10 @@ void main() {
 
     await tester.tap(find.text('Link Discord (optional)'));
     await tester.pumpAndSettle();
+    expect(find.text('Discord age requirement'), findsOneWidget);
+    expect(discord.authenticateCalls, 0);
+    await tester.tap(find.byKey(const ValueKey('discord-age-confirm')));
+    await tester.pumpAndSettle();
     expect(discord.authenticateCalls, 1);
     expect(find.text('Discord linked and enabled'), findsOneWidget);
 

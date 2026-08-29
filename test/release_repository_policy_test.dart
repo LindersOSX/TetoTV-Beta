@@ -39,5 +39,14 @@ void main() {
     expect(verifier, contains('GRADLE_USER_HOME'));
     expect(verifier, contains('[Environment+SpecialFolder]::UserProfile'));
     expect(verifier, isNot(contains(r'$env:USERPROFILE')));
+    expect(verifier, contains(r'$resolvedRecords = @($parsedResolvedRecords)'));
+    expect(
+      verifier,
+      isNot(
+        contains(
+          r'$resolvedRecords = @(Read-ZipEntryText $refsEntry | ConvertFrom-Json)',
+        ),
+      ),
+    );
   });
 }

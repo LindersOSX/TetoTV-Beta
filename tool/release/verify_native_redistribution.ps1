@@ -195,7 +195,12 @@ function Test-NativeSourceBundle([string]$Path) {
             Select-Object -First 1
         if ($null -ne $refsEntry) {
             try {
-                $resolvedRecords = @(Read-ZipEntryText $refsEntry | ConvertFrom-Json)
+                # Windows PowerShell 5.1 emits a top-level JSON array as one
+                # pipeline object. Assign it first so @() enumerates the array;
+                # wrapping ConvertFrom-Json directly would incorrectly produce
+                # one record whose properties are arrays of every source value.
+                $parsedResolvedRecords = Read-ZipEntryText $refsEntry | ConvertFrom-Json
+                $resolvedRecords = @($parsedResolvedRecords)
                 if ($resolvedRecords.Count -ne $expectedSourceCount) {
                     $bundleFailures.Add("Expected $expectedSourceCount resolved source records, found $($resolvedRecords.Count)")
                 }

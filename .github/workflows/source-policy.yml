@@ -26,11 +26,13 @@ jobs:
       - name: Install the pinned Flutter SDK commit
         env:
           FLUTTER_COMMIT: 058e0af2c2b57e369d905a03ac9748b0ebf543c6 # 3.44.8 stable
+          FLUTTER_TAG: 3.44.8
         run: |
           git init "$RUNNER_TEMP/flutter"
           git -C "$RUNNER_TEMP/flutter" remote add origin https://github.com/flutter/flutter.git
-          git -C "$RUNNER_TEMP/flutter" fetch --depth 1 origin "$FLUTTER_COMMIT"
-          git -C "$RUNNER_TEMP/flutter" checkout --detach FETCH_HEAD
+          git -C "$RUNNER_TEMP/flutter" fetch --depth 1 origin "refs/tags/$FLUTTER_TAG:refs/tags/$FLUTTER_TAG"
+          test "$(git -C "$RUNNER_TEMP/flutter" rev-parse "refs/tags/$FLUTTER_TAG^{commit}")" = "$FLUTTER_COMMIT"
+          git -C "$RUNNER_TEMP/flutter" checkout --detach "$FLUTTER_COMMIT"
           echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
           "$RUNNER_TEMP/flutter/bin/flutter" --version
 

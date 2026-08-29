@@ -7,8 +7,9 @@ the following third-party components:
 | --- | --- | --- |
 | Google Material Icons | Rounded/outlined vector glyphs used by the Flutter player and TV interface | Apache License 2.0 |
 | `media_kit`, `media_kit_video`, and `media_kit_libs_android_video` | MPV compatibility player and Flutter integration | MIT License for the media_kit projects; bundled native components retain their own licenses |
-| mpv, FFmpeg, and libass | Compatibility decoding and styled ASS subtitle rendering inside the media_kit Android runtime | Their respective upstream licenses apply; the exact v1.1.7 binary provenance and conservative GPL/LGPL license set are recorded in `NATIVE_PLAYBACK_REDISTRIBUTION.md` |
-| libtorrent4j 2.1.0-38, libtorrent-rasterbar, Boost, OpenSSL, libdatachannel, libjuice, usrsctp, libsrtp, and plog | Opt-in direct peer-to-peer torrent transport and verified piece delivery to the app-owned loopback Range bridge | libtorrent4j MIT; libtorrent-rasterbar BSD-3-Clause; Boost Software License 1.0; OpenSSL Apache License 2.0; libdatachannel and libjuice MPL-2.0; usrsctp and libsrtp BSD-style; plog MIT. Exact artifact, nested source, and license provenance is recorded in `DIRECT_TORRENT_STREAMING.md` and the bundled native notice. |
+| mpv, FFmpeg, libass, and their selected native dependencies | Compatibility decoding and styled ASS subtitle rendering, compiled by TetoTV from immutable source revisions | LGPL-3.0-or-later is used conservatively for the combined playback library; component MIT/ISC/BSD/Apache/FTL/LGPL notices and the exact build configuration are recorded in `NATIVE_PLAYBACK_REDISTRIBUTION.md` |
+| libtorrent4j 2.1.0-38, libtorrent-rasterbar, `try_signal`, Boost, OpenSSL, libdatachannel, libjuice, usrsctp, and plog | Opt-in direct peer-to-peer torrent transport, compiled by TetoTV from source, and verified piece delivery to the app-owned loopback Range bridge | libtorrent4j MIT; rasterbar and `try_signal` BSD-3-Clause; Boost Software License 1.0; OpenSSL Apache-2.0; libdatachannel and libjuice MPL-2.0; usrsctp BSD-style; plog MIT. libsrtp is source-only and is not linked because media support is disabled. |
+| Android NDK r25c and r28c runtime/toolchain components | Static zlib, C++ runtime, C++ ABI, unwind, libatomic, and compiler-runtime pieces incorporated by the source-built playback and torrent libraries | Complete Google NDK `NOTICE` and `NOTICE.toolchain` files are bundled; the included components retain their Apache-2.0-with-LLVM-exception, Bionic BSD, zlib, and other per-file terms |
 | Vendored `flutter_js` 0.8.7+tetotv.1 | Dart/Android bridge for the isolated add-on JavaScript runtime | MIT License; copyright 2019 Ábner Oliveira |
 | Android JS Runtimes bridge 0.3.6 (locally reviewed) | Source-derived FFI bridge used by the in-tree Android QuickJS build | MIT License; copyright 2020 fast-development |
 | QuickJS 2026-06-04 | JavaScript engine built from pinned official source inside the Android plugin | MIT License; copyright Fabrice Bellard and Charlie Gordon |
@@ -35,6 +36,7 @@ Upstream projects and license sources:
 - libass: <https://github.com/libass/libass>
 - libtorrent4j tag 2.1.0-38: <https://github.com/aldenml/libtorrent4j/tree/v2.1.0-38>
 - libtorrent-rasterbar: <https://github.com/arvidn/libtorrent>
+- try_signal: <https://github.com/arvidn/try_signal>
 - Boost: <https://www.boost.org/users/license.html>
 - OpenSSL: <https://www.openssl.org/source/license.html>
 - libdatachannel: <https://github.com/paullouisageneau/libdatachannel>
@@ -55,8 +57,8 @@ Upstream projects and license sources:
 - Jikan REST API: <https://github.com/jikan-me/jikan-rest>
 
 The exact resolved Dart package versions are recorded in `pubspec.lock`.
-Native Android versions are declared in `android/app/build.gradle.kts`, plugin
-Gradle metadata, and the resolved Gradle dependency graph. Copyright notices
+Native Android versions are declared in the immutable native manifest, the
+TetoTV build script, Android Gradle metadata, and build provenance. Copyright notices
 and complete license texts shipped by those dependencies remain applicable.
 When redistributing an APK, retain those notices and comply with the source,
 relinking, attribution, and other requirements that apply to the exact native
@@ -88,12 +90,11 @@ automated verification and an owner declaration do not establish compliance
 or cure an incomplete source offer. Neither this summary nor the in-APK notice
 is, by itself, a source-code offer.
 
-The direct-torrent JNI artifacts are ordinary Maven dependencies rather than
-part of the libmpv corresponding-source bundle. A distributor must separately
-retain their Gradle verification hashes; the pinned libtorrent4j,
-libtorrent-rasterbar, libdatachannel and nested dependency sources; the
-Boost/OpenSSL inputs named in the upstream build; MPL-covered source
-availability; and all applicable notices. See
+The direct-torrent JNI artifacts are TetoTV source builds included in the same
+native source/provenance bundle as the libmpv inputs. A distributor must retain
+the pinned libtorrent4j, rasterbar, `try_signal`, libdatachannel and linked
+nested dependency sources; the verified Boost/OpenSSL inputs; Android NDK
+notices; MPL-covered source availability; and all applicable notices. See
 [`DIRECT_TORRENT_STREAMING.md`](DIRECT_TORRENT_STREAMING.md).
 
 ## Kasane Teto name and artwork

@@ -89,7 +89,14 @@ if ($checksumsInfo.Length -le 0) {
     -Channel $Channel
 $nativeVerificationArguments = @{
     BundlePath = $resolvedNativeSource
-    RequireResolvedBinaries = $true
+    # Post-release verification has the final APK and the build provenance
+    # embedded in the source bundle, but not TetoTV's intermediate input JARs.
+    # A local publisher supplies (or naturally has) those inputs and gets the
+    # stronger pre-package check; remote verification is bound to the final
+    # APK-native BOM instead.
+    RequireResolvedBinaries = -not [string]::IsNullOrWhiteSpace(
+        $ResolvedBinaryDirectory
+    )
 }
 if (-not [string]::IsNullOrWhiteSpace($ResolvedBinaryDirectory)) {
     $nativeVerificationArguments.ResolvedBinaryDirectory = $ResolvedBinaryDirectory

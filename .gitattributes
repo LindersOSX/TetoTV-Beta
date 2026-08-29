@@ -6,3 +6,5 @@ assets/legal/native/** text eol=lf whitespace=-trailing-space
 tool/release/native_playback_manifest.json text eol=lf
 tool/release/verify_native_redistribution.ps1 text eol=crlf
 tool/release/stage_third_party_notices.ps1 text eol=crlf
+tool/native/*.sh text eol=lf whitespace=-trailing-space
+third_party/media_kit_libs_android_video/** text eol=lf whitespace=-trailing-space

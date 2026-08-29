@@ -1,0 +1,108 @@
+import java.security.MessageDigest
+
+group 'com.alexmercerind.media_kit_libs_android_video'
+version '1.0'
+
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+    }
+
+    dependencies {
+        classpath 'com.android.tools.build:gradle:8.13.0'
+    }
+}
+
+rootProject.allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+apply plugin: 'com.android.library'
+
+android {
+    // Conditional for compatibility with AGP <4.2.
+    if (project.android.hasProperty("namespace")) {
+        namespace 'com.alexmercerind.media_kit_libs_android_video'
+    }
+
+    compileSdkVersion 36
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    defaultConfig {
+        minSdkVersion 16
+    }
+
+    dependencies {
+        implementation fileTree(dir: "$buildDir/output", include: "*.jar")
+    }
+}
+
+def nativeArtifactDirectory = {
+    def configured = System.getenv("TETOTV_NATIVE_ARTIFACT_DIR")
+    if (configured != null && !configured.trim().isEmpty()) {
+        return new File(configured).canonicalFile
+    }
+    return new File(
+        rootProject.projectDir.parentFile,
+        "build/native-playback/outputs"
+    ).canonicalFile
+}
+
+def stageSelfBuiltNativeLibraries = tasks.register("stageSelfBuiltNativeLibraries") {
+    def artifactDirectory = nativeArtifactDirectory()
+    def requiredNames = [
+        "default-arm64-v8a.jar",
+        "default-armeabi-v7a.jar",
+    ]
+    inputs.files(requiredNames.collect { new File(artifactDirectory, it) })
+    outputs.dir(file("$buildDir/output"))
+    doLast {
+        def provenance = new File(artifactDirectory, "NATIVE_BUILD_PROVENANCE.json")
+        if (!provenance.isFile() || !provenance.text.contains('"selfBuilt": true')) {
+            throw new GradleException(
+                "TetoTV self-built native provenance is missing from ${artifactDirectory}. " +
+                "Run tool/native/build_native_playback.sh first."
+            )
+        }
+        def outputDir = file("$buildDir/output")
+        project.delete(outputDir)
+        outputDir.mkdirs()
+        requiredNames.each { name ->
+            def source = new File(artifactDirectory, name)
+            if (!source.isFile()) {
+                throw new GradleException(
+                    "Missing TetoTV self-built native artifact: ${source}"
+                )
+            }
+            copy {
+                from source
+                into outputDir
+            }
+            def sha256 = MessageDigest.getInstance("SHA-256")
+                .digest(source.bytes).encodeHex().toString()
+            logger.lifecycle("Using TetoTV self-built ${name} (sha256:${sha256})")
+        }
+    }
+}
+
+tasks.named("preBuild").configure {
+    dependsOn(stageSelfBuiltNativeLibraries)
+}
+
+// AGP's application-level dependency-report tasks inspect this library's
+// local JAR file dependency directly. Gradle 9 no longer infers that the
+// report must wait for the library preBuild task, so declare the cross-project
+// ordering instead of allowing a report to observe a partially staged JAR.
+rootProject.project(":app").tasks.configureEach { task ->
+    if (task.name == "collectReleaseDependencies") {
+        task.dependsOn(stageSelfBuiltNativeLibraries)
+    }
+}

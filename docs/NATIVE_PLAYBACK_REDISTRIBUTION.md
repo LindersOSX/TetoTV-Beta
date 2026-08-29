@@ -6,56 +6,69 @@ it is not legal advice or a claim of compliance.
 
 ## Binary identity
 
-`media_kit_libs_android_video` 1.3.8 downloads the `default` JARs from
-`media-kit/libmpv-android-video-build` v1.1.7. The release tag resolves to
-commit `fe8c3ac1a91c09aa6fb1deccbc833f1bafa54768`.
+TetoTV builds five Android input JARs from source: two ABI-specific
+libmpv/helper JARs, the libtorrent4j Java wrapper, and two ABI-specific
+libtorrent4j JNI JARs. The vendored media-kit adapter and Android app module
+accept only those local outputs after checking self-build provenance. Neither
+path has a network fallback to the older GitHub Release or Maven Central
+prebuilt JNI artifacts.
 
-| ABI | Published file | SHA-256 |
-| --- | --- | --- |
-| arm64-v8a | `default-arm64-v8a.jar` | `4363dfa5d3d415b91c1f16f6fb90c3fe59a77dfd3f9b824d2b24b492d6b09df9` |
-| armeabi-v7a | `default-armeabi-v7a.jar` | `8ead114fc5a43348d89dc0eb8f41823e549b15115c29f73ee26973f973620995` |
-
-The optional direct-torrent path resolves libtorrent4j 2.1.0-38 from Maven
-Central. Its core, ARMv7, and ARM64 JAR SHA-256 values are respectively
-`bf8ebde8d9fc20af129f26f28c01d8cfd91d87b831b44dabbe0705d9dc910243`,
-`46b417c525c35ebd45b225b4e002ab13629cffc1ec8d8290ece02a686491952b`, and
-`d9ea7d3d82e7484e07260d063a73c8f9fe5778cc06299717eba49858a44045ef`.
+The exact JAR byte lengths and SHA-256 values are recorded after each build in
+`build/native-playback/outputs/SHA256SUMS`, copied into
+`NATIVE_BUILD_PROVENANCE.json`, and pinned in the machine-readable release
+manifest. Release verification also inventories the final post-AGP `.so`
+entries in the APK so an input-container hash cannot hide an unexpected
+packaging transformation.
 
 The machine-readable record is
 [`tool/release/native_playback_manifest.json`](../tool/release/native_playback_manifest.json).
 
 ## Source and build chain
 
-The libmpv JARs were produced by the v1.1.7 build repository. Its pinned roots
-are libmpv build commit `fe8c3ac1a91c09aa6fb1deccbc833f1bafa54768`, mpv
-commit `78d43740f52db817d98bcf24fb30a76ab6fa13ff`, and
-media-kit-android-helper commit `42054e5d479f39ccbb0ae604862e2bcaf59b74c2`.
-The default flavor's `depinfo.sh`, patches, and configure arguments are part of
-the build-repository snapshot. They select FFmpeg 6.0, libass 0.17.1, Mbed TLS
-3.4.0, dav1d 1.2.0, libxml2 2.10.3, FreeType 2.13.0, FriBidi 1.0.12, and
-HarfBuzz 7.2.0. Rebuild on Linux from the exact build commit, install the SDK,
-NDK and host tools required by its workflow, and run
-`buildscripts/bundle_default.sh`. Preserve its patches and default-flavor
-configuration. Build only `arm64` and `armv7l` when reproducing TetoTV's ARM
-release inputs.
+The Linux/WSL build entry point is
+[`tool/native/build_native_playback.sh`](../tool/native/build_native_playback.sh).
+It verifies every downloaded archive, checks out every Git project at an
+immutable commit, verifies each media-kit patch before application, and emits
+a provenance file beside the five JARs. See `tool/native/README.md` for host
+requirements and commands.
 
-These commands are practical upstream rebuild paths, not reproducible-build
-claims. Upstream v1.1.7 identifies several libmpv dependencies by mutable tag,
-does not publish source-archive SHA-256 values, and contains a floating
-`media_kit` clone that is not used by the final helper bundling step. A fresh
-build therefore cannot be proven bit-for-bit identical from the recorded
-metadata alone. The staging tool records the resolved commit of every such
-tag. Release evidence must retain that report. Public and reviewed Beta paths
-must have it independently evaluated; an unreviewed Beta must disclose that
-the evaluation was not performed.
+The libmpv graph pins build scripts `fe8c3ac1a91c09aa6fb1deccbc833f1bafa54768`,
+mpv `78d43740f52db817d98bcf24fb30a76ab6fa13ff`, helper
+`42054e5d479f39ccbb0ae604862e2bcaf59b74c2`, Mbed TLS
+`1873d3bfc2da771672bd8e7e8f41f57e0af77f33`, dav1d
+`676a864a11af2c0522e1f992e770589543894686`, libxml2
+`f507d167f1755b7eaea09fb1a44d29aab828b6d1`, FFmpeg
+`ea3d24bbe3c58b171e55fe2151fc7ffaca3ab3d2`, FreeType
+`de8b92dd7ec634e9e2b25ef534c54a3537555c11`, FriBidi
+`6428d8469e536bcbb6e12c7b79ba6659371c435a`, HarfBuzz
+`a321c4fee56b15247c10f9aa3db7e7ccb3b8173b`, libass
+`e8ad72accd3a84268275a9385beb701c9284e5b3`, and gas-preprocessor
+`ac1836309c2e77023c228b7184485597286289d3`. The build configures mpv with
+`gpl=false` and FFmpeg with `--disable-gpl --disable-nonfree
+--enable-version3`.
 
-The same staged source bundle includes libtorrent4j commit
-`09ffd391d4ef12e668cc032bffcbab47d9e2d5cb`, libtorrent-rasterbar commit
-`a01469c8d1f88dd83bed458ffccffab2727b9d2a`, and the exact MPL-covered
-libdatachannel/libjuice revisions plus their pinned usrsctp, libsrtp, and plog
-dependencies. It also downloads and hash-verifies the complete Boost 1.89.0
-and OpenSSL 3.5.2 source distributions used by the upstream Android build.
-See `DIRECT_TORRENT_STREAMING.md` for the native lifecycle and artifact hashes.
+The direct-torrent graph pins libtorrent4j
+`09ffd391d4ef12e668cc032bffcbab47d9e2d5cb`, rasterbar
+`a01469c8d1f88dd83bed458ffccffab2727b9d2a`, the separately archived
+`try_signal` gitlink `105cce59972f925a33aa6b1c3109e4cd3caf583d`, and the exact
+libdatachannel, libjuice, usrsctp, and plog revisions listed in
+`DIRECT_TORRENT_STREAMING.md`. Boost 1.89.0 and OpenSSL 3.5.2 source
+distributions are size- and SHA-256-verified. Android NDK r25c is used for the
+mpv/helper line and r28c for libtorrent4j; both archives and their exact
+runtime/toolchain notices are pinned.
+
+The mpv link consumes r25c's static zlib, libatomic, and compiler-runtime
+pieces. The helper statically consumes the r25c C++ runtime, C++ ABI, unwind,
+libatomic, and compiler-runtime pieces. The complete r25c `NOTICE` and
+`NOTICE.toolchain` files are therefore included rather than treating the NDK
+as an unrecorded build-only input. The torrent line similarly retains the full
+r28c notices for its statically incorporated runtime pieces.
+
+These are new TetoTV-built artifacts. The project does not claim byte identity
+with the retired upstream prebuilts. Host package versions are recorded but a
+second isolated build and independent native-license review remain separate
+release gates; until they occur, the result remains an explicitly unreviewed
+Beta rather than a reviewed or Public compliance claim.
 
 ## Relinking and installation
 
@@ -83,10 +96,9 @@ powershell -ExecutionPolicy Bypass -File `
   tool/release/verify_native_redistribution.ps1
 ```
 
-At release time, use `-StageBundle`. This intentionally performs network-heavy
-source checkouts only then, validates immutable revisions, records the commit
-behind every upstream-declared tag, verifies the pinned Boost/OpenSSL source
-archives, and writes one combined native-source bundle under
+At release time, use `-StageBundle`. This performs the network-heavy immutable
+source exports, verifies the pinned Boost/OpenSSL archives, includes the exact
+TetoTV build script and build provenance, and writes one combined native-source bundle under
 `build/release-compliance`. Publish the versioned native source ZIP beside the
 corresponding universal APK and `SHA256SUMS`, and retain the same verified
 bundle for as long as the binary remains available. GitHub also supplies the
@@ -117,9 +129,10 @@ repository-authority verification. It is not an approval or compliance
 determination and must not be represented as one. The exception is described
 in `NATIVE_LICENSE_RELEASE_REVIEW.md` and is not permitted for Public releases.
 
-The checked-in full GPL/LGPL texts are conservative. Component copyright and
-license notices inside the staged sources determine the actual license of each
-file. Public and reviewed Beta distribution require a qualified release
-reviewer to resolve the documented upstream provenance gaps and confirm the
-final source offer. An unreviewed Beta must instead disclose that those steps
-were not independently completed and must not claim compliance.
+The checked-in full GPL/LGPL texts are conservative. Exact component notices,
+the selected build configuration, and each file's copyright determine the
+applicable terms. Public and reviewed Beta distribution require a different
+qualified person to check the final APK BOM, source bundle, notices,
+replacement path, and signed review record. An unreviewed Beta must instead
+disclose that this independent step was not completed and must not claim
+compliance.

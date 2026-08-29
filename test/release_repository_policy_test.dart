@@ -31,7 +31,7 @@ void main() {
     expect(updateChannelDocs, isNot(contains(retiredReleaseBridge)));
   });
 
-  test('native release verification resolves Gradle caches cross-platform', () {
+  test('native release verification uses TetoTV source-build outputs', () {
     final verifier = File(
       'tool/release/verify_native_redistribution.ps1',
     ).readAsStringSync();
@@ -39,12 +39,14 @@ void main() {
       'tool/release/verify_release_apk.ps1',
     ).readAsStringSync();
 
-    expect(verifier, contains('GRADLE_USER_HOME'));
-    expect(verifier, contains(r'"transforms"'));
+    expect(verifier, contains(r'build\native-playback\outputs'));
+    expect(verifier, contains('NATIVE_BUILD_PROVENANCE.json'));
+    expect(verifier, contains('selfBuilt=true'));
+    expect(verifier, isNot(contains('GRADLE_USER_HOME')));
+    expect(verifier, isNot(contains(r'"transforms"')));
     expect(verifier, contains('RequireResolvedBinaries'));
     expect(verifier, contains('requires all five pinned binary artifacts'));
-    expect(verifier, contains('[Environment+SpecialFolder]::UserProfile'));
-    expect(verifier, isNot(contains(r'$env:USERPROFILE')));
+    expect(verifier, contains(r'[Uri]::new($packageConfigUri'));
     expect(verifier, contains(r'$resolvedRecords = @($parsedResolvedRecords)'));
     expect(
       verifier,
@@ -109,7 +111,11 @@ void main() {
       isTrue,
       reason: 'every partial draft creation failure must be rolled back',
     );
-    expect(payloadVerifier, contains(r'RequireResolvedBinaries = $true'));
+    expect(
+      payloadVerifier,
+      contains('RequireResolvedBinaries = -not [string]::IsNullOrWhiteSpace('),
+    );
+    expect(payloadVerifier, contains('verify_release_apk.ps1'));
     expect(reviewVerifier, contains('-Y verify'));
     expect(reviewVerifier, contains('knownProvenanceLimitsSha256'));
     expect(reviewVerifier, contains('nativePlaybackNoticeSha256'));
@@ -191,7 +197,7 @@ void main() {
       '.github/workflows/verify-release-assets.yml',
     ).readAsStringSync();
     final releaseNotes = File(
-      'docs/RELEASE_NOTES_2.0.42.md',
+      'docs/RELEASE_NOTES_2.0.43.md',
     ).readAsStringSync();
 
     expect(

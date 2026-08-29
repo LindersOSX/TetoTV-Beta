@@ -16,18 +16,6 @@ $manifestPath = Join-Path $PSScriptRoot "native_playback_manifest.json"
 $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
 $failures = [System.Collections.Generic.List[string]]::new()
 $fixedZipTimestamp = [DateTimeOffset]::new(2000, 1, 1, 0, 0, 0, [TimeSpan]::Zero)
-$gradleUserHome = [Environment]::GetEnvironmentVariable("GRADLE_USER_HOME")
-if ([string]::IsNullOrWhiteSpace($gradleUserHome)) {
-    $userProfileRoot = [Environment]::GetFolderPath(
-        [Environment+SpecialFolder]::UserProfile
-    )
-    if ([string]::IsNullOrWhiteSpace($userProfileRoot)) {
-        $userProfileRoot = [Environment]::GetEnvironmentVariable("HOME")
-    }
-    if (-not [string]::IsNullOrWhiteSpace($userProfileRoot)) {
-        $gradleUserHome = Join-Path $userProfileRoot ".gradle"
-    }
-}
 if (-not [string]::IsNullOrWhiteSpace($ResolvedBinaryDirectory)) {
     if (-not [IO.Path]::IsPathRooted($ResolvedBinaryDirectory)) {
         $ResolvedBinaryDirectory = Join-Path $repoRoot $ResolvedBinaryDirectory
@@ -89,6 +77,66 @@ function Read-ZipEntryText([IO.Compression.ZipArchiveEntry]$Entry) {
     }
 }
 
+function Test-SourceZipBuildScriptsUseLf(
+    [IO.Compression.ZipArchiveEntry]$OuterEntry,
+    [System.Collections.Generic.List[string]]$BundleFailures
+) {
+    $outerStream = $OuterEntry.Open()
+    $memory = [IO.MemoryStream]::new()
+    try {
+        $outerStream.CopyTo($memory)
+        $memory.Position = 0
+        $nested = [IO.Compression.ZipArchive]::new(
+            $memory,
+            [IO.Compression.ZipArchiveMode]::Read,
+            $true
+        )
+        try {
+            foreach ($entry in $nested.Entries) {
+                if ($entry.FullName.EndsWith('/')) { continue }
+                $leaf = [IO.Path]::GetFileName($entry.FullName)
+                if (
+                    -not $leaf.EndsWith('.sh') -and
+                    $leaf -cne 'configure'
+                ) {
+                    continue
+                }
+
+                $scriptStream = $entry.Open()
+                $scriptBytes = [IO.MemoryStream]::new()
+                try {
+                    $scriptStream.CopyTo($scriptBytes)
+                    $bytes = $scriptBytes.ToArray()
+                    for ($index = 0; $index -lt ($bytes.Length - 1); $index++) {
+                        if ($bytes[$index] -eq 13 -and $bytes[$index + 1] -eq 10) {
+                            $BundleFailures.Add(
+                                "Source snapshot contains a CRLF build script: $($OuterEntry.FullName)!$($entry.FullName)"
+                            )
+                            break
+                        }
+                    }
+                }
+                finally {
+                    $scriptBytes.Dispose()
+                    $scriptStream.Dispose()
+                }
+            }
+        }
+        finally {
+            $nested.Dispose()
+        }
+    }
+    catch {
+        $BundleFailures.Add(
+            "Could not inspect source snapshot build scripts in $($OuterEntry.FullName): $($_.Exception.Message)"
+        )
+    }
+    finally {
+        $memory.Dispose()
+        $outerStream.Dispose()
+    }
+}
+
 function Test-NativeSourceBundle([string]$Path) {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
         throw "Native source bundle does not exist: $Path"
@@ -121,6 +169,8 @@ function Test-NativeSourceBundle([string]$Path) {
             "native_playback_manifest.json",
             "NATIVE_PLAYBACK_REDISTRIBUTION.md",
             "DIRECT_TORRENT_STREAMING.md",
+            "BUILD_NATIVE_PLAYBACK.sh",
+            "NATIVE_BUILD_PROVENANCE.json",
             "RESOLVED_SOURCE_REFS.json",
             "SOURCE_SNAPSHOT_HASHES.sha256",
             "README.txt"
@@ -157,12 +207,52 @@ function Test-NativeSourceBundle([string]$Path) {
             }
         }
 
+        $buildScriptEntry = $entries |
+            Where-Object FullName -CEQ "BUILD_NATIVE_PLAYBACK.sh" |
+            Select-Object -First 1
+        if (
+            $null -ne $buildScriptEntry -and
+            (Get-ZipEntrySha256 $buildScriptEntry) -cne [string]$script:manifest.build.scriptSha256
+        ) {
+            $bundleFailures.Add("Bundled native build script digest differs from the manifest")
+        }
+
+        $provenanceEntry = $entries |
+            Where-Object FullName -CEQ "NATIVE_BUILD_PROVENANCE.json" |
+            Select-Object -First 1
+        if ($null -ne $provenanceEntry) {
+            try {
+                $bundledProvenance = Read-ZipEntryText $provenanceEntry | ConvertFrom-Json
+                if ($bundledProvenance.selfBuilt -ne $true) {
+                    $bundleFailures.Add("Bundled build provenance does not assert selfBuilt=true")
+                }
+                if (
+                    [string]$bundledProvenance.buildScriptSha256 -cne
+                    [string]$script:manifest.build.scriptSha256
+                ) {
+                    $bundleFailures.Add("Bundled build provenance uses a different build script")
+                }
+                $bundledOutputText = @($bundledProvenance.outputChecksums) -join "`n"
+                foreach ($artifact in $script:manifest.binaryArtifacts) {
+                    if (-not $bundledOutputText.Contains("$($artifact.sha256)  $($artifact.fileName)")) {
+                        $bundleFailures.Add("Bundled build provenance does not bind $($artifact.fileName)")
+                    }
+                }
+            }
+            catch {
+                $bundleFailures.Add("Bundled NATIVE_BUILD_PROVENANCE.json is invalid: $($_.Exception.Message)")
+            }
+        }
+
         $sourceEntries = @($entries | Where-Object { $_.FullName.StartsWith('sources/') })
         $expectedSourceCount = @($script:manifest.sourceRoots).Count +
             @($script:manifest.libmpvDeclaredDependencyRefs).Count +
             @($script:manifest.sourceArchives).Count
         if ($sourceEntries.Count -ne $expectedSourceCount) {
             $bundleFailures.Add("Expected $expectedSourceCount source snapshots, found $($sourceEntries.Count)")
+        }
+        foreach ($entry in ($sourceEntries | Where-Object { $_.FullName.EndsWith('.zip') })) {
+            Test-SourceZipBuildScriptsUseLf $entry $bundleFailures
         }
 
         $hashEntry = $entries |
@@ -248,23 +338,25 @@ function Test-NativeSourceBundle([string]$Path) {
 Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 
-Test-Condition ($manifest.schemaVersion -eq 1) "Unsupported native manifest schema"
+Test-Condition ($manifest.schemaVersion -eq 2) "Unsupported native manifest schema"
 Test-Condition (@($manifest.binaryArtifacts).Count -eq 5) "Native manifest must pin exactly five release binary artifacts"
 Test-Condition (@($manifest.binaryArtifacts.id | Sort-Object -Unique).Count -eq 5) "Native binary artifact IDs must be unique"
 Test-Condition (@($manifest.binaryArtifacts.fileName | Sort-Object -Unique).Count -eq 5) "Native binary artifact file names must be unique"
 foreach ($artifact in $manifest.binaryArtifacts) {
     Test-Condition ([string]$artifact.id -match '^[a-z0-9][a-z0-9-]+$') "Native artifact ID is invalid: $($artifact.id)"
     Test-Condition ([string]$artifact.fileName -match '^[A-Za-z0-9._-]+$') "Native artifact file name is invalid: $($artifact.id)"
-    Test-Condition ([string]$artifact.url -like 'https://*') "Native artifact URL must use HTTPS: $($artifact.id)"
+    Test-Condition ([string]$artifact.provider -ceq 'TetoTV source build') "Native artifact is not identified as a TetoTV source build: $($artifact.id)"
     Test-Condition ([long]$artifact.size -gt 0) "Native artifact size is invalid: $($artifact.id)"
     Test-Condition ([string]$artifact.sha256 -match '^[0-9a-f]{64}$') "Native artifact SHA-256 is invalid: $($artifact.id)"
 }
 Test-FileText "pubspec.lock" "media_kit_libs_android_video:"
-Test-FileText "pubspec.lock" 'version: "1.3.8"'
+Test-FileText "pubspec.lock" "third_party/media_kit_libs_android_video"
 Test-FileText "pubspec.yaml" "assets/legal/native/NATIVE_PLAYBACK_NOTICE.txt"
-Test-FileText "android/app/build.gradle.kts" 'org.libtorrent4j:libtorrent4j:2.1.0-38'
-Test-FileText "android/app/build.gradle.kts" 'org.libtorrent4j:libtorrent4j-android-arm:2.1.0-38'
-Test-FileText "android/app/build.gradle.kts" 'org.libtorrent4j:libtorrent4j-android-arm64:2.1.0-38'
+Test-FileText "pubspec.yaml" "path: third_party/media_kit_libs_android_video"
+Test-FileText "android/app/build.gradle.kts" "TETOTV_NATIVE_ARTIFACT_DIR"
+Test-FileText "android/app/build.gradle.kts" "selfBuiltLibtorrentArtifacts"
+Test-FileText "tool/native/build_native_playback.sh" "build_libmpv"
+Test-FileText "tool/native/build_native_playback.sh" "build_libtorrent4j"
 $pubspecText = Get-Content -Raw -LiteralPath (Join-Path $repoRoot "pubspec.yaml")
 
 foreach ($license in $manifest.licenseAssets) {
@@ -290,15 +382,18 @@ if (Test-Path -LiteralPath $packageConfigPath) {
     $nativePackage = $packageConfig.packages | Where-Object name -eq "media_kit_libs_android_video" | Select-Object -First 1
     Test-Condition ($null -ne $nativePackage) "media_kit_libs_android_video is absent from package_config.json"
     if ($null -ne $nativePackage) {
-        $rootUri = [Uri]$nativePackage.rootUri
+        # package_config.json permits rootUri to be relative to the config
+        # file. Resolve it before reading LocalPath; casting a relative URI
+        # directly leaves LocalPath empty on Windows.
+        $packageConfigUri = [Uri]::new([IO.Path]::GetFullPath($packageConfigPath))
+        $rootUri = [Uri]::new($packageConfigUri, [string]$nativePackage.rootUri)
         $packageRoot = [Uri]::UnescapeDataString($rootUri.LocalPath)
         $pluginGradle = Join-Path $packageRoot "android\build.gradle"
         if (Test-Path -LiteralPath $pluginGradle) {
             $pluginText = Get-Content -Raw -LiteralPath $pluginGradle
-            Test-Condition $pluginText.Contains("releases/download/v1.1.7/default-arm64-v8a.jar") "Plugin does not resolve v1.1.7 arm64 JAR"
-            Test-Condition $pluginText.Contains("releases/download/v1.1.7/default-armeabi-v7a.jar") "Plugin does not resolve v1.1.7 armv7 JAR"
-            Test-Condition $pluginText.Contains("83df25b61193af8fa815e373143ac9af") "Plugin arm64 MD5 differs from manifest evidence"
-            Test-Condition $pluginText.Contains("22e21526fefc0a2b8f17adbec9f57590") "Plugin armv7 MD5 differs from manifest evidence"
+            Test-Condition $pluginText.Contains("TETOTV_NATIVE_ARTIFACT_DIR") "Plugin does not resolve the TetoTV source-build output directory"
+            Test-Condition $pluginText.Contains('"selfBuilt": true') "Plugin does not require self-build provenance"
+            Test-Condition (-not $pluginText.Contains("releases/download/")) "Plugin still contains an upstream binary-download fallback"
         } else {
             $failures.Add("Missing resolved plugin Gradle file at $pluginGradle")
         }
@@ -308,39 +403,13 @@ if (Test-Path -LiteralPath $packageConfigPath) {
 }
 
 $resolved = 0
+$defaultResolvedDirectory = Join-Path $repoRoot "build\native-playback\outputs"
 foreach ($artifact in $manifest.binaryArtifacts) {
     $candidates = @()
     if (-not [string]::IsNullOrWhiteSpace($ResolvedBinaryDirectory)) {
         $candidates += Join-Path $ResolvedBinaryDirectory $artifact.fileName
     }
-    if ($artifact.id -like "libmpv-*") {
-        $candidates += Join-Path $repoRoot "build\media_kit_libs_android_video\v1.1.7\$($artifact.fileName)"
-        $candidates += Join-Path $repoRoot "build\media_kit_libs_android_video\output\$($artifact.fileName)"
-        if (-not [string]::IsNullOrWhiteSpace($gradleUserHome)) {
-            # Gradle versions differ in whether transformed file dependencies
-            # retain the original JAR. Search only exact artifact names under
-            # transform outputs; size and SHA-256 are checked below before a
-            # candidate can satisfy this release gate.
-            $gradleCacheRoot = Join-Path $gradleUserHome "caches"
-            if (Test-Path -LiteralPath $gradleCacheRoot -PathType Container) {
-                $transformRoots = Get-ChildItem -LiteralPath $gradleCacheRoot -Directory -ErrorAction SilentlyContinue |
-                    ForEach-Object { Join-Path $_.FullName "transforms" } |
-                    Where-Object { Test-Path -LiteralPath $_ -PathType Container }
-                foreach ($transformRoot in $transformRoots) {
-                    $candidates += Get-ChildItem -LiteralPath $transformRoot -Recurse -File -Filter $artifact.fileName -ErrorAction SilentlyContinue |
-                        Select-Object -ExpandProperty FullName
-                }
-            }
-        }
-    } elseif ($artifact.id -like "libtorrent4j-*") {
-        if (-not [string]::IsNullOrWhiteSpace($gradleUserHome)) {
-            $gradleModuleRoot = Join-Path $gradleUserHome "caches\modules-2\files-2.1\org.libtorrent4j"
-            if (Test-Path -LiteralPath $gradleModuleRoot -PathType Container) {
-                $candidates += Get-ChildItem -LiteralPath $gradleModuleRoot -Recurse -File -Filter $artifact.fileName |
-                    Select-Object -ExpandProperty FullName
-            }
-        }
-    }
+    $candidates += Join-Path $defaultResolvedDirectory $artifact.fileName
     $existingCandidates = @(
         $candidates |
             Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
@@ -366,6 +435,32 @@ foreach ($artifact in $manifest.binaryArtifacts) {
     } else {
         Write-Warning "Resolved binary not present locally; hash not checked: $($artifact.id)"
     }
+}
+
+$provenanceCandidates = @()
+if (-not [string]::IsNullOrWhiteSpace($ResolvedBinaryDirectory)) {
+    $provenanceCandidates += Join-Path $ResolvedBinaryDirectory "NATIVE_BUILD_PROVENANCE.json"
+}
+$provenanceCandidates += Join-Path $defaultResolvedDirectory "NATIVE_BUILD_PROVENANCE.json"
+$resolvedProvenance = $provenanceCandidates |
+    Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
+    Select-Object -First 1
+if ($null -ne $resolvedProvenance) {
+    try {
+        $provenance = Get-Content -Raw -LiteralPath $resolvedProvenance | ConvertFrom-Json
+        Test-Condition ($provenance.selfBuilt -eq $true) "Native build provenance does not assert selfBuilt=true"
+        Test-Condition ([string]$provenance.buildScriptSha256 -ceq [string]$manifest.build.scriptSha256) "Native build provenance was produced by a different build script"
+        $provenanceOutputText = @($provenance.outputChecksums) -join "`n"
+        foreach ($artifact in $manifest.binaryArtifacts) {
+            Test-Condition $provenanceOutputText.Contains("$($artifact.sha256)  $($artifact.fileName)") "Native build provenance does not bind $($artifact.fileName)"
+        }
+    }
+    catch {
+        $failures.Add("Native build provenance is invalid: $($_.Exception.Message)")
+    }
+}
+elseif ($RequireResolvedBinaries) {
+    $failures.Add("NATIVE_BUILD_PROVENANCE.json is required with resolved source-built artifacts")
 }
 
 if ($failures.Count -gt 0) {
@@ -412,11 +507,55 @@ New-Item -ItemType Directory -Path $sourceDir, $checkoutDir, $licenseDir -Force 
 Copy-Item -LiteralPath $manifestPath -Destination $outputFull
 Copy-Item -LiteralPath (Join-Path $repoRoot "docs\NATIVE_PLAYBACK_REDISTRIBUTION.md") -Destination $outputFull
 Copy-Item -LiteralPath (Join-Path $repoRoot "docs\DIRECT_TORRENT_STREAMING.md") -Destination $outputFull
+Copy-Item -LiteralPath (Join-Path $repoRoot "tool\native\build_native_playback.sh") -Destination (Join-Path $outputFull "BUILD_NATIVE_PLAYBACK.sh")
+$provenanceSource = if (-not [string]::IsNullOrWhiteSpace($ResolvedBinaryDirectory)) {
+    Join-Path $ResolvedBinaryDirectory "NATIVE_BUILD_PROVENANCE.json"
+} else {
+    Join-Path $repoRoot "build\native-playback\outputs\NATIVE_BUILD_PROVENANCE.json"
+}
+if (-not (Test-Path -LiteralPath $provenanceSource -PathType Leaf)) {
+    throw "Cannot stage native source bundle without NATIVE_BUILD_PROVENANCE.json."
+}
+Copy-Item -LiteralPath $provenanceSource -Destination $outputFull
 foreach ($license in $manifest.licenseAssets) {
     Copy-Item -LiteralPath (Join-Path $repoRoot $license.path) -Destination $licenseDir
 }
 
 $resolvedRefs = [System.Collections.Generic.List[object]]::new()
+function Assert-ArchiveBuildScriptsUseLf([string]$ArchivePath, [string]$Id) {
+    $sourceArchive = [IO.Compression.ZipFile]::OpenRead($ArchivePath)
+    try {
+        foreach ($entry in $sourceArchive.Entries) {
+            if (
+                $entry.FullName.EndsWith('/') -or
+                $entry.FullName -notmatch '(?i)(^|/)(?:configure|autogen\.sh|bootstrap\.sh|[^/]+\.sh)$'
+            ) {
+                continue
+            }
+            $stream = $entry.Open()
+            try {
+                $memory = [IO.MemoryStream]::new()
+                try {
+                    $stream.CopyTo($memory)
+                    $text = [Text.Encoding]::UTF8.GetString($memory.ToArray())
+                }
+                finally {
+                    $memory.Dispose()
+                }
+            }
+            finally {
+                $stream.Dispose()
+            }
+            if ($text.Contains("`r`n")) {
+                throw "$Id source archive contains a CRLF build script: $($entry.FullName)"
+            }
+        }
+    }
+    finally {
+        $sourceArchive.Dispose()
+    }
+}
+
 function Export-GitSnapshot([string]$Id, [string]$Repository, [string]$Ref, [bool]$Immutable) {
     $checkout = Join-Path $script:checkoutDir $Id
     if ($Immutable) {
@@ -434,8 +573,13 @@ function Export-GitSnapshot([string]$Id, [string]$Repository, [string]$Ref, [boo
     if ($LASTEXITCODE -ne 0) { throw "git revision resolution failed for $Id at $Ref" }
     if ($Immutable -and $resolvedRef -ne $Ref) { throw "$Id resolved to $resolvedRef instead of $Ref" }
     $archive = Join-Path $script:sourceDir "$Id-$resolvedRef.zip"
-    & git -C $checkout archive --format=zip --output=$archive $resolvedRef
+    # Force object-database line endings. Windows Git's checkout conversion
+    # previously produced hash-valid ZIPs whose Bash shebangs ended in CRLF,
+    # making the published source bundle unusable on Linux.
+    & git -c core.autocrlf=false -c core.eol=lf -c core.safecrlf=true `
+        -C $checkout archive --format=zip --output=$archive $resolvedRef
     if ($LASTEXITCODE -ne 0) { throw "git archive failed for $Id" }
+    Assert-ArchiveBuildScriptsUseLf $archive $Id
     $script:resolvedRefs.Add([pscustomobject]@{
         id = $Id; repository = $Repository; requestedRef = $Ref
         resolvedCommit = $resolvedRef; immutableInput = $Immutable
@@ -487,12 +631,13 @@ $hashLines | Set-Content -Encoding ascii -LiteralPath (Join-Path $outputFull "SO
 
 $bundleReadme = @"
 This bundle contains the exact immutable source roots, source distributions,
-and snapshots of each upstream-declared dependency ref recorded for TetoTV's
-native playback and optional direct-torrent stacks. Read
+the TetoTV source-build script, and the provenance record for the five native
+input JARs used by this release. Read
 NATIVE_PLAYBACK_REDISTRIBUTION.md, DIRECT_TORRENT_STREAMING.md, and
 RESOLVED_SOURCE_REFS.json before use.
-Mutable-tag inputs and the lack of upstream reproducible-build metadata remain
-documented evidence limits; this bundle does not assert bit-for-bit identity.
+The artifacts are new TetoTV source builds. The documented lack of a second
+isolated reproduction and independent license review remains an evidence
+limit; this bundle does not claim legal approval or retired-prebuilt identity.
 "@
 $bundleReadme | Set-Content -Encoding utf8 -LiteralPath (Join-Path $outputFull "README.txt")
 

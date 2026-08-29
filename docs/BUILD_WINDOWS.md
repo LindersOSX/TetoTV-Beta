@@ -220,44 +220,48 @@ APK containing both supported application ABIs.
 Public and Beta updates use anonymous GitHub requests. No Beta key, GitHub
 token, update-proxy URL, or update-specific Dart define is required. Every
 published APK uses the production signing identity. No Public APK is currently
-published. Beta 2.0.42 uses Android build code `410019`. Flutter reuses
+published. Beta 2.0.43 uses Android build code `410020`. Flutter reuses
 `app-release.apk`, so copy and rename the Beta artifact immediately after the
 build:
 
 ```powershell
-New-Item -ItemType Directory -Force .\build\fire-tv\v2.0.42 | Out-Null
+New-Item -ItemType Directory -Force .\build\fire-tv\v2.0.43 | Out-Null
 
-# Beta 2.0.42
+# Beta 2.0.43
 flutter build apk --release --target-platform android-arm,android-arm64 `
-  --build-name 2.0.42 --build-number 410019 --no-tree-shake-icons
+  --build-name 2.0.43 --build-number 410020 --no-tree-shake-icons
 Copy-Item .\build\app\outputs\flutter-apk\app-release.apk `
-  .\build\fire-tv\v2.0.42\TetoTV-v2.0.42-universal.apk
+  .\build\fire-tv\v2.0.43\TetoTV-v2.0.43-universal.apk
 
 .\tool\release\verify_release_apk.ps1 `
   -Channel Beta `
-  -ApkPath .\build\fire-tv\v2.0.42\TetoTV-v2.0.42-universal.apk
+  -ApkPath .\build\fire-tv\v2.0.43\TetoTV-v2.0.43-universal.apk
 
 .\tool\release\verify_native_redistribution.ps1 `
-  -StageBundle -ReleaseTag v2.0.42
+  -RequireResolvedBinaries `
+  -ResolvedBinaryDirectory .\build\native-playback\outputs `
+  -StageBundle -ReleaseTag v2.0.43
 
 .\tool\release\new_release_checksums.ps1 `
-  -ApkPath .\build\fire-tv\v2.0.42\TetoTV-v2.0.42-universal.apk `
-  -NativeSourcePath .\build\release-compliance\v2.0.42\TetoTV-v2.0.42-native-playback-sources.zip `
-  -OutputPath .\build\fire-tv\v2.0.42\SHA256SUMS
+  -ApkPath .\build\fire-tv\v2.0.43\TetoTV-v2.0.43-universal.apk `
+  -NativeSourcePath .\build\release-compliance\v2.0.43\TetoTV-v2.0.43-native-playback-sources.zip `
+  -OutputPath .\build\fire-tv\v2.0.43\SHA256SUMS
 
 .\tool\release\verify_release_payloads.ps1 `
   -Channel Beta `
-  -ApkPath .\build\fire-tv\v2.0.42\TetoTV-v2.0.42-universal.apk `
-  -NativeSourcePath .\build\release-compliance\v2.0.42\TetoTV-v2.0.42-native-playback-sources.zip `
-  -ChecksumsPath .\build\fire-tv\v2.0.42\SHA256SUMS `
-  -ReleaseNotesPath .\docs\RELEASE_NOTES_2.0.42.md
+  -ApkPath .\build\fire-tv\v2.0.43\TetoTV-v2.0.43-universal.apk `
+  -NativeSourcePath .\build\release-compliance\v2.0.43\TetoTV-v2.0.43-native-playback-sources.zip `
+  -ChecksumsPath .\build\fire-tv\v2.0.43\SHA256SUMS `
+  -ReleaseNotesPath .\docs\RELEASE_NOTES_2.0.43.md
 ```
 
-The final payload check requires all five exact native JARs pinned in
-`native_playback_manifest.json`. It discovers the two libmpv inputs in the
-plugin build output and exact-name Gradle transform outputs, and the three
-libtorrent4j inputs in the Gradle module cache. A missing or digest-mismatched
-artifact blocks release preparation.
+The final payload check requires all five exact, source-built native JARs
+pinned in `native_playback_manifest.json`. Build them on Linux or WSL with
+`tool/native/build_native_playback.sh`, then keep the five JARs and
+`NATIVE_BUILD_PROVENANCE.json` together in `build/native-playback/outputs`.
+The local media-kit plugin and Android app consume only that directory; there
+is no release-build fallback to the retired upstream prebuilts. A missing or
+digest-mismatched artifact blocks release preparation.
 
 Before `-Publish`, choose exactly one evidence path documented in
 [`NATIVE_LICENSE_RELEASE_REVIEW.md`](NATIVE_LICENSE_RELEASE_REVIEW.md). The

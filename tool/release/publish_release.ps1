@@ -407,7 +407,55 @@ function Assert-GitHubRelease {
         [bool]$ExpectedDraft
     )
 
-    $release = Get-GitHubRelease $Repository $Tag
+    # GitHub may briefly omit a newly created draft (or retain its old draft
+    # state after publication) from the paginated release list. Wait for one
+    # complete, exact snapshot instead of treating that consistency delay as
+    # either success or a permanent failure.
+    $release = $null
+    $lastCandidate = $null
+    $maxSnapshotAttempts = 10
+    for ($attempt = 1; $attempt -le $maxSnapshotAttempts; $attempt++) {
+        $candidate = Get-GitHubRelease $Repository $Tag -AllowMissing
+        $snapshotReady = $false
+        if ($null -ne $candidate) {
+            $lastCandidate = $candidate
+            $candidateAssets = @($candidate.assets)
+            $snapshotReady = (
+                $candidate.tag_name -ceq $Tag -and
+                $candidate.name -ceq $Title -and
+                [bool]$candidate.draft -eq $ExpectedDraft -and
+                -not [bool]$candidate.prerelease -and
+                $candidateAssets.Count -eq $ExpectedAssets.Count
+            )
+            if ($snapshotReady) {
+                foreach ($expected in $ExpectedAssets) {
+                    $assetMatches = @(
+                        $candidateAssets | Where-Object name -CEQ $expected.Name
+                    )
+                    if (
+                        $assetMatches.Count -ne 1 -or
+                        [long]$assetMatches[0].size -ne [long]$expected.Size
+                    ) {
+                        $snapshotReady = $false
+                        break
+                    }
+                }
+            }
+        }
+        if ($snapshotReady) {
+            $release = $candidate
+            break
+        }
+        if ($attempt -lt $maxSnapshotAttempts) {
+            Start-Sleep -Milliseconds 1500
+        }
+    }
+    if ($null -eq $release) {
+        $release = $lastCandidate
+    }
+    if ($null -eq $release) {
+        throw "Release $Repository $Tag did not become visible after draft-state synchronization."
+    }
     if (
         $release.tag_name -cne $Tag -or
         $release.name -cne $Title -or
@@ -652,14 +700,24 @@ function Assert-GitHubRelease {
     }
 
     Assert-RemoteTagMatchesCommit $Repository $Tag $ExpectedTagCommit
-    $latest = Get-LatestGitHubRelease $Repository
     if ($ExpectedDraft) {
+        $latest = Get-LatestGitHubRelease $Repository
         if ($null -ne $latest -and $latest.tag_name -ceq $Tag) {
             throw "Draft $Tag must not be exposed through /releases/latest."
         }
     }
-    elseif ($null -eq $latest -or $latest.tag_name -cne $Tag) {
-        throw "$Repository does not expose published $Tag through /releases/latest."
+    else {
+        $latest = $null
+        for ($attempt = 1; $attempt -le $maxSnapshotAttempts; $attempt++) {
+            $latest = Get-LatestGitHubRelease $Repository
+            if ($null -ne $latest -and $latest.tag_name -ceq $Tag) { break }
+            if ($attempt -lt $maxSnapshotAttempts) {
+                Start-Sleep -Milliseconds 1500
+            }
+        }
+        if ($null -eq $latest -or $latest.tag_name -cne $Tag) {
+            throw "$Repository does not expose published $Tag through /releases/latest."
+        }
     }
 }
 

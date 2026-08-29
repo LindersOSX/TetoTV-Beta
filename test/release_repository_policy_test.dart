@@ -209,6 +209,13 @@ void main() {
       isNot(contains('"repos/\$Repository/releases/tags/\$encodedTag"')),
       reason: 'GitHub\'s release-by-tag endpoint hides drafts',
     );
+    expect(publisher, contains(r'$maxSnapshotAttempts = 10'));
+    expect(
+      publisher,
+      contains(r'Get-GitHubRelease $Repository $Tag -AllowMissing'),
+      reason: 'draft verification must tolerate bounded list consistency lag',
+    );
+    expect(publisher, contains('Start-Sleep -Milliseconds 1500'));
     expect(publisher, contains('[StringComparison]::Ordinal'));
     expect(
       publisher,

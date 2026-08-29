@@ -554,4 +554,4 @@ try {
 Test-NativeSourceBundle $bundlePath
 Write-Host "Staged native redistribution bundle: $bundlePath"
 Write-Host "SHA-256: $((Get-FileHash -Algorithm SHA256 -LiteralPath $bundlePath).Hash.ToLowerInvariant())"
-Write-Warning "A qualified release reviewer must resolve the manifest's provenance limits and verify complete corresponding source before publishing."
+Write-Warning "Public and reviewed Beta releases require a qualified reviewer to resolve the manifest's provenance limits and verify complete corresponding source. An explicit unreviewed Beta must disclose that this review was not performed and must not claim compliance."

@@ -7,9 +7,9 @@ every applicable license.
 
 ## Security boundary
 
-`-Publish` is blocked unless `publish_beta_release.ps1` can verify an OpenSSH
-signature over the exact attestation bytes. The attestation binds the review
-to all of the following:
+Reviewed `-Publish` is blocked unless `publish_beta_release.ps1` can verify an
+OpenSSH signature over the exact attestation bytes. The attestation binds the
+review to all of the following:
 
 - canonical release tag and full Git commit;
 - final universal APK SHA-256;
@@ -33,6 +33,55 @@ The checked-in allowlist intentionally starts with no active keys. That is a
 fail-closed release state, not a sample key to replace automatically. A project
 administrator must independently verify both a reviewer's qualification and
 public-key fingerprint before committing one exact allowed-signers entry.
+
+## Explicit unreviewed Beta exception
+
+The Beta publisher also supports a deliberately conspicuous exception when an
+independent reviewer is not yet available. This exception is Beta-only, is
+never the default, and cannot be combined with reviewer evidence. It requires:
+
+- `-PublishWithoutIndependentNativeLicenseReview`;
+- the exact acknowledgement `PUBLISH UNREVIEWED BETA`;
+- a fresh `tetotv-unreviewed-beta-release-declaration` created from the final
+  tag, commit, APK, native-source ZIP, manifest, notice, and provenance limits;
+- an owner-confirmed complete empty GitHub App inventory for the Beta
+  repository, created within 24 hours; and
+- a prominent public warning that no independent native-license or
+  corresponding-source review occurred.
+
+The unsigned owner declaration is not an approval, qualified review, legal
+advice, or a compliance determination. It never contains reviewer fields or a
+fake signature. The publisher and hosted workflow reject mixed reviewed and
+unreviewed evidence while retaining the same draft-first asset, checksum, APK,
+native-source, pinned-input, repository-authority, immutable-release, and
+GitHub attestation checks. This exception must not be used for a Public release.
+
+After the final tag and payloads exist, create it with:
+
+```powershell
+.\tool\release\new_unreviewed_beta_release_declaration.ps1 `
+  -ApkPath .\build\fire-tv\v2.x.y\TetoTV-v2.x.y-universal.apk `
+  -NativeSourcePath .\build\release-compliance\v2.x.y\TetoTV-v2.x.y-native-playback-sources.zip `
+  -OutputPath .\build\release-compliance\v2.x.y\unreviewed-beta-release-declaration.json `
+  -ConfirmNoIndependentNativeLicenseReview `
+  -ConfirmCorrespondingSourceNotIndependentlyReviewed `
+  -AcknowledgeKnownProvenanceLimits `
+  -ConfirmNoGitHubAppsInstalledForRepository
+```
+
+Pass it only through the explicit exception path:
+
+```powershell
+.\tool\release\publish_beta_release.ps1 `
+  -ApkPath .\build\fire-tv\v2.x.y\TetoTV-v2.x.y-universal.apk `
+  -NativeSourcePath .\build\release-compliance\v2.x.y\TetoTV-v2.x.y-native-playback-sources.zip `
+  -ChecksumsPath .\build\fire-tv\v2.x.y\SHA256SUMS `
+  -ReleaseNotesPath .\docs\RELEASE_NOTES_2.x.y.md `
+  -UnreviewedBetaDeclarationPath .\build\release-compliance\v2.x.y\unreviewed-beta-release-declaration.json `
+  -PublishWithoutIndependentNativeLicenseReview `
+  -UnreviewedBetaAcknowledgement "PUBLISH UNREVIEWED BETA" `
+  -Publish
+```
 
 ## Create and sign the statement
 
@@ -88,10 +137,10 @@ stricter: it must be empty, complete, signed as part of the same statement, and
 no more than 24 hours old. GitHub's personal-account API does not expose this
 complete inventory to a normal `gh` OAuth token, so the qualified reviewer must
 open **Repository settings > Integrations > GitHub Apps** and confirm that no
-App is installed for `LindersOSX/TetoTV-Beta`. Publication fails closed if that
-confirmation is absent or stale.
+  App is installed for `LindersOSX/TetoTV-Beta`. Reviewed publication fails
+  closed if that confirmation is absent or stale.
 
-## Draft-first publication
+## Reviewed draft-first publication
 
 Pass the attestation when publishing:
 
@@ -112,7 +161,7 @@ fourth release asset. Do not put private keys or private reviewer details in
 the attestation; its stable reviewer identity and role become public release
 evidence.
 
-GitHub receives a private draft first. The script re-downloads all three
+In reviewed mode, GitHub receives a private draft first. The script re-downloads all three
 assets, decodes the exact public evidence, verifies the allowlisted OpenSSH
 signature and every artifact binding, verifies hosted sizes and hashes, and
 runs the complete APK, native-source, binary-artifact, checksum, and notes
@@ -126,6 +175,12 @@ performed. It is verification provenance; it does not falsely claim that
 GitHub Actions built the locally signed APK. The workflow also requires
 GitHub's immutable-release attestation (`gh release verify`) and verifies its
 own generic attestation bundle against the exact signer workflow and tag ref.
+
+The unreviewed Beta path uses the same draft-first hosted payload checks, but it
+verifies the fresh owner declaration and exact public `unreviewed-beta` status
+instead of a reviewer signature. Its GitHub predicate records
+`nativeLicenseReviewStatus: unreviewed-beta`, the declaration digest, and only
+the automated checks actually performed. It does not claim independent review.
 
 Failed drafts are deleted automatically. A release that may already be public
 is never deleted or mutated by rollback logic, which preserves immutable

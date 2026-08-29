@@ -15,6 +15,12 @@ param(
 
     [string]$NativeLicenseReviewSignaturePath = "",
 
+    [string]$UnreviewedBetaDeclarationPath = "",
+
+    [switch]$PublishWithoutIndependentNativeLicenseReview,
+
+    [string]$UnreviewedBetaAcknowledgement = "",
+
     [switch]$Publish
 )
 
@@ -33,6 +39,15 @@ if (-not [string]::IsNullOrWhiteSpace($NativeLicenseReviewPath)) {
 }
 if (-not [string]::IsNullOrWhiteSpace($NativeLicenseReviewSignaturePath)) {
     $arguments.NativeLicenseReviewSignaturePath = $NativeLicenseReviewSignaturePath
+}
+if (-not [string]::IsNullOrWhiteSpace($UnreviewedBetaDeclarationPath)) {
+    $arguments.UnreviewedBetaDeclarationPath = $UnreviewedBetaDeclarationPath
+}
+if ($PublishWithoutIndependentNativeLicenseReview) {
+    $arguments.PublishWithoutIndependentNativeLicenseReview = $true
+}
+if (-not [string]::IsNullOrWhiteSpace($UnreviewedBetaAcknowledgement)) {
+    $arguments.UnreviewedBetaAcknowledgement = $UnreviewedBetaAcknowledgement
 }
 
 & (Join-Path $PSScriptRoot "publish_release.ps1") @arguments

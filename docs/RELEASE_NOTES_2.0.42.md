@@ -1,5 +1,8 @@
 # TetoTV 2.0.42 Beta
 
+> [!WARNING]
+> No independent native-license review: This Beta has not received independent native-library licensing review. Automated checks verify the APK, native-source bundle, notices, pinned inputs, and checksums, but do not establish legal compliance or reproducible builds.
+
 This Beta strengthens account setup, privacy handling, and release integrity while keeping the existing updater, playback, downloads, and account connections compatible.
 
 ## What's changed
@@ -9,7 +12,7 @@ This Beta strengthens account setup, privacy handling, and release integrity whi
 - Existing linked Discord sessions continue to refresh, reconnect, toggle Rich Presence, and survive cache clearing without a forced migration. Unlinking removes both the token and its confirmation marker.
 - The privacy disclosure now provides an account-free private request route and accurately separates TetoTV's application retention from Wispbyte and Discord infrastructure processing.
 - Featured TV titles use roughly the left half of the sponsor panel and scale/wrap the complete localized title without covering the right-side artwork. Phone and tablet title sizing is unchanged.
-- Native redistribution publication now requires a signed, digest-bound qualified-review attestation and verifies a private GitHub draft before making a release public.
+- Native redistribution publication supports either the default signed qualified-review path or this explicitly disclosed, owner-declared unreviewed Beta exception. Both paths verify a private GitHub draft before making a release public; the exception never represents automated checks as legal review.
 - GitHub workflows use commit-pinned actions, dependency review, CodeQL, protected branches/tags, secret scanning, push protection, and immutable future release controls.
 - The known libtorrent4j API-28-only update is held back so Fire OS 6 and Android 7 support remain intact.
 

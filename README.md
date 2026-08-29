@@ -44,6 +44,12 @@ This repository contains the complete TetoTV source code as well as the Beta rel
 | Public | Not published | Source and release-readiness documents are available, but no Public APK is currently offered |
 | Beta | [2.0.42](docs/RELEASE_NOTES_2.0.42.md) | Testing current fixes and features before a separately reviewed Public release |
 
+Beta 2.0.42 uses the repository's explicit unreviewed-Beta exception: its
+native-library and corresponding-source material did not receive independent
+license review. Automated integrity and source-bundle checks are not a legal
+compliance determination. The release notes preserve the exact disclosure and
+owner declaration; this exception does not apply to a future Public release.
+
 The Public updater repository intentionally has no release while the Public build is held for review. Existing Beta installations continue to update from the Beta repository. Android never permits an in-place install of an APK with a lower build code; Developer Mode does not bypass that platform rule.
 
 ## Android TV / Fire TV

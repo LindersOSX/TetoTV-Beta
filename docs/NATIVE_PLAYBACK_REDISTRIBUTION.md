@@ -45,7 +45,9 @@ does not publish source-archive SHA-256 values, and contains a floating
 `media_kit` clone that is not used by the final helper bundling step. A fresh
 build therefore cannot be proven bit-for-bit identical from the recorded
 metadata alone. The staging tool records the resolved commit of every such
-tag; release review must retain and evaluate that report.
+tag. Release evidence must retain that report. Public and reviewed Beta paths
+must have it independently evaluated; an unreviewed Beta must disclose that
+the evaluation was not performed.
 
 The same staged source bundle includes libtorrent4j commit
 `09ffd391d4ef12e668cc032bffcbab47d9e2d5cb`, libtorrent-rasterbar commit
@@ -90,20 +92,34 @@ corresponding universal APK and `SHA256SUMS`, and retain the same verified
 bundle for as long as the binary remains available. GitHub also supplies the
 tagged TetoTV source archives automatically. A qualified reviewer must confirm
 those archives and the durable public source locations referenced here meet
-every applicable corresponding-source obligation. Do not publish if they do
-not, or if a revision, binary hash, license asset, or source snapshot is
-missing.
+every applicable corresponding-source obligation before a Public release or a
+reviewed Beta release. Do not use either reviewed path if they do not, or if a
+revision, binary hash, license asset, or source snapshot is missing. The
+explicit unreviewed Beta exception below may only record that this confirmation
+was deferred; it does not resolve a source-offer gap.
 
-The review is enforced by the SSH-signed, artifact-bound gate documented in
+The default review path is enforced by the SSH-signed, artifact-bound gate
+documented in
 [`NATIVE_LICENSE_RELEASE_REVIEW.md`](NATIVE_LICENSE_RELEASE_REVIEW.md).
-`-Publish` requires a fresh approval signed by an exact principal in the
-checked-in qualified-reviewer allowlist. The repository starts with no active
-reviewer key, so publication intentionally fails closed until a project
-administrator independently verifies and commits a qualified reviewer's public
-key. The signed record and its validation are review evidence, not legal advice
-or a claim of compliance.
+Reviewed `-Publish` requires a fresh approval signed by an exact principal in
+the checked-in qualified-reviewer allowlist. The repository starts with no
+active reviewer key, so reviewed publication intentionally fails closed until
+a project administrator independently verifies and commits a qualified
+reviewer's public key. The signed record and its validation are review
+evidence, not legal advice or a claim of compliance.
+
+A Beta-only owner-declared exception may be used when independent review is
+explicitly deferred. That path publicly states that neither the native-license
+material nor corresponding source received independent review, binds a fresh
+unsigned declaration to the final artifacts and documented provenance limits,
+and retains all automated source, APK, checksum, pinned-input, draft, and
+repository-authority verification. It is not an approval or compliance
+determination and must not be represented as one. The exception is described
+in `NATIVE_LICENSE_RELEASE_REVIEW.md` and is not permitted for Public releases.
 
 The checked-in full GPL/LGPL texts are conservative. Component copyright and
 license notices inside the staged sources determine the actual license of each
-file. A qualified release reviewer must resolve the documented upstream
-provenance gaps and confirm the final source offer before distribution.
+file. Public and reviewed Beta distribution require a qualified release
+reviewer to resolve the documented upstream provenance gaps and confirm the
+final source offer. An unreviewed Beta must instead disclose that those steps
+were not independently completed and must not claim compliance.

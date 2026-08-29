@@ -58,7 +58,7 @@ void main() {
     expect(apkVerifier, isNot(contains(r'$IsWindows')));
   });
 
-  test('publication is draft-first and requires signed native review', () {
+  test('reviewed publication remains draft-first and verifies signed review', () {
     final publisher = File(
       'tool/release/publish_release.ps1',
     ).readAsStringSync();
@@ -84,6 +84,9 @@ void main() {
     expect(publisher, contains('unexpected collaborators are present'));
     expect(publisher, contains('immutable future releases must be enabled'));
     expect(publisher, contains('sha_pinning_required'));
+    expect(publisher, contains('android-actions/setup-android@*'));
+    expect(publisher, contains('subosito/flutter-action@*'));
+    expect(publisher, contains(r'$selectedActionsPolicy.verified_allowed'));
     expect(publisher, contains('default_workflow_permissions'));
     expect(
       publisher,
@@ -115,11 +118,8 @@ void main() {
       reviewVerifier,
       contains('Publication is blocked while any GitHub App is installed'),
     );
-    expect(publisher, contains('SignedReviewAttestationPath'));
-    expect(
-      publisher,
-      contains('complete empty GitHub App inventory'),
-    );
+    expect(publisher, contains(r'$reviewEvidence.githubAppInventory'));
+    expect(publisher, contains('complete empty GitHub App inventory'));
     expect(
       hostedReleaseVerifier,
       contains('tetotv-native-license-review-attestation-base64'),
@@ -152,6 +152,223 @@ void main() {
       activeReviewers,
       isEmpty,
       reason: 'release must remain fail-closed until a reviewer is vetted',
+    );
+  });
+
+  test('unreviewed publication is explicit, Beta-only, and cannot claim review', () {
+    final betaPublisher = File(
+      'tool/release/publish_beta_release.ps1',
+    ).readAsStringSync();
+    final publisher = File(
+      'tool/release/publish_release.ps1',
+    ).readAsStringSync();
+    final payloadVerifier = File(
+      'tool/release/verify_release_payloads.ps1',
+    ).readAsStringSync();
+    final declarationCreator = File(
+      'tool/release/new_unreviewed_beta_release_declaration.ps1',
+    ).readAsStringSync();
+    final declarationVerifier = File(
+      'tool/release/verify_unreviewed_beta_release_declaration.ps1',
+    ).readAsStringSync();
+    final hostedReleaseVerifier = File(
+      '.github/workflows/verify-release-assets.yml',
+    ).readAsStringSync();
+    final releaseNotes = File(
+      'docs/RELEASE_NOTES_2.0.42.md',
+    ).readAsStringSync();
+
+    expect(
+      betaPublisher,
+      contains('[switch]\$PublishWithoutIndependentNativeLicenseReview'),
+    );
+    expect(
+      betaPublisher,
+      contains(
+        r'$arguments.PublishWithoutIndependentNativeLicenseReview = $true',
+      ),
+    );
+    expect(betaPublisher, contains(r'Channel = "Beta"'));
+    expect(
+      publisher,
+      contains(
+        r'$unreviewedBetaAcknowledgementText = "PUBLISH UNREVIEWED BETA"',
+      ),
+    );
+    expect(publisher, contains('[StringComparison]::Ordinal'));
+    expect(
+      publisher,
+      contains(
+        'Reviewed native-license evidence and the unreviewed Beta exception are mutually exclusive.',
+      ),
+    );
+    expect(
+      publisher,
+      contains(
+        'Unreviewed Beta inputs require -PublishWithoutIndependentNativeLicenseReview.',
+      ),
+    );
+    expect(
+      publisher,
+      contains(
+        'Reviewed publication requires -NativeLicenseReviewPath and fails closed without a signed qualified-reviewer attestation.',
+      ),
+    );
+    expect(
+      publisher,
+      contains(
+        'Unreviewed Beta publication requires -UnreviewedBetaDeclarationPath.',
+      ),
+    );
+    expect(
+      RegExp(
+        r'\[ValidateSet\("Beta"\)\]\s*\[string\]\$Channel',
+      ).hasMatch(publisher),
+      isTrue,
+    );
+    expect(payloadVerifier, contains(r'if ($Channel -cne "Beta")'));
+    expect(
+      declarationCreator,
+      contains(r"'(?m)^version:\s*(2\.\d+\.\d+)\+\d+\s*$'"),
+    );
+    expect(
+      declarationVerifier,
+      contains("ReleaseTag must be a canonical Beta v2.x.y tag."),
+    );
+
+    expect(
+      declarationCreator,
+      contains(r'independentNativeLicenseReview = $false'),
+    );
+    expect(
+      declarationCreator,
+      contains(r'correspondingSourceIndependentlyReviewed = $false'),
+    );
+    expect(
+      declarationVerifier,
+      contains(r'$value -isnot [bool] -or $value -ne $false'),
+    );
+    expect(
+      declarationVerifier,
+      contains(
+        'This evidence explicitly records that no independent native-license or corresponding-source review was performed.',
+      ),
+    );
+    expect(declarationCreator, isNot(contains('ssh-keygen')));
+    expect(declarationVerifier, isNot(contains('-Y verify')));
+
+    const statusMarker =
+        '<!-- tetotv-native-license-review-status: unreviewed-beta -->';
+    final disclosureMatch = RegExp(
+      r'\$unreviewedBetaDisclosureText\s*=\s*"([^"]+)"',
+    ).firstMatch(publisher);
+    expect(disclosureMatch, isNotNull);
+    final disclosure = disclosureMatch!.group(1)!;
+    expect(releaseNotes, contains(disclosure));
+    expect(hostedReleaseVerifier, contains("disclosure='$disclosure'"));
+    expect(publisher, contains(r'$unreviewedBetaVisibleWarningPrefix'));
+    expect(
+      hostedReleaseVerifier,
+      contains(r'[[ "${warning_lines[2]}" != "> [!WARNING]" ]]'),
+    );
+    expect(declarationVerifier, contains('Compare-Object -CaseSensitive'));
+    const reviewedDisclosureRejection =
+        'Reviewed release notes must not claim that independent native-license review was not performed.';
+    expect(
+      publisher,
+      contains(
+        r'[regex]::Matches($normalizedReleaseBody, [regex]::Escape($unreviewedBetaDisclosureText))',
+      ),
+    );
+    expect(publisher, contains(reviewedDisclosureRejection));
+    expect(
+      payloadVerifier,
+      contains(r'$releaseNotesText.Contains($unreviewedDisclosure)'),
+    );
+    expect(payloadVerifier, contains(reviewedDisclosureRejection));
+    expect(
+      hostedReleaseVerifier,
+      contains(
+        r'if grep -Fq "${disclosure}" "${download_dir}/RELEASE_NOTES.md"; then',
+      ),
+    );
+    expect(hostedReleaseVerifier, contains(reviewedDisclosureRejection));
+    expect(publisher, contains(statusMarker));
+    expect(hostedReleaseVerifier, contains(statusMarker));
+    expect(
+      publisher,
+      contains(
+        'Unreviewed Beta release notes must not contain qualified-review evidence.',
+      ),
+    );
+    expect(
+      payloadVerifier,
+      contains(
+        'Unreviewed Beta release notes must not contain qualified-review evidence.',
+      ),
+    );
+    expect(
+      hostedReleaseVerifier,
+      contains(
+        'Unreviewed Beta release notes must not contain qualified-review evidence.',
+      ),
+    );
+    expect(hostedReleaseVerifier, contains('review_status="unreviewed-beta"'));
+    expect(
+      hostedReleaseVerifier,
+      contains('"owner-unreviewed-beta-declaration"'),
+    );
+    expect(hostedReleaseVerifier, contains('else null'));
+    expect(
+      hostedReleaseVerifier,
+      isNot(contains('Attest the independently verified release payload')),
+    );
+    expect(
+      hostedReleaseVerifier,
+      contains('Attest the verified release payload'),
+    );
+  });
+
+  test('both release-evidence paths preserve the three-asset contract', () {
+    final publisher = File(
+      'tool/release/publish_release.ps1',
+    ).readAsStringSync();
+    final hostedReleaseVerifier = File(
+      '.github/workflows/verify-release-assets.yml',
+    ).readAsStringSync();
+
+    expect(
+      RegExp(
+        r'\$assetPaths\s*=\s*@\(\$resolvedApk,\s*\$resolvedNativeSource,\s*\$resolvedChecksums\)',
+      ).hasMatch(publisher),
+      isTrue,
+    );
+    expect(
+      RegExp(
+        r'"release",\s*"create",\s*\$releaseTag,\s*\$resolvedApk,\s*\$resolvedNativeSource,\s*\$resolvedChecksums,\s*"--repo"',
+        multiLine: true,
+      ).hasMatch(publisher),
+      isTrue,
+    );
+    expect(
+      publisher,
+      contains(
+        r'Release must contain exactly $($ExpectedAssets.Count) assets.',
+      ),
+    );
+    expect(hostedReleaseVerifier, contains(r'"${#actual_assets[@]}" -ne 3'));
+    final subjectBlock = RegExp(
+      r'subject-path:\s*\|([\s\S]*?)predicate-type:',
+    ).firstMatch(hostedReleaseVerifier);
+    expect(subjectBlock, isNotNull);
+    final subjects = RegExp(
+      r'^\s+\$\{\{ runner\.temp \}\}/tetotv-release/',
+      multiLine: true,
+    ).allMatches(subjectBlock!.group(1)!).length;
+    expect(subjects, 3);
+    expect(
+      subjectBlock.group(1),
+      isNot(contains('unreviewed-beta-release-declaration')),
     );
   });
 }

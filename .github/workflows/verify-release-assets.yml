@@ -147,66 +147,127 @@ jobs:
           done
 
           jq -r '.body // ""' <<<"${release_json}" > "${download_dir}/RELEASE_NOTES.md"
-          mapfile -t review_markers < <(
-            grep -Eo '<!--[[:space:]]*tetotv-native-license-review-sha256:[[:space:]]*[0-9a-f]{64}[[:space:]]*-->' \
-              "${download_dir}/RELEASE_NOTES.md" || true
-          )
-          if [[ "${#review_markers[@]}" -ne 1 ]]; then
-            echo "Release notes must contain exactly one native-license review digest marker."
-            exit 1
-          fi
-          review_digest="$(sed -E 's/.*:[[:space:]]*([0-9a-f]{64})[[:space:]]*-->.*/\1/' <<<"${review_markers[0]}")"
-          all_review_marker_count="$(grep -Eic '<!--[[:space:]]*tetotv-native-license-review-sha256:' "${download_dir}/RELEASE_NOTES.md" || true)"
-          if [[ "${all_review_marker_count}" -ne 1 ]]; then
-            echo "Release notes contain an unexpected native-license review marker."
-            exit 1
-          fi
-
-          mapfile -t attestation_markers < <(
-            grep -Eo '<!--[[:space:]]*tetotv-native-license-review-attestation-base64:[[:space:]]*[A-Za-z0-9+/]+={0,2}[[:space:]]*-->' \
-              "${download_dir}/RELEASE_NOTES.md" || true
-          )
-          if [[ "${#attestation_markers[@]}" -ne 1 ]] || \
-             [[ "$(grep -Eic '<!--[[:space:]]*tetotv-native-license-review-attestation-base64:' "${download_dir}/RELEASE_NOTES.md" || true)" -ne 1 ]]; then
-            echo "Release notes must contain exactly one encoded native-license review attestation."
-            exit 1
-          fi
-          mapfile -t signature_markers < <(
-            grep -Eo '<!--[[:space:]]*tetotv-native-license-review-signature-base64:[[:space:]]*[A-Za-z0-9+/]+={0,2}[[:space:]]*-->' \
-              "${download_dir}/RELEASE_NOTES.md" || true
-          )
-          if [[ "${#signature_markers[@]}" -ne 1 ]] || \
-             [[ "$(grep -Eic '<!--[[:space:]]*tetotv-native-license-review-signature-base64:' "${download_dir}/RELEASE_NOTES.md" || true)" -ne 1 ]]; then
-            echo "Release notes must contain exactly one encoded native-license review signature."
-            exit 1
-          fi
-
-          attestation_base64="$(sed -E 's|.*:[[:space:]]*([A-Za-z0-9+/]+={0,2})[[:space:]]*-->.*|\1|' <<<"${attestation_markers[0]}")"
-          signature_base64="$(sed -E 's|.*:[[:space:]]*([A-Za-z0-9+/]+={0,2})[[:space:]]*-->.*|\1|' <<<"${signature_markers[0]}")"
-          if ! printf '%s' "${attestation_base64}" | base64 --decode > "${download_dir}/native-license-review.json" || \
-             ! printf '%s' "${signature_base64}" | base64 --decode > "${download_dir}/native-license-review.json.sig"; then
-            echo "Release notes contain invalid encoded native-license review evidence."
-            exit 1
-          fi
-          if [[ "$(sha256sum "${download_dir}/native-license-review.json" | awk '{print $1}')" != "${review_digest}" ]]; then
-            echo "Encoded native-license review attestation does not match its digest marker."
-            exit 1
-          fi
-
-          reviewer_allowlist="tool/release/qualified_native_license_reviewers.allowed_signers"
-          if ! grep -Eq '^[^#[:space:]][^[:space:]]*[[:space:]]+.*ssh-(ed25519|rsa)[[:space:]]+' "${reviewer_allowlist}"; then
-            echo "No qualified native-license reviewer key is active in the release revision."
-            exit 1
-          fi
-
           tag_commit="$(git rev-parse "${RELEASE_TAG}^{commit}")"
-          pwsh -File ./tool/release/verify_native_license_review.ps1 \
-            -AttestationPath "${download_dir}/native-license-review.json" \
-            -SignaturePath "${download_dir}/native-license-review.json.sig" \
-            -ReleaseTag "${RELEASE_TAG}" \
-            -GitCommit "${tag_commit}" \
-            -ApkPath "${download_dir}/${apk_name}" \
-            -NativeSourcePath "${download_dir}/${source_name}"
+          review_status="independently-reviewed"
+          review_digest=""
+          declaration_digest=""
+          disclosure='No independent native-license review: This Beta has not received independent native-library licensing review. Automated checks verify the APK, native-source bundle, notices, pinned inputs, and checksums, but do not establish legal compliance or reproducible builds.'
+          status_marker_count="$(grep -Eic '<!--[[:space:]]*tetotv-native-license-review-status:' "${download_dir}/RELEASE_NOTES.md" || true)"
+          exact_unreviewed_status_count="$(grep -Fxc '<!-- tetotv-native-license-review-status: unreviewed-beta -->' "${download_dir}/RELEASE_NOTES.md" || true)"
+          if [[ "${status_marker_count}" -gt 0 ]]; then
+            if [[ "${status_marker_count}" -ne 1 ]] || [[ "${exact_unreviewed_status_count}" -ne 1 ]]; then
+              echo "Release notes contain an invalid or duplicate native-license review status."
+              exit 1
+            fi
+            review_status="unreviewed-beta"
+            mapfile -t warning_lines < <(head -n 4 "${download_dir}/RELEASE_NOTES.md")
+            if [[ "${#warning_lines[@]}" -ne 4 ]] || \
+               [[ "${warning_lines[0]}" != "# TetoTV ${version} Beta" ]] || \
+               [[ -n "${warning_lines[1]}" ]] || \
+               [[ "${warning_lines[2]}" != "> [!WARNING]" ]] || \
+               [[ "${warning_lines[3]}" != "> ${disclosure}" ]]; then
+              echo "Unreviewed Beta release notes must begin with the exact visible warning block."
+              exit 1
+            fi
+            if [[ "$(grep -Foc "${disclosure}" "${download_dir}/RELEASE_NOTES.md" || true)" -ne 1 ]]; then
+              echo "Unreviewed Beta release notes must contain the disclosure exactly once."
+              exit 1
+            fi
+            if grep -Eiq '<!--[[:space:]]*tetotv-native-license-review-(sha256|attestation-base64|signature-base64):' "${download_dir}/RELEASE_NOTES.md"; then
+              echo "Unreviewed Beta release notes must not contain qualified-review evidence."
+              exit 1
+            fi
+            mapfile -t declaration_digest_markers < <(
+              grep -Eo '<!--[[:space:]]*tetotv-unreviewed-beta-declaration-sha256:[[:space:]]*[0-9a-f]{64}[[:space:]]*-->' \
+                "${download_dir}/RELEASE_NOTES.md" || true
+            )
+            if [[ "${#declaration_digest_markers[@]}" -ne 1 ]] || \
+               [[ "$(grep -Eic '<!--[[:space:]]*tetotv-unreviewed-beta-declaration-sha256:' "${download_dir}/RELEASE_NOTES.md" || true)" -ne 1 ]]; then
+              echo "Release notes must contain exactly one unreviewed Beta declaration digest."
+              exit 1
+            fi
+            declaration_digest="$(sed -E 's/.*:[[:space:]]*([0-9a-f]{64})[[:space:]]*-->.*/\1/' <<<"${declaration_digest_markers[0]}")"
+            mapfile -t declaration_markers < <(
+              grep -Eo '<!--[[:space:]]*tetotv-unreviewed-beta-declaration-base64:[[:space:]]*[A-Za-z0-9+/]+={0,2}[[:space:]]*-->' \
+                "${download_dir}/RELEASE_NOTES.md" || true
+            )
+            if [[ "${#declaration_markers[@]}" -ne 1 ]] || \
+               [[ "$(grep -Eic '<!--[[:space:]]*tetotv-unreviewed-beta-declaration-base64:' "${download_dir}/RELEASE_NOTES.md" || true)" -ne 1 ]]; then
+              echo "Release notes must contain exactly one encoded unreviewed Beta declaration."
+              exit 1
+            fi
+            declaration_base64="$(sed -E 's|.*:[[:space:]]*([A-Za-z0-9+/]+={0,2})[[:space:]]*-->.*|\1|' <<<"${declaration_markers[0]}")"
+            if ! printf '%s' "${declaration_base64}" | base64 --decode > "${download_dir}/unreviewed-beta-release-declaration.json"; then
+              echo "Release notes contain invalid encoded unreviewed Beta evidence."
+              exit 1
+            fi
+            if [[ "$(sha256sum "${download_dir}/unreviewed-beta-release-declaration.json" | awk '{print $1}')" != "${declaration_digest}" ]]; then
+              echo "Encoded unreviewed Beta declaration does not match its digest marker."
+              exit 1
+            fi
+            pwsh -File ./tool/release/verify_unreviewed_beta_release_declaration.ps1 \
+              -DeclarationPath "${download_dir}/unreviewed-beta-release-declaration.json" \
+              -ReleaseTag "${RELEASE_TAG}" \
+              -GitCommit "${tag_commit}" \
+              -ApkPath "${download_dir}/${apk_name}" \
+              -NativeSourcePath "${download_dir}/${source_name}"
+          else
+            if grep -Fq "${disclosure}" "${download_dir}/RELEASE_NOTES.md"; then
+              echo "Reviewed release notes must not claim that independent native-license review was not performed."
+              exit 1
+            fi
+            if grep -Eiq '<!--[[:space:]]*tetotv-unreviewed-beta-declaration-(sha256|base64):' "${download_dir}/RELEASE_NOTES.md"; then
+              echo "Reviewed release notes must not contain unreviewed Beta evidence."
+              exit 1
+            fi
+            mapfile -t review_markers < <(
+              grep -Eo '<!--[[:space:]]*tetotv-native-license-review-sha256:[[:space:]]*[0-9a-f]{64}[[:space:]]*-->' \
+                "${download_dir}/RELEASE_NOTES.md" || true
+            )
+            if [[ "${#review_markers[@]}" -ne 1 ]] || \
+               [[ "$(grep -Eic '<!--[[:space:]]*tetotv-native-license-review-sha256:' "${download_dir}/RELEASE_NOTES.md" || true)" -ne 1 ]]; then
+              echo "Release notes must contain exactly one native-license review digest marker."
+              exit 1
+            fi
+            review_digest="$(sed -E 's/.*:[[:space:]]*([0-9a-f]{64})[[:space:]]*-->.*/\1/' <<<"${review_markers[0]}")"
+            mapfile -t attestation_markers < <(
+              grep -Eo '<!--[[:space:]]*tetotv-native-license-review-attestation-base64:[[:space:]]*[A-Za-z0-9+/]+={0,2}[[:space:]]*-->' \
+                "${download_dir}/RELEASE_NOTES.md" || true
+            )
+            mapfile -t signature_markers < <(
+              grep -Eo '<!--[[:space:]]*tetotv-native-license-review-signature-base64:[[:space:]]*[A-Za-z0-9+/]+={0,2}[[:space:]]*-->' \
+                "${download_dir}/RELEASE_NOTES.md" || true
+            )
+            if [[ "${#attestation_markers[@]}" -ne 1 ]] || [[ "${#signature_markers[@]}" -ne 1 ]] || \
+               [[ "$(grep -Eic '<!--[[:space:]]*tetotv-native-license-review-attestation-base64:' "${download_dir}/RELEASE_NOTES.md" || true)" -ne 1 ]] || \
+               [[ "$(grep -Eic '<!--[[:space:]]*tetotv-native-license-review-signature-base64:' "${download_dir}/RELEASE_NOTES.md" || true)" -ne 1 ]]; then
+              echo "Release notes must contain exactly one encoded native-license review and signature."
+              exit 1
+            fi
+            attestation_base64="$(sed -E 's|.*:[[:space:]]*([A-Za-z0-9+/]+={0,2})[[:space:]]*-->.*|\1|' <<<"${attestation_markers[0]}")"
+            signature_base64="$(sed -E 's|.*:[[:space:]]*([A-Za-z0-9+/]+={0,2})[[:space:]]*-->.*|\1|' <<<"${signature_markers[0]}")"
+            if ! printf '%s' "${attestation_base64}" | base64 --decode > "${download_dir}/native-license-review.json" || \
+               ! printf '%s' "${signature_base64}" | base64 --decode > "${download_dir}/native-license-review.json.sig"; then
+              echo "Release notes contain invalid encoded native-license review evidence."
+              exit 1
+            fi
+            if [[ "$(sha256sum "${download_dir}/native-license-review.json" | awk '{print $1}')" != "${review_digest}" ]]; then
+              echo "Encoded native-license review attestation does not match its digest marker."
+              exit 1
+            fi
+            reviewer_allowlist="tool/release/qualified_native_license_reviewers.allowed_signers"
+            if ! grep -Eq '^[^#[:space:]][^[:space:]]*[[:space:]]+.*ssh-(ed25519|rsa)[[:space:]]+' "${reviewer_allowlist}"; then
+              echo "No qualified native-license reviewer key is active in the release revision."
+              exit 1
+            fi
+            pwsh -File ./tool/release/verify_native_license_review.ps1 \
+              -AttestationPath "${download_dir}/native-license-review.json" \
+              -SignaturePath "${download_dir}/native-license-review.json.sig" \
+              -ReleaseTag "${RELEASE_TAG}" \
+              -GitCommit "${tag_commit}" \
+              -ApkPath "${download_dir}/${apk_name}" \
+              -NativeSourcePath "${download_dir}/${source_name}"
+          fi
 
           artifact_dir="${RUNNER_TEMP}/tetotv-pinned-native-artifacts"
           mkdir -p "${artifact_dir}"
@@ -234,6 +295,12 @@ jobs:
             exit 1
           fi
 
+          evidence_arguments=()
+          if [[ "${review_status}" == "independently-reviewed" ]]; then
+            evidence_arguments+=( -NativeLicenseReviewSha256 "${review_digest}" )
+          else
+            evidence_arguments+=( -UnreviewedBetaDeclarationSha256 "${declaration_digest}" )
+          fi
           pwsh -File ./tool/release/verify_release_payloads.ps1 \
             -Channel "${CHANNEL}" \
             -ApkPath "${download_dir}/${apk_name}" \
@@ -241,26 +308,51 @@ jobs:
             -ChecksumsPath "${download_dir}/${checksums_name}" \
             -ReleaseNotesPath "${download_dir}/RELEASE_NOTES.md" \
             -ResolvedBinaryDirectory "${artifact_dir}" \
-            -NativeLicenseReviewSha256 "${review_digest}"
+            "${evidence_arguments[@]}"
 
           jq -n \
             --arg releaseTag "${RELEASE_TAG}" \
             --arg gitCommit "${tag_commit}" \
+            --arg reviewStatus "${review_status}" \
             --arg nativeLicenseReviewSha256 "${review_digest}" \
+            --arg unreviewedBetaDeclarationSha256 "${declaration_digest}" \
             '{
-              schemaVersion: 1,
+              schemaVersion: 2,
               verificationType: "tetotv-release-payload-verification",
               releaseTag: $releaseTag,
               gitCommit: $gitCommit,
-              nativeLicenseReviewSha256: $nativeLicenseReviewSha256,
-              checksPerformed: [
-                "allowlisted-reviewer-ssh-signature",
-                "artifact-bound-native-license-review",
-                "hosted-asset-digests-and-sizes",
-                "apk-signature-abi-and-alignment",
-                "native-source-and-notice-bundle",
-                "pinned-native-binary-inputs"
-              ]
+              nativeLicenseReviewStatus: $reviewStatus,
+              nativeLicenseReviewSha256: (
+                if $reviewStatus == "independently-reviewed"
+                then $nativeLicenseReviewSha256
+                else null
+                end
+              ),
+              unreviewedBetaDeclarationSha256: (
+                if $reviewStatus == "unreviewed-beta"
+                then $unreviewedBetaDeclarationSha256
+                else null
+                end
+              ),
+              checksPerformed: (
+                if $reviewStatus == "independently-reviewed"
+                then [
+                  "allowlisted-reviewer-ssh-signature",
+                  "artifact-bound-native-license-review",
+                  "hosted-asset-digests-and-sizes",
+                  "apk-signature-abi-and-alignment",
+                  "native-source-and-notice-bundle",
+                  "pinned-native-binary-inputs"
+                ]
+                else [
+                  "owner-unreviewed-beta-declaration",
+                  "hosted-asset-digests-and-sizes",
+                  "apk-signature-abi-and-alignment",
+                  "native-source-and-notice-bundle",
+                  "pinned-native-binary-inputs"
+                ]
+                end
+              )
             }' > "${download_dir}/release-verification-predicate.json"
 
           latest_tag="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq '.tag_name')"
@@ -269,7 +361,7 @@ jobs:
             exit 1
           fi
 
-      - name: Attest the independently verified release payload
+      - name: Attest the verified release payload
         id: release-attestation
         uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
         with:
@@ -277,7 +369,7 @@ jobs:
             ${{ runner.temp }}/tetotv-release/TetoTV-${{ github.event.release.tag_name }}-universal.apk
             ${{ runner.temp }}/tetotv-release/TetoTV-${{ github.event.release.tag_name }}-native-playback-sources.zip
             ${{ runner.temp }}/tetotv-release/SHA256SUMS
-          predicate-type: https://github.com/LindersOSX/TetoTV-Beta/attestations/release-verification/v1
+          predicate-type: https://github.com/LindersOSX/TetoTV-Beta/attestations/release-verification/v2
           predicate-path: ${{ runner.temp }}/tetotv-release/release-verification-predicate.json
 
       - name: Verify the emitted release attestation bundle
@@ -307,7 +399,7 @@ jobs:
             gh attestation verify "${artifact}" \
               --repo "${GITHUB_REPOSITORY}" \
               --bundle "${ATTESTATION_BUNDLE}" \
-              --predicate-type "https://github.com/LindersOSX/TetoTV-Beta/attestations/release-verification/v1" \
+              --predicate-type "https://github.com/LindersOSX/TetoTV-Beta/attestations/release-verification/v2" \
               --signer-workflow "LindersOSX/TetoTV-Beta/.github/workflows/verify-release-assets.yml" \
               --source-ref "refs/tags/${RELEASE_TAG}" \
               --deny-self-hosted-runners

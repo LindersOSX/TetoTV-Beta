@@ -198,6 +198,17 @@ void main() {
         r'$unreviewedBetaAcknowledgementText = "PUBLISH UNREVIEWED BETA"',
       ),
     );
+    expect(
+      publisher,
+      contains('"api", "--paginate", "--slurp"'),
+      reason: 'draft verification must enumerate every release page',
+    );
+    expect(publisher, contains('"repos/\$Repository/releases?per_page=100"'));
+    expect(
+      publisher,
+      isNot(contains('"repos/\$Repository/releases/tags/\$encodedTag"')),
+      reason: 'GitHub\'s release-by-tag endpoint hides drafts',
+    );
     expect(publisher, contains('[StringComparison]::Ordinal'));
     expect(
       publisher,

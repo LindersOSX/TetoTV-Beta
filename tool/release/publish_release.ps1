@@ -172,24 +172,28 @@ function Invoke-GitHubCli {
 }
 
 function Get-GitHubRelease([string]$Repository, [string]$Tag, [switch]$AllowMissing) {
-    $encodedTag = [Uri]::EscapeDataString($Tag)
-    $allowedExitCodes = if ($AllowMissing) { @(0, 1) } else { @(0) }
-    $result = Invoke-GitHubCli `
-        -Arguments @("api", "repos/$Repository/releases/tags/$encodedTag") `
-        -AllowedExitCodes $allowedExitCodes
-    if ($result.ExitCode -ne 0) {
-        $details = ($result.Output -join "`n").Trim()
-        if ($AllowMissing -and $details -match '(?i)(HTTP\s+404|not\s+found)') {
-            return $null
-        }
-        throw "Could not read release $Tag from $Repository.`n$details"
-    }
+    # GitHub's release-by-tag endpoint returns 404 for private drafts, even to
+    # an authenticated repository owner. Enumerate all pages so verification
+    # and rollback can see both drafts and published releases.
+    $result = Invoke-GitHubCli -Arguments @(
+        "api", "--paginate", "--slurp",
+        "repos/$Repository/releases?per_page=100"
+    )
     try {
-        return ($result.Output -join "`n") | ConvertFrom-Json
+        $releases = @(($result.Output -join "`n") | ConvertFrom-Json)
     }
     catch {
-        throw "GitHub returned invalid release data for $Repository $Tag."
+        throw "GitHub returned invalid release-list data for $Repository."
     }
+    $matches = @($releases | Where-Object { [string]$_.tag_name -ceq $Tag })
+    if ($matches.Count -gt 1) {
+        throw "GitHub returned more than one release for exact tag $Tag in $Repository."
+    }
+    if ($matches.Count -eq 0) {
+        if ($AllowMissing) { return $null }
+        throw "Release $Tag does not exist in $Repository."
+    }
+    return $matches[0]
 }
 
 function Get-LatestGitHubRelease([string]$Repository) {

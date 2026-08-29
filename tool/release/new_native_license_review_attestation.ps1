@@ -25,7 +25,10 @@ param(
     [switch]$ConfirmCorrespondingSourceReviewed,
 
     [Parameter(Mandatory = $true)]
-    [switch]$AcknowledgeKnownProvenanceLimits
+    [switch]$AcknowledgeKnownProvenanceLimits,
+
+    [Parameter(Mandatory = $true)]
+    [switch]$ConfirmNoGitHubAppsInstalledForRepository
 )
 
 $ErrorActionPreference = "Stop"
@@ -51,7 +54,8 @@ foreach ($confirmation in @(
     $Approve,
     $ConfirmQualifiedReviewer,
     $ConfirmCorrespondingSourceReviewed,
-    $AcknowledgeKnownProvenanceLimits
+    $AcknowledgeKnownProvenanceLimits,
+    $ConfirmNoGitHubAppsInstalledForRepository
 )) {
     if (-not $confirmation) {
         throw "All explicit review confirmations are required before an approved attestation can be created."
@@ -103,12 +107,13 @@ finally {
     $algorithm.Dispose()
 }
 
+$reviewedAtUtc = [DateTimeOffset]::UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'")
 $statement = [ordered]@{
-    schemaVersion = 1
+    schemaVersion = 2
     statementType = "tetotv-native-license-review"
     releaseTag = $releaseTag
     gitCommit = $gitCommit
-    reviewedAtUtc = [DateTimeOffset]::UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'")
+    reviewedAtUtc = $reviewedAtUtc
     reviewerIdentity = $ReviewerIdentity
     reviewerRole = $ReviewerRole
     decision = "approved"
@@ -116,6 +121,13 @@ $statement = [ordered]@{
     correspondingSourceReviewed = $true
     knownProvenanceLimitsAcknowledged = $true
     knownProvenanceLimitsSha256 = $limitsHash
+    githubAppInventory = [ordered]@{
+        repository = "LindersOSX/TetoTV-Beta"
+        checkedAtUtc = $reviewedAtUtc
+        reviewMethod = "github-repository-settings-installed-github-apps"
+        inventoryComplete = $true
+        installations = @()
+    }
     artifacts = [ordered]@{
         apkSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $resolvedApk).Hash.ToLowerInvariant()
         nativeSourceSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $resolvedNativeSource).Hash.ToLowerInvariant()

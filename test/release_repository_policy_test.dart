@@ -110,6 +110,16 @@ void main() {
     expect(reviewVerifier, contains('-Y verify'));
     expect(reviewVerifier, contains('knownProvenanceLimitsSha256'));
     expect(reviewVerifier, contains('nativePlaybackNoticeSha256'));
+    expect(reviewVerifier, contains('githubAppInventory'));
+    expect(
+      reviewVerifier,
+      contains('Publication is blocked while any GitHub App is installed'),
+    );
+    expect(publisher, contains('SignedReviewAttestationPath'));
+    expect(
+      publisher,
+      contains('complete empty GitHub App inventory'),
+    );
     expect(
       hostedReleaseVerifier,
       contains('tetotv-native-license-review-attestation-base64'),

@@ -225,8 +225,38 @@ function Get-GitHubApiJson([string]$Path) {
 
 function Assert-GitHubReleaseAuthorityBoundary(
     [string]$Repository,
-    [string]$ExpectedOwner
+    [string]$ExpectedOwner,
+    [string]$SignedReviewAttestationPath
 ) {
+    try {
+        $signedReview = Get-Content -Raw -LiteralPath $SignedReviewAttestationPath |
+            ConvertFrom-Json
+    }
+    catch {
+        throw "Could not read the already verified signed release-authority review evidence."
+    }
+    $appInventory = $signedReview.githubAppInventory
+    if ($null -eq $appInventory) {
+        throw "The signed release-authority review is missing its GitHub App inventory."
+    }
+    $appInventoryProperties = @($appInventory.PSObject.Properties.Name | Sort-Object)
+    $expectedAppInventoryProperties = @(
+        "checkedAtUtc",
+        "installations",
+        "inventoryComplete",
+        "repository",
+        "reviewMethod"
+    ) | Sort-Object
+    if (
+        $appInventoryProperties.Count -ne $expectedAppInventoryProperties.Count -or
+        (Compare-Object $expectedAppInventoryProperties $appInventoryProperties) -or
+        [string]$appInventory.repository -cne $Repository -or
+        $appInventory.inventoryComplete -ne $true -or
+        @($appInventory.installations).Count -ne 0
+    ) {
+        throw "The signed release-authority review must contain a complete empty GitHub App inventory for $Repository."
+    }
+
     $metadata = Get-GitHubApiJson "repos/$Repository"
     if (
         [string]$metadata.owner.login -cne $ExpectedOwner -or
@@ -482,10 +512,6 @@ try {
         throw "Could not resolve local HEAD."
     }
     Assert-TagMatchesHead $repository $releaseTag $headCommit
-    Assert-GitHubReleaseAuthorityBoundary `
-        -Repository $repository `
-        -ExpectedOwner "LindersOSX"
-
     $reviewArguments = @{
         AttestationPath = $NativeLicenseReviewPath
         ReleaseTag = $releaseTag
@@ -498,6 +524,10 @@ try {
     }
     & (Join-Path $PSScriptRoot "verify_native_license_review.ps1") @reviewArguments
     $resolvedReview = (Resolve-Path -LiteralPath $NativeLicenseReviewPath).Path
+    Assert-GitHubReleaseAuthorityBoundary `
+        -Repository $repository `
+        -ExpectedOwner "LindersOSX" `
+        -SignedReviewAttestationPath $resolvedReview
     $resolvedReviewSignature = if (
         [string]::IsNullOrWhiteSpace($NativeLicenseReviewSignaturePath)
     ) {

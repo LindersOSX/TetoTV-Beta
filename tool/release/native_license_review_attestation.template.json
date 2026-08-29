@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "statementType": "tetotv-native-license-review",
   "releaseTag": "v2.x.y",
   "gitCommit": "<40-lowercase-hex-commit>",
@@ -11,6 +11,13 @@
   "correspondingSourceReviewed": true,
   "knownProvenanceLimitsAcknowledged": true,
   "knownProvenanceLimitsSha256": "<64-lowercase-hex-digest>",
+  "githubAppInventory": {
+    "repository": "LindersOSX/TetoTV-Beta",
+    "checkedAtUtc": "YYYY-MM-DDTHH:MM:SSZ",
+    "reviewMethod": "github-repository-settings-installed-github-apps",
+    "inventoryComplete": true,
+    "installations": []
+  },
   "artifacts": {
     "apkSha256": "<64-lowercase-hex-digest>",
     "nativeSourceSha256": "<64-lowercase-hex-digest>",

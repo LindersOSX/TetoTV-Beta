@@ -148,8 +148,16 @@ Assert-ExactProperties $attestation @(
     "correspondingSourceReviewed",
     "knownProvenanceLimitsAcknowledged",
     "knownProvenanceLimitsSha256",
+    "githubAppInventory",
     "artifacts"
 ) "Native-license review attestation"
+Assert-ExactProperties $attestation.githubAppInventory @(
+    "repository",
+    "checkedAtUtc",
+    "reviewMethod",
+    "inventoryComplete",
+    "installations"
+) "GitHub App installation inventory"
 Assert-ExactProperties $attestation.artifacts @(
     "apkSha256",
     "nativeSourceSha256",
@@ -163,7 +171,7 @@ if (
 ) {
     throw "schemaVersion must be a JSON integer."
 }
-if ([long]$attestation.schemaVersion -ne 1) {
+if ([long]$attestation.schemaVersion -ne 2) {
     throw "Unsupported native-license review attestation schema."
 }
 if ([string]$attestation.statementType -cne "tetotv-native-license-review") {
@@ -218,6 +226,43 @@ $reviewedAt = [DateTimeOffset]::ParseExact(
 $now = [DateTimeOffset]::UtcNow
 if ($reviewedAt -gt $now.AddMinutes(5) -or $reviewedAt -lt $now.AddDays(-30)) {
     throw "Native-license review must be completed within 30 days before publication and cannot be future-dated."
+}
+
+$appInventory = $attestation.githubAppInventory
+if ([string]$appInventory.repository -cne "LindersOSX/TetoTV-Beta") {
+    throw "GitHub App inventory must cover the exact Beta release repository."
+}
+if (
+    [string]$appInventory.reviewMethod -cne
+        "github-repository-settings-installed-github-apps"
+) {
+    throw "GitHub App inventory must be completed from the repository's Installed GitHub Apps settings page."
+}
+if (
+    $appInventory.inventoryComplete -isnot [bool] -or
+    $appInventory.inventoryComplete -ne $true
+) {
+    throw "GitHub App inventory must be explicitly marked complete."
+}
+if (@($appInventory.installations).Count -ne 0) {
+    throw "Publication is blocked while any GitHub App is installed for the Beta repository."
+}
+$appInventoryCheckedAtText = [string]$appInventory.checkedAtUtc
+if ($appInventoryCheckedAtText -notmatch '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$') {
+    throw "GitHub App inventory checkedAtUtc must use UTC form YYYY-MM-DDTHH:MM:SSZ."
+}
+$appInventoryCheckedAt = [DateTimeOffset]::ParseExact(
+    $appInventoryCheckedAtText,
+    "yyyy-MM-dd'T'HH:mm:ss'Z'",
+    [Globalization.CultureInfo]::InvariantCulture,
+    [Globalization.DateTimeStyles]::AssumeUniversal
+)
+if (
+    $appInventoryCheckedAt -gt $now.AddMinutes(5) -or
+    $appInventoryCheckedAt -lt $now.AddHours(-24) -or
+    $appInventoryCheckedAt -ne $reviewedAt
+) {
+    throw "The signed empty GitHub App inventory must be completed with this review within 24 hours before publication."
 }
 
 $manifest = Get-Content -Raw -LiteralPath $resolvedManifest | ConvertFrom-Json

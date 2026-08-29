@@ -198,6 +198,13 @@ must use phishing-resistant two-factor authentication (preferably a passkey or
 hardware security key), offline recovery codes, and narrowly scoped/revocable
 credentials.
 
+The publisher automatically verifies collaborators, invitations, write deploy
+keys, immutable-release settings, and Actions permissions. A normal GitHub CLI
+OAuth token cannot enumerate the complete GitHub App installation inventory for
+a personal account, so the signed release review must also contain a complete,
+empty inventory confirmed from **Repository settings > Integrations > GitHub
+Apps** within the previous 24 hours. Any installed App blocks publication.
+
 If release creation must be technically independent of the owner, transfer the
 repositories to a GitHub organization, enforce immutable releases at the
 organization level, and place publication behind an organization-controlled

@@ -17,6 +17,9 @@ to all of the following:
 - checked-in native manifest SHA-256;
 - checked-in `NATIVE_PLAYBACK_NOTICE.txt` SHA-256;
 - the exact digest of every recorded upstream provenance limitation; and
+- a complete, empty inventory of GitHub Apps installed for the Beta repository,
+  reviewed from the repository's Installed GitHub Apps settings page no more
+  than 24 hours before publication; and
 - explicit approval, qualification, corresponding-source review, and
   provenance-limit acknowledgement fields.
 
@@ -47,7 +50,8 @@ clean checkout whose release tag resolves to `HEAD`, generate the exact JSON:
   -Approve `
   -ConfirmQualifiedReviewer `
   -ConfirmCorrespondingSourceReviewed `
-  -AcknowledgeKnownProvenanceLimits
+  -AcknowledgeKnownProvenanceLimits `
+  -ConfirmNoGitHubAppsInstalledForRepository
 ```
 
 The helper refuses a dirty or untagged checkout and verifies the source bundle
@@ -79,7 +83,13 @@ This produces `attestation.json.sig`. Verify before publication:
 
 The review must be no more than 30 days old and cannot be future-dated. Any
 content change invalidates both the detached signature and the digest embedded
-in the eventual GitHub release notes.
+in the eventual GitHub release notes. The GitHub App inventory is intentionally
+stricter: it must be empty, complete, signed as part of the same statement, and
+no more than 24 hours old. GitHub's personal-account API does not expose this
+complete inventory to a normal `gh` OAuth token, so the qualified reviewer must
+open **Repository settings > Integrations > GitHub Apps** and confirm that no
+App is installed for `LindersOSX/TetoTV-Beta`. Publication fails closed if that
+confirmation is absent or stale.
 
 ## Draft-first publication
 

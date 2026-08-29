@@ -62,6 +62,36 @@ function Get-TextSha256([string]$Value) {
     }
 }
 
+function Get-CanonicalUtcJsonString(
+    [string]$Json,
+    [string]$PropertyName,
+    [string]$Label
+) {
+    # ConvertFrom-Json in newer PowerShell versions may deserialize ISO-8601
+    # strings as DateTime values. Match the raw JSON lexeme so validation is
+    # exact and behaves the same in Windows PowerShell 5.1 and PowerShell 7+.
+    $keyPattern = '(?<!\\)"{0}"\s*:' -f `
+        [regex]::Escape($PropertyName)
+    $keyOccurrences = @([regex]::Matches(
+        $Json,
+        $keyPattern,
+        [Text.RegularExpressions.RegexOptions]::CultureInvariant
+    ))
+    if ($keyOccurrences.Count -ne 1) {
+        throw "$Label must appear exactly once as a JSON property."
+    }
+    $pattern = $keyPattern + '\s*"(?<value>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)"'
+    $occurrences = @([regex]::Matches(
+        $Json,
+        $pattern,
+        [Text.RegularExpressions.RegexOptions]::CultureInvariant
+    ))
+    if ($occurrences.Count -ne 1) {
+        throw "$Label must appear exactly once as a canonical UTC JSON string."
+    }
+    return $occurrences[0].Groups['value'].Value
+}
+
 $resolvedDeclaration = Resolve-RequiredFile $DeclarationPath "Unreviewed Beta release declaration"
 $resolvedApk = Resolve-RequiredFile $ApkPath "Release APK"
 $resolvedNativeSource = Resolve-RequiredFile $NativeSourcePath "Native source bundle"
@@ -85,7 +115,8 @@ if ([IO.Path]::GetFileName($resolvedNativeSource) -cne $expectedNativeSourceName
 }
 
 try {
-    $declaration = Get-Content -Raw -LiteralPath $resolvedDeclaration | ConvertFrom-Json
+    $declarationJson = Get-Content -Raw -LiteralPath $resolvedDeclaration
+    $declaration = $declarationJson | ConvertFrom-Json
 }
 catch {
     throw "Unreviewed Beta release declaration is not valid JSON: $($_.Exception.Message)"
@@ -118,6 +149,15 @@ Assert-ExactProperties $declaration.artifacts @(
     "nativeManifestSha256",
     "nativePlaybackNoticeSha256"
 ) "Unreviewed Beta artifact binding"
+
+$declaredAtText = Get-CanonicalUtcJsonString `
+    -Json $declarationJson `
+    -PropertyName "declaredAtUtc" `
+    -Label "declaredAtUtc"
+$inventoryCheckedAtText = Get-CanonicalUtcJsonString `
+    -Json $declarationJson `
+    -PropertyName "checkedAtUtc" `
+    -Label "GitHub App inventory checkedAtUtc"
 
 if (
     $declaration.schemaVersion -isnot [int] -and
@@ -155,7 +195,6 @@ if ($acknowledgement -isnot [bool] -or $acknowledgement -ne $true) {
     throw "knownProvenanceLimitsAcknowledged must be the JSON boolean true."
 }
 
-$declaredAtText = [string]$declaration.declaredAtUtc
 if ($declaredAtText -notmatch '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$') {
     throw "declaredAtUtc must use UTC form YYYY-MM-DDTHH:MM:SSZ."
 }
@@ -186,7 +225,6 @@ if (
 if (@($appInventory.installations).Count -ne 0) {
     throw "Publication is blocked while any GitHub App is installed for the Beta repository."
 }
-$inventoryCheckedAtText = [string]$appInventory.checkedAtUtc
 if ($inventoryCheckedAtText -notmatch '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$') {
     throw "GitHub App inventory checkedAtUtc must use UTC form YYYY-MM-DDTHH:MM:SSZ."
 }

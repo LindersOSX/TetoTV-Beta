@@ -58,6 +58,36 @@ function Get-TextSha256([string]$Value) {
     }
 }
 
+function Get-CanonicalUtcJsonString(
+    [string]$Json,
+    [string]$PropertyName,
+    [string]$Label
+) {
+    # Newer PowerShell versions may deserialize ISO-8601 JSON strings as
+    # DateTime values. Validate the exact raw JSON property and value so the
+    # signed review behaves consistently in Windows PowerShell 5.1 and 7+.
+    $keyPattern = '(?<!\\)"{0}"\s*:' -f `
+        [regex]::Escape($PropertyName)
+    $keyOccurrences = @([regex]::Matches(
+        $Json,
+        $keyPattern,
+        [Text.RegularExpressions.RegexOptions]::CultureInvariant
+    ))
+    if ($keyOccurrences.Count -ne 1) {
+        throw "$Label must appear exactly once as a JSON property."
+    }
+    $pattern = $keyPattern + '\s*"(?<value>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)"'
+    $occurrences = @([regex]::Matches(
+        $Json,
+        $pattern,
+        [Text.RegularExpressions.RegexOptions]::CultureInvariant
+    ))
+    if ($occurrences.Count -ne 1) {
+        throw "$Label must appear exactly once as a canonical UTC JSON string."
+    }
+    return $occurrences[0].Groups['value'].Value
+}
+
 function Invoke-SshReviewVerification(
     [string]$MessagePath,
     [string]$ReviewSignaturePath,
@@ -129,7 +159,8 @@ if ($GitCommit -notmatch '^[0-9a-f]{40}$') {
 }
 
 try {
-    $attestation = Get-Content -Raw -LiteralPath $resolvedAttestation | ConvertFrom-Json
+    $attestationJson = Get-Content -Raw -LiteralPath $resolvedAttestation
+    $attestation = $attestationJson | ConvertFrom-Json
 }
 catch {
     throw "Native-license review attestation is not valid JSON: $($_.Exception.Message)"
@@ -164,6 +195,15 @@ Assert-ExactProperties $attestation.artifacts @(
     "nativeManifestSha256",
     "nativePlaybackNoticeSha256"
 ) "Native-license review artifact binding"
+
+$reviewedAtText = Get-CanonicalUtcJsonString `
+    -Json $attestationJson `
+    -PropertyName "reviewedAtUtc" `
+    -Label "reviewedAtUtc"
+$appInventoryCheckedAtText = Get-CanonicalUtcJsonString `
+    -Json $attestationJson `
+    -PropertyName "checkedAtUtc" `
+    -Label "GitHub App inventory checkedAtUtc"
 
 if (
     $attestation.schemaVersion -isnot [int] -and
@@ -213,7 +253,6 @@ if ([string]::IsNullOrWhiteSpace($reviewerRole) -or $reviewerRole.Length -gt 160
     throw "reviewerRole must identify the reviewer's qualification in 160 characters or fewer."
 }
 
-$reviewedAtText = [string]$attestation.reviewedAtUtc
 if ($reviewedAtText -notmatch '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$') {
     throw "reviewedAtUtc must use UTC form YYYY-MM-DDTHH:MM:SSZ."
 }
@@ -247,7 +286,6 @@ if (
 if (@($appInventory.installations).Count -ne 0) {
     throw "Publication is blocked while any GitHub App is installed for the Beta repository."
 }
-$appInventoryCheckedAtText = [string]$appInventory.checkedAtUtc
 if ($appInventoryCheckedAtText -notmatch '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$') {
     throw "GitHub App inventory checkedAtUtc must use UTC form YYYY-MM-DDTHH:MM:SSZ."
 }

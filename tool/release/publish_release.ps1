@@ -180,7 +180,8 @@ function Get-GitHubRelease([string]$Repository, [string]$Tag, [switch]$AllowMiss
         "repos/$Repository/releases?per_page=100"
     )
     try {
-        $releases = @(($result.Output -join "`n") | ConvertFrom-Json)
+        $pages = @(($result.Output -join "`n") | ConvertFrom-Json)
+        $releases = @($pages | ForEach-Object { @($_) })
     }
     catch {
         throw "GitHub returned invalid release-list data for $Repository."

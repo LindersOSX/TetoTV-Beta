@@ -240,7 +240,7 @@ void main() {
   test('library completion uses the awaited MPV handoff before route pop', () {
     final completion = method(
       'void _handlePlaybackCompleted()',
-      'Future<bool> _seekForSkip',
+      'Future<VerifiedSkipSeekResult> _seekForSkip',
     );
     expectInOrder(completion, [
       'libraryPlayback.markCompleted(',
@@ -248,6 +248,49 @@ void main() {
       'unawaited(_returnToStreamPicker())',
     ]);
     expect(completion, isNot(contains('context.pop()')));
+  });
+
+  test(
+    'failed automatic skip falls back to the manual action without looping',
+    () {
+      final skipCheck = method(
+        'void _checkSkips(Duration position)',
+        'void _focusSkipOnce',
+      );
+      expect(
+        skipCheck,
+        contains('!_suppressedAutomaticSkipSegments.contains(key)'),
+      );
+
+      final autoSkip = method(
+        'Future<void> _autoSkipSegment',
+        'void _focusSkipOnce',
+      );
+      expectInOrder(autoSkip, [
+        '} catch (_)',
+        'if (sourceStillActive)',
+        '_suppressedAutomaticSkipSegments.add(segmentKey)',
+        '} finally',
+        '_checkSkips(_player.state.position)',
+      ]);
+
+      final sourceReset = method(
+        'void _resetSkipSegmentsForSourceChange()',
+        'void _recordSkipSegmentDiagnostic',
+      );
+      expect(sourceReset, contains('_suppressedAutomaticSkipSegments.clear()'));
+    },
+  );
+
+  test('verified skip retries are bound to the active source', () {
+    final skipSeek = method(
+      'Future<VerifiedSkipSeekResult> _seekForSkip',
+      'Future<void> _waitForPlayerMutations',
+    );
+    expect(skipSeek, contains('final expectedStream = _currentStream'));
+    expect(skipSeek, contains('final expectedSource = _source'));
+    expect(skipSeek, contains('!identical(_currentStream, expectedStream)'));
+    expect(skipSeek, contains('_source != expectedSource'));
   });
 
   test(

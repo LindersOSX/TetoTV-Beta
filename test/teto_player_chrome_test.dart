@@ -553,7 +553,7 @@ void main() {
         expect(timeRect.left, greaterThan(nextRect.right));
         expect(timeRect.right, lessThan(speedRect.left));
         expect(progressRect.top, greaterThan(playRect.bottom));
-        expect(panelRect.height, inInclusiveRange(96, 112));
+        expect(panelRect.height, inInclusiveRange(145, 153));
         expect(tester.takeException(), isNull);
       },
     );
@@ -1223,6 +1223,10 @@ void main() {
         ),
       );
 
+      final chrome = find.byKey(
+        const ValueKey('scrub-hold-bottom-player-chrome'),
+      );
+      final restingChromeRect = tester.getRect(chrome);
       final slider = find.byKey(
         const ValueKey('scrub-hold-player-progress-bar'),
       );
@@ -1236,9 +1240,31 @@ void main() {
         find.byKey(const ValueKey('scrub-hold-player-seek-time-bubble')),
         findsOneWidget,
       );
+      final bubbleRect = tester.getRect(
+        find.byKey(const ValueKey('scrub-hold-player-seek-time-bubble')),
+      );
+      final controlsRect = tester.getRect(
+        find.byKey(const ValueKey('scrub-hold-player-controls-spaced')),
+      );
+      final progressRect = tester.getRect(slider);
+      expect(
+        bubbleRect.top,
+        greaterThanOrEqualTo(controlsRect.bottom),
+        reason: 'the fixed seek-bubble lane must stay below the controls',
+      );
+      expect(
+        bubbleRect.bottom,
+        lessThan(progressRect.top),
+        reason: 'the seek bubble must remain directly above the progress bar',
+      );
       expect(
         find.byKey(const ValueKey('scrub-hold-player-seek-target-time')),
         findsNothing,
+      );
+      expect(
+        tester.getRect(chrome),
+        restingChromeRect,
+        reason: 'touch scrubbing must not resize or move the player HUD',
       );
 
       await gesture.up();
@@ -1256,6 +1282,7 @@ void main() {
       scheduleHide();
       progressFocus.requestFocus();
       await tester.pump();
+      final focusedChromeRect = tester.getRect(chrome);
       await tester.sendKeyDownEvent(LogicalKeyboardKey.arrowRight);
       for (var repeat = 0; repeat < 30; repeat++) {
         await tester.pump(const Duration(milliseconds: 200));
@@ -1266,6 +1293,11 @@ void main() {
       expect(
         find.byKey(const ValueKey('scrub-hold-player-seek-time-bubble')),
         findsOneWidget,
+      );
+      expect(
+        tester.getRect(chrome),
+        focusedChromeRect,
+        reason: 'D-pad scrubbing must not resize or move the player HUD',
       );
 
       await tester.sendKeyUpEvent(LogicalKeyboardKey.arrowRight);
@@ -1446,6 +1478,11 @@ void main() {
         ),
       );
 
+      final restingChromeRect = tester.getRect(
+        find.byKey(
+          const ValueKey('scrubbing-skip-spacing-bottom-player-chrome'),
+        ),
+      );
       progressFocus.requestFocus();
       await tester.pump();
       await tester.sendKeyDownEvent(LogicalKeyboardKey.arrowRight);
@@ -1468,6 +1505,11 @@ void main() {
       );
       expect(skipRect.bottom, lessThan(chromeRect.top));
       expect(chromeRect.top - skipRect.bottom, greaterThanOrEqualTo(12));
+      expect(
+        chromeRect,
+        restingChromeRect,
+        reason: 'the floating seek bubble must not expand the TV HUD',
+      );
 
       await tester.sendKeyUpEvent(LogicalKeyboardKey.arrowRight);
       await tester.pump();
@@ -1482,7 +1524,7 @@ void main() {
         viewport: const Size(1920, 1080),
         controlsVisible: true,
       ),
-      130,
+      173,
     );
     expect(
       playerSkipOverlayBottomInset(
@@ -1490,7 +1532,7 @@ void main() {
         controlsVisible: true,
         safeAreaBottom: 24,
       ),
-      160,
+      193,
     );
     expect(
       playerSkipOverlayBottomInset(
@@ -1499,7 +1541,7 @@ void main() {
         safeAreaBottom: 24,
         textScaleFactor: 2.5,
       ),
-      262,
+      295,
     );
     expect(
       playerSkipOverlayBottomInset(
@@ -1515,7 +1557,7 @@ void main() {
         controlsVisible: true,
         expandedHeader: true,
       ),
-      174,
+      217,
     );
     expect(
       playerSkipOverlayBottomInset(
@@ -1523,7 +1565,7 @@ void main() {
         controlsVisible: true,
         scrubbing: true,
       ),
-      175,
+      173,
     );
     expect(
       playerSkipOverlayBottomInset(
@@ -1532,7 +1574,7 @@ void main() {
         safeAreaBottom: 24,
         scrubbing: true,
       ),
-      198,
+      193,
     );
     expect(
       playerSkipOverlayBottomInset(
@@ -1542,7 +1584,7 @@ void main() {
         textScaleFactor: 2.5,
         scrubbing: true,
       ),
-      closeTo(322.05, .001),
+      295,
     );
   });
 

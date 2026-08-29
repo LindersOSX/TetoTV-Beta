@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:dio/dio.dart';
@@ -31,12 +32,47 @@ bool skipSegmentLookupIsComplete({
   required bool externalFailed,
   required bool hasMarkers,
   required int attempts,
+  bool transientExternalFailure = false,
+  bool terminalExternalFailure = false,
   bool runtimeProbesExhausted = false,
 }) {
-  if (runtimeProbesExhausted) return true;
-  if (attempts >= 4) return true;
-  if (externalFailed) return false;
+  if (runtimeProbesExhausted || terminalExternalFailure) {
+    return true;
+  }
+  if (externalFailed) {
+    final limit = transientExternalFailure
+        ? skipSegmentTotalTransientLookupAttemptLimit
+        : skipSegmentImmediateLookupAttemptLimit;
+    return attempts >= limit;
+  }
+  if (attempts >= skipSegmentImmediateLookupAttemptLimit) return true;
   return hasMarkers || !isWebStream;
+}
+
+const skipSegmentImmediateLookupAttemptLimit = 4;
+const skipSegmentTotalTransientLookupAttemptLimit = 6;
+
+/// Returns a bounded retry delay for an incomplete marker lookup.
+///
+/// The first four attempts retain the short startup cadence. Transport and
+/// service failures then receive two slower recovery attempts because the
+/// timing service can recover while playback is still active. Clean, exhausted
+/// no-matches never enter this deferred path.
+Duration? skipSegmentLookupRetryDelay({
+  required bool lookupComplete,
+  required bool transientExternalFailure,
+  required int attempts,
+}) {
+  if (lookupComplete) return null;
+  if (attempts < skipSegmentImmediateLookupAttemptLimit) {
+    return const Duration(milliseconds: 1200);
+  }
+  if (!transientExternalFailure) return null;
+  return switch (attempts) {
+    4 => const Duration(seconds: 20),
+    5 => const Duration(seconds: 60),
+    _ => null,
+  };
 }
 
 enum SkipSegmentKind { opening, ending, recap }
@@ -80,6 +116,9 @@ class AniSkipLookupResult {
     required this.probeCount,
     required this.usedDurationFallback,
     required this.runtimeFallbackSearchComplete,
+    required this.status,
+    required this.transientFailureCount,
+    this.failureReason,
   });
 
   final List<SkipSegment> segments;
@@ -96,6 +135,64 @@ class AniSkipLookupResult {
   /// unresolved transport/server failure. Empty results may be finalized only
   /// in this state; otherwise the player can retry later.
   final bool runtimeFallbackSearchComplete;
+
+  final AniSkipLookupStatus status;
+  final int transientFailureCount;
+  final AniSkipFailureReason? failureReason;
+
+  bool get hasTransientFailure =>
+      status == AniSkipLookupStatus.transientFailure ||
+      status == AniSkipLookupStatus.partialTransientFailure;
+}
+
+enum AniSkipLookupStatus {
+  found,
+  noMatch,
+  partialTransientFailure,
+  transientFailure,
+  permanentFailure,
+}
+
+extension AniSkipLookupStatusDiagnostics on AniSkipLookupStatus {
+  String get diagnosticCode => switch (this) {
+    AniSkipLookupStatus.found => 'success',
+    AniSkipLookupStatus.noMatch => 'no_match',
+    AniSkipLookupStatus.partialTransientFailure => 'partial_transient_failure',
+    AniSkipLookupStatus.transientFailure => 'transient_failure',
+    AniSkipLookupStatus.permanentFailure => 'permanent_failure',
+  };
+}
+
+enum AniSkipFailureReason {
+  invalidRequest,
+  rateLimited,
+  serverError,
+  clientError,
+  connectionTimeout,
+  transformTimeout,
+  receiveTimeout,
+  sendTimeout,
+  connectionError,
+  certificateError,
+  canceled,
+  unknownTransport,
+}
+
+extension AniSkipFailureReasonDiagnostics on AniSkipFailureReason {
+  String get diagnosticCode => switch (this) {
+    AniSkipFailureReason.invalidRequest => 'invalid_request',
+    AniSkipFailureReason.rateLimited => 'rate_limited',
+    AniSkipFailureReason.serverError => 'server_error',
+    AniSkipFailureReason.clientError => 'client_error',
+    AniSkipFailureReason.connectionTimeout => 'connection_timeout',
+    AniSkipFailureReason.transformTimeout => 'transform_timeout',
+    AniSkipFailureReason.receiveTimeout => 'receive_timeout',
+    AniSkipFailureReason.sendTimeout => 'send_timeout',
+    AniSkipFailureReason.connectionError => 'connection_error',
+    AniSkipFailureReason.certificateError => 'certificate_error',
+    AniSkipFailureReason.canceled => 'canceled',
+    AniSkipFailureReason.unknownTransport => 'unknown_transport',
+  };
 }
 
 class AniSkipClient {
@@ -137,6 +234,9 @@ class AniSkipClient {
         probeCount: 0,
         usedDurationFallback: false,
         runtimeFallbackSearchComplete: false,
+        status: AniSkipLookupStatus.permanentFailure,
+        transientFailureCount: 0,
+        failureReason: AniSkipFailureReason.invalidRequest,
       );
     }
     final actualSeconds = episodeDuration.inMilliseconds / 1000;
@@ -144,8 +244,10 @@ class AniSkipClient {
         ? aniSkipRuntimeProbes(episodeDuration)
         : <double>[actualSeconds];
     Object? lastTransientFailure;
+    AniSkipFailureReason? lastFailureReason;
     var observedCleanNoMatch = false;
-    var hadTransientFailure = false;
+    var hadUnresolvedTransientFailure = false;
+    var transientFailureCount = 0;
     for (var probeIndex = 0; probeIndex < probeLengths.length; probeIndex++) {
       final probeLength = probeLengths[probeIndex];
       final uri = _aniSkipUri(
@@ -158,11 +260,13 @@ class AniSkipClient {
       // therefore execute once each to avoid hammering the community API.
       final requestAttempts = probeIndex == 0 ? 2 : 1;
       Map<String, dynamic>? body;
+      var receivedResponse = false;
       for (var attempt = 0; attempt < requestAttempts; attempt++) {
         try {
           final response = await _dio.getUri<Map<String, dynamic>>(uri);
           final status = response.statusCode ?? 200;
           if (status == 404) {
+            receivedResponse = true;
             observedCleanNoMatch = true;
             body = response.data;
             break;
@@ -174,24 +278,39 @@ class AniSkipClient {
               response: response,
             );
           }
+          receivedResponse = true;
           body = response.data;
           break;
         } on DioException catch (error) {
           final status = error.response?.statusCode;
           if (status == 404) {
+            receivedResponse = true;
             observedCleanNoMatch = true;
             final data = error.response?.data;
             if (data is Map<String, dynamic>) body = data;
             break;
           }
-          if (!_retryableAniSkipFailure(error)) rethrow;
+          final failureReason = _aniSkipFailureReason(error);
+          if (!_retryableAniSkipFailure(error)) {
+            return AniSkipLookupResult(
+              segments: const [],
+              probeCount: probeIndex + 1,
+              usedDurationFallback: false,
+              runtimeFallbackSearchComplete: false,
+              status: AniSkipLookupStatus.permanentFailure,
+              transientFailureCount: transientFailureCount,
+              failureReason: failureReason,
+            );
+          }
           lastTransientFailure = error;
-          hadTransientFailure = true;
+          lastFailureReason = failureReason;
+          transientFailureCount++;
           if (attempt + 1 < requestAttempts) {
             await Future<void>.delayed(retryDelay);
           }
         }
       }
+      if (!receivedResponse) hadUnresolvedTransientFailure = true;
       if (body == null || body['found'] != true || body['results'] is! List) {
         if (body != null) observedCleanNoMatch = true;
         continue;
@@ -206,17 +325,27 @@ class AniSkipClient {
         probeCount: probeIndex + 1,
         usedDurationFallback: probeIndex > 0,
         runtimeFallbackSearchComplete: false,
+        status: AniSkipLookupStatus.found,
+        transientFailureCount: transientFailureCount,
+        failureReason: lastFailureReason,
       );
     }
-    if (!observedCleanNoMatch && lastTransientFailure != null) {
-      throw lastTransientFailure;
-    }
+    // Retain this assertion in debug builds: a transient count must always
+    // carry the source exception that supplied its safe diagnostic class.
+    assert(transientFailureCount == 0 || lastTransientFailure != null);
     return AniSkipLookupResult(
       segments: const [],
       probeCount: probeLengths.length,
       usedDurationFallback: false,
       runtimeFallbackSearchComplete:
-          allowRuntimeFallback && !hadTransientFailure,
+          allowRuntimeFallback && !hadUnresolvedTransientFailure,
+      status: hadUnresolvedTransientFailure
+          ? observedCleanNoMatch
+                ? AniSkipLookupStatus.partialTransientFailure
+                : AniSkipLookupStatus.transientFailure
+          : AniSkipLookupStatus.noMatch,
+      transientFailureCount: transientFailureCount,
+      failureReason: lastFailureReason,
     );
   }
 
@@ -298,9 +427,124 @@ bool _retryableAniSkipFailure(DioException error) {
       (status != null && status >= 500) ||
       error.type == DioExceptionType.connectionError ||
       error.type == DioExceptionType.connectionTimeout ||
+      error.type == DioExceptionType.transformTimeout ||
       error.type == DioExceptionType.receiveTimeout ||
       error.type == DioExceptionType.sendTimeout ||
       error.type == DioExceptionType.unknown;
+}
+
+AniSkipFailureReason _aniSkipFailureReason(DioException error) {
+  final status = error.response?.statusCode;
+  if (status == 429) return AniSkipFailureReason.rateLimited;
+  if (status != null && status >= 500) return AniSkipFailureReason.serverError;
+  if (status != null && status >= 400) return AniSkipFailureReason.clientError;
+  return switch (error.type) {
+    DioExceptionType.connectionTimeout =>
+      AniSkipFailureReason.connectionTimeout,
+    DioExceptionType.transformTimeout => AniSkipFailureReason.transformTimeout,
+    DioExceptionType.receiveTimeout => AniSkipFailureReason.receiveTimeout,
+    DioExceptionType.sendTimeout => AniSkipFailureReason.sendTimeout,
+    DioExceptionType.connectionError => AniSkipFailureReason.connectionError,
+    DioExceptionType.badCertificate => AniSkipFailureReason.certificateError,
+    DioExceptionType.cancel => AniSkipFailureReason.canceled,
+    DioExceptionType.badResponse => AniSkipFailureReason.clientError,
+    DioExceptionType.unknown => AniSkipFailureReason.unknownTransport,
+  };
+}
+
+class VerifiedSkipSeekResult {
+  const VerifiedSkipSeekResult({
+    required this.verified,
+    required this.position,
+    required this.attempts,
+  });
+
+  final bool verified;
+  final Duration position;
+  final int attempts;
+}
+
+bool skipSeekTargetReached({
+  required Duration target,
+  required Duration actual,
+  Duration tolerance = const Duration(milliseconds: 250),
+  Duration maximumOvershoot = const Duration(seconds: 5),
+}) => actual + tolerance >= target && actual <= target + maximumOvershoot;
+
+/// Sends a skip seek and confirms the player actually moved before reporting
+/// success. Some HLS demuxers accept an early seek command without applying it.
+Future<VerifiedSkipSeekResult> performVerifiedSkipSeek({
+  required Duration target,
+  required Future<void> Function(Duration target) seek,
+  required Duration Function() currentPosition,
+  Future<void> Function(Duration delay)? wait,
+  bool Function()? isCanceled,
+  int maximumAttempts = 3,
+  Duration operationTimeout = const Duration(seconds: 2),
+  Duration settleDelay = const Duration(milliseconds: 700),
+}) async {
+  final boundedAttempts = maximumAttempts.clamp(1, 6).toInt();
+  final boundedOperationTimeout = operationTimeout <= Duration.zero
+      ? const Duration(milliseconds: 1)
+      : operationTimeout;
+  final waitFor = wait ?? Future<void>.delayed;
+  var actual = currentPosition();
+  for (var attempt = 1; attempt <= boundedAttempts; attempt++) {
+    if (isCanceled?.call() == true) {
+      return VerifiedSkipSeekResult(
+        verified: false,
+        position: actual,
+        attempts: attempt - 1,
+      );
+    }
+    var operationTimedOut = false;
+    try {
+      await seek(target).timeout(boundedOperationTimeout);
+    } on TimeoutException {
+      operationTimedOut = true;
+    } catch (_) {
+      // A demuxer can throw while still committing the seek. Verification is
+      // authoritative, so inspect the resulting position before retrying.
+    }
+    if (isCanceled?.call() == true) {
+      return VerifiedSkipSeekResult(
+        verified: false,
+        position: currentPosition(),
+        attempts: attempt,
+      );
+    }
+    await waitFor(settleDelay);
+    actual = currentPosition();
+    if (isCanceled?.call() == true) {
+      return VerifiedSkipSeekResult(
+        verified: false,
+        position: actual,
+        attempts: attempt,
+      );
+    }
+    if (skipSeekTargetReached(target: target, actual: actual)) {
+      return VerifiedSkipSeekResult(
+        verified: true,
+        position: actual,
+        attempts: attempt,
+      );
+    }
+    // Do not stack more seek commands behind an operation whose completion is
+    // unknown. A later source change is handled by the caller's cancellation
+    // guard, and the marker remains available for an explicit manual retry.
+    if (operationTimedOut) {
+      return VerifiedSkipSeekResult(
+        verified: false,
+        position: actual,
+        attempts: attempt,
+      );
+    }
+  }
+  return VerifiedSkipSeekResult(
+    verified: false,
+    position: actual,
+    attempts: boundedAttempts,
+  );
 }
 
 /// AniSkip selects submitted markers using the requested episode runtime.

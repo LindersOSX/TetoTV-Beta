@@ -1,5 +1,6 @@
 import 'package:anime_tv/features/catalog/data/anilist_catalog_client.dart';
 import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
+import 'package:anime_tv/features/catalog/domain/franchise_watch_order.dart';
 import 'package:anime_tv/features/downloads/application/offline_catalog_providers.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -40,9 +41,10 @@ final animeDetailsProvider = FutureProvider.family<AnimeSummary, int>((
   }
 });
 
-final franchiseProvider = FutureProvider.family<List<AnimeSummary>, int>(
-  (ref, id) => ref.watch(catalogClientProvider).franchise(id),
-);
+final franchiseProvider =
+    FutureProvider.family<List<FranchiseWatchOrderEntry>, int>(
+      (ref, id) => ref.watch(catalogClientProvider).franchiseWatchOrder(id),
+    );
 
 final studioAnimeProvider = FutureProvider.family<List<AnimeSummary>, int>(
   (ref, id) => ref.watch(catalogClientProvider).studioAnime(id),

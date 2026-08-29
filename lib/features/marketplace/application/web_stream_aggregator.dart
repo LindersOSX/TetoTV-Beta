@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/features/marketplace/application/marketplace_controller.dart';
@@ -11,6 +12,22 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 const defaultWebProviderDeadline = Duration(seconds: 20);
 const defaultMaxConcurrentWebProviders = 2;
+
+var _webProviderSearchDiagnosticSequence = 0;
+final String _webProviderSearchDiagnosticBootNonce = (() {
+  final random = math.Random.secure();
+  return List<String>.generate(
+    3,
+    (_) => random.nextInt(0x10000).toRadixString(16).padLeft(4, '0'),
+    growable: false,
+  ).join();
+})();
+
+/// Returns a media-free correlation ID that remains unique across process
+/// restarts while the bounded diagnostic history is retained.
+String nextWebProviderSearchDiagnosticSessionId() =>
+    'provider-search-$_webProviderSearchDiagnosticBootNonce-'
+    '${++_webProviderSearchDiagnosticSequence}';
 
 /// Carries only audio capability a provider explicitly reported into the
 /// playback launch. A legacy unlabeled result remains unknown instead of
@@ -40,12 +57,14 @@ class WebStreamSearchProgress {
     this.completedProviders = 0,
     this.totalProviders = 0,
     this.pendingProviderNames = const [],
+    this.diagnosticSessionId = '',
   });
 
   final WebStreamAggregation aggregation;
   final int completedProviders;
   final int totalProviders;
   final List<String> pendingProviderNames;
+  final String diagnosticSessionId;
 
   bool get isComplete => completedProviders >= totalProviders;
 }
@@ -131,8 +150,10 @@ class WebStreamAggregator {
   Stream<WebStreamSearchProgress> searchIncrementally(
     EpisodeReference episode,
   ) async* {
+    final diagnosticSessionId = nextWebProviderSearchDiagnosticSessionId();
     final health = await _store.providerHealth();
-    final enabledAddons = (await _store.installedAddons())
+    final installedAddons = await _store.installedAddons();
+    final enabledAddons = installedAddons
         .where((addon) => addon.enabled)
         .toList(growable: false);
     final availabilityFailures = <WebProviderFailure>[];
@@ -151,6 +172,7 @@ class WebStreamAggregator {
       availabilityFailures.add(failure);
       _recordProviderSearchOutcome(
         provider,
+        diagnosticSessionId: diagnosticSessionId,
         status: failure.status.name,
         count: 0,
         stage: failure.stage ?? 'availability',
@@ -164,56 +186,78 @@ class WebStreamAggregator {
     }
     final addons = orderInstalledProvidersByHealth(searchable, health);
     final providers = addons.map(SeanimeJavascriptProvider.new).toList();
-    await for (final progress in aggregateWebStreamingProvidersIncrementally(
-      providers,
-      episode,
-      deadline: providerDeadline,
-      maxConcurrentProviders: maxConcurrentProviders,
-      onSuccess: (provider, streams) async {
-        final hasStreams = streams.isNotEmpty;
-        if (hasStreams) await _store.recordProviderSuccess(provider.id);
-        _recordProviderSearchOutcome(
-          provider,
-          status: hasStreams ? 'success' : 'no_match',
-          count: streams.length,
-          stage: 'complete',
-          reason: hasStreams ? 'streams_returned' : 'empty_result',
-        );
-      },
-      onFailure: (provider, error, noMatch) async {
-        final details = seanimeProviderFailureDetails(error);
-        final identityNoMatch = error is _EpisodeIdentityNoMatch;
-        final stage = identityNoMatch
-            ? 'episode_lookup'
-            : details?.stage ?? 'runtime';
-        final reason = identityNoMatch
-            ? 'episode_identity_mismatch'
-            : details?.reason ??
-                  (error is TimeoutException ? 'timeout' : 'provider_error');
-        if (!noMatch) {
-          final healthMessage = seanimeProviderFailureMessage(error);
-          await _store.recordProviderFailure(
-            provider.id,
-            healthMessage,
+    _recordProviderSearchSummary(
+      webProviderSearchSummaryDiagnosticDetails(
+        phase: 'start',
+        diagnosticSessionId: diagnosticSessionId,
+        installedProviders: installedAddons.length,
+        enabledProviders: enabledAddons.length,
+        searchableProviders: providers.length,
+        blockedProviders: blockedProviders,
+        completedProviders: blockedProviders,
+        returnedProviders: 0,
+        returnedResults: 0,
+      ),
+    );
+    var recordedInitialProgress = false;
+    var lastProgressMilestone = blockedProviders;
+    var terminalSummaryRecorded = false;
+    var lastCompletedProviders = blockedProviders;
+    var lastAggregation = WebStreamAggregation(
+      failures: List.unmodifiable(availabilityFailures),
+    );
+    try {
+      await for (final progress in aggregateWebStreamingProvidersIncrementally(
+        providers,
+        episode,
+        deadline: providerDeadline,
+        maxConcurrentProviders: maxConcurrentProviders,
+        onSuccess: (provider, streams) async {
+          final hasStreams = streams.isNotEmpty;
+          if (hasStreams) await _store.recordProviderSuccess(provider.id);
+          _recordProviderSearchOutcome(
+            provider,
+            diagnosticSessionId: diagnosticSessionId,
+            status: hasStreams ? 'success' : 'no_match',
+            count: streams.length,
+            stage: 'complete',
+            reason: hasStreams ? 'streams_returned' : 'empty_result',
+          );
+        },
+        onFailure: (provider, error, noMatch) async {
+          final details = seanimeProviderFailureDetails(error);
+          final identityNoMatch = error is _EpisodeIdentityNoMatch;
+          final stage = identityNoMatch
+              ? 'episode_lookup'
+              : details?.stage ?? 'runtime';
+          final reason = identityNoMatch
+              ? 'episode_identity_mismatch'
+              : details?.reason ??
+                    (error is TimeoutException ? 'timeout' : 'provider_error');
+          if (!noMatch) {
+            final healthMessage = seanimeProviderFailureMessage(error);
+            await _store.recordProviderFailure(
+              provider.id,
+              healthMessage,
+              stage: stage,
+              reason: reason,
+            );
+          }
+          _recordProviderSearchOutcome(
+            provider,
+            diagnosticSessionId: diagnosticSessionId,
+            status: noMatch ? 'no_match' : 'failed',
+            count: 0,
             stage: stage,
             reason: reason,
           );
-        }
-        _recordProviderSearchOutcome(
-          provider,
-          status: noMatch ? 'no_match' : 'failed',
-          count: 0,
-          stage: stage,
-          reason: reason,
-        );
-      },
-    )) {
-      final providersWithRuntimeStatus = {
-        for (final failure in progress.aggregation.failures)
-          if (failure.providerId case final id?) id.trim().toLowerCase(),
-      };
-      yield WebStreamSearchProgress(
-        aggregation: mergeWebProviderOutcomes([
+        },
+      )) {
+        final providersWithRuntimeStatus = {
+          for (final failure in progress.aggregation.failures)
+            if (failure.providerId case final id?) id.trim().toLowerCase(),
+        };
+        final aggregation = mergeWebProviderOutcomes([
           (streams: progress.aggregation.streams, failure: null),
           for (final failure in [
             ...availabilityFailures.where(
@@ -226,16 +270,122 @@ class WebStreamAggregator {
             ...progress.aggregation.failures,
           ])
             (streams: const <WebStreamResult>[], failure: failure),
-        ]),
-        completedProviders: progress.completedProviders + blockedProviders,
-        totalProviders: enabledAddons.length,
-        pendingProviderNames: progress.pendingProviderNames,
+        ]);
+        final completedProviders =
+            progress.completedProviders + blockedProviders;
+        final isComplete = completedProviders >= enabledAddons.length;
+        final returnedProviders = aggregation.streams
+            .map(webStreamProviderIdentity)
+            .toSet()
+            .length;
+        final shouldRecordProgress =
+            !isComplete &&
+            (!recordedInitialProgress ||
+                completedProviders - lastProgressMilestone >= 4);
+        if (shouldRecordProgress || isComplete) {
+          final phase = isComplete ? 'final' : 'progress';
+          _recordProviderSearchSummary(
+            webProviderSearchSummaryDiagnosticDetails(
+              phase: phase,
+              diagnosticSessionId: diagnosticSessionId,
+              installedProviders: installedAddons.length,
+              enabledProviders: enabledAddons.length,
+              searchableProviders: providers.length,
+              blockedProviders: blockedProviders,
+              completedProviders: completedProviders,
+              returnedProviders: returnedProviders,
+              returnedResults: aggregation.streams.length,
+              failureReasonCounts: webProviderFailureReasonCounts(
+                aggregation.failures,
+              ),
+            ),
+          );
+          if (!isComplete) {
+            recordedInitialProgress = true;
+            lastProgressMilestone = completedProviders;
+          } else {
+            terminalSummaryRecorded = true;
+          }
+        }
+        lastCompletedProviders = completedProviders;
+        lastAggregation = aggregation;
+        yield WebStreamSearchProgress(
+          aggregation: aggregation,
+          completedProviders: completedProviders,
+          totalProviders: enabledAddons.length,
+          pendingProviderNames: progress.pendingProviderNames,
+          diagnosticSessionId: diagnosticSessionId,
+        );
+      }
+    } catch (_) {
+      terminalSummaryRecorded = true;
+      _recordProviderSearchSummary(
+        webProviderSearchSummaryDiagnosticDetails(
+          phase: 'error',
+          diagnosticSessionId: diagnosticSessionId,
+          installedProviders: installedAddons.length,
+          enabledProviders: enabledAddons.length,
+          searchableProviders: providers.length,
+          blockedProviders: blockedProviders,
+          completedProviders: lastCompletedProviders,
+          returnedProviders: lastAggregation.streams
+              .map(webStreamProviderIdentity)
+              .toSet()
+              .length,
+          returnedResults: lastAggregation.streams.length,
+          failureReasonCounts: webProviderFailureReasonCounts(
+            lastAggregation.failures,
+          ),
+        ),
       );
+      rethrow;
+    } finally {
+      if (!terminalSummaryRecorded) {
+        _recordProviderSearchSummary(
+          webProviderSearchSummaryDiagnosticDetails(
+            phase: 'canceled',
+            diagnosticSessionId: diagnosticSessionId,
+            installedProviders: installedAddons.length,
+            enabledProviders: enabledAddons.length,
+            searchableProviders: providers.length,
+            blockedProviders: blockedProviders,
+            completedProviders: lastCompletedProviders,
+            returnedProviders: lastAggregation.streams
+                .map(webStreamProviderIdentity)
+                .toSet()
+                .length,
+            returnedResults: lastAggregation.streams.length,
+            failureReasonCounts: webProviderFailureReasonCounts(
+              lastAggregation.failures,
+            ),
+          ),
+        );
+      }
+    }
+  }
+
+  void _recordProviderSearchSummary(Map<String, Object?> details) {
+    unawaited(_persistProviderSearchSummary(details));
+  }
+
+  Future<void> _persistProviderSearchSummary(
+    Map<String, Object?> details,
+  ) async {
+    try {
+      await _store.database.recordDiagnosticEvent(
+        category: 'provider-search',
+        severity: 'info',
+        message: 'Web provider discovery summary',
+        details: details,
+      );
+    } catch (_) {
+      // Diagnostics are best-effort and must never affect provider discovery.
     }
   }
 
   void _recordProviderSearchOutcome(
     WebStreamingProvider provider, {
+    required String diagnosticSessionId,
     required String status,
     required int count,
     required String stage,
@@ -244,6 +394,7 @@ class WebStreamAggregator {
     unawaited(
       _persistProviderSearchOutcome(
         provider,
+        diagnosticSessionId: diagnosticSessionId,
         status: status,
         count: count,
         stage: stage,
@@ -254,6 +405,7 @@ class WebStreamAggregator {
 
   Future<void> _persistProviderSearchOutcome(
     WebStreamingProvider provider, {
+    required String diagnosticSessionId,
     required String status,
     required int count,
     required String stage,
@@ -262,6 +414,9 @@ class WebStreamAggregator {
     try {
       await _store.database.recordDiagnosticEvent(
         category: 'provider-search',
+        severity: status == 'failed' || status == 'unavailable'
+            ? 'warning'
+            : 'info',
         message: webProviderSearchDiagnosticMessage(
           provider,
           status: status,
@@ -269,6 +424,7 @@ class WebStreamAggregator {
           stage: stage,
           reason: reason,
         ),
+        details: webProviderSearchOutcomeDiagnosticDetails(diagnosticSessionId),
       );
     } catch (_) {
       // Diagnostics are best-effort and must never affect provider discovery.
@@ -480,6 +636,139 @@ WebProviderFailure? installedWebProviderAvailabilityFailure(
 /// Bounded provider-only provenance for the explicit diagnostic report. This
 /// never receives a catalog title, episode/query, result URL, or exception
 /// message; manifest URLs are reduced to their public host by the provider.
+Map<String, Object?> webProviderSearchSummaryDiagnosticDetails({
+  required String phase,
+  required String diagnosticSessionId,
+  required int installedProviders,
+  required int enabledProviders,
+  required int searchableProviders,
+  required int blockedProviders,
+  required int completedProviders,
+  required int returnedProviders,
+  required int returnedResults,
+  Map<String, int> failureReasonCounts = const {},
+}) {
+  final safeReasons = <String, int>{};
+  for (final entry in failureReasonCounts.entries) {
+    final reason = _safeWebProviderFailureReason(entry.key);
+    safeReasons.update(
+      reason,
+      (count) => count + entry.value.clamp(0, 9999),
+      ifAbsent: () => entry.value.clamp(0, 9999),
+    );
+  }
+  return {
+    'session_id': _safeWebProviderDiagnosticSessionId(diagnosticSessionId),
+    'phase': _safeWebProviderDiagnosticPhase(phase),
+    'state': <Map<String, Object>>[
+      {
+        'kind': 'installed_providers',
+        'count': installedProviders.clamp(0, 9999),
+      },
+      {'kind': 'enabled_providers', 'count': enabledProviders.clamp(0, 9999)},
+      {
+        'kind': 'searchable_providers',
+        'count': searchableProviders.clamp(0, 9999),
+      },
+      {'kind': 'blocked_providers', 'count': blockedProviders.clamp(0, 9999)},
+      {
+        'kind': 'completed_providers',
+        'count': completedProviders.clamp(0, 9999),
+      },
+      {'kind': 'returned_providers', 'count': returnedProviders.clamp(0, 9999)},
+      {'kind': 'returned_results', 'count': returnedResults.clamp(0, 99999)},
+    ],
+    if (safeReasons.isNotEmpty)
+      'reason': <Map<String, Object>>[
+        for (final entry in safeReasons.entries)
+          {'reason_code': entry.key, 'count': entry.value},
+      ],
+  };
+}
+
+Map<String, int> webProviderFailureReasonCounts(
+  Iterable<WebProviderFailure> failures,
+) {
+  final counts = <String, int>{};
+  for (final failure in failures) {
+    final reason = _safeWebProviderFailureReason(
+      failure.reason ?? 'unspecified',
+    );
+    counts.update(reason, (count) => count + 1, ifAbsent: () => 1);
+  }
+  return counts;
+}
+
+Map<String, Object?> webProviderVisibilityDiagnosticDetails({
+  required String phase,
+  required String diagnosticSessionId,
+  required int rawProviders,
+  required int rawResults,
+  required int visibleProviders,
+  required int visibleResults,
+  required String audioFilter,
+  required String qualityFilter,
+}) => {
+  'session_id': _safeWebProviderDiagnosticSessionId(diagnosticSessionId),
+  'phase': _safeWebProviderDiagnosticPhase(phase),
+  'state': <Map<String, Object>>[
+    {'kind': 'raw_providers', 'count': rawProviders.clamp(0, 9999)},
+    {'kind': 'raw_results', 'count': rawResults.clamp(0, 99999)},
+    {'kind': 'visible_providers', 'count': visibleProviders.clamp(0, 9999)},
+    {'kind': 'visible_results', 'count': visibleResults.clamp(0, 99999)},
+  ],
+  'audio_mode': const {'all', 'sub', 'dub'}.contains(audioFilter)
+      ? audioFilter
+      : 'unknown',
+  'quality': const {'any', 'p2160', 'p1080', 'p720'}.contains(qualityFilter)
+      ? qualityFilter
+      : 'unknown',
+};
+
+Map<String, Object?> webProviderSearchOutcomeDiagnosticDetails(
+  String diagnosticSessionId,
+) => {'session_id': _safeWebProviderDiagnosticSessionId(diagnosticSessionId)};
+
+String _safeWebProviderDiagnosticSessionId(String value) =>
+    RegExp(r'^provider-search-[0-9a-f]{12}-[0-9]+$').hasMatch(value)
+    ? value
+    : 'provider-search-unknown';
+
+String _safeWebProviderDiagnosticPhase(String value) =>
+    const {
+      'start',
+      'progress',
+      'final',
+      'filter_changed',
+      'canceled',
+      'error',
+    }.contains(value)
+    ? value
+    : 'unknown';
+
+String _safeWebProviderFailureReason(String value) {
+  if (RegExp(r'^http_[1-5][0-9]{2}$').hasMatch(value)) return value;
+  return const {
+        'timeout',
+        'empty_sources',
+        'unsafe_target',
+        'invalid_response',
+        'network',
+        'runtime_api',
+        'provider_error',
+        'empty_result',
+        'episode_identity_mismatch',
+        'health_quarantine',
+        'incompatible_runtime',
+        'reported_broken',
+        'deprecated',
+        'unavailable',
+        'unspecified',
+      }.contains(value)
+      ? value
+      : 'other';
+}
+
 String webProviderSearchDiagnosticMessage(
   WebStreamingProvider provider, {
   required String status,

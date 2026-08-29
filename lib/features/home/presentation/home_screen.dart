@@ -1125,18 +1125,47 @@ class _HeroPanel extends StatelessWidget {
         // never lays out its title beyond the visible card.
         ? screenWidth - 62
         : isTelevision
-        // Keep the complete title within roughly the left half of the TV hero
-        // so even long localized titles can wrap without covering the subject
-        // artwork on the right.
-        ? (screenWidth * .48).clamp(360.0, 920.0)
+        // Give the title the left half of the TV hero. Do not cap this on
+        // larger canvases: using the available width keeps localized titles
+        // readable without shrinking their type or covering the artwork.
+        ? (screenWidth * .5).clamp(360.0, double.infinity)
         : screenWidth >= 1400
         ? 660.0
         : screenWidth >= 1100
         ? 570.0
         : 310.0;
-    final titleHeight = shortTvHero ? 68.0 : (cinematicTv ? 102.0 : 80.0);
     final displayTitle =
         anime?.displayTitle(titlePreference) ?? 'Frieren: Beyond Journey’s End';
+    final titleStyle = Theme.of(context).textTheme.displaySmall?.copyWith(
+      color: context.appPalette.primaryText,
+      fontSize: cinematicTv
+          ? (shortTvHero ? 33 : (dense ? 39 : 46))
+          : (compact ? 29 : 39),
+      height: .98,
+      fontWeight: FontWeight.w900,
+    );
+    final baseTitleHeight = isTelevision
+        ? 102.0
+        : (shortTvHero ? 68.0 : (cinematicTv ? 102.0 : 80.0));
+    final measuredTitleHeight = isTelevision
+        ? _measureHeroTitleHeight(
+            context,
+            title: displayTitle,
+            width: copyWidth,
+            style: titleStyle,
+          )
+        : baseTitleHeight;
+    final titleHeight = measuredTitleHeight > baseTitleHeight
+        ? measuredTitleHeight.ceilToDouble()
+        : baseTitleHeight;
+    final baseHeroHeight =
+        height ?? (compact ? (dense ? 360.0 : 410.0) : (dense ? 290.0 : 350.0));
+    // TV Home scrolls vertically, so an exceptional localized title can grow
+    // the banner instead of shrinking, clipping, or painting over the facts
+    // and actions below it. Normal titles keep the established hero height.
+    final resolvedHeroHeight = isTelevision
+        ? baseHeroHeight + titleHeight - baseTitleHeight
+        : baseHeroHeight;
     final facts = <String>[
       if (anime?.seasonYear case final year?) '$year',
       if (anime?.format case final format?) format.replaceAll('_', ' '),
@@ -1151,7 +1180,7 @@ class _HeroPanel extends StatelessWidget {
     ];
     return Container(
       key: const ValueKey('home-hero'),
-      height: height ?? (compact ? (dense ? 360 : 410) : (dense ? 290 : 350)),
+      height: resolvedHeroHeight,
       clipBehavior: Clip.hardEdge,
       decoration: BoxDecoration(color: context.appPalette.surface),
       child: Stack(
@@ -1211,7 +1240,7 @@ class _HeroPanel extends StatelessWidget {
           Padding(
             padding: EdgeInsets.fromLTRB(
               cinematicTv ? 34 : (compact ? 15 : 18),
-              shortTvHero ? 68 : (cinematicTv ? 78 : (compact ? 24 : 30)),
+              shortTvHero ? 60 : (cinematicTv ? 78 : (compact ? 24 : 30)),
               cinematicTv ? 28 : (compact ? 15 : 24),
               shortTvHero ? 18 : (cinematicTv ? 28 : (compact ? 18 : 22)),
             ),
@@ -1253,17 +1282,8 @@ class _HeroPanel extends StatelessWidget {
                       alignment: Alignment.centerLeft,
                       child: _HeroTitleText(
                         title: displayTitle,
-                        width: copyWidth,
                         fitEntireTitle: isTelevision,
-                        style: Theme.of(context).textTheme.displaySmall
-                            ?.copyWith(
-                              color: context.appPalette.primaryText,
-                              fontSize: cinematicTv
-                                  ? (shortTvHero ? 33 : (dense ? 39 : 46))
-                                  : (compact ? 29 : 39),
-                              height: .98,
-                              fontWeight: FontWeight.w900,
-                            ),
+                        style: titleStyle,
                       ),
                     ),
                   ),
@@ -1330,34 +1350,39 @@ class _HeroPanel extends StatelessWidget {
 class _HeroTitleText extends StatelessWidget {
   const _HeroTitleText({
     required this.title,
-    required this.width,
     required this.fitEntireTitle,
     required this.style,
   });
 
   final String title;
-  final double width;
   final bool fitEntireTitle;
   final TextStyle? style;
 
   @override
   Widget build(BuildContext context) {
-    final titleText = Text(
+    return Text(
       title,
       maxLines: fitEntireTitle ? null : 2,
       overflow: fitEntireTitle ? TextOverflow.visible : TextOverflow.ellipsis,
       softWrap: true,
       style: style,
     );
-    if (!fitEntireTitle) return titleText;
-
-    return FittedBox(
-      key: const ValueKey('home-hero-title-fit'),
-      fit: BoxFit.scaleDown,
-      alignment: Alignment.centerLeft,
-      child: SizedBox(width: width, child: titleText),
-    );
   }
+}
+
+double _measureHeroTitleHeight(
+  BuildContext context, {
+  required String title,
+  required double width,
+  required TextStyle? style,
+}) {
+  final painter = TextPainter(
+    text: TextSpan(text: title, style: style),
+    textDirection: Directionality.of(context),
+    textScaler: MediaQuery.textScalerOf(context),
+    locale: Localizations.maybeLocaleOf(context),
+  )..layout(maxWidth: width);
+  return painter.height;
 }
 
 class _HeroMetadataLine extends StatelessWidget {

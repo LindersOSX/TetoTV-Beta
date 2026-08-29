@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:anime_tv/features/player/application/skip_segment_service.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -81,6 +83,87 @@ void main() {
         runtimeProbesExhausted: true,
       ),
       isTrue,
+    );
+  });
+
+  test('transient lookup failures receive only two deferred retries', () {
+    expect(
+      skipSegmentLookupIsComplete(
+        isWebStream: true,
+        externalFailed: true,
+        transientExternalFailure: true,
+        hasMarkers: false,
+        attempts: 4,
+      ),
+      isFalse,
+    );
+    expect(
+      skipSegmentLookupRetryDelay(
+        lookupComplete: false,
+        transientExternalFailure: true,
+        attempts: 4,
+      ),
+      const Duration(seconds: 20),
+    );
+    expect(
+      skipSegmentLookupRetryDelay(
+        lookupComplete: false,
+        transientExternalFailure: true,
+        attempts: 5,
+      ),
+      const Duration(seconds: 60),
+    );
+    expect(
+      skipSegmentLookupIsComplete(
+        isWebStream: true,
+        externalFailed: true,
+        transientExternalFailure: true,
+        hasMarkers: false,
+        attempts: 6,
+      ),
+      isTrue,
+    );
+    expect(
+      skipSegmentLookupRetryDelay(
+        lookupComplete: true,
+        transientExternalFailure: true,
+        attempts: 6,
+      ),
+      isNull,
+    );
+  });
+
+  test('embedded markers do not hide a transient community failure', () {
+    expect(
+      skipSegmentLookupIsComplete(
+        isWebStream: true,
+        externalFailed: true,
+        transientExternalFailure: true,
+        hasMarkers: true,
+        attempts: 4,
+      ),
+      isFalse,
+    );
+  });
+
+  test('clean exhausted no-match never enters deferred retry', () {
+    expect(
+      skipSegmentLookupIsComplete(
+        isWebStream: true,
+        externalFailed: false,
+        hasMarkers: false,
+        attempts: 1,
+        runtimeProbesExhausted: true,
+      ),
+      isTrue,
+    );
+    expect(
+      skipSegmentLookupRetryDelay(
+        lookupComplete: true,
+        transientExternalFailure: false,
+        attempts: 1,
+      ),
+      isNull,
     );
   });
 
@@ -463,5 +546,233 @@ void main() {
 
     expect(requests, 2);
     expect(segments.single.kind, SkipSegmentKind.opening);
+  });
+
+  test('AniSkip treats a recovered retry as a clean no-match', () async {
+    final dio = Dio();
+    var requests = 0;
+    dio.interceptors.add(
+      InterceptorsWrapper(
+        onRequest: (options, handler) {
+          requests++;
+          if (requests == 1) {
+            handler.reject(
+              DioException(
+                requestOptions: options,
+                type: DioExceptionType.connectionError,
+                message: 'temporary offline fixture',
+              ),
+            );
+            return;
+          }
+          handler.resolve(
+            Response<Map<String, dynamic>>(
+              requestOptions: options,
+              statusCode: 404,
+              data: const <String, dynamic>{'found': false, 'results': []},
+            ),
+          );
+        },
+      ),
+    );
+
+    final result = await AniSkipClient(dio: dio, retryDelay: Duration.zero)
+        .lookup(
+          malMediaId: 1887,
+          episode: 18,
+          episodeDuration: const Duration(minutes: 24),
+          allowRuntimeFallback: true,
+        );
+
+    expect(result.segments, isEmpty);
+    expect(result.status, AniSkipLookupStatus.noMatch);
+    expect(result.transientFailureCount, 1);
+    expect(result.failureReason, AniSkipFailureReason.connectionError);
+    expect(result.runtimeFallbackSearchComplete, isTrue);
+    expect(result.hasTransientFailure, isFalse);
+    expect(result.status.diagnosticCode, 'no_match');
+    expect(result.failureReason?.diagnosticCode, 'connection_error');
+  });
+
+  test(
+    'AniSkip keeps an exhausted probe retryable after later clean no-matches',
+    () async {
+      final dio = Dio();
+      var requests = 0;
+      dio.interceptors.add(
+        InterceptorsWrapper(
+          onRequest: (options, handler) {
+            requests++;
+            if (requests <= 2) {
+              handler.reject(
+                DioException(
+                  requestOptions: options,
+                  type: DioExceptionType.connectionError,
+                  message: 'temporary offline fixture',
+                ),
+              );
+              return;
+            }
+            handler.resolve(
+              Response<Map<String, dynamic>>(
+                requestOptions: options,
+                statusCode: 404,
+                data: const <String, dynamic>{'found': false, 'results': []},
+              ),
+            );
+          },
+        ),
+      );
+
+      final result = await AniSkipClient(dio: dio, retryDelay: Duration.zero)
+          .lookup(
+            malMediaId: 1887,
+            episode: 18,
+            episodeDuration: const Duration(minutes: 24),
+            allowRuntimeFallback: true,
+          );
+
+      expect(result.segments, isEmpty);
+      expect(result.status, AniSkipLookupStatus.partialTransientFailure);
+      expect(result.transientFailureCount, 2);
+      expect(result.runtimeFallbackSearchComplete, isFalse);
+      expect(result.hasTransientFailure, isTrue);
+    },
+  );
+
+  test('AniSkip keeps accepted server-error responses retryable', () async {
+    final dio = Dio(BaseOptions(validateStatus: (_) => true));
+    var requests = 0;
+    dio.interceptors.add(
+      InterceptorsWrapper(
+        onRequest: (options, handler) {
+          requests++;
+          handler.resolve(
+            Response<Map<String, dynamic>>(
+              requestOptions: options,
+              statusCode: 503,
+              data: const <String, dynamic>{'found': false, 'results': []},
+            ),
+          );
+        },
+      ),
+    );
+
+    final result = await AniSkipClient(dio: dio, retryDelay: Duration.zero)
+        .lookup(
+          malMediaId: 1887,
+          episode: 18,
+          episodeDuration: const Duration(minutes: 24),
+          allowRuntimeFallback: true,
+        );
+
+    expect(requests, greaterThan(1));
+    expect(result.segments, isEmpty);
+    expect(result.status, AniSkipLookupStatus.transientFailure);
+    expect(result.runtimeFallbackSearchComplete, isFalse);
+    expect(result.hasTransientFailure, isTrue);
+    expect(result.failureReason, AniSkipFailureReason.serverError);
+  });
+
+  test('verified skip seek retries a command the player ignored', () async {
+    var position = const Duration(seconds: 10);
+    var seekCalls = 0;
+
+    final result = await performVerifiedSkipSeek(
+      target: const Duration(seconds: 100),
+      seek: (target) async {
+        seekCalls++;
+        if (seekCalls == 2) position = target;
+      },
+      currentPosition: () => position,
+      wait: (_) async {},
+    );
+
+    expect(result.verified, isTrue);
+    expect(result.position, const Duration(seconds: 100));
+    expect(result.attempts, 2);
+    expect(seekCalls, 2);
+  });
+
+  test('verified skip seek stays failed after its bounded attempts', () async {
+    var seekCalls = 0;
+
+    final result = await performVerifiedSkipSeek(
+      target: const Duration(seconds: 100),
+      seek: (_) async => seekCalls++,
+      currentPosition: () => const Duration(seconds: 10),
+      wait: (_) async {},
+    );
+
+    expect(result.verified, isFalse);
+    expect(result.position, const Duration(seconds: 10));
+    expect(result.attempts, 3);
+    expect(seekCalls, 3);
+  });
+
+  test('verified skip seek stops retrying after its source changes', () async {
+    var sourceChanged = false;
+    var seekCalls = 0;
+    var position = const Duration(seconds: 10);
+
+    final result = await performVerifiedSkipSeek(
+      target: const Duration(seconds: 100),
+      seek: (_) async => seekCalls++,
+      currentPosition: () => position,
+      wait: (_) async {
+        sourceChanged = true;
+        position = const Duration(seconds: 100);
+      },
+      isCanceled: () => sourceChanged,
+    );
+
+    expect(result.verified, isFalse);
+    expect(result.attempts, 1);
+    expect(seekCalls, 1);
+  });
+
+  test('verified skip seek times out instead of waiting forever', () async {
+    final neverCompletes = Completer<void>();
+    var seekCalls = 0;
+
+    final result = await performVerifiedSkipSeek(
+      target: const Duration(seconds: 100),
+      seek: (_) {
+        seekCalls++;
+        return neverCompletes.future;
+      },
+      currentPosition: () => const Duration(seconds: 10),
+      wait: (_) async {},
+      operationTimeout: const Duration(milliseconds: 1),
+    );
+
+    expect(result.verified, isFalse);
+    expect(result.position, const Duration(seconds: 10));
+    expect(result.attempts, 1);
+    expect(seekCalls, 1);
+  });
+
+  test('seek verification does not accept a nearby ignored position', () {
+    expect(
+      skipSeekTargetReached(
+        target: const Duration(milliseconds: 191984),
+        actual: const Duration(milliseconds: 190000),
+      ),
+      isFalse,
+    );
+    expect(
+      skipSeekTargetReached(
+        target: const Duration(milliseconds: 191984),
+        actual: const Duration(milliseconds: 191800),
+      ),
+      isTrue,
+    );
+    expect(
+      skipSeekTargetReached(
+        target: const Duration(seconds: 100),
+        actual: const Duration(minutes: 24),
+      ),
+      isFalse,
+    );
   });
 }

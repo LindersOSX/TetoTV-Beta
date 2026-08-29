@@ -4,6 +4,7 @@ import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/features/catalog/data/kitsu_catalog_fallback.dart';
 import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
 import 'package:anime_tv/features/catalog/domain/anime_trailer.dart';
+import 'package:anime_tv/features/catalog/domain/franchise_watch_order.dart';
 import 'package:dio/dio.dart';
 
 /// A catalog failure whose retryability is known without exposing the request
@@ -1436,38 +1437,56 @@ class AniListCatalogClient {
   }
 
   Future<List<AnimeSummary>> franchise(int mediaId) async {
+    final order = await franchiseWatchOrder(mediaId);
+    return List.unmodifiable(order.map((entry) => entry.anime));
+  }
+
+  Future<List<FranchiseWatchOrderEntry>> franchiseWatchOrder(
+    int mediaId,
+  ) async {
     final root = await details(mediaId);
-    final values = <int, AnimeSummary>{root.id: root};
-    for (final relation in root.relatedAnime) {
-      values[relation.anime.id] = relation.anime;
-    }
-    final directIds = root.relatedAnime
-        .where(
-          (item) =>
-              const ['SEQUEL', 'PREQUEL', 'PARENT'].contains(item.relationType),
-        )
-        .map((item) => item.anime.id)
-        .take(8);
-    final expanded = await Future.wait(directIds.map(details));
-    for (final anime in expanded) {
-      values[anime.id] = anime;
+    final expanded = <int, AnimeSummary>{root.id: root};
+    final pending = <int>{};
+
+    void queueContinuations(AnimeSummary anime) {
       for (final relation in anime.relatedAnime) {
-        if (const [
-          'SEQUEL',
-          'PREQUEL',
-          'PARENT',
-        ].contains(relation.relationType)) {
-          values[relation.anime.id] = relation.anime;
+        final type = relation.relationType.trim().toUpperCase().replaceAll(
+          '_',
+          ' ',
+        );
+        if (const {'SEQUEL', 'PREQUEL', 'PARENT'}.contains(type) &&
+            !expanded.containsKey(relation.anime.id)) {
+          pending.add(relation.anime.id);
         }
       }
     }
-    final result = values.values.toList();
-    result.sort((a, b) {
-      final year = (a.seasonYear ?? 9999).compareTo(b.seasonYear ?? 9999);
-      if (year != 0) return year;
-      return a.id.compareTo(b.id);
-    });
-    return result;
+
+    queueContinuations(root);
+    // Follow the primary continuation graph far enough to cover long-running
+    // franchises while keeping one Related Series visit bounded and fast.
+    const maximumDetailedTitles = 24;
+    while (pending.isNotEmpty && expanded.length < maximumDetailedTitles) {
+      final remainingCapacity = maximumDetailedTitles - expanded.length;
+      final batchIds = pending.take(remainingCapacity.clamp(1, 8)).toList();
+      pending.removeAll(batchIds);
+      final batch = await Future.wait(batchIds.map(details));
+      for (final anime in batch) {
+        expanded[anime.id] = anime;
+      }
+      // A reciprocal edge can point at another title from the same batch.
+      // Mark the whole batch complete before queuing its next continuation so
+      // that title is not fetched a second time on the following pass.
+      pending.removeAll(expanded.keys);
+      for (final anime in batch) {
+        queueContinuations(anime);
+      }
+      pending.removeAll(expanded.keys);
+    }
+
+    return buildRecommendedFranchiseWatchOrder(
+      rootId: root.id,
+      anime: expanded.values,
+    );
   }
 
   Future<List<AnimeSummary>> _mediaPage(

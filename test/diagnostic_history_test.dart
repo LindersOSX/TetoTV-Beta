@@ -198,12 +198,18 @@ void main() {
               'embedded_marker_count': 0,
               'community_marker_count': 2,
               'community_status': 'found_nearby_runtime',
+              'community_status_class': 'partial_transient_failure',
+              'community_failure_reason': 'connection_timeout',
+              'community_transient_failure_count': 1,
               'community_probe_count': 4,
               'duration_fallback_used': true,
               'segment_kind': 'opening',
               'automatic': true,
               'marker_start_ms': 90000,
               'marker_end_ms': 181013,
+              'seek_verified': true,
+              'seek_attempts': 2,
+              'post_seek_position_ms': 181100,
               'title': 'Private anime title',
               'url': 'https://private.example/video.m3u8',
             })!
@@ -211,12 +217,18 @@ void main() {
 
     expect(sanitized['community_status'], 'found_nearby_runtime');
     expect(sanitized['community_probe_count'], 4);
+    expect(sanitized['community_status_class'], 'partial_transient_failure');
+    expect(sanitized['community_failure_reason'], 'connection_timeout');
+    expect(sanitized['community_transient_failure_count'], 1);
     expect(sanitized['duration_fallback_used'], isTrue);
     expect(sanitized['community_marker_count'], 2);
     expect(sanitized['segment_kind'], 'opening');
     expect(sanitized['automatic'], isTrue);
     expect(sanitized['marker_start_ms'], 90000);
     expect(sanitized['marker_end_ms'], 181013);
+    expect(sanitized['seek_verified'], isTrue);
+    expect(sanitized['seek_attempts'], 2);
+    expect(sanitized['post_seek_position_ms'], 181100);
     expect(sanitized['title'], '[REDACTED]');
     expect(sanitized['url'], '[REDACTED]');
   });

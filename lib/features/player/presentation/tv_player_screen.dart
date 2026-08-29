@@ -740,7 +740,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   Completer<void>? _seekDrainCompleter;
   final Set<Future<void>> _trickplayOperations = <Future<void>>{};
   int _trickplayGeneration = 0;
-  Future<bool>? _skipSeekOperation;
+  Future<VerifiedSkipSeekResult>? _skipSeekOperation;
   bool _skipInProgress = false;
   int _seekBackSeconds = 10;
   int _seekForwardSeconds = 10;
@@ -748,6 +748,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   Color _captionBackgroundColor = Colors.transparent;
   final PlayerSkipAutoFocusGate _skipAutoFocusGate = PlayerSkipAutoFocusGate();
   final Set<String> _consumedSkipSegments = {};
+  final Set<String> _suppressedAutomaticSkipSegments = {};
   final Set<String> _diagnosticActivatedSkipKeys = {};
   bool _allowExit = false;
   bool _confirmingExit = false;
@@ -1597,6 +1598,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   }
 
   void _checkSkips(Duration position) {
+    if (_skipInProgress) return;
     final active = activeSkipSegmentAt(
       segments: _skips,
       position: position,
@@ -1640,7 +1642,9 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
           position: position,
         );
       }
-      if (autoSkip && !_skipInProgress && _consumedSkipSegments.add(key)) {
+      if (autoSkip &&
+          !_skipInProgress &&
+          !_suppressedAutomaticSkipSegments.contains(key)) {
         if (mounted) {
           final skipHadFocus = _skipControlFocus.hasFocus;
           setState(() {
@@ -1702,9 +1706,10 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     if (_skipInProgress ||
         _engineHandoffInProgress ||
         _blockGuestLocalControl(notify: false)) {
-      _consumedSkipSegments.remove(segmentKey);
       return;
     }
+    final expectedStream = _currentStream;
+    final expectedSource = _source;
     _skipInProgress = true;
     final target = safeSkipSegmentTarget(
       requested: segment.end,
@@ -1717,11 +1722,13 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       position: _player.state.position,
       target: target,
     );
+    VerifiedSkipSeekResult? seekResult;
     try {
       final duration = _player.state.duration;
       final wasPlaying = _player.state.playing;
-      final succeeded = await _seekForSkip(target);
-      if (!succeeded) throw StateError('skip seek failed');
+      seekResult = await _seekForSkip(target);
+      if (!seekResult.verified) throw StateError('skip seek failed');
+      _consumedSkipSegments.add(segmentKey);
       _recordSkipSegmentActionDiagnostic(
         status: 'seek_succeeded',
         segment: segment,
@@ -1729,6 +1736,9 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
         position: _player.state.position,
         target: target,
         seekSucceeded: true,
+        postSeekPosition: seekResult.position,
+        seekAttempts: seekResult.attempts,
+        seekVerified: true,
       );
       if (mounted && !_engineHandoffInProgress) {
         _showTrackMessage(
@@ -1746,17 +1756,29 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
         _handlePlaybackCompleted();
       }
     } catch (_) {
-      _recordSkipSegmentActionDiagnostic(
-        status: 'seek_failed',
-        segment: segment,
-        automatic: true,
-        position: _player.state.position,
-        target: target,
-        seekSucceeded: false,
-      );
-      _consumedSkipSegments.remove(segmentKey);
-      if (mounted && !_engineHandoffInProgress) {
-        _showTrackMessage('Could not skip this segment');
+      final sourceStillActive =
+          identical(_currentStream, expectedStream) &&
+          _source == expectedSource;
+      if (sourceStillActive) {
+        // The verified seek already makes a few bounded attempts. If all of
+        // them fail, keep the marker visible for a manual retry instead of
+        // immediately re-entering auto-skip on every position update.
+        _suppressedAutomaticSkipSegments.add(segmentKey);
+        _recordSkipSegmentActionDiagnostic(
+          status: 'seek_failed',
+          segment: segment,
+          automatic: true,
+          position: _player.state.position,
+          target: target,
+          seekSucceeded: false,
+          postSeekPosition: seekResult?.position ?? _player.state.position,
+          seekAttempts: seekResult?.attempts ?? 0,
+          seekVerified: false,
+        );
+        _consumedSkipSegments.remove(segmentKey);
+        if (mounted && !_engineHandoffInProgress) {
+          _showTrackMessage('Could not skip this segment');
+        }
       }
     } finally {
       _skipInProgress = false;
@@ -1791,7 +1813,10 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     });
   }
 
-  void _scheduleSkipSegmentLoad(Duration duration) {
+  void _scheduleSkipSegmentLoad(
+    Duration duration, {
+    Duration delay = const Duration(milliseconds: 1200),
+  }) {
     if (!_skipSegmentFeaturesEnabled) return;
     if (_skipLoadInFlight ||
         _engineHandoffInProgress ||
@@ -1822,7 +1847,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     }
     _skipLoadTimer?.cancel();
     final generation = _skipLoadGeneration;
-    _skipLoadTimer = Timer(const Duration(milliseconds: 1200), () {
+    _skipLoadTimer = Timer(delay, () {
       if (generation != _skipLoadGeneration) return;
       unawaited(_loadSkipSegments(duration, generation: generation));
     });
@@ -1860,12 +1885,19 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     var externalProbeCount = 0;
     var externalDurationFallbackUsed = false;
     var externalRuntimeProbesExhausted = false;
+    var externalTransientFailure = false;
+    var externalTerminalFailure = false;
+    var externalStatusClass = 'not_requested';
+    String? externalFailureReason;
+    var externalTransientFailureCount = 0;
     try {
       final episode = _catalogEpisodeNumber ?? widget.launch.episode.episode;
       final malMediaId = await _resolveSkipMalMediaId();
       final Future<List<SkipSegment>> externalFuture;
       if (malMediaId == null || episode <= 0) {
         externalStatus = 'catalog_mapping_unavailable';
+        externalStatusClass = 'mapping_unavailable';
+        externalFailureReason = 'catalog_mapping_unavailable';
         externalFuture = Future<List<SkipSegment>>.value(const <SkipSegment>[]);
       } else {
         externalStatus = 'requested';
@@ -1877,6 +1909,15 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
               allowRuntimeFallback: _currentStream.isWebStream,
             )
             .then((result) {
+              externalStatusClass = result.status.diagnosticCode;
+              externalFailureReason = result.failureReason?.diagnosticCode;
+              externalTransientFailureCount = result.transientFailureCount;
+              externalTransientFailure =
+                  result.segments.isEmpty && result.hasTransientFailure;
+              externalTerminalFailure =
+                  result.segments.isEmpty &&
+                  result.status == AniSkipLookupStatus.permanentFailure;
+              externalFailed = externalTransientFailure;
               externalProbeCount = result.probeCount;
               externalDurationFallbackUsed = result.usedDurationFallback;
               externalRuntimeProbesExhausted =
@@ -1884,9 +1925,16 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
                   result.segments.isEmpty &&
                   result.runtimeFallbackSearchComplete;
               externalStatus = result.segments.isEmpty
-                  ? externalRuntimeProbesExhausted
-                        ? 'no_match_after_nearby_runtimes'
-                        : 'no_match'
+                  ? switch (result.status) {
+                      AniSkipLookupStatus.transientFailure ||
+                      AniSkipLookupStatus.partialTransientFailure =>
+                        'request_failed',
+                      AniSkipLookupStatus.permanentFailure =>
+                        'request_rejected',
+                      _ when externalRuntimeProbesExhausted =>
+                        'no_match_after_nearby_runtimes',
+                      _ => 'no_match',
+                    }
                   : result.usedDurationFallback
                   ? 'found_nearby_runtime'
                   : 'found';
@@ -1894,6 +1942,10 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
             })
             .catchError((_) {
               externalFailed = true;
+              externalTransientFailure = true;
+              externalStatusClass = 'unexpected_failure';
+              externalFailureReason = 'unexpected_error';
+              externalTransientFailureCount++;
               externalStatus = 'request_failed';
               return const <SkipSegment>[];
             });
@@ -1930,6 +1982,9 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
           currentDuration: currentDuration,
           communityProbeCount: externalProbeCount,
           durationFallbackUsed: externalDurationFallbackUsed,
+          communityStatusClass: externalStatusClass,
+          communityFailureReason: externalFailureReason,
+          communityTransientFailureCount: externalTransientFailureCount,
         );
         if (_skipDurationRestarts++ < 8) {
           _skipLoadAttempts = (_skipLoadAttempts - 1).clamp(0, 4);
@@ -1944,6 +1999,8 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
         externalFailed: externalFailed,
         hasMarkers: _skips.isNotEmpty,
         attempts: _skipLoadAttempts,
+        transientExternalFailure: externalTransientFailure,
+        terminalExternalFailure: externalTerminalFailure,
         runtimeProbesExhausted: externalRuntimeProbesExhausted,
       );
       _recordSkipSegmentDiagnostic(
@@ -1955,6 +2012,9 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
         currentDuration: currentDuration,
         communityProbeCount: externalProbeCount,
         durationFallbackUsed: externalDurationFallbackUsed,
+        communityStatusClass: externalStatusClass,
+        communityFailureReason: externalFailureReason,
+        communityTransientFailureCount: externalTransientFailureCount,
       );
     } catch (_) {
       if (generation != _skipLoadGeneration) return;
@@ -1967,12 +2027,20 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
         externalCount: 0,
         requestedDuration: duration,
         currentDuration: _player.state.duration,
+        communityStatusClass: externalStatusClass,
+        communityFailureReason: externalFailureReason,
+        communityTransientFailureCount: externalTransientFailureCount,
       );
     } finally {
       if (generation == _skipLoadGeneration) {
         _skipLoadInFlight = false;
-        if (mounted && !_skipLoadComplete && _skipLoadAttempts < 4) {
-          _scheduleSkipSegmentLoad(_player.state.duration);
+        final retryDelay = skipSegmentLookupRetryDelay(
+          lookupComplete: _skipLoadComplete,
+          transientExternalFailure: externalTransientFailure,
+          attempts: _skipLoadAttempts,
+        );
+        if (mounted && retryDelay != null) {
+          _scheduleSkipSegmentLoad(_player.state.duration, delay: retryDelay);
         }
       }
     }
@@ -1988,6 +2056,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     _skipDurationRestarts = 0;
     _skipDurationCandidate = null;
     _consumedSkipSegments.clear();
+    _suppressedAutomaticSkipSegments.clear();
     _diagnosticActivatedSkipKeys.clear();
     _skipAutoFocusGate.reset();
     setState(() {
@@ -2010,6 +2079,9 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     required Duration currentDuration,
     int communityProbeCount = 0,
     bool durationFallbackUsed = false,
+    String? communityStatusClass,
+    String? communityFailureReason,
+    int communityTransientFailureCount = 0,
   }) {
     unawaited(
       _database.recordDiagnosticEvent(
@@ -2024,6 +2096,9 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
           'embedded_marker_count': embeddedCount,
           'community_marker_count': externalCount,
           'community_status': externalStatus,
+          'community_status_class': ?communityStatusClass,
+          'community_failure_reason': ?communityFailureReason,
+          'community_transient_failure_count': communityTransientFailureCount,
           'community_probe_count': communityProbeCount,
           'duration_fallback_used': durationFallbackUsed,
           'requested_duration_ms': requestedDuration.inMilliseconds.clamp(
@@ -2046,6 +2121,9 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     required Duration position,
     Duration? target,
     bool? seekSucceeded,
+    Duration? postSeekPosition,
+    int? seekAttempts,
+    bool? seekVerified,
   }) {
     unawaited(
       _database.recordDiagnosticEvent(
@@ -2058,6 +2136,8 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
           'marker_source': segment.source.name,
           'automatic': automatic,
           'seek_succeeded': ?seekSucceeded,
+          'seek_verified': ?seekVerified,
+          'seek_attempts': ?seekAttempts,
           'watch_party_active': _watchPartyActive,
           'guest_controls_locked': _guestControlsLocked,
           'controls_visible': _controlsVisible,
@@ -2079,6 +2159,10 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
             const Duration(hours: 24).inMilliseconds,
           ),
           'target_ms': ?target?.inMilliseconds.clamp(
+            0,
+            const Duration(hours: 24).inMilliseconds,
+          ),
+          'post_seek_position_ms': ?postSeekPosition?.inMilliseconds.clamp(
             0,
             const Duration(hours: 24).inMilliseconds,
           ),
@@ -2640,25 +2724,40 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     }
   }
 
-  Future<bool> _seekForSkip(
+  Future<VerifiedSkipSeekResult> _seekForSkip(
     Duration target, {
     bool supersedeInheritedResume = false,
   }) {
     if (_engineHandoffInProgress || _blockGuestLocalControl(notify: false)) {
-      return Future<bool>.value(false);
+      return Future<VerifiedSkipSeekResult>.value(
+        VerifiedSkipSeekResult(
+          verified: false,
+          position: _player.state.position,
+          attempts: 0,
+        ),
+      );
     }
-    late final Future<bool> operation;
+    final expectedStream = _currentStream;
+    final expectedSource = _source;
+    late final Future<VerifiedSkipSeekResult> operation;
     operation =
         (() async {
-          try {
-            if (supersedeInheritedResume) _pendingInheritedResume = null;
-            _trickplayGeneration++;
-            await _player.seek(target);
+          if (supersedeInheritedResume) _pendingInheritedResume = null;
+          _trickplayGeneration++;
+          final result = await performVerifiedSkipSeek(
+            target: target,
+            seek: _player.seek,
+            currentPosition: () => _player.state.position,
+            isCanceled: () =>
+                _engineHandoffInProgress ||
+                _playerReleasedForHandoff ||
+                !identical(_currentStream, expectedStream) ||
+                _source != expectedSource,
+          );
+          if (result.verified) {
             _recordCommittedSeek(target);
-            return true;
-          } catch (_) {
-            return false;
           }
+          return result;
         })().whenComplete(() {
           if (identical(_skipSeekOperation, operation)) {
             _skipSeekOperation = null;
@@ -5103,13 +5202,14 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     }
     final segment = _activeSkip;
     if (segment == null) return;
+    final expectedStream = _currentStream;
+    final expectedSource = _source;
     _skipInProgress = true;
     final target = safeSkipSegmentTarget(
       requested: segment.end,
       duration: _player.state.duration,
     );
     final segmentKey = skipSegmentKey(segment);
-    _consumedSkipSegments.add(segmentKey);
     _recordSkipSegmentActionDiagnostic(
       status: 'manual_action_started',
       segment: segment,
@@ -5125,14 +5225,13 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       });
       _recoverFocusAfterSkipDismissed(skipHadFocus: skipHadFocus);
     }
+    VerifiedSkipSeekResult? seekResult;
     try {
       final duration = _player.state.duration;
       final wasPlaying = _player.state.playing;
-      final succeeded = await _seekForSkip(
-        target,
-        supersedeInheritedResume: true,
-      );
-      if (!succeeded) throw StateError('skip seek failed');
+      seekResult = await _seekForSkip(target, supersedeInheritedResume: true);
+      if (!seekResult.verified) throw StateError('skip seek failed');
+      _consumedSkipSegments.add(segmentKey);
       _recordSkipSegmentActionDiagnostic(
         status: 'seek_succeeded',
         segment: segment,
@@ -5140,6 +5239,9 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
         position: _player.state.position,
         target: target,
         seekSucceeded: true,
+        postSeekPosition: seekResult.position,
+        seekAttempts: seekResult.attempts,
+        seekVerified: true,
       );
       if (mounted && !_engineHandoffInProgress) {
         _showTrackMessage(segment.actionLabel.replaceFirst('Skip', 'Skipped'));
@@ -5153,17 +5255,25 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
         _handlePlaybackCompleted();
       }
     } catch (_) {
-      _recordSkipSegmentActionDiagnostic(
-        status: 'seek_failed',
-        segment: segment,
-        automatic: false,
-        position: _player.state.position,
-        target: target,
-        seekSucceeded: false,
-      );
-      _consumedSkipSegments.remove(segmentKey);
-      if (mounted && !_engineHandoffInProgress) {
-        _showTrackMessage('Could not skip this segment');
+      final sourceStillActive =
+          identical(_currentStream, expectedStream) &&
+          _source == expectedSource;
+      if (sourceStillActive) {
+        _recordSkipSegmentActionDiagnostic(
+          status: 'seek_failed',
+          segment: segment,
+          automatic: false,
+          position: _player.state.position,
+          target: target,
+          seekSucceeded: false,
+          postSeekPosition: seekResult?.position ?? _player.state.position,
+          seekAttempts: seekResult?.attempts ?? 0,
+          seekVerified: false,
+        );
+        _consumedSkipSegments.remove(segmentKey);
+        if (mounted && !_engineHandoffInProgress) {
+          _showTrackMessage('Could not skip this segment');
+        }
       }
     } finally {
       _skipInProgress = false;

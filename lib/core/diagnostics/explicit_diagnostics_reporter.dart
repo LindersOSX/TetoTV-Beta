@@ -368,7 +368,7 @@ String buildRedactedDiagnosticsText({
   if (text.length <= maximumExplicitDiagnosticsCharacters) return text;
 
   // Preserve valid, parseable JSON if an unusual device produces an enormous
-  // capability list. The normal path above retains all 100 database events.
+  // capability list. The normal path above retains all 300 database events.
   // This fallback keeps representative data from every section and declares
   // the reduction instead of cutting through a JSON value.
   final compactTruncation = _SnapshotTruncation();

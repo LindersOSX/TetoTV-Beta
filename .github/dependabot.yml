@@ -11,9 +11,24 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    ignore:
+      # 2.1.0-39 raises the native Android minimum to API 28. TetoTV retains
+      # Fire OS 6 / Android 7 support and intentionally pins the API-24 build.
+      - dependency-name: org.libtorrent4j:libtorrent4j
+        versions: [">= 2.1.0-39"]
+      - dependency-name: org.libtorrent4j:libtorrent4j-android-arm
+        versions: [">= 2.1.0-39"]
+      - dependency-name: org.libtorrent4j:libtorrent4j-android-arm64
+        versions: [">= 2.1.0-39"]
 
   - package-ecosystem: github-actions
     directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: npm
+    directory: /tool/addon_runtime
     schedule:
       interval: weekly
     open-pull-requests-limit: 5

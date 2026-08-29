@@ -8,6 +8,7 @@ import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
 import 'package:anime_tv/features/discord/application/discord_account_link_resolver.dart';
 import 'package:anime_tv/features/discord/application/discord_presence_controller.dart';
+import 'package:anime_tv/features/discord/presentation/discord_minimum_age_confirmation_dialog.dart';
 import 'package:anime_tv/features/marketplace/application/marketplace_controller.dart';
 import 'package:anime_tv/features/marketplace/presentation/source_pairing_dialog.dart';
 import 'package:anime_tv/features/settings/application/all_debrid_settings_controller.dart';
@@ -892,7 +893,13 @@ class _AccountsStep extends ConsumerWidget {
                       if (flow == DiscordAccountLinkFlow.deviceQr) {
                         await context.push('/pair/discord');
                       } else {
-                        await discordController.linkAccount();
+                        final confirmation =
+                            await showDiscordMinimumAgeConfirmationDialog(
+                              context,
+                            );
+                        if (confirmation != null) {
+                          await discordController.linkAccount(confirmation);
+                        }
                       }
                     },
             ),

@@ -15,6 +15,10 @@ param(
 
     [string]$ReleaseNotesPath = "",
 
+    [string]$NativeLicenseReviewPath = "",
+
+    [string]$NativeLicenseReviewSignaturePath = "",
+
     [switch]$Publish
 )
 
@@ -190,66 +194,203 @@ function Assert-RemoteTagMatchesCommit(
     }
 }
 
-function Remove-GitHubReleaseAfterFailure(
+function Remove-GitHubDraftAfterFailure(
     [string]$Repository,
     [string]$Tag
 ) {
     try {
+        $release = Get-GitHubRelease $Repository $Tag -AllowMissing
+        if ($null -eq $release) { return }
+        if (-not [bool]$release.draft) {
+            Write-Warning "Release $Repository $Tag is already published. It was not deleted; published immutable releases require investigation instead of automated rollback."
+            return
+        }
         $arguments = @("release", "delete", $Tag, "--repo", $Repository, "--yes")
         Invoke-GitHubCli -Arguments $arguments | Out-Null
     }
     catch {
-        Write-Warning "Could not roll back $Repository release $Tag. Remove it manually before retrying."
+        Write-Warning "Could not roll back draft $Repository release $Tag. Remove the draft manually before retrying."
     }
 }
 
-function Assert-PublishedRelease {
+function Get-GitHubApiJson([string]$Path) {
+    $result = Invoke-GitHubCli -Arguments @("api", $Path)
+    try {
+        return ($result.Output -join "`n") | ConvertFrom-Json
+    }
+    catch {
+        throw "GitHub returned invalid JSON for API path $Path."
+    }
+}
+
+function Assert-GitHubReleaseAuthorityBoundary(
+    [string]$Repository,
+    [string]$ExpectedOwner,
+    [string]$SignedReviewAttestationPath
+) {
+    try {
+        $signedReview = Get-Content -Raw -LiteralPath $SignedReviewAttestationPath |
+            ConvertFrom-Json
+    }
+    catch {
+        throw "Could not read the already verified signed release-authority review evidence."
+    }
+    $appInventory = $signedReview.githubAppInventory
+    if ($null -eq $appInventory) {
+        throw "The signed release-authority review is missing its GitHub App inventory."
+    }
+    $appInventoryProperties = @($appInventory.PSObject.Properties.Name | Sort-Object)
+    $expectedAppInventoryProperties = @(
+        "checkedAtUtc",
+        "installations",
+        "inventoryComplete",
+        "repository",
+        "reviewMethod"
+    ) | Sort-Object
+    if (
+        $appInventoryProperties.Count -ne $expectedAppInventoryProperties.Count -or
+        (Compare-Object $expectedAppInventoryProperties $appInventoryProperties) -or
+        [string]$appInventory.repository -cne $Repository -or
+        $appInventory.inventoryComplete -ne $true -or
+        @($appInventory.installations).Count -ne 0
+    ) {
+        throw "The signed release-authority review must contain a complete empty GitHub App inventory for $Repository."
+    }
+
+    $metadata = Get-GitHubApiJson "repos/$Repository"
+    if (
+        [string]$metadata.owner.login -cne $ExpectedOwner -or
+        [string]$metadata.owner.type -cne "User" -or
+        [string]$metadata.default_branch -cne "main" -or
+        [string]$metadata.visibility -cne "public" -or
+        [bool]$metadata.archived
+    ) {
+        throw "The GitHub repository owner, visibility, default branch, or archive state does not match the reviewed release boundary."
+    }
+
+    $collaborators = @(Get-GitHubApiJson "repos/$Repository/collaborators?affiliation=all&per_page=100")
+    if (
+        $collaborators.Count -ne 1 -or
+        [string]$collaborators[0].login -cne $ExpectedOwner -or
+        -not [bool]$collaborators[0].permissions.admin
+    ) {
+        throw "Publication requires the audited single-owner authority boundary; unexpected collaborators are present."
+    }
+    if (@(Get-GitHubApiJson "repos/$Repository/invitations").Count -ne 0) {
+        throw "Publication is blocked while repository collaborator invitations are pending."
+    }
+    $writeDeployKeys = @(
+        @(Get-GitHubApiJson "repos/$Repository/keys") |
+            Where-Object { -not [bool]$_.read_only }
+    )
+    if ($writeDeployKeys.Count -ne 0) {
+        throw "Publication is blocked while a write-capable repository deploy key exists."
+    }
+
+    $immutableReleases = Get-GitHubApiJson "repos/$Repository/immutable-releases"
+    if (-not [bool]$immutableReleases.enabled) {
+        throw "GitHub immutable future releases must be enabled before publication."
+    }
+    $actionsPolicy = Get-GitHubApiJson "repos/$Repository/actions/permissions"
+    if (
+        -not [bool]$actionsPolicy.enabled -or
+        [string]$actionsPolicy.allowed_actions -cne "selected" -or
+        -not [bool]$actionsPolicy.sha_pinning_required
+    ) {
+        throw "GitHub Actions must allow only selected actions and require full commit-SHA pins before publication."
+    }
+    $workflowPermissions = Get-GitHubApiJson "repos/$Repository/actions/permissions/workflow"
+    if (
+        [string]$workflowPermissions.default_workflow_permissions -cne "read" -or
+        [bool]$workflowPermissions.can_approve_pull_request_reviews
+    ) {
+        throw "GitHub workflow tokens must remain read-only by default and must not approve pull requests."
+    }
+}
+
+function Assert-GitHubRelease {
     param(
         [string]$Repository,
         [string]$Tag,
         [string]$Title,
         [string]$ExpectedTagCommit,
         [object[]]$ExpectedAssets,
-        [string]$BuildCode
+        [string]$BuildCode,
+        [string]$NativeLicenseReviewSha256,
+        [bool]$ExpectedDraft
     )
 
     $release = Get-GitHubRelease $Repository $Tag
     if (
         $release.tag_name -cne $Tag -or
         $release.name -cne $Title -or
-        [bool]$release.draft -or
+        [bool]$release.draft -ne $ExpectedDraft -or
         [bool]$release.prerelease
     ) {
-        throw "Published release metadata verification failed for $Repository $Tag."
+        $state = if ($ExpectedDraft) { "draft" } else { "published" }
+        throw "$state release metadata verification failed for $Repository $Tag."
     }
     $buildMarker = "<!-- tetotv-android-version-code: $BuildCode -->"
     if (@([regex]::Matches([string]$release.body, [regex]::Escape($buildMarker))).Count -ne 1) {
-        throw "Published release notes do not contain the exact Android build-code marker once."
+        throw "Release notes do not contain the exact Android build-code marker once."
+    }
+    $reviewMarker = "<!-- tetotv-native-license-review-sha256: $NativeLicenseReviewSha256 -->"
+    if (@([regex]::Matches([string]$release.body, [regex]::Escape($reviewMarker))).Count -ne 1) {
+        throw "Release notes do not contain the exact native-license review digest marker once."
+    }
+    if (@([regex]::Matches([string]$release.body, '(?im)<!--\s*tetotv-native-license-review-sha256:')).Count -ne 1) {
+        throw "Release notes contain an unexpected native-license review marker."
+    }
+    $attestationEvidenceMatches = @([regex]::Matches(
+        [string]$release.body,
+        '(?im)<!--\s*tetotv-native-license-review-attestation-base64:\s*(?<data>[A-Za-z0-9+/]+={0,2})\s*-->'
+    ))
+    if (
+        $attestationEvidenceMatches.Count -ne 1 -or
+        @([regex]::Matches(
+            [string]$release.body,
+            '(?im)<!--\s*tetotv-native-license-review-attestation-base64:'
+        )).Count -ne 1
+    ) {
+        throw "Release notes must contain exactly one encoded native-license review attestation."
+    }
+    $signatureEvidenceMatches = @([regex]::Matches(
+        [string]$release.body,
+        '(?im)<!--\s*tetotv-native-license-review-signature-base64:\s*(?<data>[A-Za-z0-9+/]+={0,2})\s*-->'
+    ))
+    if (
+        $signatureEvidenceMatches.Count -ne 1 -or
+        @([regex]::Matches(
+            [string]$release.body,
+            '(?im)<!--\s*tetotv-native-license-review-signature-base64:'
+        )).Count -ne 1
+    ) {
+        throw "Release notes must contain exactly one encoded native-license review signature."
     }
     foreach ($expected in $ExpectedAssets) {
         if (-not ([string]$release.body).Contains($expected.Name)) {
-            throw "Published release notes do not name the asset '$($expected.Name)'."
+            throw "Release notes do not name the asset '$($expected.Name)'."
         }
     }
 
     $hostedAssets = @($release.assets)
     if ($hostedAssets.Count -ne $ExpectedAssets.Count) {
-        throw "Published release must contain exactly $($ExpectedAssets.Count) assets."
+        throw "Release must contain exactly $($ExpectedAssets.Count) assets."
     }
     foreach ($expected in $ExpectedAssets) {
         $matches = @($hostedAssets | Where-Object name -CEQ $expected.Name)
         if ($matches.Count -ne 1) {
-            throw "Published release is missing the unique asset '$($expected.Name)'."
+            throw "Release is missing the unique asset '$($expected.Name)'."
         }
         $hosted = $matches[0]
         if ([long]$hosted.size -ne [long]$expected.Size) {
-            throw "Published asset size mismatch: $($expected.Name)."
+            throw "Hosted asset size mismatch: $($expected.Name)."
         }
         if (
             [string]$hosted.digest -and
             [string]$hosted.digest -cne "sha256:$($expected.Sha256)"
         ) {
-            throw "Published asset digest mismatch: $($expected.Name)."
+            throw "Hosted asset digest mismatch: $($expected.Name)."
         }
     }
 
@@ -265,13 +406,59 @@ function Assert-PublishedRelease {
             ) | Out-Null
             $downloadedPath = Join-Path $downloadRoot $expected.Name
             if (-not (Test-Path -LiteralPath $downloadedPath -PathType Leaf)) {
-                throw "GitHub did not return the published asset '$($expected.Name)'."
+                throw "GitHub did not return the hosted asset '$($expected.Name)'."
             }
             $downloadedHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $downloadedPath).Hash.ToLowerInvariant()
             if ($downloadedHash -cne $expected.Sha256) {
-                throw "Downloaded published asset digest mismatch: $($expected.Name)."
+                throw "Downloaded hosted asset digest mismatch: $($expected.Name)."
             }
         }
+
+        $downloadedNotesPath = Join-Path $downloadRoot "RELEASE_NOTES.md"
+        [IO.File]::WriteAllText(
+            $downloadedNotesPath,
+            [string]$release.body,
+            [Text.UTF8Encoding]::new($false)
+        )
+        $downloadedAttestationPath = Join-Path $downloadRoot "native-license-review.json"
+        $downloadedSignaturePath = Join-Path $downloadRoot "native-license-review.json.sig"
+        try {
+            [IO.File]::WriteAllBytes(
+                $downloadedAttestationPath,
+                [Convert]::FromBase64String(
+                    $attestationEvidenceMatches[0].Groups['data'].Value
+                )
+            )
+            [IO.File]::WriteAllBytes(
+                $downloadedSignaturePath,
+                [Convert]::FromBase64String(
+                    $signatureEvidenceMatches[0].Groups['data'].Value
+                )
+            )
+        }
+        catch {
+            throw "Release notes contain invalid encoded native-license review evidence."
+        }
+        $downloadedAttestationSha256 = (
+            Get-FileHash -Algorithm SHA256 -LiteralPath $downloadedAttestationPath
+        ).Hash.ToLowerInvariant()
+        if ($downloadedAttestationSha256 -cne $NativeLicenseReviewSha256) {
+            throw "Encoded native-license review attestation does not match its digest marker."
+        }
+        & (Join-Path $PSScriptRoot "verify_native_license_review.ps1") `
+            -AttestationPath $downloadedAttestationPath `
+            -SignaturePath $downloadedSignaturePath `
+            -ReleaseTag $Tag `
+            -GitCommit $ExpectedTagCommit `
+            -ApkPath (Join-Path $downloadRoot ([IO.Path]::GetFileName($resolvedApk))) `
+            -NativeSourcePath (Join-Path $downloadRoot ([IO.Path]::GetFileName($resolvedNativeSource)))
+        & (Join-Path $PSScriptRoot "verify_release_payloads.ps1") `
+            -Channel $Channel `
+            -ApkPath (Join-Path $downloadRoot ([IO.Path]::GetFileName($resolvedApk))) `
+            -NativeSourcePath (Join-Path $downloadRoot ([IO.Path]::GetFileName($resolvedNativeSource))) `
+            -ChecksumsPath (Join-Path $downloadRoot ([IO.Path]::GetFileName($resolvedChecksums))) `
+            -ReleaseNotesPath $downloadedNotesPath `
+            -NativeLicenseReviewSha256 $NativeLicenseReviewSha256
     }
     finally {
         $safeTempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
@@ -283,8 +470,13 @@ function Assert-PublishedRelease {
 
     Assert-RemoteTagMatchesCommit $Repository $Tag $ExpectedTagCommit
     $latest = Get-LatestGitHubRelease $Repository
-    if ($null -eq $latest -or $latest.tag_name -cne $Tag) {
-        throw "$Repository does not expose $Tag through /releases/latest."
+    if ($ExpectedDraft) {
+        if ($null -ne $latest -and $latest.tag_name -ceq $Tag) {
+            throw "Draft $Tag must not be exposed through /releases/latest."
+        }
+    }
+    elseif ($null -eq $latest -or $latest.tag_name -cne $Tag) {
+        throw "$Repository does not expose published $Tag through /releases/latest."
     }
 }
 
@@ -300,10 +492,14 @@ foreach ($asset in $expectedAssets) {
 
 if (-not $Publish) {
     Write-Host "Dry run only. No GitHub changes were made."
+    Write-Host "Publication additionally requires an SSH-signed, allowlisted native-license review attestation bound to the final tag, commit, APK, source ZIP, manifest, and native notice."
     exit 0
 }
 if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
     throw "GitHub CLI (gh) is required to publish."
+}
+if ([string]::IsNullOrWhiteSpace($NativeLicenseReviewPath)) {
+    throw "-Publish requires -NativeLicenseReviewPath. Publication fails closed without a signed qualified-reviewer attestation."
 }
 
 Push-Location $repositoryRoot
@@ -316,6 +512,31 @@ try {
         throw "Could not resolve local HEAD."
     }
     Assert-TagMatchesHead $repository $releaseTag $headCommit
+    $reviewArguments = @{
+        AttestationPath = $NativeLicenseReviewPath
+        ReleaseTag = $releaseTag
+        GitCommit = $headCommit
+        ApkPath = $resolvedApk
+        NativeSourcePath = $resolvedNativeSource
+    }
+    if (-not [string]::IsNullOrWhiteSpace($NativeLicenseReviewSignaturePath)) {
+        $reviewArguments.SignaturePath = $NativeLicenseReviewSignaturePath
+    }
+    & (Join-Path $PSScriptRoot "verify_native_license_review.ps1") @reviewArguments
+    $resolvedReview = (Resolve-Path -LiteralPath $NativeLicenseReviewPath).Path
+    Assert-GitHubReleaseAuthorityBoundary `
+        -Repository $repository `
+        -ExpectedOwner "LindersOSX" `
+        -SignedReviewAttestationPath $resolvedReview
+    $resolvedReviewSignature = if (
+        [string]::IsNullOrWhiteSpace($NativeLicenseReviewSignaturePath)
+    ) {
+        (Resolve-Path -LiteralPath "$resolvedReview.sig").Path
+    }
+    else {
+        (Resolve-Path -LiteralPath $NativeLicenseReviewSignaturePath).Path
+    }
+    $nativeLicenseReviewSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $resolvedReview).Hash.ToLowerInvariant()
 
     if ($null -ne (Get-GitHubRelease $repository $releaseTag -AllowMissing)) {
         throw "Release $releaseTag already exists in $repository."
@@ -345,7 +566,34 @@ try {
         }
     }
 
-    $releaseCreated = $false
+    $notesText = [IO.File]::ReadAllText($resolvedNotes)
+    if ($notesText -match '(?im)<!--\s*tetotv-native-license-review-(?:sha256|attestation-base64|signature-base64):') {
+        throw "The source release-notes file must not contain native-license review markers; the publisher adds verified evidence."
+    }
+    $reviewMarker = "<!-- tetotv-native-license-review-sha256: $nativeLicenseReviewSha256 -->"
+    $reviewAttestationBase64 = [Convert]::ToBase64String(
+        [IO.File]::ReadAllBytes($resolvedReview)
+    )
+    $reviewSignatureBase64 = [Convert]::ToBase64String(
+        [IO.File]::ReadAllBytes($resolvedReviewSignature)
+    )
+    $reviewAttestationMarker = "<!-- tetotv-native-license-review-attestation-base64: $reviewAttestationBase64 -->"
+    $reviewSignatureMarker = "<!-- tetotv-native-license-review-signature-base64: $reviewSignatureBase64 -->"
+    $releaseNotesWithReview = (
+        $notesText.TrimEnd() + "`n`n" +
+        $reviewMarker + "`n" +
+        $reviewAttestationMarker + "`n" +
+        $reviewSignatureMarker + "`n"
+    )
+    $releaseTempRoot = Join-Path ([IO.Path]::GetTempPath()) ("tetotv-release-notes-" + [Guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $releaseTempRoot | Out-Null
+    $verifiedNotesPath = Join-Path $releaseTempRoot "RELEASE_NOTES.md"
+    [IO.File]::WriteAllText(
+        $verifiedNotesPath,
+        $releaseNotesWithReview,
+        [Text.UTF8Encoding]::new($false)
+    )
+
     try {
         Invoke-GitHubCli -Arguments @(
             "release", "create", $releaseTag,
@@ -353,26 +601,56 @@ try {
             $resolvedNativeSource,
             $resolvedChecksums,
             "--repo", $repository,
-            "--latest",
+            "--draft",
+            "--latest=false",
             "--title", $releaseTitle,
-            "--notes-file", $resolvedNotes,
+            "--notes-file", $verifiedNotesPath,
             "--verify-tag"
         ) | Out-Null
-        $releaseCreated = $true
-
-        Assert-PublishedRelease `
+        # This is the publication boundary: re-download every private draft
+        # asset and run the complete APK/native/source/checksum verifier before
+        # the release becomes visible. No asset can bypass the draft gate.
+        Assert-GitHubRelease `
             -Repository $repository `
             -Tag $releaseTag `
             -Title $releaseTitle `
             -ExpectedTagCommit $headCommit `
             -ExpectedAssets $expectedAssets `
-            -BuildCode $buildCode
+            -BuildCode $buildCode `
+            -NativeLicenseReviewSha256 $nativeLicenseReviewSha256 `
+            -ExpectedDraft $true
+
+        Invoke-GitHubCli -Arguments @(
+            "release", "edit", $releaseTag,
+            "--repo", $repository,
+            "--draft=false",
+            "--latest",
+            "--verify-tag"
+        ) | Out-Null
+
+        Assert-GitHubRelease `
+            -Repository $repository `
+            -Tag $releaseTag `
+            -Title $releaseTitle `
+            -ExpectedTagCommit $headCommit `
+            -ExpectedAssets $expectedAssets `
+            -BuildCode $buildCode `
+            -NativeLicenseReviewSha256 $nativeLicenseReviewSha256 `
+            -ExpectedDraft $false
     }
     catch {
-        if ($releaseCreated) {
-            Remove-GitHubReleaseAfterFailure -Repository $repository -Tag $releaseTag
-        }
+        # `gh release create` creates the draft before uploading each asset.
+        # Query actual GitHub state on every failure so a partial upload cannot
+        # leave a stale draft merely because the CLI command never returned.
+        Remove-GitHubDraftAfterFailure -Repository $repository -Tag $releaseTag
         throw
+    }
+    finally {
+        $safeTempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
+        $safeReleaseTempRoot = [IO.Path]::GetFullPath($releaseTempRoot)
+        if ($safeReleaseTempRoot.StartsWith($safeTempRoot, [StringComparison]::OrdinalIgnoreCase)) {
+            Remove-Item -LiteralPath $safeReleaseTempRoot -Recurse -Force -ErrorAction SilentlyContinue
+        }
     }
 }
 finally {

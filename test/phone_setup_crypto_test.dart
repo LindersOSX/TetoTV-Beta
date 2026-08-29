@@ -36,7 +36,7 @@ void main() {
         const pairingId = 'pairing_1234567890';
         final cleartext = utf8.encode(
           jsonEncode({
-            'version': 2,
+            'version': 3,
             'preferences': {
               'preferred_audio': 'sub',
               'title_language': 'romaji',
@@ -59,6 +59,7 @@ void main() {
                 'token_type': 1,
                 'expires_at': 2000000000,
                 'scopes': ['openid', 'sdk.social_layer_presence'],
+                'minimum_age_confirmation': {'version': 1, 'confirmed': true},
               },
             },
           }),
@@ -81,7 +82,7 @@ void main() {
         expect(bundle.preferences.debridProvider, 'torbox');
         expect(bundle.repositoryUrls, ['https://example.test/repository.json']);
         expect(bundle.manifestUrls, ['https://example.test/manifest.json']);
-        expect(bundle.protocolVersion, 2);
+        expect(bundle.protocolVersion, 3);
         expect(bundle.credentials.tracking?.accessToken, 'tracker-secret');
         expect(bundle.credentials.debrid?.apiKey, 'debrid-secret');
         expect(bundle.credentials.discord?.accessToken, 'discord-access');

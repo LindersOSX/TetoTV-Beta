@@ -6,6 +6,7 @@ import 'package:anime_tv/core/widgets/copyable_qr_interaction.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/features/discord/application/discord_device_pairing_controller.dart';
 import 'package:anime_tv/features/discord/domain/discord_device_pairing.dart';
+import 'package:anime_tv/features/discord/domain/discord_minimum_age_confirmation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -27,6 +28,7 @@ class _DiscordDevicePairingScreenState
   final _statusActionFocus = FocusNode(
     debugLabel: 'discord-pairing.status-action',
   );
+  DiscordMinimumAgeConfirmation? _minimumAgeConfirmation;
 
   @override
   void initState() {
@@ -34,7 +36,9 @@ class _DiscordDevicePairingScreenState
     WidgetsBinding.instance.addObserver(this);
     _controller = ref.read(discordDevicePairingControllerProvider.notifier);
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) unawaited(_controller.start());
+      if (mounted && _statusActionFocus.canRequestFocus) {
+        _statusActionFocus.requestFocus();
+      }
     });
   }
 
@@ -60,6 +64,17 @@ class _DiscordDevicePairingScreenState
   void _close() {
     _controller.stop();
     context.pop();
+  }
+
+  void _confirmAndStart() {
+    const confirmation = DiscordMinimumAgeConfirmation.current();
+    setState(() => _minimumAgeConfirmation = confirmation);
+    unawaited(_controller.start(confirmation));
+  }
+
+  void _restart() {
+    final confirmation = _minimumAgeConfirmation;
+    if (confirmation != null) unawaited(_controller.start(confirmation));
   }
 
   @override
@@ -117,17 +132,75 @@ class _DiscordDevicePairingScreenState
               const SizedBox(height: 22),
               Expanded(
                 child: Center(
-                  child: _DiscordPairingContent(
-                    state: state,
-                    onRestart: _controller.start,
-                    onDone: _close,
-                    actionFocusNode: _statusActionFocus,
-                  ),
+                  child: _minimumAgeConfirmation == null
+                      ? _MinimumAgeConfirmationCard(
+                          onConfirm: _confirmAndStart,
+                          actionFocusNode: _statusActionFocus,
+                        )
+                      : _DiscordPairingContent(
+                          state: state,
+                          onRestart: _restart,
+                          onDone: _close,
+                          actionFocusNode: _statusActionFocus,
+                        ),
                 ),
               ),
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _MinimumAgeConfirmationCard extends StatelessWidget {
+  const _MinimumAgeConfirmationCard({
+    required this.onConfirm,
+    required this.actionFocusNode,
+  });
+
+  final VoidCallback onConfirm;
+  final FocusNode actionFocusNode;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      constraints: const BoxConstraints(maxWidth: 720),
+      padding: EdgeInsets.all(context.isCompactWidth ? 20 : 32),
+      decoration: BoxDecoration(
+        color: context.appPalette.surface,
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: Colors.white.withValues(alpha: .08)),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            Icons.verified_user_outlined,
+            size: context.isCompactWidth ? 48 : 64,
+            color: context.appPalette.accentBright,
+          ),
+          const SizedBox(height: 18),
+          Text(
+            'Discord age requirement',
+            textAlign: TextAlign.center,
+            style: Theme.of(context).textTheme.headlineSmall,
+          ),
+          const SizedBox(height: 12),
+          Text(
+            'I confirm I meet Discord\'s minimum age of at least 13, or the older minimum required where I live.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: context.appPalette.mutedText),
+          ),
+          const SizedBox(height: 24),
+          _PairingAction(
+            key: const ValueKey('discord-age-confirm'),
+            focusNode: actionFocusNode,
+            icon: Icons.check_rounded,
+            label: 'I meet the requirement',
+            onPressed: onConfirm,
+          ),
+        ],
       ),
     );
   }

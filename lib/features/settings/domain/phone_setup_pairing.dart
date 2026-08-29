@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'package:anime_tv/features/discord/domain/discord_minimum_age_confirmation.dart';
+
 enum PhoneSetupPairingStatus {
   pending,
   bound,
@@ -194,7 +196,7 @@ class PhoneSetupCredentials {
   /// Provider-specific protocol-v2 debrid credentials.
   final PhoneSetupDebridCredentials? debrid;
 
-  /// Complete protocol-v2 Discord OAuth credentials.
+  /// Complete protocol-v3 Discord OAuth credentials and eligibility marker.
   final PhoneSetupDiscordCredentials? discord;
 
   bool get hasTrackingToken =>
@@ -249,6 +251,7 @@ class PhoneSetupDiscordCredentials {
     required this.tokenType,
     required this.expiresAt,
     required this.scopes,
+    required this.minimumAgeConfirmation,
   });
 
   final String accessToken;
@@ -256,6 +259,7 @@ class PhoneSetupDiscordCredentials {
   final int tokenType;
   final DateTime expiresAt;
   final List<String> scopes;
+  final DiscordMinimumAgeConfirmation minimumAgeConfirmation;
 }
 
 class PhoneSetupBundle {
@@ -287,7 +291,8 @@ class PhoneSetupBundle {
       throw const FormatException('The phone setup version is not supported.');
     }
     final versionValue = decoded['version'];
-    if (versionValue is! int || (versionValue != 1 && versionValue != 2)) {
+    if (versionValue is! int ||
+        (versionValue != 1 && versionValue != 2 && versionValue != 3)) {
       throw const FormatException('The phone setup version is not supported.');
     }
     final protocolVersion = versionValue;
@@ -392,7 +397,11 @@ class PhoneSetupBundle {
     );
     final parsedCredentials = protocolVersion == 1
         ? _parseLegacyCredentials(credentials, parsedPreferences)
-        : _parseVersionTwoCredentials(credentials, parsedPreferences);
+        : _parseStructuredCredentials(
+            credentials,
+            parsedPreferences,
+            requireDiscordConfirmation: protocolVersion >= 3,
+          );
     return PhoneSetupBundle(
       protocolVersion: protocolVersion,
       preferences: parsedPreferences,
@@ -425,13 +434,17 @@ PhoneSetupCredentials _parseLegacyCredentials(
   );
 }
 
-PhoneSetupCredentials _parseVersionTwoCredentials(
+PhoneSetupCredentials _parseStructuredCredentials(
   Map<String, dynamic> credentials,
-  PhoneSetupPreferences preferences,
-) {
+  PhoneSetupPreferences preferences, {
+  required bool requireDiscordConfirmation,
+}) {
   final tracking = _parseTrackingCredentials(credentials['tracking']);
   final debrid = _parseDebridCredentials(credentials['debrid']);
-  final discord = _parseDiscordCredentials(credentials['discord']);
+  final discord = _parseDiscordCredentials(
+    credentials['discord'],
+    requireConfirmation: requireDiscordConfirmation,
+  );
   if (tracking != null &&
       preferences.trackingProvider != null &&
       preferences.trackingProvider != tracking.provider) {
@@ -546,8 +559,16 @@ PhoneSetupDebridCredentials? _parseDebridCredentials(Object? value) {
   );
 }
 
-PhoneSetupDiscordCredentials? _parseDiscordCredentials(Object? value) {
+PhoneSetupDiscordCredentials? _parseDiscordCredentials(
+  Object? value, {
+  required bool requireConfirmation,
+}) {
   if (value == null) return null;
+  if (!requireConfirmation) {
+    throw const FormatException(
+      'Discord phone setup requires protocol version 3 and a minimum-age confirmation.',
+    );
+  }
   final data = _stringMap(value, 'Discord credentials');
   const keys = {
     'access_token',
@@ -555,6 +576,7 @@ PhoneSetupDiscordCredentials? _parseDiscordCredentials(Object? value) {
     'token_type',
     'expires_at',
     'scopes',
+    'minimum_age_confirmation',
   };
   _rejectUnknownKeys(data, keys, 'Discord credentials');
   final tokenType = data['token_type'];
@@ -574,6 +596,9 @@ PhoneSetupDiscordCredentials? _parseDiscordCredentials(Object? value) {
         _epochSeconds(data['expires_at']) ??
         (throw const FormatException('The Discord token expiry is invalid.')),
     scopes: scopes,
+    minimumAgeConfirmation: DiscordMinimumAgeConfirmation.parseExact(
+      data['minimum_age_confirmation'],
+    ),
   );
 }
 

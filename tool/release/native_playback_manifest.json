@@ -156,7 +156,7 @@
     {"path": "assets/legal/native/LIBSRTP_LICENSE.txt", "sha256": "8e19d42a1eec9561f3f347253ddf2e385c55f392f025bb0fd41b88dbf38db5ae"},
     {"path": "assets/legal/native/PLOG_LICENSE.txt", "sha256": "e4d01796524cbc13b1571a1f0914823c6a23b316ba039e7014f47a4eef7fd4c3"},
     {"path": "assets/legal/native/DIRECT_TORRENT_NATIVE_NOTICE.txt", "sha256": "93f19999d6f3b7492cbbe2584865470fe22e6f52a94e0d993b2d8dceba49daac"},
-    {"path": "assets/legal/native/NATIVE_PLAYBACK_NOTICE.txt"}
+    {"path": "assets/legal/native/NATIVE_PLAYBACK_NOTICE.txt", "sha256": "9ea7144b3fd11e3ddcef26074d0d05876990e43d4fe731c447e9a7fa5d5e1a8b"}
   ],
   "knownProvenanceLimits": [
     "The libmpv v1.1.7 build scripts identify several dependencies by mutable Git tag rather than immutable commit and do not record source-archive SHA-256 values.",

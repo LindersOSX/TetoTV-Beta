@@ -59,9 +59,9 @@ void main() {
       },
     );
 
-    test('accepts complete version-two linked account credentials', () {
+    test('accepts complete version-three linked account credentials', () {
       final bundle = _parse({
-        'version': 2,
+        'version': 3,
         'preferences': {
           'tracking_provider': 'myanimelist',
           'debrid_provider': 'realdebrid',
@@ -90,11 +90,12 @@ void main() {
             'token_type': 1,
             'expires_at': 2000000000,
             'scopes': ['openid', 'sdk.social_layer_presence'],
+            'minimum_age_confirmation': {'version': 1, 'confirmed': true},
           },
         },
       });
 
-      expect(bundle.protocolVersion, 2);
+      expect(bundle.protocolVersion, 3);
       expect(bundle.credentials.tracking?.provider, 'myanimelist');
       expect(bundle.credentials.tracking?.refreshToken, 'mal-refresh-token');
       expect(bundle.credentials.tracking?.expiresAt, isNotNull);
@@ -105,13 +106,17 @@ void main() {
         'openid',
         'sdk.social_layer_presence',
       ]);
+      expect(
+        bundle.credentials.discord?.minimumAgeConfirmation.confirmed,
+        isTrue,
+      );
     });
 
     test(
       'accepts the production AniList, Real-Debrid, and Discord bundle with empty sources',
       () {
         final bundle = _parse({
-          'version': 2,
+          'version': 3,
           'preferences': {
             'preferred_audio': 'sub',
             'title_language': 'english',
@@ -157,11 +162,12 @@ void main() {
               'token_type': 1,
               'expires_at': 2000000000,
               'scopes': ['openid', 'sdk.social_layer_presence'],
+              'minimum_age_confirmation': {'version': 1, 'confirmed': true},
             },
           },
         });
 
-        expect(bundle.protocolVersion, 2);
+        expect(bundle.protocolVersion, 3);
         expect(bundle.repositoryUrls, isEmpty);
         expect(bundle.manifestUrls, isEmpty);
         expect(bundle.credentials.tracking?.provider, 'anilist');
@@ -227,7 +233,7 @@ void main() {
           },
         },
         {
-          'version': 2,
+          'version': 3,
           'credentials': {
             'discord': {
               'access_token': 'access-token',
@@ -235,11 +241,12 @@ void main() {
               'token_type': 1,
               'expires_at': 2000000000,
               'scopes': ['openid'],
+              'minimum_age_confirmation': {'version': 1, 'confirmed': true},
             },
           },
         },
         {
-          'version': 2,
+          'version': 3,
           'credentials': {
             'discord': {
               'access_token': 'access-token',
@@ -247,6 +254,7 @@ void main() {
               'token_type': 1,
               'expires_at': 2000000000,
               'scopes': ['openid', 'sdk.social_layer_presence'],
+              'minimum_age_confirmation': {'version': 1, 'confirmed': true},
               'password': 'never-accepted',
             },
           },
@@ -265,6 +273,50 @@ void main() {
         },
       ]) {
         expect(() => _parse(payload), throwsFormatException);
+      }
+    });
+
+    test('rejects legacy Discord imports without the version-three gate', () {
+      expect(
+        () => _parse({
+          'version': 2,
+          'credentials': {
+            'discord': {
+              'access_token': 'discord-access-token',
+              'refresh_token': 'discord-refresh-token',
+              'token_type': 1,
+              'expires_at': 2000000000,
+              'scopes': ['openid', 'sdk.social_layer_presence'],
+            },
+          },
+        }),
+        throwsFormatException,
+      );
+    });
+
+    test('requires the exact accepted Discord confirmation object', () {
+      for (final confirmation in <Object?>[
+        null,
+        {'version': 1, 'confirmed': false},
+        {'version': 2, 'confirmed': true},
+        {'version': 1, 'confirmed': true, 'age': 18},
+      ]) {
+        expect(
+          () => _parse({
+            'version': 3,
+            'credentials': {
+              'discord': {
+                'access_token': 'discord-access-token',
+                'refresh_token': 'discord-refresh-token',
+                'token_type': 1,
+                'expires_at': 2000000000,
+                'scopes': ['openid', 'sdk.social_layer_presence'],
+                'minimum_age_confirmation': ?confirmation,
+              },
+            },
+          }),
+          throwsFormatException,
+        );
       }
     });
 
@@ -335,7 +387,7 @@ void main() {
         () => PhoneSetupBundle.parse(const [0xff, 0xfe]),
         throwsFormatException,
       );
-      expect(() => _parse({'version': 3}), throwsFormatException);
+      expect(() => _parse({'version': 4}), throwsFormatException);
       expect(
         () => PhoneSetupBundle.parse(List<int>.filled(64 * 1024 + 1, 0x20)),
         throwsFormatException,

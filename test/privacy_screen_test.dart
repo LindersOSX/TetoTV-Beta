@@ -26,6 +26,17 @@ void main() {
       bundledPolicy.replaceAll('\r\n', '\n'),
       contains('private-server\nheaders'),
     );
+    expect(bundledPolicy, contains("Discord's minimum age of at least 13"));
+    expect(
+      bundledPolicy,
+      matches(
+        RegExp(
+          r"does not ask for or\s+retain the user's birth date",
+          multiLine: true,
+        ),
+      ),
+    );
+    expect(bundledPolicy, contains('versioned `confirmed: true` marker'));
 
     expect(find.text('Privacy & data'), findsOneWidget);
     expect(find.textContaining('TetoTV privacy disclosure'), findsOneWidget);

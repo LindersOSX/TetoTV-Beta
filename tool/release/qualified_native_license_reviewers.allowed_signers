@@ -1,0 +1,8 @@
+# Fail-closed by design: no native-license reviewer key is currently trusted.
+#
+# After independently confirming a qualified reviewer's identity and public key,
+# add one OpenSSH allowed-signers entry in this exact form (without the leading #):
+# reviewer@example.com namespaces="tetotv-native-license-review" ssh-ed25519 AAAA... reviewer-key-label
+#
+# Each principal must be an exact reviewer identity; do not use wildcard
+# principals. Keep private signing keys outside this repository.

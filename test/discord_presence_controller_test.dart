@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/features/discord/application/discord_presence_controller.dart';
+import 'package:anime_tv/features/discord/domain/discord_minimum_age_confirmation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -9,6 +10,7 @@ import 'support/failure_injecting_secure_storage.dart';
 
 void main() {
   const storage = FlutterSecureStorage();
+  const confirmation = DiscordMinimumAgeConfirmation.current();
 
   setUp(() => FlutterSecureStorage.setMockInitialValues({}));
   tearDown(() => FlutterSecureStorage.setMockInitialValues({}));
@@ -39,7 +41,7 @@ void main() {
       addTearDown(controller.dispose);
       await _settle();
 
-      await controller.linkAccount();
+      await controller.linkAccount(confirmation);
 
       expect(controller.state.linked, isTrue);
       expect(controller.state.enabled, isTrue);
@@ -54,8 +56,47 @@ void main() {
         await storage.read(key: 'discord_rich_presence_refresh_token'),
         'refresh-token',
       );
+      expect(
+        await storage.read(
+          key: 'discord_rich_presence_minimum_age_confirmation_v1',
+        ),
+        '{"version":1,"confirmed":true}',
+      );
     },
   );
+
+  test('new Discord links reject an unaccepted eligibility marker', () async {
+    const rejected = DiscordMinimumAgeConfirmation(
+      version: 1,
+      confirmed: false,
+    );
+    final platform = _FakeDiscordPlatform();
+    final controller = DiscordPresenceController(storage, platform);
+    addTearDown(controller.dispose);
+    await _settle();
+
+    await expectLater(
+      controller.linkAccount(rejected),
+      throwsA(isA<StateError>()),
+    );
+    await expectLater(
+      controller.acceptLinkedToken(platform.deviceToken, rejected),
+      throwsA(isA<StateError>()),
+    );
+
+    expect(platform.authenticateCalls, 0);
+    expect(platform.connectCalls, 0);
+    expect(
+      await storage.read(key: 'discord_rich_presence_access_token'),
+      isNull,
+    );
+    expect(
+      await storage.read(
+        key: 'discord_rich_presence_minimum_age_confirmation_v1',
+      ),
+      isNull,
+    );
+  });
 
   test('concurrent link requests start authentication only once', () async {
     final platform = _FakeDiscordPlatform();
@@ -65,8 +106,8 @@ void main() {
     addTearDown(controller.dispose);
     await _settle();
 
-    final firstLink = controller.linkAccount();
-    final secondLink = controller.linkAccount();
+    final firstLink = controller.linkAccount(confirmation);
+    final secondLink = controller.linkAccount(confirmation);
 
     expect(controller.state.busy, isTrue);
     expect(platform.authenticateCalls, 1);
@@ -87,7 +128,7 @@ void main() {
     addTearDown(controller.dispose);
     await _settle();
 
-    await controller.linkAccount();
+    await controller.linkAccount(confirmation);
 
     expect(platform.authenticateCalls, 1);
     expect(platform.connectCalls, 0);
@@ -102,6 +143,12 @@ void main() {
     );
     expect(
       await storage.read(key: 'discord_rich_presence_refresh_token'),
+      isNull,
+    );
+    expect(
+      await storage.read(
+        key: 'discord_rich_presence_minimum_age_confirmation_v1',
+      ),
       isNull,
     );
   });
@@ -120,7 +167,7 @@ void main() {
       addTearDown(controller.dispose);
       await _settle();
 
-      await controller.linkAccount();
+      await controller.linkAccount(confirmation);
 
       expect(platform.authenticateCalls, 1);
       expect(platform.cancelAuthenticationCalls, 1);
@@ -135,7 +182,7 @@ void main() {
 
       final retryAuthentication = Completer<DiscordTokenBundle>();
       platform.authenticationCompleter = retryAuthentication;
-      final retry = controller.linkAccount();
+      final retry = controller.linkAccount(confirmation);
 
       expect(platform.authenticateCalls, 2);
       expect(controller.state.busy, isTrue);
@@ -184,7 +231,7 @@ void main() {
       );
       await _settle();
 
-      final linking = controller.linkAccount();
+      final linking = controller.linkAccount(confirmation);
       expect(controller.state.busy, isTrue);
       expect(platform.authenticateCalls, 1);
 
@@ -205,7 +252,7 @@ void main() {
         isNull,
       );
 
-      await controller.linkAccount();
+      await controller.linkAccount(confirmation);
       expect(platform.authenticateCalls, 1);
     },
   );
@@ -218,7 +265,7 @@ void main() {
       addTearDown(controller.dispose);
       await _settle();
 
-      await controller.linkAccount();
+      await controller.linkAccount(confirmation);
 
       expect(controller.state.linked, isTrue);
       expect(controller.state.enabled, isTrue);
@@ -249,7 +296,7 @@ void main() {
       final controller = DiscordPresenceController(storage, platform);
       addTearDown(controller.dispose);
       await _settle();
-      await controller.linkAccount();
+      await controller.linkAccount(confirmation);
 
       await controller.setEnabled(false);
       expect(controller.state.linked, isTrue);
@@ -268,7 +315,7 @@ void main() {
     final controller = DiscordPresenceController(storage, platform);
     addTearDown(controller.dispose);
     await _settle();
-    await controller.linkAccount();
+    await controller.linkAccount(confirmation);
 
     await controller.unlinkAccount();
 
@@ -307,6 +354,18 @@ void main() {
     expect(platform.connectCalls, 1);
     expect(platform.lastConnected?.accessToken, 'access-token');
     expect(controller.state.connected, isTrue);
+    expect(
+      await storage.read(
+        key: 'discord_rich_presence_minimum_age_confirmation_v1',
+      ),
+      isNull,
+      reason: 'legacy linked sessions must keep reconnecting without migration',
+    );
+
+    await controller.setEnabled(false);
+    await controller.setEnabled(true);
+    expect(platform.authenticateCalls, 0);
+    expect(controller.state.connected, isTrue);
   });
 
   test(
@@ -317,7 +376,7 @@ void main() {
       addTearDown(controller.dispose);
       await _settle();
 
-      await controller.acceptLinkedToken(platform.deviceToken);
+      await controller.acceptLinkedToken(platform.deviceToken, confirmation);
 
       expect(platform.authenticateCalls, 0);
       expect(platform.connectCalls, 1);
@@ -338,7 +397,7 @@ void main() {
     addTearDown(controller.dispose);
     await _settle();
 
-    await controller.importLinkedToken(platform.deviceToken);
+    await controller.importLinkedToken(platform.deviceToken, confirmation);
 
     expect(controller.state.linked, isTrue);
     expect(controller.state.enabled, isTrue);
@@ -359,7 +418,7 @@ void main() {
       addTearDown(controller.dispose);
       await _settle();
 
-      final linking = controller.linkAccount();
+      final linking = controller.linkAccount(confirmation);
       await _settle();
       expect(controller.state.busy, isTrue);
       await expectLater(
@@ -397,6 +456,7 @@ void main() {
       final snapshot = await controller.snapshotForImport();
       await controller.importLinkedToken(
         platform.deviceToken,
+        confirmation,
         connectAfterStore: false,
       );
       await controller.restoreImportSnapshot(snapshot);
@@ -435,6 +495,7 @@ void main() {
       final snapshot = await controller.snapshotForImport();
       await controller.importLinkedToken(
         platform.deviceToken,
+        confirmation,
         connectAfterStore: false,
       );
       platform.connectFailuresRemaining = 1;
@@ -471,10 +532,12 @@ void main() {
       final controller = DiscordPresenceController(failingStorage, platform);
       addTearDown(controller.dispose);
       await _settle();
-      failingStorage.failNextWrite('discord_rich_presence_token_type');
+      failingStorage.failNextWrite(
+        'discord_rich_presence_minimum_age_confirmation_v1',
+      );
 
       await expectLater(
-        controller.importLinkedToken(platform.deviceToken),
+        controller.importLinkedToken(platform.deviceToken, confirmation),
         throwsA(isA<StateError>()),
       );
 
@@ -496,6 +559,11 @@ void main() {
         'openid sdk.social_layer_presence',
       );
       expect(failingStorage.values['discord_rich_presence_enabled'], 'true');
+      expect(
+        failingStorage
+            .values['discord_rich_presence_minimum_age_confirmation_v1'],
+        isNull,
+      );
       expect(controller.state.linked, isTrue);
       expect(controller.state.enabled, isTrue);
     },
@@ -510,12 +578,13 @@ void main() {
       await _settle();
 
       await expectLater(
-        controller.acceptLinkedToken(platform.token),
+        controller.acceptLinkedToken(platform.token, confirmation),
         throwsA(isA<StateError>()),
       );
       await expectLater(
         controller.acceptLinkedToken(
           platform.deviceTokenWithScopes('openid identify'),
+          confirmation,
         ),
         throwsA(isA<StateError>()),
       );
@@ -538,7 +607,7 @@ void main() {
       addTearDown(controller.dispose);
       await _settle();
 
-      await controller.acceptLinkedToken(platform.deviceToken);
+      await controller.acceptLinkedToken(platform.deviceToken, confirmation);
 
       expect(controller.state.linked, isTrue);
       expect(controller.state.enabled, isTrue);
@@ -566,7 +635,7 @@ void main() {
       addTearDown(controller.dispose);
       await _settle();
 
-      await controller.acceptLinkedToken(platform.deviceToken);
+      await controller.acceptLinkedToken(platform.deviceToken, confirmation);
 
       expect(controller.state.linked, isTrue);
       expect(controller.state.enabled, isTrue);
@@ -595,9 +664,12 @@ void main() {
     addTearDown(controller.dispose);
     await _settle();
 
-    final accepting = controller.acceptLinkedToken(platform.deviceToken);
+    final accepting = controller.acceptLinkedToken(
+      platform.deviceToken,
+      confirmation,
+    );
     await expectLater(
-      controller.acceptLinkedToken(platform.deviceToken),
+      controller.acceptLinkedToken(platform.deviceToken, confirmation),
       throwsA(isA<StateError>()),
     );
     await accepting;

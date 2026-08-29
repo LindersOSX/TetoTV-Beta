@@ -94,6 +94,15 @@ every applicable corresponding-source obligation. Do not publish if they do
 not, or if a revision, binary hash, license asset, or source snapshot is
 missing.
 
+The review is enforced by the SSH-signed, artifact-bound gate documented in
+[`NATIVE_LICENSE_RELEASE_REVIEW.md`](NATIVE_LICENSE_RELEASE_REVIEW.md).
+`-Publish` requires a fresh approval signed by an exact principal in the
+checked-in qualified-reviewer allowlist. The repository starts with no active
+reviewer key, so publication intentionally fails closed until a project
+administrator independently verifies and commits a qualified reviewer's public
+key. The signed record and its validation are review evidence, not legal advice
+or a claim of compliance.
+
 The checked-in full GPL/LGPL texts are conservative. Component copyright and
 license notices inside the staged sources determine the actual license of each
 file. A qualified release reviewer must resolve the documented upstream

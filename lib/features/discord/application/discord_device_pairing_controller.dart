@@ -4,10 +4,14 @@ import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/features/discord/application/discord_presence_controller.dart';
 import 'package:anime_tv/features/discord/data/discord_device_pairing_client.dart';
 import 'package:anime_tv/features/discord/domain/discord_device_pairing.dart';
+import 'package:anime_tv/features/discord/domain/discord_minimum_age_confirmation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 typedef DiscordDeviceTokenAcceptor =
-    Future<void> Function(DiscordTokenBundle token);
+    Future<void> Function(
+      DiscordTokenBundle token,
+      DiscordMinimumAgeConfirmation minimumAgeConfirmation,
+    );
 
 final discordDevicePairingControllerProvider =
     StateNotifierProvider.autoDispose<
@@ -37,13 +41,34 @@ class DiscordDevicePairingController
   int? _pollingGeneration;
   int _consecutivePollFailures = 0;
   bool _tokenDelivered = false;
+  DiscordMinimumAgeConfirmation? _minimumAgeConfirmation;
 
-  Future<void> start() async {
+  Future<void> start(
+    DiscordMinimumAgeConfirmation minimumAgeConfirmation,
+  ) async {
+    if (!minimumAgeConfirmation.isCurrentAndAccepted) {
+      final previousSession = state.session;
+      _generation++;
+      _pollTimer?.cancel();
+      _pollingGeneration = null;
+      _effectivePollInterval = null;
+      _minimumAgeConfirmation = null;
+      if (previousSession != null && !_tokenDelivered) {
+        unawaited(_cancelBestEffort(previousSession));
+      }
+      state = const DiscordDevicePairingState(
+        stage: DiscordDevicePairingStage.failed,
+        message:
+            'Confirm that you meet Discord\'s minimum age requirement before linking.',
+      );
+      return;
+    }
     final previousSession = state.session;
     final generation = ++_generation;
     _pollTimer?.cancel();
     _pollingGeneration = null;
     _effectivePollInterval = null;
+    _minimumAgeConfirmation = minimumAgeConfirmation;
     _consecutivePollFailures = 0;
     _tokenDelivered = false;
     if (previousSession != null) {
@@ -119,7 +144,14 @@ class DiscordDevicePairingController
           // Mark delivery before crossing the async storage boundary. A late
           // timer or resumed lifecycle callback must never store/connect twice.
           _tokenDelivered = true;
-          await _acceptToken(token);
+          final minimumAgeConfirmation = _minimumAgeConfirmation;
+          if (minimumAgeConfirmation == null ||
+              !minimumAgeConfirmation.isCurrentAndAccepted) {
+            throw StateError(
+              'Discord minimum-age confirmation is no longer valid.',
+            );
+          }
+          await _acceptToken(token, minimumAgeConfirmation);
           if (!mounted || generation != _generation) return;
           state = DiscordDevicePairingState(
             stage: DiscordDevicePairingStage.completed,
@@ -169,6 +201,7 @@ class DiscordDevicePairingController
     _pollTimer?.cancel();
     _pollingGeneration = null;
     _effectivePollInterval = null;
+    _minimumAgeConfirmation = null;
     if (session != null && !_tokenDelivered) {
       unawaited(_cancelBestEffort(session));
     }
@@ -195,6 +228,7 @@ class DiscordDevicePairingController
     _pollTimer?.cancel();
     _pollingGeneration = null;
     _effectivePollInterval = null;
+    _minimumAgeConfirmation = null;
     if (session != null && !_tokenDelivered) {
       unawaited(_cancelBestEffort(session));
     }

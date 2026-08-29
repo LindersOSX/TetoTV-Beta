@@ -4,9 +4,34 @@ import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/features/discord/application/discord_device_pairing_controller.dart';
 import 'package:anime_tv/features/discord/data/discord_device_pairing_client.dart';
 import 'package:anime_tv/features/discord/domain/discord_device_pairing.dart';
+import 'package:anime_tv/features/discord/domain/discord_minimum_age_confirmation.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  const confirmation = DiscordMinimumAgeConfirmation.current();
+
+  test(
+    'does not create a device code before age eligibility is confirmed',
+    () async {
+      final client = _FakePairingApi(
+        session: _session(pollInterval: const Duration(hours: 1)),
+      );
+      final controller = DiscordDevicePairingController(
+        client,
+        (_, _) async {},
+      );
+      addTearDown(controller.dispose);
+
+      await controller.start(
+        const DiscordMinimumAgeConfirmation(version: 1, confirmed: false),
+      );
+
+      expect(client.createCalls, 0);
+      expect(controller.state.stage, DiscordDevicePairingStage.failed);
+      expect(controller.state.message, contains('minimum age'));
+    },
+  );
+
   test(
     'slow_down persists for pending polls instead of reverting cadence',
     () async {
@@ -26,11 +51,11 @@ void main() {
       );
       final controller = DiscordDevicePairingController(
         client,
-        (_) async {},
+        (_, _) async {},
         slowDownPenalty: const Duration(milliseconds: 80),
       );
       addTearDown(controller.dispose);
-      await controller.start();
+      await controller.start(confirmation);
 
       await controller.pollNow();
       await Future<void>.delayed(const Duration(milliseconds: 50));
@@ -54,9 +79,9 @@ void main() {
       session: _session(pollInterval: const Duration(hours: 1)),
       results: [StateError(secret), StateError(secret), StateError(secret)],
     );
-    final controller = DiscordDevicePairingController(client, (_) async {});
+    final controller = DiscordDevicePairingController(client, (_, _) async {});
     addTearDown(controller.dispose);
-    await controller.start();
+    await controller.start(confirmation);
 
     await controller.pollNow();
     expect(controller.state.stage, DiscordDevicePairingStage.waiting);
@@ -76,11 +101,11 @@ void main() {
       pollCompleter: pendingPoll,
     );
     var accepted = 0;
-    final controller = DiscordDevicePairingController(client, (_) async {
+    final controller = DiscordDevicePairingController(client, (_, _) async {
       accepted++;
     });
     addTearDown(controller.dispose);
-    await controller.start();
+    await controller.start(confirmation);
     final polling = controller.pollNow();
 
     controller.stop();
@@ -108,10 +133,10 @@ void main() {
         pollCompleter: pendingPoll,
       );
       var accepted = 0;
-      final controller = DiscordDevicePairingController(client, (_) async {
+      final controller = DiscordDevicePairingController(client, (_, _) async {
         accepted++;
       });
-      await controller.start();
+      await controller.start(confirmation);
       final polling = controller.pollNow();
 
       controller.dispose();
@@ -138,11 +163,11 @@ void main() {
         pollCompleter: pendingPoll,
       );
       var accepted = 0;
-      final controller = DiscordDevicePairingController(client, (_) async {
+      final controller = DiscordDevicePairingController(client, (_, _) async {
         accepted++;
       });
       addTearDown(controller.dispose);
-      await controller.start();
+      await controller.start(confirmation);
 
       final first = controller.pollNow();
       final second = controller.pollNow();
@@ -172,11 +197,15 @@ class _FakePairingApi implements DiscordDevicePairingApi {
   final List<Object> results;
   final Completer<DiscordDevicePairingPollResult>? pollCompleter;
   int pollCalls = 0;
+  int createCalls = 0;
   int cancelCalls = 0;
   final List<DateTime> pollTimes = [];
 
   @override
-  Future<DiscordDevicePairingSession> createSession() async => session;
+  Future<DiscordDevicePairingSession> createSession() async {
+    createCalls++;
+    return session;
+  }
 
   @override
   Future<DiscordDevicePairingPollResult> poll(

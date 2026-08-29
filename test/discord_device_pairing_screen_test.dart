@@ -72,7 +72,7 @@ void main() {
     final harness = await _pumpPairingRoute(
       tester,
       api: api,
-      acceptToken: (_) async => acceptedTokens++,
+      acceptToken: (_, _) async => acceptedTokens++,
     );
 
     await harness.controller.pollNow();
@@ -155,7 +155,7 @@ Future<_PairingHarness> _pumpPairingRoute(
 
   final controller = DiscordDevicePairingController(
     api,
-    acceptToken ?? (_) async {},
+    acceptToken ?? (_, _) async {},
   );
   final router = GoRouter(
     routes: [
@@ -193,6 +193,13 @@ Future<_PairingHarness> _pumpPairingRoute(
   );
   await tester.pumpAndSettle();
   await tester.tap(find.text('OPEN'));
+  await tester.pumpAndSettle();
+  expect(find.text('Discord age requirement'), findsOneWidget);
+  expect(
+    find.textContaining('older minimum required where I live'),
+    findsOneWidget,
+  );
+  await tester.tap(find.byKey(const ValueKey('discord-age-confirm')));
   await tester.pumpAndSettle();
   return _PairingHarness(controller: controller);
 }

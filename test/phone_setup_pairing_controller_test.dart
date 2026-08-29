@@ -5,6 +5,7 @@ import 'package:anime_tv/core/preferences/playback_audio_preference.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/features/auth/application/pairing_controller.dart';
 import 'package:anime_tv/features/discord/application/discord_presence_controller.dart';
+import 'package:anime_tv/features/discord/domain/discord_minimum_age_confirmation.dart';
 import 'package:anime_tv/features/marketplace/domain/source_pairing.dart';
 import 'package:anime_tv/features/settings/application/all_debrid_settings_controller.dart';
 import 'package:anime_tv/features/settings/application/display_preferences_controller.dart';
@@ -122,11 +123,11 @@ void main() {
     );
 
     test(
-      'version-two Discord authorization imports without a second link',
+      'version-three Discord authorization imports without a second link',
       () async {
         final expiresAt = DateTime.now().toUtc().add(const Duration(days: 7));
         final bundle = PhoneSetupBundle(
-          protocolVersion: 2,
+          protocolVersion: 3,
           preferences: const PhoneSetupPreferences(linkDiscord: true),
           repositoryUrls: const [],
           manifestUrls: const [],
@@ -137,6 +138,8 @@ void main() {
               tokenType: 1,
               expiresAt: expiresAt,
               scopes: const ['openid', 'sdk.social_layer_presence'],
+              minimumAgeConfirmation:
+                  const DiscordMinimumAgeConfirmation.current(),
             ),
           ),
         );
@@ -301,7 +304,7 @@ void main() {
             .load();
         final result = await importer.importer.apply(
           PhoneSetupBundle(
-            protocolVersion: 2,
+            protocolVersion: 3,
             preferences: const PhoneSetupPreferences(
               debridProvider: 'realdebrid',
               linkDiscord: true,
@@ -323,6 +326,8 @@ void main() {
                 tokenType: 1,
                 expiresAt: DateTime.now().toUtc().add(const Duration(days: 7)),
                 scopes: const ['openid', 'sdk.social_layer_presence'],
+                minimumAgeConfirmation:
+                    const DiscordMinimumAgeConfirmation.current(),
               ),
             ),
           ),

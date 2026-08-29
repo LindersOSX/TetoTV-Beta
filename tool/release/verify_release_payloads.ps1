@@ -14,7 +14,11 @@ param(
     [string]$ChecksumsPath,
 
     [Parameter(Mandatory = $true)]
-    [string]$ReleaseNotesPath
+    [string]$ReleaseNotesPath,
+
+    [string]$ResolvedBinaryDirectory = "",
+
+    [string]$NativeLicenseReviewSha256 = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -81,8 +85,14 @@ if ($checksumsInfo.Length -le 0) {
 & (Join-Path $PSScriptRoot "verify_release_apk.ps1") `
     -ApkPath $resolvedApk `
     -Channel $Channel
-& (Join-Path $PSScriptRoot "verify_native_redistribution.ps1") `
-    -BundlePath $resolvedNativeSource
+$nativeVerificationArguments = @{
+    BundlePath = $resolvedNativeSource
+    RequireResolvedBinaries = $true
+}
+if (-not [string]::IsNullOrWhiteSpace($ResolvedBinaryDirectory)) {
+    $nativeVerificationArguments.ResolvedBinaryDirectory = $ResolvedBinaryDirectory
+}
+& (Join-Path $PSScriptRoot "verify_native_redistribution.ps1") @nativeVerificationArguments
 
 $apkSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $resolvedApk).Hash.ToLowerInvariant()
 $sourceSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $resolvedNativeSource).Hash.ToLowerInvariant()
@@ -108,6 +118,18 @@ if ($buildCodeMatches.Count -ne 1) {
 foreach ($assetName in @($expectedApkName, $expectedNativeSourceName, $expectedChecksumsName)) {
     if (-not $releaseNotesText.Contains($assetName)) {
         throw "Release notes must name the exact release asset '$assetName'."
+    }
+}
+if (-not [string]::IsNullOrWhiteSpace($NativeLicenseReviewSha256)) {
+    if ($NativeLicenseReviewSha256 -notmatch '^[0-9a-f]{64}$') {
+        throw "NativeLicenseReviewSha256 must be a lowercase SHA-256 digest."
+    }
+    $reviewMarker = "<!-- tetotv-native-license-review-sha256: $NativeLicenseReviewSha256 -->"
+    if (@([regex]::Matches($releaseNotesText, [regex]::Escape($reviewMarker))).Count -ne 1) {
+        throw "Release notes must contain the exact native-license review digest marker once."
+    }
+    if (@([regex]::Matches($releaseNotesText, '(?im)<!--\s*tetotv-native-license-review-sha256:')).Count -ne 1) {
+        throw "Release notes must not contain another native-license review marker."
     }
 }
 

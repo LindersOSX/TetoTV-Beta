@@ -69,6 +69,16 @@ void main() {
     );
     expect(manifest['releaseReadyWithoutStagedBundle'], isFalse);
     expect(manifest['knownProvenanceLimits'], isNotEmpty);
+    expect(
+      (manifest['licenseAssets'] as List<dynamic>)
+          .cast<Map<String, dynamic>>()
+          .singleWhere(
+            (item) =>
+                item['path'] ==
+                'assets/legal/native/NATIVE_PLAYBACK_NOTICE.txt',
+          )['sha256'],
+      '9ea7144b3fd11e3ddcef26074d0d05876990e43d4fe731c447e9a7fa5d5e1a8b',
+    );
   });
 
   test('full conservative GPL and LGPL texts are shipped and hash pinned', () {
@@ -84,9 +94,8 @@ void main() {
       expect(file.existsSync(), isTrue, reason: path);
       expect(pubspec, contains('- $path'), reason: '$path must ship in APK');
       final expectedHash = license['sha256'] as String?;
-      if (expectedHash != null) {
-        expect(sha256.convert(file.readAsBytesSync()).toString(), expectedHash);
-      }
+      expect(expectedHash, isNotNull, reason: '$path must be hash pinned');
+      expect(sha256.convert(file.readAsBytesSync()).toString(), expectedHash);
     }
 
     expect(

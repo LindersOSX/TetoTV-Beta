@@ -1,25 +1,65 @@
-# TetoTV
+<p align="center">
+  <img src="assets/branding/tetotv_tv_banner.png" alt="TetoTV logo" width="720">
+</p>
 
-**TetoTV — An open-source media library, playback, and tracking client for Android TV, Google TV, Fire TV, and Android**
+<h1 align="center">TetoTV Beta</h1>
 
-TetoTV is a TV-first client for discovering titles, tracking progress, and playing media from services and libraries configured by the user. It runs as a standalone Android app with no companion server to install or maintain.
+<p align="center">
+  <strong>A TV-first media library, playback, and tracking client for Android TV, Google TV, Fire TV, tablets, and phones.</strong>
+</p>
 
-TetoTV does not host, index, supply, recommend, or endorse media sources, provider extensions, marketplace catalogs, or credentials. No third-party catalog or provider is bundled or preconfigured. Users must have authorization to access, play, and download any media they connect.
+<p align="center">
+  <a href="https://github.com/LindersOSX/TetoTV-Beta/releases/latest"><img src="https://img.shields.io/github/v/release/LindersOSX/TetoTV-Beta?display_name=tag&amp;label=Beta&amp;color=e52b50" alt="Latest Beta release"></a>
+  <a href="https://github.com/LindersOSX/TetoTV-Beta/actions/workflows/source-policy.yml"><img src="https://github.com/LindersOSX/TetoTV-Beta/actions/workflows/source-policy.yml/badge.svg?branch=main" alt="Source policy status"></a>
+  <img src="https://img.shields.io/badge/Android-7.0%2B-3DDC84?logo=android&amp;logoColor=white" alt="Android 7.0 or newer">
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/LindersOSX/TetoTV-Beta?color=6f42c1" alt="MIT license"></a>
+</p>
 
-[Public source and status](https://github.com/LindersOSX/TetoTV-Public) · [Download the current Beta](https://github.com/LindersOSX/TetoTV-Beta/releases/latest) · [Join Discord](https://discord.gg/juC6k7d4WY) · [Watch on YouTube](https://www.youtube.com/@TetoTVApp)
+<p align="center">
+  <a href="https://github.com/LindersOSX/TetoTV-Beta/releases/latest"><strong>Download Beta</strong></a>
+  · <a href="docs/RELEASE_NOTES_2.0.44.md">What's new</a>
+  · <a href="https://github.com/LindersOSX/TetoTV-Beta/issues/new">Report an issue</a>
+  · <a href="https://discord.gg/juC6k7d4WY">Discord</a>
+  · <a href="https://www.youtube.com/@TetoTVApp">YouTube</a>
+</p>
 
-This repository contains the complete TetoTV source code as well as the Beta release channel. It is not just an APK or beta-download repository.
+> [!IMPORTANT]
+> TetoTV is a user-configured media client. It does not host, index, supply, recommend, or endorse media sources, provider extensions, marketplace catalogs, or credentials. No third-party catalog or provider is bundled or preconfigured. Viewers must be authorized to access, play, and download the media they connect.
 
-## Feature summary
+TetoTV runs directly on the Android device with no companion server required for normal browsing and playback. This repository contains the complete application source and the Beta release channel—not only APK downloads.
 
-- Remote-first layouts for Android TV, Google TV, and Fire TV, with support for both ARM32 and ARM64 devices.
-- Optional AniList and MyAnimeList list/progress sync, plus local profiles for viewers who do not use either tracker.
-- A generic compatibility layer for user-supplied HTTPS extensions, with bounded runtime and network controls, health results, and staged troubleshooting.
-- Offline episode and whole-season downloads from sources the user is authorized to download, with an integrated Download Manager.
-- Optional user-configured Debrid and direct peer-to-peer integrations; direct peer-to-peer use is off by default.
-- MPV playback with subtitles, audio-track selection, playback speed, intro/outro skipping when timing data is available, and TV-friendly seeking.
-- Optional Plex and Jellyfin integrations that add personal-library episodes to the same source picker.
-- Watch Party rooms with synchronized playback and host controls.
+## See TetoTV in action
+
+<p align="center">
+  <img src="docs/screenshots/home-tv.png" alt="TetoTV home screen on a television" width="100%">
+</p>
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/secure-phone-setup-tv.png" alt="Secure phone setup screen"></td>
+    <td width="50%"><img src="docs/screenshots/download-manager-tv.png" alt="TetoTV Download Manager"></td>
+  </tr>
+</table>
+
+<p align="center">
+  <img src="docs/screenshots/player-hud-tv.png" alt="TetoTV player controls" width="100%">
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/home-phone.png" alt="TetoTV phone layout with bottom navigation" width="300">
+</p>
+
+<p align="center"><em>These captures use synthetic demo titles and local fixtures. The displayed QR points to a reserved <code>.example</code> domain and is not a live pairing session.</em></p>
+
+## Why TetoTV
+
+| Designed for the couch | Comfortable on phones |
+| --- | --- |
+| Predictable D-pad movement, visible focus, TV-scale layouts, and a persistent navigation path. | The same theme and features adapt to bottom navigation in portrait and a left rail in landscape. |
+| **Bring your own services** | **Profiles and tracking** |
+| Clean installs contain no source catalog. Viewers connect only accounts, personal libraries, and HTTPS extensions they choose. | Local profiles work without an account; optional AniList and MyAnimeList connections can sync lists and progress. |
+| **Integrated playback** | **Downloads and Watch Party** |
+| MPV playback includes audio and subtitle selection, speed controls, TV-friendly seeking, and optional skip timing. | Authorized media can be saved for offline playback, while synchronized rooms provide host-controlled viewing. |
 
 ## Feature matrix
 
@@ -44,11 +84,8 @@ This repository contains the complete TetoTV source code as well as the Beta rel
 | Public | Not published | Source and release-readiness documents are available, but no Public APK is currently offered |
 | Beta | [2.0.44](docs/RELEASE_NOTES_2.0.44.md) | Testing current fixes and source-built native playback before a separately reviewed Public release |
 
-Beta 2.0.44 uses the repository's explicit unreviewed-Beta exception: its
-native-library and corresponding-source material did not receive independent
-license review. Automated integrity and source-bundle checks are not a legal
-compliance determination. The release notes preserve the exact disclosure and
-owner declaration; this exception does not apply to a future Public release.
+> [!WARNING]
+> Beta 2.0.44 uses the repository's explicit unreviewed-Beta exception. Its native-library and corresponding-source material did not receive independent license review, and automated integrity checks are not a legal compliance determination. Read the [complete Beta disclosure](docs/RELEASE_NOTES_2.0.44.md). This exception does not apply to a future Public release.
 
 The Public updater repository intentionally has no release while the Public build is held for review. Existing Beta installations continue to update from the Beta repository. Android never permits an in-place install of an APK with a lower build code; Developer Mode does not bypass that platform rule.
 
@@ -163,6 +200,20 @@ TetoTV-authored source code is available in this repository under the MIT Licens
 
 TetoTV uses third-party services and open-source components but is not affiliated with, sponsored by, or endorsed by AniList, MyAnimeList, Discord, Amazon, Google, Plex, Jellyfin, or any streaming or Debrid provider. See the [content and source policy](CONTENT_POLICY.md) for the repository boundary and reporting path.
 
+## Project documentation
+
+| Document | Covers |
+| --- | --- |
+| [Content and source policy](CONTENT_POLICY.md) | Repository boundaries, prohibited source material, and rights reports |
+| [Privacy documentation](docs/PRIVACY.md) | Optional network features, diagnostics, redaction, and data handling |
+| [Security policy](SECURITY.md) | Private vulnerability reporting and supported releases |
+| [Architecture](docs/ARCHITECTURE.md) | Application layers, storage, playback, and hosted coordination |
+| [Windows build guide](docs/BUILD_WINDOWS.md) | Reproducing the Flutter and Android build locally |
+| [Update channels](docs/UPDATE_CHANNELS.md) | Beta/Public identity, signatures, versioning, and updater behavior |
+| [Third-party notices](docs/THIRD_PARTY_NOTICES.md) | Component licenses, service terms, and attribution |
+
 ## Help and feedback
 
-For announcements, support, and feature requests, [join the TetoTV Discord](https://discord.gg/juC6k7d4WY). When reporting a bug, include the TetoTV version, device model, Android or Fire OS version, steps to reproduce it, and a diagnostics report when possible.
+For public bugs and feature requests, [open a GitHub issue](https://github.com/LindersOSX/TetoTV-Beta/issues/new). For announcements and community support, [join the TetoTV Discord](https://discord.gg/juC6k7d4WY). Security vulnerabilities should follow the private process in [SECURITY.md](SECURITY.md), not a public issue.
+
+When reporting a bug, include the TetoTV version, device model, Android or Fire OS version, steps to reproduce it, and a diagnostics report when possible.

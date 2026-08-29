@@ -128,7 +128,7 @@ void main() {
     expect(
       source,
       contains(
-        'await _player.seek(target);\n            _recordCommittedSeek(target);',
+        'if (result.verified) {\n            _recordCommittedSeek(target);',
       ),
     );
     expect(

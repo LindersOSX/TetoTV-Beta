@@ -11,10 +11,11 @@ const double _playerControlFocusGutter = 20;
 const double _playerProgressFocusBorderWidth = 1.4;
 const double _compactPlayerSeekBubbleFontSize = 14;
 const double _regularPlayerSeekBubbleFontSize = 18;
-const double _compactPlayerSeekBubbleBaseReserve = 38;
-const double _regularPlayerSeekBubbleBaseReserve = 45;
-const double _compactPlayerChromeReservedHeight = 136;
-const double _regularPlayerChromeReservedHeight = 130;
+// These reserves include the always-present seek-bubble lane. Keeping the lane
+// in the resting HUD prevents either the chrome or the Skip action from moving
+// when scrubbing starts.
+const double _compactPlayerChromeReservedHeight = 169;
+const double _regularPlayerChromeReservedHeight = 173;
 const Color _defaultPlayerChromePanel = Color(0xD6080808);
 const Color _defaultPlayerChromeShadow = Color(0xA8000000);
 const Color _defaultPlayerControlSurface = Color(0x8F242429);
@@ -92,24 +93,12 @@ double playerSkipOverlayBottomInset({
   // viewports. Reserve that line so Skip Intro/Outro stays visibly detached
   // from the panel instead of landing on top of its badges or border.
   final expandedHeaderGrowth = expandedHeader ? 44.0 : 0.0;
-  // The seek timestamp is inserted above the progress track only while the
-  // viewer is scrubbing. Move Skip Intro/Outro by the same amount so it stays
-  // detached from both the bubble and the expanded HUD. The base reserve
-  // includes the bubble pointer and its gap above the track; the remaining
-  // term tracks the scaled timestamp glyph height.
-  final scrubbingGrowth = scrubbing
-      ? (compact
-                ? _compactPlayerSeekBubbleBaseReserve
-                : _regularPlayerSeekBubbleBaseReserve) +
-            (scale - 1) *
-                (compact
-                    ? _compactPlayerSeekBubbleFontSize * 1.05
-                    : _regularPlayerSeekBubbleFontSize * 1.05)
-      : 0.0;
+  // The bubble lane is part of the resting HUD, so beginning a scrub must not
+  // move either the chrome or the separate Skip action. [scrubbing] remains an
+  // explicit compatibility input but no longer changes geometry.
   return base +
       accessibleGrowth +
       expandedHeaderGrowth +
-      scrubbingGrowth +
       safeAreaBottom.clamp(0, 160);
 }
 
@@ -1066,21 +1055,32 @@ class _TetoPlayerProgressScrubberState
     final displayPosition = Duration(
       milliseconds: _displayMilliseconds.round(),
     );
+    final seekLabel = formatPlayerChromeDuration(displayPosition);
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        if (_interacting) ...[
-          _PlayerSeekTimeBubble(
-            engineKey: widget.engineKey,
-            label: formatPlayerChromeDuration(displayPosition),
-            progress: durationAvailable
-                ? _displayMilliseconds / _scrubMaximumMilliseconds
-                : 0,
+        // Reserve the seek-bubble lane even while it is hidden. This keeps the
+        // HUD's outer geometry stable during scrubbing and prevents the bubble
+        // from painting back over the control strip above it.
+        SizedBox(
+          height: _PlayerSeekTimeBubble.heightFor(
+            context,
+            label: seekLabel,
             compact: widget.compact,
-            palette: widget.palette,
           ),
-          const SizedBox(height: 2),
-        ],
+          child: _interacting
+              ? _PlayerSeekTimeBubble(
+                  engineKey: widget.engineKey,
+                  label: seekLabel,
+                  progress: durationAvailable
+                      ? _displayMilliseconds / _scrubMaximumMilliseconds
+                      : 0,
+                  compact: widget.compact,
+                  palette: widget.palette,
+                )
+              : null,
+        ),
+        const SizedBox(height: 2),
         Semantics(
           hint: widget.showSupplementalRow ? null : widget.footerHint,
           child: Focus(
@@ -1222,6 +1222,31 @@ class _PlayerSeekTimeBubble extends StatelessWidget {
   final double progress;
   final bool compact;
   final AppThemePalette palette;
+
+  static double heightFor(
+    BuildContext context, {
+    required String label,
+    required bool compact,
+  }) {
+    final textPainter = TextPainter(
+      text: TextSpan(
+        text: label,
+        style: TextStyle(
+          fontSize: compact
+              ? _compactPlayerSeekBubbleFontSize
+              : _regularPlayerSeekBubbleFontSize,
+          height: 1.05,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+      maxLines: 1,
+      textDirection: Directionality.of(context),
+      textScaler: MediaQuery.textScalerOf(context),
+    )..layout();
+    final verticalPadding = compact ? 5.0 : 6.0;
+    final pointerHeight = compact ? 8.0 : 10.0;
+    return textPainter.height + verticalPadding * 2 + pointerHeight;
+  }
 
   @override
   Widget build(BuildContext context) {

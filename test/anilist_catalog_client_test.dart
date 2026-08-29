@@ -272,6 +272,121 @@ void main() {
   };
 
   group('AniListCatalogClient', () {
+    test(
+      'franchise watch order expands a continuation chain once per title',
+      () async {
+        final requestedIds = <int>[];
+        final dio = Dio(BaseOptions(baseUrl: 'https://graphql.anilist.co'));
+
+        Map<String, dynamic> media(
+          int id, {
+          required int year,
+          String format = 'TV',
+          List<(int, String)> relations = const [],
+        }) => {
+          'id': id,
+          'idMal': null,
+          'type': 'ANIME',
+          'title': {
+            'userPreferred': 'Title $id',
+            'english': 'English $id',
+            'romaji': 'Romaji $id',
+          },
+          'description': '',
+          'episodes': 12,
+          'averageScore': 80,
+          'genres': <String>[],
+          'coverImage': {'extraLarge': null},
+          'bannerImage': null,
+          'format': format,
+          'status': 'FINISHED',
+          'season': 'SPRING',
+          'seasonYear': year,
+          'duration': 24,
+          'synonyms': <String>[],
+          'nextAiringEpisode': null,
+          'relations': {
+            'edges': [
+              for (final relation in relations)
+                {
+                  'relationType': relation.$2,
+                  'node': {
+                    'id': relation.$1,
+                    'idMal': null,
+                    'type': 'ANIME',
+                    'title': {'userPreferred': 'Title ${relation.$1}'},
+                    'description': '',
+                    'episodes': relation.$1 == 9 ? 1 : 12,
+                    'averageScore': 80,
+                    'genres': <String>[],
+                    'coverImage': {'extraLarge': null},
+                    'bannerImage': null,
+                    'format': relation.$1 == 9 ? 'MOVIE' : 'TV',
+                    'status': 'FINISHED',
+                    'season': 'SPRING',
+                    'seasonYear': relation.$1 == 9 ? 2020 : 2019 + relation.$1,
+                    'duration': 24,
+                    'synonyms': <String>[],
+                    'nextAiringEpisode': null,
+                  },
+                },
+            ],
+          },
+        };
+
+        dio.interceptors.add(
+          InterceptorsWrapper(
+            onRequest: (options, handler) {
+              final variables =
+                  (options.data as Map<String, dynamic>)['variables']
+                      as Map<String, dynamic>;
+              final id = variables['id'] as int;
+              requestedIds.add(id);
+              final response = switch (id) {
+                1 => media(
+                  1,
+                  year: 2020,
+                  relations: const [(2, 'SEQUEL'), (9, 'SIDE_STORY')],
+                ),
+                2 => media(
+                  2,
+                  year: 2021,
+                  relations: const [(1, 'PREQUEL'), (3, 'SEQUEL')],
+                ),
+                3 => media(
+                  3,
+                  year: 2022,
+                  relations: const [(2, 'PREQUEL'), (4, 'SEQUEL')],
+                ),
+                4 => media(4, year: 2023, relations: const [(3, 'PREQUEL')]),
+                _ => throw StateError('Unexpected media request $id'),
+              };
+              handler.resolve(
+                Response<Map<String, dynamic>>(
+                  data: {
+                    'data': {'Media': response},
+                  },
+                  requestOptions: options,
+                  statusCode: 200,
+                ),
+              );
+            },
+          ),
+        );
+        final client = AniListCatalogClient(dio: dio);
+
+        final order = await client.franchiseWatchOrder(1);
+        final ids = order.map((entry) => entry.anime.id).toList();
+        final movie = order.singleWhere((entry) => entry.anime.id == 9);
+
+        expect(requestedIds, [1, 2, 3, 4]);
+        expect(ids.indexOf(1), lessThan(ids.indexOf(2)));
+        expect(ids.indexOf(2), lessThan(ids.indexOf(3)));
+        expect(ids.indexOf(3), lessThan(ids.indexOf(4)));
+        expect(movie.watchOrderLabel, 'Movie · Side story');
+      },
+    );
+
     test('strips HTML tags from descriptions', () async {
       final client = AniListCatalogClient(
         dio: interceptedDio({

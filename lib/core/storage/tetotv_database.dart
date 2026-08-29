@@ -9,7 +9,13 @@ import 'package:sqflite/sqflite.dart';
 /// The SQLite table survives process death; it is never uploaded unless the
 /// user presses the diagnostic-report share button.
 const diagnosticHistoryWindow = Duration(hours: 48);
-const maximumPersistedDiagnosticEvents = 240;
+// Provider searches and playback startup can each emit a burst of events.
+// Retain enough history for a complete search plus the playback which follows
+// it; 240 entries allowed title-artwork noise to evict the evidence needed to
+// correlate a source-picker result with an intermittent player failure. Keep
+// this aligned with the explicit report sanitizer's full-size list bound so a
+// chronological export never drops the newest events.
+const maximumPersistedDiagnosticEvents = 300;
 const diagnosticEventSchema = 'tetotv-diagnostic-events-v3';
 
 const _diagnosticDroppedAgeKey = 'dropped_age';
@@ -1764,6 +1770,9 @@ bool _isSafeDiagnosticContextKey(String key) {
     'embedded_marker_count',
     'community_marker_count',
     'community_status',
+    'community_status_class',
+    'community_failure_reason',
+    'community_transient_failure_count',
     'community_probe_count',
     'duration_fallback_used',
     'requested_duration_ms',
@@ -1772,6 +1781,8 @@ bool _isSafeDiagnosticContextKey(String key) {
     'marker_source',
     'automatic',
     'seek_succeeded',
+    'seek_verified',
+    'seek_attempts',
     'watch_party_active',
     'guest_controls_locked',
     'controls_visible',
@@ -1780,6 +1791,7 @@ bool _isSafeDiagnosticContextKey(String key) {
     'marker_start_ms',
     'marker_end_ms',
     'target_ms',
+    'post_seek_position_ms',
     'cached',
     'seekable',
     'frame',

@@ -206,7 +206,7 @@ void main() {
       '.github/workflows/verify-release-assets.yml',
     ).readAsStringSync();
     final releaseNotes = File(
-      'docs/RELEASE_NOTES_2.0.44.md',
+      'docs/RELEASE_NOTES_2.0.45.md',
     ).readAsStringSync();
 
     expect(

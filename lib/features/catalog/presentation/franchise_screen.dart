@@ -36,13 +36,17 @@ class FranchiseScreen extends ConsumerWidget {
                 ),
                 const SizedBox(width: 14),
                 Text(
-                  'Franchise order',
+                  'Recommended watch order',
                   style: Theme.of(context).textTheme.headlineSmall,
                 ),
                 const SizedBox(width: 14),
-                Text(
-                  'Sequels, prequels, side stories, and connected titles',
-                  style: TextStyle(color: context.appPalette.mutedText),
+                Expanded(
+                  child: Text(
+                    'Prequels, sequels, movies, OVAs, specials, and spin-offs',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(color: context.appPalette.mutedText),
+                  ),
                 ),
               ],
             ),
@@ -56,11 +60,19 @@ class FranchiseScreen extends ConsumerWidget {
                 ),
                 error: (error, _) =>
                     Center(child: Text('Could not build franchise: $error')),
-                data: (items) => CatalogGrid(
-                  items: items,
-                  titlePreference: preference,
-                  autofocus: false,
-                ),
+                data: (entries) {
+                  final badgeByMediaId = <int, String>{
+                    for (var index = 0; index < entries.length; index++)
+                      entries[index].anime.id:
+                          '#${index + 1} · ${entries[index].watchOrderLabel}',
+                  };
+                  return CatalogGrid(
+                    items: [for (final entry in entries) entry.anime],
+                    titlePreference: preference,
+                    autofocus: false,
+                    itemBadgeText: (anime) => badgeByMediaId[anime.id],
+                  );
+                },
               ),
             ),
           ],

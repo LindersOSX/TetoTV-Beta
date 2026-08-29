@@ -21,6 +21,7 @@ class CatalogGrid extends StatefulWidget {
     this.onNavigateLeftFromFirstColumn,
     this.onNavigateUpFromFirstRow,
     this.onLongPress,
+    this.itemBadgeText,
     super.key,
   });
 
@@ -31,6 +32,7 @@ class CatalogGrid extends StatefulWidget {
   final VoidCallback? onNavigateLeftFromFirstColumn;
   final VoidCallback? onNavigateUpFromFirstRow;
   final ValueChanged<AnimeSummary>? onLongPress;
+  final String? Function(AnimeSummary anime)? itemBadgeText;
 
   @override
   State<CatalogGrid> createState() => _CatalogGridState();
@@ -479,6 +481,7 @@ class _CatalogGridState extends State<CatalogGrid> {
           },
           itemBuilder: (context, index) {
             final anime = widget.items[index];
+            final itemBadgeText = widget.itemBadgeText?.call(anime);
             return TvFocusable(
               key: ValueKey(_itemIdentities[index]),
               focusNode: _focusNodeAt(index),
@@ -531,6 +534,26 @@ class _CatalogGridState extends State<CatalogGrid> {
                                   status: anime.status,
                                 ),
                               ),
+                            if (itemBadgeText != null &&
+                                itemBadgeText.trim().isNotEmpty)
+                              Positioned(
+                                right: 5,
+                                top:
+                                    animeAiringStatusLabel(anime.status) == null
+                                    ? 5
+                                    : 29,
+                                child: ConstrainedBox(
+                                  constraints: BoxConstraints(
+                                    maxWidth: cardCrossAxisExtent * .88,
+                                  ),
+                                  child: _CatalogItemContextBadge(
+                                    key: ValueKey(
+                                      'catalog-item-context-${anime.id}',
+                                    ),
+                                    label: itemBadgeText,
+                                  ),
+                                ),
+                              ),
                             Positioned(
                               left: 5,
                               right: 5,
@@ -571,6 +594,43 @@ class _CatalogGridState extends State<CatalogGrid> {
           },
         );
       },
+    );
+  }
+}
+
+class _CatalogItemContextBadge extends StatelessWidget {
+  const _CatalogItemContextBadge({required this.label, super.key});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: const Color(0xE8101010),
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(
+          color: context.appPalette.accentBright.withValues(alpha: .72),
+        ),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+        child: FittedBox(
+          fit: BoxFit.scaleDown,
+          alignment: Alignment.centerRight,
+          child: Text(
+            label,
+            maxLines: 1,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 8,
+              fontWeight: FontWeight.w900,
+              letterSpacing: .25,
+              height: 1,
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

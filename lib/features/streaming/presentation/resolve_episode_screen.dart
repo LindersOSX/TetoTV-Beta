@@ -566,6 +566,8 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
   int _debridSourcesTotal = 0;
   int _webProvidersCompleted = 0;
   int _webProvidersTotal = 0;
+  String _webDiagnosticSessionId = '';
+  String _lastWebVisibilityDiagnosticSignature = '';
   List<String> _pendingDebridSources = const [];
   List<String> _pendingWebProviders = const [];
   int _releaseSearchGeneration = 0;
@@ -982,6 +984,8 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
       _debridSourcesTotal = 0;
       _webProvidersCompleted = 0;
       _webProvidersTotal = 0;
+      _webDiagnosticSessionId = '';
+      _lastWebVisibilityDiagnosticSignature = '';
       _pendingDebridSources = const [];
       _pendingWebProviders = const [];
       _debridSearchEnabled = shouldSearchDebrid;
@@ -1104,9 +1108,13 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
             _webFailures = progress.aggregation.failures;
             _webProvidersCompleted = progress.completedProviders;
             _webProvidersTotal = progress.totalProviders;
+            _webDiagnosticSessionId = progress.diagnosticSessionId;
             _pendingWebProviders = progress.pendingProviderNames;
             if (progress.isComplete) _webSearchFinished = true;
           });
+          if (progress.isComplete) {
+            _recordWebProviderVisibilityDiagnostic(phase: 'final');
+          }
           finishVisibleSearchIfReady();
           _tryStartAutoPlay(
             generation: generation,
@@ -2165,6 +2173,48 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
       ),
     );
     return _providerFairManualWebStreams(result);
+  }
+
+  void _recordWebProviderVisibilityDiagnostic({required String phase}) {
+    if (_webDiagnosticSessionId.isEmpty) return;
+    final visibleStreams = _filteredWebStreams(_webStreams);
+    final rawProviderCount = _webStreams
+        .map(webStreamProviderIdentity)
+        .toSet()
+        .length;
+    final visibleProviderCount = visibleStreams
+        .map(webStreamProviderIdentity)
+        .toSet()
+        .length;
+    final signature = [
+      phase,
+      _webDiagnosticSessionId,
+      rawProviderCount,
+      _webStreams.length,
+      visibleProviderCount,
+      visibleStreams.length,
+      _languageFilter.name,
+      _qualityFilter.name,
+    ].join(':');
+    if (signature == _lastWebVisibilityDiagnosticSignature) return;
+    _lastWebVisibilityDiagnosticSignature = signature;
+    unawaited(
+      TetoTvDatabase.instance.recordDiagnosticEvent(
+        category: 'provider-search',
+        message: 'Web provider results after filters',
+        severity: 'info',
+        details: webProviderVisibilityDiagnosticDetails(
+          phase: phase,
+          diagnosticSessionId: _webDiagnosticSessionId,
+          rawProviders: rawProviderCount,
+          rawResults: _webStreams.length,
+          visibleProviders: visibleProviderCount,
+          visibleResults: visibleStreams.length,
+          audioFilter: _languageFilter.name,
+          qualityFilter: _qualityFilter.name,
+        ),
+      ),
+    );
   }
 
   bool get _hasFailedWebProviders => _webFailures.any(
@@ -3390,7 +3440,13 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
   }
 
   void _updatePicker(VoidCallback update) {
+    final previousLanguage = _languageFilter;
+    final previousQuality = _qualityFilter;
     setState(update);
+    if (previousLanguage != _languageFilter ||
+        previousQuality != _qualityFilter) {
+      _recordWebProviderVisibilityDiagnostic(phase: 'filter_changed');
+    }
     unawaited(_rememberPickerPreferences());
   }
 

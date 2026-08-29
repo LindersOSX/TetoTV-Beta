@@ -1,5 +1,8 @@
 import 'dart:convert';
 
+import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
+import 'package:anime_tv/features/settings/application/tracking_accounts_controller.dart';
+import 'package:anime_tv/features/watch_together/application/watch_party_public_identity_provider.dart';
 import 'package:anime_tv/features/watch_together/data/watch_party_client.dart';
 import 'package:anime_tv/features/watch_together/domain/watch_party_models.dart';
 import 'package:dio/dio.dart';
@@ -48,6 +51,75 @@ void main() {
       ),
       isNull,
     );
+  });
+
+  test('AniList host and MAL guest exchange public avatars', () {
+    final host = _trackerIdentity(
+      provider: TrackingProvider.anilist,
+      username: 'Ani Host',
+      avatarUrl: 'https://img.anili.st/user/123/avatar.png',
+    );
+    final guest = _trackerIdentity(
+      provider: TrackingProvider.myAnimeList,
+      username: 'MAL Guest',
+      avatarUrl:
+          'https://api-cdn.myanimelist.net/images/userimages/456/avatar.jpg',
+    );
+
+    final snapshot = _crossTrackerSnapshot(host: host, guest: guest);
+
+    expect(snapshot.participants, hasLength(2));
+    expect(snapshot.participants[0].displayName, 'Ani Host');
+    expect(
+      snapshot.participants[0].avatarUrl,
+      'https://img.anili.st/user/123/avatar.png',
+    );
+    expect(snapshot.participants[1].displayName, 'MAL Guest');
+    expect(
+      snapshot.participants[1].avatarUrl,
+      'https://api-cdn.myanimelist.net/images/userimages/456/avatar.jpg',
+    );
+  });
+
+  test('MAL host and AniList guest exchange public avatars', () {
+    final host = _trackerIdentity(
+      provider: TrackingProvider.myAnimeList,
+      username: 'MAL Host',
+      avatarUrl: 'https://cdn.myanimelist.net/images/userimages/789.jpg',
+    );
+    final guest = _trackerIdentity(
+      provider: TrackingProvider.anilist,
+      username: 'Ani Guest',
+      avatarUrl:
+          'https://s4.anilist.co/file/anilistcdn/user/avatar/large/b321.jpg',
+    );
+
+    final snapshot = _crossTrackerSnapshot(host: host, guest: guest);
+
+    expect(snapshot.participants, hasLength(2));
+    expect(snapshot.participants[0].displayName, 'MAL Host');
+    expect(
+      snapshot.participants[0].avatarUrl,
+      'https://cdn.myanimelist.net/images/userimages/789.jpg',
+    );
+    expect(snapshot.participants[1].displayName, 'Ani Guest');
+    expect(
+      snapshot.participants[1].avatarUrl,
+      'https://s4.anilist.co/file/anilistcdn/user/avatar/large/b321.jpg',
+    );
+  });
+
+  test('missing or untrusted tracker avatar keeps the initials fallback', () {
+    final identity = _trackerIdentity(
+      provider: TrackingProvider.anilist,
+      username: 'Fallback Viewer',
+      avatarUrl: 'https://tracker.example/private/avatar?token=secret',
+    );
+
+    expect(identity.toJson(), {'display_name': 'Fallback Viewer'});
+    final snapshot = _crossTrackerSnapshot(host: identity);
+    expect(snapshot.participants.single.displayName, 'Fallback Viewer');
+    expect(snapshot.participants.single.avatarUrl, isNull);
   });
 
   test('snapshot accepts a strict bounded public roster only', () {
@@ -211,3 +283,37 @@ Map<String, Object?> _snapshotJson() => {
   'participants': const <Object?>[],
   'expires_at': '2030-01-01T00:00:00Z',
 };
+
+WatchPartyPublicIdentity _trackerIdentity({
+  required TrackingProvider provider,
+  required String username,
+  required String avatarUrl,
+}) => watchPartyPublicIdentityForProfiles(
+  activeLocalProfile: null,
+  trackerProfiles: <TrackingProvider, TrackingAccountProfile>{
+    provider: TrackingAccountProfile(
+      provider: provider,
+      username: username,
+      avatarUrl: avatarUrl,
+    ),
+  },
+  preferredTracker: provider,
+)!;
+
+WatchPartySnapshot _crossTrackerSnapshot({
+  required WatchPartyPublicIdentity host,
+  WatchPartyPublicIdentity? guest,
+}) {
+  Map<String, Object?> participant(
+    WatchPartyPublicIdentity identity,
+    String role,
+  ) => <String, Object?>{...identity.toJson(), 'role': role, 'ready': true};
+
+  return WatchPartySnapshot.fromJson({
+    ..._snapshotJson(),
+    'participants': <Object?>[
+      participant(host, 'host'),
+      if (guest != null) participant(guest, 'guest'),
+    ],
+  });
+}

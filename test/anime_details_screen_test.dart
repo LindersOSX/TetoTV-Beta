@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/preferences/title_language_preference.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/features/catalog/application/anime_title_logo_provider.dart';
@@ -692,7 +693,7 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
 
-    const anime = AnimeSummary(
+    final anime = AnimeSummary(
       id: 1,
       title: 'The Example Hero and the Long Adventure Title',
       description:
@@ -704,7 +705,12 @@ void main() {
       format: 'TV',
       status: 'RELEASING',
       durationMinutes: 24,
-      relatedAnime: [
+      staff: const [AnimePerson(id: 10, name: 'Example Director')],
+      trailer: AnimeTrailer.tryCreate(
+        provider: 'youtube',
+        videoId: 'abcDEF_12-3',
+      ),
+      relatedAnime: const [
         RelatedAnime(
           relationType: 'SEQUEL',
           anime: AnimeSummary(
@@ -742,6 +748,8 @@ void main() {
     expect(find.text('Start watching'), findsOneWidget);
     expect(find.text('My List status'), findsOneWidget);
     expect(find.text('Episode 1 of 24'), findsOneWidget);
+    expect(find.text('Watch trailer'), findsOneWidget);
+    expect(find.text('Cast & crew'), findsOneWidget);
     expect(find.text('Related series'), findsOneWidget);
     expect(find.text('RELATED'), findsNothing);
     expect(find.text('The Example Hero Season 2'), findsNothing);
@@ -779,20 +787,83 @@ void main() {
     final compactTvInformationTray = tester.getRect(
       find.byKey(const ValueKey('anime-details-information-actions')),
     );
-    final compactTvRelatedAction = tester.getRect(
-      find.byKey(const ValueKey('anime-details-related-series')),
-    );
-    final compactTvDownloadAction = tester.getRect(
-      find.byKey(const ValueKey('anime-details-download-season')),
-    );
+    final compactInformationActionRects = <Rect>[
+      for (final key in const [
+        ValueKey('anime-details-watch-trailer-surface'),
+        ValueKey('anime-details-cast-crew-surface'),
+        ValueKey('anime-details-related-series-surface'),
+        ValueKey('anime-details-download-season-surface'),
+      ])
+        tester.getRect(find.byKey(key)),
+    ];
     expect(compactTvPoster.height / 540, closeTo(.60, .01));
     expect(compactTvPoster.right, lessThan(compactTvInfo.left));
     expect(compactTvInfo.right, lessThan(compactTvActions.left));
-    // A television keeps the same reference action sizing even when Android
-    // exposes a 960px logical canvas instead of a full-HD one.
-    expect(compactTvInformationTray.height, 80);
-    expect(compactTvRelatedAction.size, const Size(165, 58));
-    expect(compactTvDownloadAction.size, const Size(182, 58));
+    // A television keeps every available action in one compact visible row
+    // even when Android exposes a 960px logical canvas.
+    expect(compactTvInformationTray.height, 86);
+    for (var index = 0; index < compactInformationActionRects.length; index++) {
+      final rect = compactInformationActionRects[index];
+      expect(rect.width, closeTo(90, .01));
+      expect(rect.height, 64);
+      expect(rect.top, compactInformationActionRects.first.top);
+      expect(rect.left, greaterThanOrEqualTo(compactTvInformationTray.left));
+      expect(rect.right, lessThanOrEqualTo(compactTvInformationTray.right));
+      if (index > 0) {
+        expect(
+          rect.left - compactInformationActionRects[index - 1].right,
+          closeTo(6, .01),
+        );
+      }
+    }
+    final informationTray = find.byKey(
+      const ValueKey('anime-details-information-actions'),
+    );
+    expect(
+      find.descendant(of: informationTray, matching: find.byType(FittedBox)),
+      findsNothing,
+    );
+    expect(tester.widget<Text>(find.text('Watch trailer')).style?.fontSize, 16);
+    for (final icon in tester.widgetList<Icon>(
+      find.descendant(of: informationTray, matching: find.byType(Icon)),
+    )) {
+      expect(icon.size, 23);
+    }
+    final compactTrailerControl = tester.widget<FocusableActionDetector>(
+      find
+          .descendant(
+            of: find.byKey(const ValueKey('anime-details-watch-trailer')),
+            matching: find.byType(FocusableActionDetector),
+          )
+          .first,
+    );
+    compactTrailerControl.focusNode!.requestFocus();
+    await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    await tester.pump();
+    final compactCastControl = tester.widget<FocusableActionDetector>(
+      find
+          .descendant(
+            of: find.byKey(const ValueKey('anime-details-cast-crew')),
+            matching: find.byType(FocusableActionDetector),
+          )
+          .first,
+    );
+    expect(compactCastControl.focusNode?.hasFocus, isTrue);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+    await tester.pump();
+    expect(compactTrailerControl.focusNode?.hasFocus, isTrue);
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('anime-details-information-actions')),
+        matching: find.byWidgetPredicate(
+          (widget) =>
+              widget is SingleChildScrollView &&
+              widget.scrollDirection == Axis.horizontal,
+        ),
+      ),
+      findsNothing,
+    );
     await tester.tap(find.text('My List status'));
     await tester.pumpAndSettle();
     expect(find.text('Planning'), findsOneWidget);
@@ -871,16 +942,27 @@ void main() {
     expect(find.text('2026'), findsWidgets);
     expect(find.text('24m'), findsWidgets);
     expect(find.text('7.8 / 10'), findsOneWidget);
-    final castControl = tester.widget<FocusableActionDetector>(
+    final trailerControl = tester.widget<FocusableActionDetector>(
       find
-          .ancestor(
-            of: find.text('Cast & crew'),
+          .descendant(
+            of: find.byKey(const ValueKey('anime-details-watch-trailer')),
             matching: find.byType(FocusableActionDetector),
           )
           .first,
     );
-    castControl.focusNode!.requestFocus();
+    trailerControl.focusNode!.requestFocus();
     await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    await tester.pump();
+    final castControl = tester.widget<FocusableActionDetector>(
+      find
+          .descendant(
+            of: find.byKey(const ValueKey('anime-details-cast-crew')),
+            matching: find.byType(FocusableActionDetector),
+          )
+          .first,
+    );
+    expect(castControl.focusNode?.hasFocus, isTrue);
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
     await tester.pump();
     final relatedControl = tester.widget<FocusableActionDetector>(
@@ -922,22 +1004,18 @@ void main() {
         closeTo(informationActionRects.first.bottom, .01),
       );
       expect(
-        informationActionRects[index].left,
-        greaterThan(informationActionRects[index - 1].right),
-      );
-    }
-    expect(informationActionRects.first.height, 58);
-    expect(
-      informationActionRects.map((rect) => rect.width),
-      orderedEquals(const [154, 150, 165, 182]),
-    );
-    for (var index = 1; index < informationActionRects.length; index++) {
-      expect(
         informationActionRects[index].left -
             informationActionRects[index - 1].right,
         12,
       );
     }
+    for (final rect in informationActionRects) {
+      expect(rect.height, 58);
+    }
+    expect(
+      informationActionRects.map((rect) => rect.width),
+      orderedEquals(const [154, 150, 165, 182]),
+    );
     final informationTray = tester.widget<Container>(
       find.byKey(const ValueKey('anime-details-information-actions')),
     );
@@ -1087,6 +1165,7 @@ void main() {
         await tester.pumpWidget(
           ProviderScope(
             overrides: [
+              isTelevisionProvider.overrideWithValue(false),
               animeDetailsProvider.overrideWith((_, _) async => anime),
               trackingHomeProvider.overrideWith(
                 (_) async => const TrackingHomeData(
@@ -1200,6 +1279,7 @@ void main() {
         await tester.pumpWidget(
           ProviderScope(
             overrides: [
+              isTelevisionProvider.overrideWithValue(false),
               animeDetailsProvider.overrideWith((_, _) async => anime),
               trackingHomeProvider.overrideWith(
                 (_) async => const TrackingHomeData(
@@ -1222,18 +1302,50 @@ void main() {
         expect(find.text('Related series'), findsOneWidget);
         expect(find.text('Download season'), findsOneWidget);
         expect(find.text('EP 1 / 12'), findsOneWidget);
-        final informationActionTops = <double>[
+        final informationActionRects = <Rect>[
           for (final key in const [
             ValueKey('anime-details-watch-trailer'),
             ValueKey('anime-details-cast-crew'),
             ValueKey('anime-details-related-series'),
             ValueKey('anime-details-download-season'),
           ])
-            tester.getTopLeft(find.byKey(key)).dy,
+            tester.getRect(find.byKey(key)),
         ];
-        for (final top in informationActionTops.skip(1)) {
-          expect(top, closeTo(informationActionTops.first, .01));
+        for (var index = 1; index < informationActionRects.length; index++) {
+          expect(
+            informationActionRects[index].top,
+            closeTo(informationActionRects.first.top, .01),
+          );
+          expect(
+            informationActionRects[index].left,
+            greaterThan(informationActionRects[index - 1].right),
+          );
         }
+        expect(
+          find.descendant(
+            of: find.byKey(const ValueKey('anime-details-information-actions')),
+            matching: find.byWidgetPredicate(
+              (widget) =>
+                  widget is SingleChildScrollView &&
+                  widget.scrollDirection == Axis.horizontal,
+            ),
+          ),
+          findsNothing,
+        );
+        final mobileInformationTray = find.byKey(
+          const ValueKey('anime-details-information-actions'),
+        );
+        expect(
+          find.descendant(
+            of: mobileInformationTray,
+            matching: find.byType(FittedBox),
+          ),
+          findsNothing,
+        );
+        expect(
+          tester.widget<Text>(find.text('Watch trailer')).style?.fontSize,
+          12,
+        );
         final posterSize = tester.getSize(
           find.byKey(const ValueKey('anime-details-poster')),
         );

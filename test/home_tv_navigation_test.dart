@@ -544,7 +544,7 @@ void main() {
     expect(find.text(hero.description), findsNothing);
     final titleRect = tester.getRect(titleFinder);
     final heroRect = tester.getRect(find.byKey(const ValueKey('home-hero')));
-    expect(titleRect.width, closeTo(1280 * .48, .01));
+    expect(titleRect.width, closeTo(1280 * .5, .01));
     expect(titleRect.right, lessThan(heroRect.left + heroRect.width * .58));
     expect(titleRect.height, lessThan(heroRect.height * .3));
     expect(heroRect.contains(titleRect.topLeft), isTrue);
@@ -556,11 +556,12 @@ void main() {
   });
 
   testWidgets(
-    'TV featured hero wraps and scales a long title without truncating it',
+    'TV featured hero wraps a long title at the same size without truncation',
     (tester) async {
       const longTitle =
           'The Legendary Hero Is Reborn as the Last Guardian of the Forgotten '
-          'Kingdom Beyond the End of the World';
+          'Kingdom Beyond the End of the World and Must Gather Every Ancient '
+          'Relic Before the Stars Disappear Forever from the Northern Sky';
       await _pumpFeaturedHomeHero(
         tester,
         viewport: const Size(960, 540),
@@ -590,17 +591,14 @@ void main() {
         of: currentTitle,
         matching: find.text(longTitle),
       );
-      final fittedTitle = find.descendant(
-        of: currentTitle,
-        matching: find.byKey(const ValueKey('home-hero-title-fit')),
-      );
-
       expect(titleText, findsOneWidget);
-      expect(fittedTitle, findsOneWidget);
+      expect(
+        find.descendant(of: currentTitle, matching: find.byType(FittedBox)),
+        findsNothing,
+      );
       final textWidget = tester.widget<Text>(titleText);
       expect(textWidget.maxLines, isNull);
       expect(textWidget.overflow, TextOverflow.visible);
-      expect(tester.widget<FittedBox>(fittedTitle).fit, BoxFit.scaleDown);
       expect(
         tester.renderObject<RenderParagraph>(titleText).didExceedMaxLines,
         isFalse,
@@ -609,8 +607,13 @@ void main() {
       final slotRect = tester.getRect(titleSlot);
       final renderedTextRect = tester.getRect(titleText);
       final heroRect = tester.getRect(find.byKey(const ValueKey('home-hero')));
-      expect(slotRect.height, 68);
-      expect(slotRect.width, closeTo(960 * .48, .01));
+      final metadataRect = tester.getRect(find.text('8.8'));
+      final labelRect = tester.getRect(find.text('Releasing'));
+      final actionRect = tester.getRect(
+        find.byKey(const ValueKey('home-hero-watch-now')),
+      );
+      expect(slotRect.height, greaterThan(102));
+      expect(slotRect.width, closeTo(960 * .5, .01));
       expect(slotRect.right, lessThan(heroRect.left + heroRect.width * .58));
       expect(find.byKey(const ValueKey('hero-art-1618')), findsOneWidget);
       expect(slotRect.contains(renderedTextRect.topLeft), isTrue);
@@ -618,6 +621,10 @@ void main() {
         slotRect.contains(renderedTextRect.bottomRight - const Offset(.1, .1)),
         isTrue,
       );
+      expect(renderedTextRect.bottom, lessThanOrEqualTo(metadataRect.top));
+      expect(metadataRect.bottom, lessThanOrEqualTo(labelRect.top));
+      expect(labelRect.bottom, lessThan(actionRect.top));
+      expect(heroRect.height, closeTo(300 + slotRect.height - 102, .01));
       for (final action in const [
         ValueKey('home-hero-watch-now'),
         ValueKey('home-hero-my-list'),
@@ -629,6 +636,50 @@ void main() {
           isTrue,
         );
       }
+      expect(tester.takeException(), isNull);
+
+      const shortTitle = 'Short TV Title';
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump();
+      await _pumpFeaturedHomeHero(
+        tester,
+        viewport: const Size(960, 540),
+        isTelevision: true,
+        preferences: const SettingsPreferences(
+          interfaceMode: InterfaceMode.television,
+          showHero: true,
+          loaded: true,
+        ),
+        hero: const AnimeSummary(
+          id: 1619,
+          title: shortTitle,
+          description: 'A short-title comparison fixture.',
+          episodes: null,
+          score: null,
+        ),
+      );
+
+      final shortTitleText = find.text(shortTitle);
+      expect(shortTitleText, findsOneWidget);
+      expect(
+        tester.widget<Text>(shortTitleText).style?.fontSize,
+        textWidget.style?.fontSize,
+      );
+      expect(
+        tester.getSize(find.byKey(const ValueKey('hero-title-1619'))).height,
+        102,
+      );
+      expect(
+        tester.getSize(find.byKey(const ValueKey('home-hero'))).height,
+        300,
+      );
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('hero-title-text-1619')),
+          matching: find.byType(FittedBox),
+        ),
+        findsNothing,
+      );
       expect(tester.takeException(), isNull);
     },
   );

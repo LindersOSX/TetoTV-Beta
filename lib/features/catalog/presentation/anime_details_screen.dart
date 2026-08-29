@@ -486,6 +486,9 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
                                 onCredits: onCredits,
                                 onDownloadSeason: onDownloadSeason,
                                 downloadSeasonLabel: downloadSeasonLabel,
+                                television: isTelevision,
+                                large: isTelevision,
+                                availableWidth: constraints.maxWidth,
                               ),
                             ],
                           ],
@@ -526,6 +529,11 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
               final posterWidth = targetPosterWidth
                   .clamp(minimumPosterWidth, maximumPosterWidth)
                   .toDouble();
+              final informationWidth =
+                  constraints.maxWidth -
+                  posterWidth -
+                  actionWidth -
+                  columnGap * 2;
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -676,6 +684,8 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
                                       onCredits: onCredits,
                                       onDownloadSeason: onDownloadSeason,
                                       downloadSeasonLabel: downloadSeasonLabel,
+                                      television: isTelevision,
+                                      availableWidth: informationWidth,
                                       // Android televisions do not all expose
                                       // the same logical canvas. Keep the
                                       // 10-foot action styling on TV even when
@@ -1239,6 +1249,8 @@ class _InformationActions extends StatelessWidget {
     required this.onCredits,
     required this.onDownloadSeason,
     required this.downloadSeasonLabel,
+    required this.television,
+    required this.availableWidth,
     this.large = false,
   });
 
@@ -1247,6 +1259,8 @@ class _InformationActions extends StatelessWidget {
   final VoidCallback? onCredits;
   final VoidCallback? onDownloadSeason;
   final String downloadSeasonLabel;
+  final bool television;
+  final double availableWidth;
   final bool large;
 
   @override
@@ -1317,7 +1331,7 @@ class _InformationActions extends StatelessWidget {
       (total, action) => total + action.preferredWidth,
     );
     final preferredStripWidth =
-        preferredButtonsWidth + (spacing * (actions.length - 1));
+        preferredButtonsWidth + spacing * (actions.length - 1);
 
     return FocusTraversalGroup(
       policy: ReadingOrderTraversalPolicy(),
@@ -1331,39 +1345,44 @@ class _InformationActions extends StatelessWidget {
         ),
         child: LayoutBuilder(
           builder: (context, constraints) {
-            // Keep the controls on one visual baseline like the TV reference.
-            // If a compact device cannot show their readable widths at once,
-            // the strip scrolls horizontally as focus (or touch) moves rather
-            // than wrapping or overflowing the screen.
-            final minimumReadableScale = .90;
-            final minimumStripWidth =
-                preferredStripWidth * minimumReadableScale;
-            // TV typography and icons must remain at their intended 10-foot
-            // size. A narrow TV column scrolls the fixed-width strip instead
-            // of quietly shrinking it into the phone treatment.
-            final stripWidth = large
-                ? preferredStripWidth
-                : constraints.maxWidth >= preferredStripWidth
-                ? preferredStripWidth
-                : constraints.maxWidth >= minimumStripWidth
+            // One row replaces the old two-row footprint. Never halve the
+            // control widths and then ask FittedBox to make 10-foot text fit:
+            // a constrained canvas keeps all actions visible by stacking each
+            // full-size icon above its (up to two-line) label instead.
+            final constraintWidth = constraints.hasBoundedWidth
                 ? constraints.maxWidth
-                : minimumStripWidth;
-            final widthScale = preferredStripWidth == 0
-                ? 1.0
-                : (stripWidth - (spacing * (actions.length - 1))) /
-                      preferredButtonsWidth;
-
-            return SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: SizedBox(
-                width: stripWidth,
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    for (var index = 0; index < actions.length; index++) ...[
-                      if (index > 0) SizedBox(width: spacing),
+                : preferredStripWidth;
+            final boundedWidth = (availableWidth - panelPadding.horizontal)
+                .clamp(0.0, constraintWidth)
+                .clamp(0.0, preferredStripWidth)
+                .toDouble();
+            final compact = boundedWidth < preferredStripWidth;
+            final compactSpacing = large || television ? 6.0 : 5.0;
+            final stripWidth = compact ? boundedWidth : preferredStripWidth;
+            return SizedBox(
+              width: stripWidth,
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  for (var index = 0; index < actions.length; index++) ...[
+                    if (index > 0)
+                      SizedBox(width: compact ? compactSpacing : spacing),
+                    if (compact)
+                      Expanded(
+                        child: _InformationButton(
+                          key: actions[index].key,
+                          surfaceKey: actions[index].surfaceKey,
+                          label: actions[index].label,
+                          icon: actions[index].icon,
+                          onPressed: actions[index].onPressed,
+                          primary: actions[index].primary,
+                          large: large,
+                          stacked: true,
+                        ),
+                      )
+                    else
                       SizedBox(
-                        width: actions[index].preferredWidth * widthScale,
+                        width: actions[index].preferredWidth,
                         child: _InformationButton(
                           key: actions[index].key,
                           surfaceKey: actions[index].surfaceKey,
@@ -1374,9 +1393,8 @@ class _InformationActions extends StatelessWidget {
                           large: large,
                         ),
                       ),
-                    ],
                   ],
-                ),
+                ],
               ),
             );
           },
@@ -1395,6 +1413,7 @@ class _InformationButton extends StatelessWidget {
     required this.large,
     required this.surfaceKey,
     this.primary = false,
+    this.stacked = false,
   });
 
   final String label;
@@ -1402,6 +1421,7 @@ class _InformationButton extends StatelessWidget {
   final VoidCallback onPressed;
   final bool large;
   final bool primary;
+  final bool stacked;
   final Key? surfaceKey;
 
   @override
@@ -1424,32 +1444,57 @@ class _InformationButton extends StatelessWidget {
       },
       child: Container(
         key: surfaceKey,
-        height: large ? 58 : 42,
+        height: stacked ? (large ? 64 : 54) : (large ? 58 : 42),
         alignment: Alignment.center,
-        padding: EdgeInsets.symmetric(horizontal: large ? 14 : 11),
+        padding: EdgeInsets.symmetric(
+          horizontal: stacked ? (large ? 4 : 3) : (large ? 14 : 11),
+          vertical: stacked ? 2 : 0,
+        ),
         decoration: BoxDecoration(
           color: primary ? context.appPalette.accent : const Color(0xEE171717),
           borderRadius: BorderRadius.circular(10),
           border: Border.all(color: Colors.white.withValues(alpha: .15)),
         ),
-        child: FittedBox(
-          fit: BoxFit.scaleDown,
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(icon, size: large ? 23 : 18),
-              SizedBox(width: large ? 9 : 7),
-              Text(
-                label,
-                maxLines: 1,
-                style: TextStyle(
-                  fontSize: large ? 16 : 12,
-                  fontWeight: FontWeight.w700,
-                ),
+        child: stacked
+            ? Column(
+                mainAxisSize: MainAxisSize.max,
+                children: [
+                  Icon(icon, size: large ? 23 : 18),
+                  const SizedBox(height: 1),
+                  Expanded(
+                    child: Center(
+                      child: Text(
+                        label,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: large ? 16 : 12,
+                          height: 1,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              )
+            : Row(
+                children: [
+                  Icon(icon, size: large ? 23 : 18),
+                  SizedBox(width: large ? 9 : 7),
+                  Expanded(
+                    child: Text(
+                      label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: large ? 16 : 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ],
               ),
-            ],
-          ),
-        ),
       ),
     );
   }

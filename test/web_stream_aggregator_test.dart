@@ -698,6 +698,152 @@ void main() {
     },
   );
 
+  test('provider search correlation ids are boot-scoped and sequential', () {
+    final first = nextWebProviderSearchDiagnosticSessionId();
+    final second = nextWebProviderSearchDiagnosticSessionId();
+    final pattern = RegExp(r'^provider-search-[0-9a-f]{12}-[0-9]+$');
+
+    expect(first, matches(pattern));
+    expect(second, matches(pattern));
+    expect(second, isNot(first));
+    expect(
+      first.substring(0, first.lastIndexOf('-')),
+      second.substring(0, second.lastIndexOf('-')),
+    );
+  });
+
+  test('provider search summaries contain only aggregate safe fields', () {
+    final details = webProviderSearchSummaryDiagnosticDetails(
+      phase: 'final',
+      diagnosticSessionId:
+          'https://private.example/episode/7?token=do-not-record',
+      installedProviders: 14,
+      enabledProviders: 12,
+      searchableProviders: 10,
+      blockedProviders: 2,
+      completedProviders: 12,
+      returnedProviders: 3,
+      returnedResults: 20,
+      failureReasonCounts: const {
+        'timeout': 2,
+        'https://private.example/episode/7?token=do-not-record': 4,
+      },
+    );
+    final states = (details['state']! as List<Object?>)
+        .cast<Map<String, Object>>();
+    int countFor(String kind) =>
+        states.singleWhere((entry) => entry['kind'] == kind)['count']! as int;
+    final reasons = (details['reason']! as List<Object?>)
+        .cast<Map<String, Object>>();
+
+    expect(details['session_id'], 'provider-search-unknown');
+    expect(details['phase'], 'final');
+    expect(countFor('installed_providers'), 14);
+    expect(countFor('enabled_providers'), 12);
+    expect(countFor('searchable_providers'), 10);
+    expect(countFor('blocked_providers'), 2);
+    expect(countFor('completed_providers'), 12);
+    expect(countFor('returned_providers'), 3);
+    expect(countFor('returned_results'), 20);
+    expect(
+      reasons,
+      containsAll(<Map<String, Object>>[
+        {'reason_code': 'timeout', 'count': 2},
+        {'reason_code': 'other', 'count': 4},
+      ]),
+    );
+    expect(details.toString(), isNot(contains('private.example')));
+    expect(details.toString(), isNot(contains('episode/7')));
+    expect(details.toString(), isNot(contains('do-not-record')));
+    final sanitized = sanitizeDiagnosticContext(details)! as Map;
+    expect(sanitized['state'], hasLength(7));
+    expect(sanitized['reason'], hasLength(2));
+    expect(sanitized, isNot(contains('_redactedFieldCount')));
+  });
+
+  test('post-filter diagnostics expose counts and active safe filters', () {
+    final details = webProviderVisibilityDiagnosticDetails(
+      phase: 'filter_changed',
+      diagnosticSessionId: 'provider-search-a1b2c3d4e5f6-42',
+      rawProviders: 3,
+      rawResults: 20,
+      visibleProviders: 2,
+      visibleResults: 8,
+      audioFilter: 'dub',
+      qualityFilter: 'p1080',
+    );
+    final states = (details['state']! as List<Object?>)
+        .cast<Map<String, Object>>();
+    int countFor(String kind) =>
+        states.singleWhere((entry) => entry['kind'] == kind)['count']! as int;
+
+    expect(details['session_id'], 'provider-search-a1b2c3d4e5f6-42');
+    expect(details['phase'], 'filter_changed');
+    expect(details['audio_mode'], 'dub');
+    expect(details['quality'], 'p1080');
+    expect(countFor('raw_providers'), 3);
+    expect(countFor('raw_results'), 20);
+    expect(countFor('visible_providers'), 2);
+    expect(countFor('visible_results'), 8);
+    final sanitized = sanitizeDiagnosticContext(details)! as Map;
+    expect(sanitized['state'], hasLength(4));
+    expect(sanitized['audio_mode'], 'dub');
+    expect(sanitized['quality'], 'p1080');
+    expect(sanitized, isNot(contains('_redactedFieldCount')));
+
+    final unsafe = webProviderVisibilityDiagnosticDetails(
+      phase: 'https://private.example/title',
+      diagnosticSessionId: 'private-token',
+      rawProviders: 0,
+      rawResults: 0,
+      visibleProviders: 0,
+      visibleResults: 0,
+      audioFilter: 'episode-title',
+      qualityFilter: 'https://private.example/video.m3u8',
+    );
+    expect(unsafe['phase'], 'unknown');
+    expect(unsafe['session_id'], 'provider-search-unknown');
+    expect(unsafe['audio_mode'], 'unknown');
+    expect(unsafe['quality'], 'unknown');
+    expect(unsafe.toString(), isNot(contains('private.example')));
+    expect(unsafe.toString(), isNot(contains('episode-title')));
+  });
+
+  test(
+    'provider outcome diagnostics retain only their safe correlation id',
+    () {
+      expect(
+        webProviderSearchOutcomeDiagnosticDetails(
+          'provider-search-a1b2c3d4e5f6-42',
+        ),
+        {'session_id': 'provider-search-a1b2c3d4e5f6-42'},
+      );
+      final unsafe = webProviderSearchOutcomeDiagnosticDetails(
+        'https://private.example/episode/7?token=do-not-record',
+      );
+      expect(unsafe, {'session_id': 'provider-search-unknown'});
+      expect(unsafe.toString(), isNot(contains('private.example')));
+      expect(unsafe.toString(), isNot(contains('do-not-record')));
+
+      for (final phase in const ['canceled', 'error']) {
+        expect(
+          webProviderSearchSummaryDiagnosticDetails(
+            phase: phase,
+            diagnosticSessionId: 'provider-search-a1b2c3d4e5f6-42',
+            installedProviders: 14,
+            enabledProviders: 12,
+            searchableProviders: 10,
+            blockedProviders: 2,
+            completedProviders: 4,
+            returnedProviders: 1,
+            returnedResults: 3,
+          )['phase'],
+          phase,
+        );
+      }
+    },
+  );
+
   test('resolver and player share one episode discovery session', () async {
     final release = Completer<void>();
     final aggregator = _CountingSharedAggregator(release.future);

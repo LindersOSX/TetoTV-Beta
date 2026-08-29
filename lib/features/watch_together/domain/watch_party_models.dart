@@ -10,7 +10,17 @@ const int maximumWatchPartyGuestCount = 20;
 const int maximumWatchPartyRosterSize = maximumWatchPartyGuestCount + 1;
 const int maximumWatchPartyEventCount = 16;
 
-const _watchPartyAvatarHosts = <String>{'s4.anilist.co', 'cdn.myanimelist.net'};
+// Tracker APIs can return either their established artwork host or a newer CDN
+// alias. Keep this list exact and provider-owned: a Watch Party shares only the
+// already-public avatar URL, never a tracker token, account ID, or lookup key.
+// Supporting both trackers' public CDN variants also makes the roster
+// independent of which tracker the receiving participant uses.
+const _watchPartyAvatarHosts = <String>{
+  's4.anilist.co',
+  'img.anili.st',
+  'cdn.myanimelist.net',
+  'api-cdn.myanimelist.net',
+};
 
 @immutable
 class WatchPartyPublicIdentity {

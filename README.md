@@ -42,7 +42,7 @@ This repository contains the complete TetoTV source code as well as the Beta rel
 | Channel | Version | Best for |
 | --- | --- | --- |
 | Public | Not published | Source and release-readiness documents are available, but no Public APK is currently offered |
-| Beta | [2.0.40](docs/RELEASE_NOTES_2.0.40.md) | Testing current fixes and features before a separately reviewed Public release |
+| Beta | [2.0.41](docs/RELEASE_NOTES_2.0.41.md) | Testing current fixes and features before a separately reviewed Public release |
 
 The Public updater repository intentionally has no release while the Public build is held for review. Existing Beta installations continue to update from the Beta repository. Android never permits an in-place install of an APK with a lower build code; Developer Mode does not bypass that platform rule.
 

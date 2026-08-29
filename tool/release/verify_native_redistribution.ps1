@@ -15,6 +15,18 @@ $manifestPath = Join-Path $PSScriptRoot "native_playback_manifest.json"
 $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
 $failures = [System.Collections.Generic.List[string]]::new()
 $fixedZipTimestamp = [DateTimeOffset]::new(2000, 1, 1, 0, 0, 0, [TimeSpan]::Zero)
+$gradleUserHome = [Environment]::GetEnvironmentVariable("GRADLE_USER_HOME")
+if ([string]::IsNullOrWhiteSpace($gradleUserHome)) {
+    $userProfileRoot = [Environment]::GetFolderPath(
+        [Environment+SpecialFolder]::UserProfile
+    )
+    if ([string]::IsNullOrWhiteSpace($userProfileRoot)) {
+        $userProfileRoot = [Environment]::GetEnvironmentVariable("HOME")
+    }
+    if (-not [string]::IsNullOrWhiteSpace($userProfileRoot)) {
+        $gradleUserHome = Join-Path $userProfileRoot ".gradle"
+    }
+}
 
 function Test-Condition([bool]$Condition, [string]$Message) {
     if (-not $Condition) { $script:failures.Add($Message) }
@@ -276,10 +288,12 @@ foreach ($artifact in $manifest.binaryArtifacts) {
         $candidates += Join-Path $repoRoot "build\media_kit_libs_android_video\v1.1.7\$($artifact.fileName)"
         $candidates += Join-Path $repoRoot "build\media_kit_libs_android_video\output\$($artifact.fileName)"
     } elseif ($artifact.id -like "libtorrent4j-*") {
-        $gradleModuleRoot = Join-Path $env:USERPROFILE ".gradle\caches\modules-2\files-2.1\org.libtorrent4j"
-        if (Test-Path -LiteralPath $gradleModuleRoot -PathType Container) {
-            $candidates += Get-ChildItem -LiteralPath $gradleModuleRoot -Recurse -File -Filter $artifact.fileName |
-                Select-Object -ExpandProperty FullName
+        if (-not [string]::IsNullOrWhiteSpace($gradleUserHome)) {
+            $gradleModuleRoot = Join-Path $gradleUserHome "caches\modules-2\files-2.1\org.libtorrent4j"
+            if (Test-Path -LiteralPath $gradleModuleRoot -PathType Container) {
+                $candidates += Get-ChildItem -LiteralPath $gradleModuleRoot -Recurse -File -Filter $artifact.fileName |
+                    Select-Object -ExpandProperty FullName
+            }
         }
     }
     $candidate = $candidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1

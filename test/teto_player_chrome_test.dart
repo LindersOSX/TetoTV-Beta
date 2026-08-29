@@ -977,18 +977,23 @@ void main() {
     );
     expect(tester.widget<Slider>(sliderFinder).label, '23:59');
     expect(
-      find.byKey(const ValueKey('target-time-player-seek-target-time')),
+      find.byKey(const ValueKey('target-time-player-seek-time-bubble')),
       findsOneWidget,
     );
-    final seekTextFinder = find.text('Seek 23:59');
+    expect(
+      find.byKey(const ValueKey('target-time-player-seek-target-time')),
+      findsNothing,
+    );
+    final seekTextFinder = find.text('23:59');
     expect(seekTextFinder, findsOneWidget);
     final seekText = tester.widget<Text>(seekTextFinder);
     expect(seekText.style?.fontSize, 18);
     final seekRect = tester.getRect(
-      find.byKey(const ValueKey('target-time-player-seek-target-time')),
+      find.byKey(const ValueKey('target-time-player-seek-time-bubble')),
     );
     final progressRect = tester.getRect(sliderFinder);
     expect(seekRect.bottom, lessThan(progressRect.top));
+    expect(seekRect.right, lessThanOrEqualTo(progressRect.right));
     expect(seeks, isEmpty);
 
     await tester.sendKeyUpEvent(LogicalKeyboardKey.arrowRight);
@@ -1044,18 +1049,25 @@ void main() {
     await tester.pump();
 
     final seekFinder = find.byKey(
-      const ValueKey('compact-target-time-player-seek-target-time'),
+      const ValueKey('compact-target-time-player-seek-time-bubble'),
     );
     final progressFinder = find.byKey(
       const ValueKey('compact-target-time-player-progress-bar'),
     );
     expect(seekFinder, findsOneWidget);
-    final seekText = tester.widget<Text>(find.text('Seek 03:30'));
+    final seekText = tester.widget<Text>(find.text('03:30'));
     expect(seekText.style?.fontSize, 14);
+    final slider = tester.widget<Slider>(progressFinder);
+    final progressRect = tester.getRect(progressFinder);
+    final expectedThumbCenter =
+        progressRect.left +
+        12 +
+        (progressRect.width - 24) * (slider.value / slider.max);
     expect(
-      tester.getRect(seekFinder).bottom,
-      lessThan(tester.getRect(progressFinder).top),
+      tester.getRect(seekFinder).center.dx,
+      closeTo(expectedThumbCenter, .01),
     );
+    expect(tester.getRect(seekFinder).bottom, lessThan(progressRect.top));
 
     await tester.sendKeyUpEvent(LogicalKeyboardKey.arrowRight);
     await tester.pump();
@@ -1220,10 +1232,22 @@ void main() {
       expect(hudVisible, isTrue);
       expect(interactionStates, isNotEmpty);
       expect(interactionStates.last, isTrue);
+      expect(
+        find.byKey(const ValueKey('scrub-hold-player-seek-time-bubble')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('scrub-hold-player-seek-target-time')),
+        findsNothing,
+      );
 
       await gesture.up();
       await tester.pump(playerControlsIdleTimeout - const Duration(seconds: 1));
       expect(hudVisible, isTrue);
+      expect(
+        find.byKey(const ValueKey('scrub-hold-player-seek-time-bubble')),
+        findsNothing,
+      );
       await tester.pump(const Duration(seconds: 1));
       expect(hudVisible, isFalse);
       expect(interactionStates.last, isFalse);
@@ -1239,10 +1263,18 @@ void main() {
       }
       expect(hudVisible, isTrue);
       expect(interactionStates.last, isTrue);
+      expect(
+        find.byKey(const ValueKey('scrub-hold-player-seek-time-bubble')),
+        findsOneWidget,
+      );
 
       await tester.sendKeyUpEvent(LogicalKeyboardKey.arrowRight);
       await tester.pump(playerControlsIdleTimeout - const Duration(seconds: 1));
       expect(hudVisible, isTrue);
+      expect(
+        find.byKey(const ValueKey('scrub-hold-player-seek-time-bubble')),
+        findsNothing,
+      );
       await tester.pump(const Duration(seconds: 1));
       expect(hudVisible, isFalse);
       expect(interactionStates.last, isFalse);
@@ -1351,6 +1383,99 @@ void main() {
     );
   }
 
+  testWidgets(
+    'skip action stays clear of the HUD during active D-pad scrubbing',
+    (tester) async {
+      const viewport = Size(1920, 1080);
+      tester.view.physicalSize = viewport;
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final playFocus = FocusNode();
+      final progressFocus = FocusNode();
+      addTearDown(playFocus.dispose);
+      addTearDown(progressFocus.dispose);
+      var scrubbing = false;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: StatefulBuilder(
+              builder: (context, setHarnessState) => Stack(
+                children: [
+                  TetoPlayerChrome(
+                    engineKey: 'scrubbing-skip-spacing',
+                    title: 'Episode',
+                    streamLabel: 'Stream',
+                    position: const Duration(minutes: 3),
+                    duration: const Duration(minutes: 24),
+                    isPlaying: true,
+                    playFocusNode: playFocus,
+                    progressFocusNode: progressFocus,
+                    seekBackSeconds: 10,
+                    seekForwardSeconds: 30,
+                    onSeek: (_) {},
+                    onRewind: () {},
+                    onPlayPause: () {},
+                    onForward: () {},
+                    onAudio: () {},
+                    onSubtitles: () {},
+                    onPicture: () {},
+                    onOptions: () {},
+                    onDismiss: () {},
+                    onScrubInteractionChanged: (active) {
+                      setHarnessState(() => scrubbing = active);
+                    },
+                  ),
+                  Positioned(
+                    right: 38,
+                    bottom: playerSkipOverlayBottomInset(
+                      viewport: viewport,
+                      controlsVisible: true,
+                      scrubbing: scrubbing,
+                    ),
+                    child: TetoSkipSegmentOverlay(
+                      label: 'Skip Intro',
+                      onPressed: () {},
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+
+      progressFocus.requestFocus();
+      await tester.pump();
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.arrowRight);
+      await tester.pump();
+
+      expect(scrubbing, isTrue);
+      expect(
+        find.byKey(
+          const ValueKey('scrubbing-skip-spacing-player-seek-time-bubble'),
+        ),
+        findsOneWidget,
+      );
+      final skipRect = tester.getRect(
+        find.byKey(const ValueKey('player-skip-segment-overlay')),
+      );
+      final chromeRect = tester.getRect(
+        find.byKey(
+          const ValueKey('scrubbing-skip-spacing-bottom-player-chrome'),
+        ),
+      );
+      expect(skipRect.bottom, lessThan(chromeRect.top));
+      expect(chromeRect.top - skipRect.bottom, greaterThanOrEqualTo(12));
+
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.arrowRight);
+      await tester.pump();
+      expect(scrubbing, isFalse);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   test('skip overlay inset follows HUD visibility and safe area', () {
     expect(
       playerSkipOverlayBottomInset(
@@ -1391,6 +1516,33 @@ void main() {
         expandedHeader: true,
       ),
       174,
+    );
+    expect(
+      playerSkipOverlayBottomInset(
+        viewport: const Size(1920, 1080),
+        controlsVisible: true,
+        scrubbing: true,
+      ),
+      175,
+    );
+    expect(
+      playerSkipOverlayBottomInset(
+        viewport: const Size(640, 360),
+        controlsVisible: true,
+        safeAreaBottom: 24,
+        scrubbing: true,
+      ),
+      198,
+    );
+    expect(
+      playerSkipOverlayBottomInset(
+        viewport: const Size(640, 360),
+        controlsVisible: true,
+        safeAreaBottom: 24,
+        textScaleFactor: 2.5,
+        scrubbing: true,
+      ),
+      closeTo(322.05, .001),
     );
   });
 

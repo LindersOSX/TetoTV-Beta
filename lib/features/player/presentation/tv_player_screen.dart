@@ -5361,10 +5361,16 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
 
   void _handleProgressScrubInteraction(bool active) {
     if (_progressScrubActive == active) return;
-    _progressScrubActive = active;
     _controlsTimer?.cancel();
+    if (mounted) {
+      setState(() {
+        _progressScrubActive = active;
+        if (active) _controlsVisible = true;
+      });
+    } else {
+      _progressScrubActive = active;
+    }
     if (active) {
-      if (mounted && !_controlsVisible) setState(() => _controlsVisible = true);
       return;
     }
     // Preview seeks deliberately suppress persistent and synchronized side
@@ -5763,6 +5769,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
                       expandedHeader:
                           _watchPartyStatus != null ||
                           _watchPartyWatchingCount != null,
+                      scrubbing: _progressScrubActive,
                     ),
                     child: TetoSkipSegmentOverlay(
                       focusNode: _skipControlFocus,

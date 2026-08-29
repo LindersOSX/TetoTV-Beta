@@ -220,37 +220,37 @@ APK containing both supported application ABIs.
 Public and Beta updates use anonymous GitHub requests. No Beta key, GitHub
 token, update-proxy URL, or update-specific Dart define is required. Every
 published APK uses the production signing identity. No Public APK is currently
-published. Beta 2.0.40 uses Android build code `410017`. Flutter reuses
+published. Beta 2.0.41 uses Android build code `410018`. Flutter reuses
 `app-release.apk`, so copy and rename the Beta artifact immediately after the
 build:
 
 ```powershell
-New-Item -ItemType Directory -Force .\build\fire-tv | Out-Null
+New-Item -ItemType Directory -Force .\build\fire-tv\v2.0.41 | Out-Null
 
-# Beta 2.0.40
+# Beta 2.0.41
 flutter build apk --release --target-platform android-arm,android-arm64 `
-  --build-name 2.0.40 --build-number 410017 --no-tree-shake-icons
+  --build-name 2.0.41 --build-number 410018 --no-tree-shake-icons
 Copy-Item .\build\app\outputs\flutter-apk\app-release.apk `
-  .\build\fire-tv\TetoTV-v2.0.40-universal.apk
+  .\build\fire-tv\v2.0.41\TetoTV-v2.0.41-universal.apk
 
 .\tool\release\verify_release_apk.ps1 `
   -Channel Beta `
-  -ApkPath .\build\fire-tv\TetoTV-v2.0.40-universal.apk
+  -ApkPath .\build\fire-tv\v2.0.41\TetoTV-v2.0.41-universal.apk
 
 .\tool\release\verify_native_redistribution.ps1 `
-  -StageBundle -ReleaseTag v2.0.40
+  -StageBundle -ReleaseTag v2.0.41
 
 .\tool\release\new_release_checksums.ps1 `
-  -ApkPath .\build\fire-tv\TetoTV-v2.0.40-universal.apk `
-  -NativeSourcePath .\build\release-compliance\TetoTV-v2.0.40-native-playback-sources.zip `
-  -OutputPath .\build\fire-tv\SHA256SUMS
+  -ApkPath .\build\fire-tv\v2.0.41\TetoTV-v2.0.41-universal.apk `
+  -NativeSourcePath .\build\release-compliance\v2.0.41\TetoTV-v2.0.41-native-playback-sources.zip `
+  -OutputPath .\build\fire-tv\v2.0.41\SHA256SUMS
 
 .\tool\release\verify_release_payloads.ps1 `
   -Channel Beta `
-  -ApkPath .\build\fire-tv\TetoTV-v2.0.40-universal.apk `
-  -NativeSourcePath .\build\release-compliance\TetoTV-v2.0.40-native-playback-sources.zip `
-  -ChecksumsPath .\build\fire-tv\SHA256SUMS `
-  -ReleaseNotesPath .\docs\RELEASE_NOTES_2.0.40.md
+  -ApkPath .\build\fire-tv\v2.0.41\TetoTV-v2.0.41-universal.apk `
+  -NativeSourcePath .\build\release-compliance\v2.0.41\TetoTV-v2.0.41-native-playback-sources.zip `
+  -ChecksumsPath .\build\fire-tv\v2.0.41\SHA256SUMS `
+  -ReleaseNotesPath .\docs\RELEASE_NOTES_2.0.41.md
 ```
 
 The Beta GitHub release has exactly three custom assets: the universal APK, the

@@ -8,6 +8,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 const double _playerControlFocusGutter = 20;
+const double _playerProgressFocusBorderWidth = 1.4;
+const double _compactPlayerSeekBubbleFontSize = 14;
+const double _regularPlayerSeekBubbleFontSize = 18;
+const double _compactPlayerSeekBubbleBaseReserve = 38;
+const double _regularPlayerSeekBubbleBaseReserve = 45;
 const double _compactPlayerChromeReservedHeight = 136;
 const double _regularPlayerChromeReservedHeight = 130;
 const Color _defaultPlayerChromePanel = Color(0xD6080808);
@@ -74,6 +79,7 @@ double playerSkipOverlayBottomInset({
   double safeAreaBottom = 0,
   double textScaleFactor = 1,
   bool expandedHeader = false,
+  bool scrubbing = false,
 }) {
   if (!controlsVisible) return 26 + safeAreaBottom.clamp(0, 160);
   final compact = viewport.width < 720 || viewport.height < 480;
@@ -86,9 +92,24 @@ double playerSkipOverlayBottomInset({
   // viewports. Reserve that line so Skip Intro/Outro stays visibly detached
   // from the panel instead of landing on top of its badges or border.
   final expandedHeaderGrowth = expandedHeader ? 44.0 : 0.0;
+  // The seek timestamp is inserted above the progress track only while the
+  // viewer is scrubbing. Move Skip Intro/Outro by the same amount so it stays
+  // detached from both the bubble and the expanded HUD. The base reserve
+  // includes the bubble pointer and its gap above the track; the remaining
+  // term tracks the scaled timestamp glyph height.
+  final scrubbingGrowth = scrubbing
+      ? (compact
+                ? _compactPlayerSeekBubbleBaseReserve
+                : _regularPlayerSeekBubbleBaseReserve) +
+            (scale - 1) *
+                (compact
+                    ? _compactPlayerSeekBubbleFontSize * 1.05
+                    : _regularPlayerSeekBubbleFontSize * 1.05)
+      : 0.0;
   return base +
       accessibleGrowth +
       expandedHeaderGrowth +
+      scrubbingGrowth +
       safeAreaBottom.clamp(0, 160);
 }
 
@@ -1049,37 +1070,16 @@ class _TetoPlayerProgressScrubberState
       mainAxisSize: MainAxisSize.min,
       children: [
         if (_interacting) ...[
-          Align(
-            alignment: Alignment.centerRight,
-            child: IgnorePointer(
-              child: DecoratedBox(
-                key: ValueKey('${widget.engineKey}-player-seek-target-time'),
-                decoration: BoxDecoration(
-                  color: widget.palette.background.withValues(alpha: .94),
-                  borderRadius: BorderRadius.circular(7),
-                  border: Border.all(
-                    color: widget.palette.accent.withValues(alpha: .7),
-                  ),
-                ),
-                child: Padding(
-                  padding: EdgeInsets.symmetric(
-                    horizontal: widget.compact ? 8 : 10,
-                    vertical: widget.compact ? 3 : 4,
-                  ),
-                  child: Text(
-                    'Seek ${formatPlayerChromeDuration(displayPosition)}',
-                    style: TextStyle(
-                      color: _playerPrimaryTextColor(widget.palette),
-                      fontSize: widget.compact ? 14 : 18,
-                      height: 1.1,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                ),
-              ),
-            ),
+          _PlayerSeekTimeBubble(
+            engineKey: widget.engineKey,
+            label: formatPlayerChromeDuration(displayPosition),
+            progress: durationAvailable
+                ? _displayMilliseconds / _scrubMaximumMilliseconds
+                : 0,
+            compact: widget.compact,
+            palette: widget.palette,
           ),
-          SizedBox(height: widget.compact ? 3 : 4),
+          const SizedBox(height: 2),
         ],
         Semantics(
           hint: widget.showSupplementalRow ? null : widget.footerHint,
@@ -1107,7 +1107,7 @@ class _TetoPlayerProgressScrubberState
                   color: _focused
                       ? widget.palette.focusRing
                       : Colors.transparent,
-                  width: 1.4,
+                  width: _playerProgressFocusBorderWidth,
                 ),
               ),
               child: SliderTheme(
@@ -1124,7 +1124,9 @@ class _TetoPlayerProgressScrubberState
                   overlayShape: const RoundSliderOverlayShape(
                     overlayRadius: 12,
                   ),
-                  showValueIndicator: ShowValueIndicator.onDrag,
+                  // The shared bubble above handles touch and D-pad scrubbing
+                  // consistently, so suppress Slider's touch-only duplicate.
+                  showValueIndicator: ShowValueIndicator.never,
                 ),
                 child: Slider(
                   key: ValueKey('${widget.engineKey}-player-progress-bar'),
@@ -1204,6 +1206,176 @@ class _TetoPlayerProgressScrubberState
       ],
     );
   }
+}
+
+class _PlayerSeekTimeBubble extends StatelessWidget {
+  const _PlayerSeekTimeBubble({
+    required this.engineKey,
+    required this.label,
+    required this.progress,
+    required this.compact,
+    required this.palette,
+  });
+
+  final String engineKey;
+  final String label;
+  final double progress;
+  final bool compact;
+  final AppThemePalette palette;
+
+  @override
+  Widget build(BuildContext context) {
+    final textDirection = Directionality.of(context);
+    final textStyle = TextStyle(
+      color: contrastForeground(palette.accentBright),
+      fontSize: compact
+          ? _compactPlayerSeekBubbleFontSize
+          : _regularPlayerSeekBubbleFontSize,
+      height: 1.05,
+      fontWeight: FontWeight.w800,
+    );
+    final textPainter = TextPainter(
+      text: TextSpan(text: label, style: textStyle),
+      maxLines: 1,
+      textDirection: textDirection,
+      textScaler: MediaQuery.textScalerOf(context),
+    )..layout();
+    final horizontalPadding = compact ? 11.0 : 14.0;
+    final verticalPadding = compact ? 5.0 : 6.0;
+    final pointerHeight = compact ? 8.0 : 10.0;
+    final pointerHalfWidth = compact ? 7.0 : 8.0;
+    final naturalWidth = textPainter.width + horizontalPadding * 2;
+    final bubbleHeight =
+        textPainter.height + verticalPadding * 2 + pointerHeight;
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final availableWidth = constraints.maxWidth;
+        final sliderWidth =
+            (availableWidth - _playerProgressFocusBorderWidth * 2).clamp(
+              0.0,
+              availableWidth,
+            );
+        final bubbleWidth = naturalWidth.clamp(0.0, sliderWidth).toDouble();
+        final trackInset = sliderWidth < 24 ? sliderWidth / 2 : 12.0;
+        final logicalProgress = progress.clamp(0.0, 1.0);
+        final visualProgress = textDirection == TextDirection.rtl
+            ? 1 - logicalProgress
+            : logicalProgress;
+        final thumbCenter =
+            _playerProgressFocusBorderWidth +
+            trackInset +
+            (sliderWidth - trackInset * 2).clamp(0.0, sliderWidth) *
+                visualProgress;
+        final minimumLeft = _playerProgressFocusBorderWidth;
+        final maximumLeft = minimumLeft + sliderWidth - bubbleWidth;
+        final left = (thumbCenter - bubbleWidth / 2).clamp(
+          minimumLeft,
+          maximumLeft,
+        );
+        final pointerMargin = (pointerHalfWidth + 2).clamp(
+          0.0,
+          bubbleWidth / 2,
+        );
+        final pointerCenter = (thumbCenter - left).clamp(
+          pointerMargin,
+          bubbleWidth - pointerMargin,
+        );
+
+        return SizedBox(
+          width: double.infinity,
+          height: bubbleHeight,
+          child: Stack(
+            children: [
+              Positioned(
+                left: left,
+                top: 0,
+                child: IgnorePointer(
+                  child: Semantics(
+                    container: true,
+                    label: 'Seek $label',
+                    excludeSemantics: true,
+                    child: CustomPaint(
+                      key: ValueKey('$engineKey-player-seek-time-bubble'),
+                      painter: _PlayerSeekTimeBubblePainter(
+                        color: palette.accentBright,
+                        shadowColor: palette.background.withValues(alpha: .8),
+                        pointerCenter: pointerCenter,
+                        pointerHeight: pointerHeight,
+                        pointerHalfWidth: pointerHalfWidth,
+                      ),
+                      child: SizedBox(
+                        width: bubbleWidth,
+                        height: bubbleHeight,
+                        child: Padding(
+                          padding: EdgeInsets.fromLTRB(
+                            horizontalPadding,
+                            verticalPadding,
+                            horizontalPadding,
+                            verticalPadding + pointerHeight,
+                          ),
+                          child: Text(
+                            label,
+                            key: ValueKey('$engineKey-player-seek-time-text'),
+                            maxLines: 1,
+                            overflow: TextOverflow.fade,
+                            softWrap: false,
+                            textAlign: TextAlign.center,
+                            style: textStyle,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _PlayerSeekTimeBubblePainter extends CustomPainter {
+  const _PlayerSeekTimeBubblePainter({
+    required this.color,
+    required this.shadowColor,
+    required this.pointerCenter,
+    required this.pointerHeight,
+    required this.pointerHalfWidth,
+  });
+
+  final Color color;
+  final Color shadowColor;
+  final double pointerCenter;
+  final double pointerHeight;
+  final double pointerHalfWidth;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final bodyBottom = size.height - pointerHeight;
+    final body = RRect.fromRectAndRadius(
+      Rect.fromLTWH(0, 0, size.width, bodyBottom),
+      Radius.circular(bodyBottom / 2),
+    );
+    final path = Path()
+      ..addRRect(body)
+      ..moveTo(pointerCenter - pointerHalfWidth, bodyBottom - 1)
+      ..lineTo(pointerCenter, size.height)
+      ..lineTo(pointerCenter + pointerHalfWidth, bodyBottom - 1)
+      ..close();
+    canvas.drawShadow(path, shadowColor, 5, false);
+    canvas.drawPath(path, Paint()..color = color);
+  }
+
+  @override
+  bool shouldRepaint(covariant _PlayerSeekTimeBubblePainter oldDelegate) =>
+      color != oldDelegate.color ||
+      shadowColor != oldDelegate.shadowColor ||
+      pointerCenter != oldDelegate.pointerCenter ||
+      pointerHeight != oldDelegate.pointerHeight ||
+      pointerHalfWidth != oldDelegate.pointerHalfWidth;
 }
 
 class _PlayerProgressTime extends StatelessWidget {

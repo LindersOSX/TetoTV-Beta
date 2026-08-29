@@ -2,6 +2,7 @@ import 'package:anime_tv/core/storage/storage_providers.dart';
 import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/preferences/title_language_preference.dart';
+import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/features/catalog/application/anime_title_logo_provider.dart';
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
 import 'package:anime_tv/features/catalog/data/anilist_catalog_client.dart';
@@ -22,6 +23,7 @@ import 'package:anime_tv/features/tracking/application/my_list_controller.dart';
 import 'package:anime_tv/features/tracking/domain/tracking_repository.dart';
 import 'package:anime_tv/features/tracking/presentation/my_list_screen.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -549,6 +551,179 @@ void main() {
       heroRect.contains(titleRect.bottomRight - const Offset(.1, .1)),
       isTrue,
     );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'TV featured hero wraps and scales a long title without truncating it',
+    (tester) async {
+      const longTitle =
+          'The Legendary Hero Is Reborn as the Last Guardian of the Forgotten '
+          'Kingdom Beyond the End of the World';
+      await _pumpFeaturedHomeHero(
+        tester,
+        viewport: const Size(960, 540),
+        isTelevision: true,
+        preferences: const SettingsPreferences(
+          interfaceMode: InterfaceMode.television,
+          showHero: true,
+          loaded: true,
+        ),
+        hero: const AnimeSummary(
+          id: 1618,
+          title: longTitle,
+          description: 'A long-title television regression fixture.',
+          episodes: 24,
+          score: 8.8,
+          format: 'TV',
+          status: 'RELEASING',
+          seasonYear: 2026,
+          durationMinutes: 24,
+          genres: ['Adventure', 'Fantasy'],
+        ),
+      );
+
+      final titleSlot = find.byKey(const ValueKey('hero-title-1618'));
+      final currentTitle = find.byKey(const ValueKey('hero-title-text-1618'));
+      final titleText = find.descendant(
+        of: currentTitle,
+        matching: find.text(longTitle),
+      );
+      final fittedTitle = find.descendant(
+        of: currentTitle,
+        matching: find.byKey(const ValueKey('home-hero-title-fit')),
+      );
+
+      expect(titleText, findsOneWidget);
+      expect(fittedTitle, findsOneWidget);
+      final textWidget = tester.widget<Text>(titleText);
+      expect(textWidget.maxLines, isNull);
+      expect(textWidget.overflow, TextOverflow.visible);
+      expect(tester.widget<FittedBox>(fittedTitle).fit, BoxFit.scaleDown);
+      expect(
+        tester.renderObject<RenderParagraph>(titleText).didExceedMaxLines,
+        isFalse,
+      );
+
+      final slotRect = tester.getRect(titleSlot);
+      final renderedTextRect = tester.getRect(titleText);
+      final heroRect = tester.getRect(find.byKey(const ValueKey('home-hero')));
+      expect(slotRect.size, const Size(310, 68));
+      expect(slotRect.contains(renderedTextRect.topLeft), isTrue);
+      expect(
+        slotRect.contains(renderedTextRect.bottomRight - const Offset(.1, .1)),
+        isTrue,
+      );
+      for (final action in const [
+        ValueKey('home-hero-watch-now'),
+        ValueKey('home-hero-my-list'),
+      ]) {
+        final actionRect = tester.getRect(find.byKey(action));
+        expect(heroRect.contains(actionRect.topLeft), isTrue);
+        expect(
+          heroRect.contains(actionRect.bottomRight - const Offset(.1, .1)),
+          isTrue,
+        );
+      }
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'compact non-TV hero keeps the existing full two-line title treatment',
+    (tester) async {
+      const compactTitle = 'A Compact Tablet Featured Title';
+      await _pumpFeaturedHomeHero(
+        tester,
+        viewport: const Size(540, 960),
+        isTelevision: false,
+        preferences: const SettingsPreferences(
+          interfaceMode: InterfaceMode.phone,
+          homeLayout: HomeLayout.compact,
+          showHero: true,
+          loaded: true,
+        ),
+        hero: const AnimeSummary(
+          id: 2026,
+          title: compactTitle,
+          description: 'A compact-width regression fixture.',
+          episodes: 12,
+          score: 8.2,
+        ),
+      );
+
+      final titleSlot = find.byKey(const ValueKey('hero-title-2026'));
+      final currentTitle = find.byKey(const ValueKey('hero-title-text-2026'));
+      final titleText = find.descendant(
+        of: currentTitle,
+        matching: find.text(compactTitle),
+      );
+
+      expect(titleText, findsOneWidget);
+      expect(
+        find.descendant(
+          of: currentTitle,
+          matching: find.byKey(const ValueKey('home-hero-title-fit')),
+        ),
+        findsNothing,
+      );
+      final textWidget = tester.widget<Text>(titleText);
+      expect(textWidget.maxLines, 2);
+      expect(textWidget.overflow, TextOverflow.ellipsis);
+      expect(
+        tester.renderObject<RenderParagraph>(titleText).didExceedMaxLines,
+        isFalse,
+      );
+      expect(tester.getSize(titleSlot), const Size(478, 80));
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('tablet hero keeps its existing title bounds and rendering', (
+    tester,
+  ) async {
+    const tabletTitle = 'The Apothecary Diaries';
+    await _pumpFeaturedHomeHero(
+      tester,
+      viewport: const Size(1200, 800),
+      isTelevision: false,
+      preferences: const SettingsPreferences(
+        interfaceMode: InterfaceMode.phone,
+        showHero: true,
+        loaded: true,
+      ),
+      hero: const AnimeSummary(
+        id: 2048,
+        title: tabletTitle,
+        description: 'A tablet regression fixture.',
+        episodes: 24,
+        score: 8.9,
+      ),
+    );
+
+    final titleSlot = find.byKey(const ValueKey('hero-title-2048'));
+    final currentTitle = find.byKey(const ValueKey('hero-title-text-2048'));
+    final titleText = find.descendant(
+      of: currentTitle,
+      matching: find.text(tabletTitle),
+    );
+
+    expect(titleText, findsOneWidget);
+    expect(
+      find.descendant(
+        of: currentTitle,
+        matching: find.byKey(const ValueKey('home-hero-title-fit')),
+      ),
+      findsNothing,
+    );
+    final textWidget = tester.widget<Text>(titleText);
+    expect(textWidget.maxLines, 2);
+    expect(textWidget.overflow, TextOverflow.ellipsis);
+    expect(
+      tester.renderObject<RenderParagraph>(titleText).didExceedMaxLines,
+      isFalse,
+    );
+    expect(tester.getSize(titleSlot), const Size(570, 68));
     expect(tester.takeException(), isNull);
   });
 
@@ -1368,6 +1543,49 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+}
+
+Future<void> _pumpFeaturedHomeHero(
+  WidgetTester tester, {
+  required Size viewport,
+  required bool isTelevision,
+  required SettingsPreferences preferences,
+  required AnimeSummary hero,
+}) async {
+  FlutterSecureStorage.setMockInitialValues({
+    initialSetupCompletedStorageKey: 'true',
+  });
+  tester.view.physicalSize = viewport;
+  tester.view.devicePixelRatio = 1;
+  addTearDown(tester.view.resetPhysicalSize);
+  addTearDown(tester.view.resetDevicePixelRatio);
+
+  await tester.pumpWidget(
+    ProviderScope(
+      overrides: [
+        isTelevisionProvider.overrideWithValue(isTelevision),
+        settingsPreferencesProvider.overrideWith(
+          (_) => _RailSettingsController(preferences),
+        ),
+        trendingAnimeProvider.overrideWith((_) async => [hero]),
+        seasonalAnimeProvider.overrideWith((_) async => const []),
+        trackingHomeProvider.overrideWith(
+          (_) async => const TrackingHomeData(
+            watching: [],
+            planToWatch: [],
+            completed: [],
+          ),
+        ),
+        recentPlaybackProvider.overrideWith((_) async => const []),
+        dismissedContinueWatchingProvider.overrideWith(
+          (_) async => const <int>{},
+        ),
+      ],
+      child: const MaterialApp(home: HomeScreen()),
+    ),
+  );
+  await tester.pump();
+  await tester.pump(const Duration(milliseconds: 400));
 }
 
 class _RailSettingsController extends SettingsPreferencesController {

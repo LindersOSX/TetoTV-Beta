@@ -42,19 +42,6 @@ if ($versionMajor -ne $expectedMajor) {
 $releaseTag = "v$versionName"
 $repository = "LindersOSX/TetoTV-Beta"
 $releaseTitle = "TetoTV $versionName Beta - Android TV / Google TV / Fire TV"
-$releaseTargets = [System.Collections.Generic.List[object]]::new()
-$releaseTargets.Add([pscustomobject]@{
-    Repository = $repository
-    Title = $releaseTitle
-    IsCanonical = $true
-    CreatesTag = $false
-})
-$releaseTargets.Add([pscustomobject]@{
-    Repository = "LindersOSX/TetoTV"
-    Title = "$releaseTitle - legacy updater bridge"
-    IsCanonical = $false
-    CreatesTag = $true
-})
 if ([string]::IsNullOrWhiteSpace($ReleaseNotesPath)) {
     $ReleaseNotesPath = Join-Path $repositoryRoot "docs\RELEASE_NOTES_$versionName.md"
 }
@@ -177,15 +164,6 @@ function Get-RemoteRefCommit([string]$Repository, [string]$Ref, [switch]$Tag) {
     return (($selected -split '\s+')[0]).Trim()
 }
 
-function Test-RemoteTagExists([string]$Repository, [string]$Tag) {
-    $repositoryUrl = "https://github.com/$Repository.git"
-    $lines = @(& git ls-remote --tags $repositoryUrl "refs/tags/$Tag" "refs/tags/$Tag^{}" 2>$null)
-    if ($LASTEXITCODE -ne 0) {
-        throw "Could not inspect tag $Tag in $Repository."
-    }
-    return $lines.Count -gt 0
-}
-
 function Assert-TagMatchesHead([string]$Repository, [string]$Tag, [string]$HeadCommit) {
     $localTagCommit = (& git rev-list -n 1 $Tag 2>$null).Trim()
     if ($LASTEXITCODE -ne 0 -or $localTagCommit -cne $HeadCommit) {
@@ -214,12 +192,10 @@ function Assert-RemoteTagMatchesCommit(
 
 function Remove-GitHubReleaseAfterFailure(
     [string]$Repository,
-    [string]$Tag,
-    [bool]$CleanupTag
+    [string]$Tag
 ) {
     try {
         $arguments = @("release", "delete", $Tag, "--repo", $Repository, "--yes")
-        if ($CleanupTag) { $arguments += "--cleanup-tag" }
         Invoke-GitHubCli -Arguments $arguments | Out-Null
     }
     catch {
@@ -313,7 +289,7 @@ function Assert-PublishedRelease {
 }
 
 Write-Host "Prepared $Channel release"
-Write-Host "  Repositories: $($releaseTargets.Repository -join ', ')"
+Write-Host "  Repository:  $repository"
 Write-Host "  Tag:        $releaseTag"
 Write-Host "  Build code: $buildCode"
 Write-Host "  Title:      $releaseTitle"
@@ -341,99 +317,60 @@ try {
     }
     Assert-TagMatchesHead $repository $releaseTag $headCommit
 
-    $expectedTagCommits = @{}
-    $latestReleases = @{}
-    foreach ($target in $releaseTargets) {
-        if ($null -ne (Get-GitHubRelease $target.Repository $releaseTag -AllowMissing)) {
-            throw "Release $releaseTag already exists in $($target.Repository)."
-        }
-        if (-not $target.IsCanonical -and (Test-RemoteTagExists $target.Repository $releaseTag)) {
-            throw "Tag $releaseTag already exists in legacy updater repository $($target.Repository)."
-        }
-        $latestReleases[$target.Repository] = Get-LatestGitHubRelease $target.Repository
-        $expectedTagCommits[$target.Repository] = if ($target.IsCanonical) {
-            $headCommit
-        }
-        else {
-            Get-RemoteRefCommit $target.Repository "refs/heads/main"
-        }
+    if ($null -ne (Get-GitHubRelease $repository $releaseTag -AllowMissing)) {
+        throw "Release $releaseTag already exists in $repository."
     }
 
-    $latest = $latestReleases[$repository]
-    $legacyLatest = $latestReleases["LindersOSX/TetoTV"]
-    if ($null -ne $latest -and $null -eq $legacyLatest) {
-        throw "The legacy Beta updater feed is empty while the canonical feed is not. Repair the legacy feed before publishing."
-    }
-    if ($null -ne $latest -and $latest.tag_name -cne $legacyLatest.tag_name) {
-        throw "Canonical and legacy Beta updater feeds are out of sync. Repair them before publishing."
-    }
-    if ($null -eq $latest -and $null -ne $legacyLatest) {
-        Write-Host "The clean canonical Beta repository has no prior release; the legacy feed will be used as the version floor for this first synchronized publication."
-    }
-
-    foreach ($target in $releaseTargets) {
-        $targetLatest = $latestReleases[$target.Repository]
-        if ($null -eq $targetLatest) { continue }
+    $latest = Get-LatestGitHubRelease $repository
+    if ($null -ne $latest) {
         try {
-            $latestVersion = [version]([string]$targetLatest.tag_name).TrimStart('v')
+            $latestVersion = [version]([string]$latest.tag_name).TrimStart('v')
             $candidateVersion = [version]$versionName
         }
         catch {
-            throw "The latest or candidate $Channel version in $($target.Repository) is not valid semantic version data."
+            throw "The latest or candidate $Channel version in $repository is not valid semantic version data."
         }
         if ($candidateVersion -le $latestVersion) {
-            throw "Candidate $Channel $versionName must be newer than latest $($targetLatest.tag_name) in $($target.Repository)."
+            throw "Candidate $Channel $versionName must be newer than latest $($latest.tag_name) in $repository."
         }
         $latestBuildMatch = [regex]::Match(
-            [string]$targetLatest.body,
+            [string]$latest.body,
             '(?is)tetotv-android-version-code:\s*(?<code>\d+)'
         )
         if (
             $latestBuildMatch.Success -and
             [long]$buildCode -le [long]$latestBuildMatch.Groups['code'].Value
         ) {
-            throw "Android build code $buildCode must exceed the latest published $Channel build code in $($target.Repository)."
+            throw "Android build code $buildCode must exceed the latest published $Channel build code in $repository."
         }
     }
 
-    $createdTargets = [System.Collections.Generic.List[object]]::new()
+    $releaseCreated = $false
     try {
-        foreach ($target in $releaseTargets) {
-            $createArguments = @(
-                "release", "create", $releaseTag,
-                $resolvedApk,
-                $resolvedNativeSource,
-                $resolvedChecksums,
-                "--repo", $target.Repository,
-                "--latest",
-                "--title", $target.Title,
-                "--notes-file", $resolvedNotes
-            )
-            if ($target.IsCanonical) {
-                $createArguments += "--verify-tag"
-            }
-            else {
-                $createArguments += @("--target", "main")
-            }
-            Invoke-GitHubCli -Arguments $createArguments | Out-Null
-            $createdTargets.Add($target)
+        Invoke-GitHubCli -Arguments @(
+            "release", "create", $releaseTag,
+            $resolvedApk,
+            $resolvedNativeSource,
+            $resolvedChecksums,
+            "--repo", $repository,
+            "--latest",
+            "--title", $releaseTitle,
+            "--notes-file", $resolvedNotes,
+            "--verify-tag"
+        ) | Out-Null
+        $releaseCreated = $true
 
-            Assert-PublishedRelease `
-                -Repository $target.Repository `
-                -Tag $releaseTag `
-                -Title $target.Title `
-                -ExpectedTagCommit $expectedTagCommits[$target.Repository] `
-                -ExpectedAssets $expectedAssets `
-                -BuildCode $buildCode
-        }
+        Assert-PublishedRelease `
+            -Repository $repository `
+            -Tag $releaseTag `
+            -Title $releaseTitle `
+            -ExpectedTagCommit $headCommit `
+            -ExpectedAssets $expectedAssets `
+            -BuildCode $buildCode
     }
     catch {
-        for ($index = $createdTargets.Count - 1; $index -ge 0; $index--) {
-            $created = $createdTargets[$index]
-            Remove-GitHubReleaseAfterFailure `
-                -Repository $created.Repository `
-                -Tag $releaseTag `
-                -CleanupTag ([bool]$created.CreatesTag)
+        if ($releaseCreated) {
+            Remove-GitHubReleaseAfterFailure -Repository $repository -Tag $releaseTag
         }
         throw
     }

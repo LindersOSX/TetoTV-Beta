@@ -128,6 +128,7 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
   @override
   Widget build(BuildContext context) {
     final titlePreference = ref.watch(titleLanguagePreferenceProvider);
+    final isTelevision = ref.watch(isTelevisionProvider);
     final displayTitle = anime.displayTitle(titlePreference);
     final franchiseContext = animeFranchiseContextLabel(
       anime: anime,
@@ -675,7 +676,12 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
                                       onCredits: onCredits,
                                       onDownloadSeason: onDownloadSeason,
                                       downloadSeasonLabel: downloadSeasonLabel,
-                                      large: wide,
+                                      // Android televisions do not all expose
+                                      // the same logical canvas. Keep the
+                                      // 10-foot action styling on TV even when
+                                      // a 4K panel reports fewer than 1500
+                                      // logical pixels after interface scaling.
+                                      large: wide || isTelevision,
                                     ),
                                   ],
                                 ],
@@ -1249,6 +1255,7 @@ class _InformationActions extends StatelessWidget {
         <
           ({
             Key? key,
+            Key? surfaceKey,
             String label,
             IconData icon,
             VoidCallback onPressed,
@@ -1259,6 +1266,7 @@ class _InformationActions extends StatelessWidget {
           if (onTrailer != null)
             (
               key: const ValueKey('anime-details-watch-trailer'),
+              surfaceKey: const ValueKey('anime-details-watch-trailer-surface'),
               label: 'Watch trailer',
               icon: Icons.play_arrow_rounded,
               onPressed: onTrailer!,
@@ -1268,15 +1276,19 @@ class _InformationActions extends StatelessWidget {
           if (onCredits != null)
             (
               key: const ValueKey('anime-details-cast-crew'),
+              surfaceKey: const ValueKey('anime-details-cast-crew-surface'),
               label: 'Cast & crew',
               icon: Icons.groups_rounded,
               onPressed: onCredits!,
               primary: false,
-              preferredWidth: large ? 146 : 105,
+              preferredWidth: large ? 150 : 105,
             ),
           if (onFranchise != null)
             (
               key: const ValueKey('anime-details-related-series'),
+              surfaceKey: const ValueKey(
+                'anime-details-related-series-surface',
+              ),
               label: 'Related series',
               icon: Icons.account_tree_rounded,
               onPressed: onFranchise!,
@@ -1286,15 +1298,20 @@ class _InformationActions extends StatelessWidget {
           if (onDownloadSeason != null)
             (
               key: const ValueKey('anime-details-download-season'),
+              surfaceKey: const ValueKey(
+                'anime-details-download-season-surface',
+              ),
               label: downloadSeasonLabel,
               icon: Icons.download_for_offline_rounded,
               onPressed: onDownloadSeason!,
               primary: false,
-              preferredWidth: large ? 190 : 145,
+              preferredWidth: large ? 182 : 145,
             ),
         ];
     final spacing = large ? 12.0 : 8.0;
-    final panelPadding = large ? 8.0 : 6.0;
+    final panelPadding = large
+        ? const EdgeInsets.symmetric(horizontal: 8, vertical: 10)
+        : const EdgeInsets.all(6);
     final preferredButtonsWidth = actions.fold<double>(
       0,
       (total, action) => total + action.preferredWidth,
@@ -1306,7 +1323,7 @@ class _InformationActions extends StatelessWidget {
       policy: ReadingOrderTraversalPolicy(),
       child: Container(
         key: const ValueKey('anime-details-information-actions'),
-        padding: EdgeInsets.all(panelPadding),
+        padding: panelPadding,
         decoration: BoxDecoration(
           color: const Color(0xC9111111),
           borderRadius: BorderRadius.circular(large ? 14 : 12),
@@ -1318,10 +1335,15 @@ class _InformationActions extends StatelessWidget {
             // If a compact device cannot show their readable widths at once,
             // the strip scrolls horizontally as focus (or touch) moves rather
             // than wrapping or overflowing the screen.
-            final minimumReadableScale = large ? .84 : .90;
+            final minimumReadableScale = .90;
             final minimumStripWidth =
                 preferredStripWidth * minimumReadableScale;
-            final stripWidth = constraints.maxWidth >= preferredStripWidth
+            // TV typography and icons must remain at their intended 10-foot
+            // size. A narrow TV column scrolls the fixed-width strip instead
+            // of quietly shrinking it into the phone treatment.
+            final stripWidth = large
+                ? preferredStripWidth
+                : constraints.maxWidth >= preferredStripWidth
                 ? preferredStripWidth
                 : constraints.maxWidth >= minimumStripWidth
                 ? constraints.maxWidth
@@ -1344,6 +1366,7 @@ class _InformationActions extends StatelessWidget {
                         width: actions[index].preferredWidth * widthScale,
                         child: _InformationButton(
                           key: actions[index].key,
+                          surfaceKey: actions[index].surfaceKey,
                           label: actions[index].label,
                           icon: actions[index].icon,
                           onPressed: actions[index].onPressed,
@@ -1370,6 +1393,7 @@ class _InformationButton extends StatelessWidget {
     required this.icon,
     required this.onPressed,
     required this.large,
+    required this.surfaceKey,
     this.primary = false,
   });
 
@@ -1378,6 +1402,7 @@ class _InformationButton extends StatelessWidget {
   final VoidCallback onPressed;
   final bool large;
   final bool primary;
+  final Key? surfaceKey;
 
   @override
   Widget build(BuildContext context) {
@@ -1385,12 +1410,26 @@ class _InformationButton extends StatelessWidget {
       onPressed: onPressed,
       focusScale: 1.02,
       borderRadius: BorderRadius.circular(10),
+      onFocusChanged: (focused) {
+        if (!focused) return;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!context.mounted) return;
+          Scrollable.ensureVisible(
+            context,
+            duration: const Duration(milliseconds: 120),
+            curve: Curves.easeOutCubic,
+            alignmentPolicy: ScrollPositionAlignmentPolicy.keepVisibleAtEnd,
+          );
+        });
+      },
       child: Container(
+        key: surfaceKey,
         height: large ? 58 : 42,
         alignment: Alignment.center,
-        padding: EdgeInsets.symmetric(horizontal: large ? 16 : 11),
+        padding: EdgeInsets.symmetric(horizontal: large ? 14 : 11),
         decoration: BoxDecoration(
           color: primary ? context.appPalette.accent : const Color(0xEE171717),
+          borderRadius: BorderRadius.circular(10),
           border: Border.all(color: Colors.white.withValues(alpha: .15)),
         ),
         child: FittedBox(
@@ -1405,7 +1444,7 @@ class _InformationButton extends StatelessWidget {
                 maxLines: 1,
                 style: TextStyle(
                   fontSize: large ? 16 : 12,
-                  fontWeight: FontWeight.w800,
+                  fontWeight: FontWeight.w700,
                 ),
               ),
             ],

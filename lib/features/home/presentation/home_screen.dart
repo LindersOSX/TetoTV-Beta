@@ -858,6 +858,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     final heroRoute = hero == null ? '/search?q=Frieren' : '/anime/${hero.id}';
     final heroPanel = _HeroPanel(
       anime: hero,
+      isTelevision: isTelevision,
       isLoading: trendingAsync.isLoading,
       focusNode: _heroFocus,
       myListFocusNode: _heroMyListFocus,
@@ -1084,6 +1085,7 @@ class _HeroPanel extends StatelessWidget {
     required this.myListFocusNode,
     required this.titlePreference,
     required this.preferences,
+    required this.isTelevision,
     required this.isLoading,
     required this.activeIndex,
     required this.itemCount,
@@ -1100,6 +1102,7 @@ class _HeroPanel extends StatelessWidget {
   final FocusNode myListFocusNode;
   final TitleLanguagePreference titlePreference;
   final SettingsPreferences preferences;
+  final bool isTelevision;
   final bool isLoading;
   final int activeIndex;
   final int itemCount;
@@ -1243,10 +1246,10 @@ class _HeroPanel extends StatelessWidget {
                     child: Align(
                       key: ValueKey('hero-title-text-${anime?.id ?? 0}'),
                       alignment: Alignment.centerLeft,
-                      child: Text(
-                        displayTitle,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
+                      child: _HeroTitleText(
+                        title: displayTitle,
+                        width: copyWidth,
+                        fitEntireTitle: isTelevision,
                         style: Theme.of(context).textTheme.displaySmall
                             ?.copyWith(
                               color: context.appPalette.primaryText,
@@ -1315,6 +1318,39 @@ class _HeroPanel extends StatelessWidget {
             ),
         ],
       ),
+    );
+  }
+}
+
+class _HeroTitleText extends StatelessWidget {
+  const _HeroTitleText({
+    required this.title,
+    required this.width,
+    required this.fitEntireTitle,
+    required this.style,
+  });
+
+  final String title;
+  final double width;
+  final bool fitEntireTitle;
+  final TextStyle? style;
+
+  @override
+  Widget build(BuildContext context) {
+    final titleText = Text(
+      title,
+      maxLines: fitEntireTitle ? null : 2,
+      overflow: fitEntireTitle ? TextOverflow.visible : TextOverflow.ellipsis,
+      softWrap: true,
+      style: style,
+    );
+    if (!fitEntireTitle) return titleText;
+
+    return FittedBox(
+      key: const ValueKey('home-hero-title-fit'),
+      fit: BoxFit.scaleDown,
+      alignment: Alignment.centerLeft,
+      child: SizedBox(width: width, child: titleText),
     );
   }
 }

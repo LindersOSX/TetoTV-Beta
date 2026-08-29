@@ -27,10 +27,6 @@ endpoint is therefore the expected state and must be handled as no available
 Public update. Do not create a Public tag or release until a separate Public
 release review is approved.
 
-The legacy `LindersOSX/TetoTV-Releases` bridge also has no current release.
-Older Public clients that still use it will not receive an update until a
-future reviewed Public release is intentionally mirrored there.
-
 ## Beta channel
 
 Beta reads completed 2.x releases from:
@@ -39,31 +35,17 @@ Beta reads completed 2.x releases from:
 https://api.github.com/repos/LindersOSX/TetoTV-Beta/releases/latest
 ```
 
-The current Beta source build is `v2.0.40` with Android build code `410017`.
+The current Beta source build is `v2.0.41` with Android build code `410018`.
 Its release title is:
 
 ```text
-TetoTV 2.0.40 Beta - Android TV / Google TV / Fire TV
+TetoTV 2.0.41 Beta - Android TV / Google TV / Fire TV
 ```
 
 Publish it as a normal, non-draft, non-prerelease GitHub release so
-`/releases/latest` can return it. The clean repository cutover intentionally
-starts a new public source history; do not push an old branch, tag, pull-request
-ref, import, fork network, or bundle into the replacement repository.
-
-## Legacy Beta updater bridge
-
-Installed Beta builds that still use the original repository name validate the
-repository embedded in every APK download URL. Until that migration window is
-explicitly closed, mirror each signed Beta tag and release to:
-
-```text
-https://api.github.com/repos/LindersOSX/TetoTV/releases/latest
-```
-
-`tool/release/publish_beta_release.ps1` must publish and verify the canonical
-Beta release and this bridge together. Failure of either publication is a
-release failure, and a partial publication must be rolled back.
+`/releases/latest` can return it. `LindersOSX/TetoTV-Beta` is the sole source
+and update feed for this channel, so publish and verify the signed release only
+in that repository.
 
 ## Release asset contract
 
@@ -90,7 +72,7 @@ proxy.
 Release notes must include the exact asset names and this build-code marker:
 
 ```html
-<!-- tetotv-android-version-code: 410017 -->
+<!-- tetotv-android-version-code: 410018 -->
 ```
 
 When build-code metadata is present, the updater rejects a known lower build
@@ -112,10 +94,10 @@ These rules apply equally on phones, Android TV, Google TV, and Fire TV.
 
 ## Switching and rollback
 
-The current Beta uses build code `410017`. No Public counterpart is available.
+The current Beta uses build code `410018`. No Public counterpart is available.
 An older Public install can move to this Beta when Android accepts the higher
 build code, but it cannot move back in place until a future Public build uses
-code `410017` or higher. Uninstalling first permits an older APK but deletes
+code `410018` or higher. Uninstalling first permits an older APK but deletes
 local application data. Developer Mode and in-app settings cannot override
 this Android rule.
 
@@ -137,7 +119,7 @@ Before publishing either channel:
    phone, Android TV/Google TV, and Fire TV devices.
 
 For Beta, use `tool/release/publish_beta_release.ps1`; it is a dry run unless
-`-Publish` is passed and it retains the legacy Beta updater bridge. Public
+`-Publish` is passed and publishes only to `LindersOSX/TetoTV-Beta`. Public
 publication is intentionally absent from the release scripts and rejected by
 the release workflow. Re-enabling it requires a separately reviewed source
 change after the Public channel is approved.

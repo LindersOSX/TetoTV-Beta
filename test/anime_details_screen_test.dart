@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:anime_tv/core/preferences/title_language_preference.dart';
+import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/features/catalog/application/anime_title_logo_provider.dart';
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
@@ -775,9 +776,23 @@ void main() {
     final compactTvActions = tester.getRect(
       find.byKey(const ValueKey('episode-actions-panel')),
     );
+    final compactTvInformationTray = tester.getRect(
+      find.byKey(const ValueKey('anime-details-information-actions')),
+    );
+    final compactTvRelatedAction = tester.getRect(
+      find.byKey(const ValueKey('anime-details-related-series')),
+    );
+    final compactTvDownloadAction = tester.getRect(
+      find.byKey(const ValueKey('anime-details-download-season')),
+    );
     expect(compactTvPoster.height / 540, closeTo(.60, .01));
     expect(compactTvPoster.right, lessThan(compactTvInfo.left));
     expect(compactTvInfo.right, lessThan(compactTvActions.left));
+    // A television keeps the same reference action sizing even when Android
+    // exposes a 960px logical canvas instead of a full-HD one.
+    expect(compactTvInformationTray.height, 80);
+    expect(compactTvRelatedAction.size, const Size(165, 58));
+    expect(compactTvDownloadAction.size, const Size(182, 58));
     await tester.tap(find.text('My List status'));
     await tester.pumpAndSettle();
     expect(find.text('Planning'), findsOneWidget);
@@ -912,6 +927,34 @@ void main() {
       );
     }
     expect(informationActionRects.first.height, 58);
+    expect(
+      informationActionRects.map((rect) => rect.width),
+      orderedEquals(const [154, 150, 165, 182]),
+    );
+    for (var index = 1; index < informationActionRects.length; index++) {
+      expect(
+        informationActionRects[index].left -
+            informationActionRects[index - 1].right,
+        12,
+      );
+    }
+    final informationTray = tester.widget<Container>(
+      find.byKey(const ValueKey('anime-details-information-actions')),
+    );
+    expect(
+      informationTray.padding,
+      const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+    );
+    expect(
+      (informationTray.decoration! as BoxDecoration).borderRadius,
+      BorderRadius.circular(14),
+    );
+    final trailerSurface = tester.widget<Container>(
+      find.byKey(const ValueKey('anime-details-watch-trailer-surface')),
+    );
+    final trailerDecoration = trailerSurface.decoration! as BoxDecoration;
+    expect(trailerDecoration.color, AppColors.accent);
+    expect(trailerDecoration.borderRadius, BorderRadius.circular(10));
     final posterCenter = tester.getCenter(
       find.byKey(const ValueKey('anime-details-poster')),
     );

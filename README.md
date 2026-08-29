@@ -42,9 +42,9 @@ This repository contains the complete TetoTV source code as well as the Beta rel
 | Channel | Version | Best for |
 | --- | --- | --- |
 | Public | Not published | Source and release-readiness documents are available, but no Public APK is currently offered |
-| Beta | [2.0.43](docs/RELEASE_NOTES_2.0.43.md) | Testing current fixes and source-built native playback before a separately reviewed Public release |
+| Beta | [2.0.44](docs/RELEASE_NOTES_2.0.44.md) | Testing current fixes and source-built native playback before a separately reviewed Public release |
 
-Beta 2.0.43 uses the repository's explicit unreviewed-Beta exception: its
+Beta 2.0.44 uses the repository's explicit unreviewed-Beta exception: its
 native-library and corresponding-source material did not receive independent
 license review. Automated integrity and source-bundle checks are not a legal
 compliance determination. The release notes preserve the exact disclosure and

@@ -432,6 +432,16 @@ void main() {
     ).allMatches(subjectBlock!.group(1)!).length;
     expect(subjects, 3);
     expect(
+      RegExp(
+        r'\$\{\{ env\.RELEASE_TAG \}\}',
+      ).allMatches(subjectBlock.group(1)!).length,
+      2,
+    );
+    expect(
+      subjectBlock.group(1),
+      isNot(contains('github.event.release.tag_name')),
+    );
+    expect(
       subjectBlock.group(1),
       isNot(contains('unreviewed-beta-release-declaration')),
     );

@@ -35,6 +35,9 @@ void main() {
     final verifier = File(
       'tool/release/verify_native_redistribution.ps1',
     ).readAsStringSync();
+    final apkVerifier = File(
+      'tool/release/verify_release_apk.ps1',
+    ).readAsStringSync();
 
     expect(verifier, contains('GRADLE_USER_HOME'));
     expect(verifier, contains('[Environment+SpecialFolder]::UserProfile'));
@@ -48,5 +51,7 @@ void main() {
         ),
       ),
     );
+    expect(apkVerifier, contains('[Environment]::OSVersion.Platform'));
+    expect(apkVerifier, isNot(contains(r'$IsWindows')));
   });
 }

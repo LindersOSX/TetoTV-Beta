@@ -65,7 +65,9 @@ function Resolve-AndroidTool {
     )
 
     $root = Join-Path $SdkRoot $RelativeRoot
-    $toolName = if ($IsWindows -or $env:OS -eq "Windows_NT") {
+    $windowsHost =
+        [Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT
+    $toolName = if ($windowsHost) {
         $WindowsName
     }
     else {

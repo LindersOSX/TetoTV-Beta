@@ -47,9 +47,6 @@ void main() {
   double verticalGap(WidgetTester tester, String upper, String lower) =>
       cardRect(tester, lower).top - cardRect(tester, upper).bottom;
 
-  double horizontalGap(WidgetTester tester, String left, String right) =>
-      cardRect(tester, right).left - cardRect(tester, left).right;
-
   testWidgets('all five Settings tabs expose the restyled card contract', (
     tester,
   ) async {
@@ -58,11 +55,11 @@ void main() {
     const cardsByArea = <String, List<String>>{
       'appearance': [
         'appearance-theme-display-card',
-        'appearance-navigation-card',
         'appearance-home-screen-card',
         'appearance-display-options-card',
         'appearance-input-feedback-card',
         'appearance-home-shelves-card',
+        'appearance-navigation-card',
       ],
       'playback': [
         'settings-card-playback-captions',
@@ -263,48 +260,75 @@ void main() {
     }
   });
 
-  testWidgets('TV Settings use one consistent card gutter across every area', (
+  testWidgets('TV Settings use one full-width card list in every area', (
     tester,
   ) async {
     await pumpSettings(tester);
 
-    const pairs = <String, (String, String)>{
-      'appearance': (
+    const cardsByArea = <String, List<String>>{
+      'appearance': [
         'appearance-theme-display-card',
         'appearance-home-screen-card',
-      ),
-      'playback': (
+        'appearance-display-options-card',
+        'appearance-input-feedback-card',
+        'appearance-home-shelves-card',
+        'appearance-navigation-card',
+      ],
+      'playback': [
         'settings-card-playback-captions',
         'settings-card-playback-player',
-      ),
-      'services': (
+      ],
+      'services': [
         'settings-card-services-debrid',
         'settings-card-services-sources',
-      ),
-      'accounts': (
+        'settings-card-services-autopick',
+        'settings-card-services-features',
+        'settings-card-services-privacy',
+      ],
+      'accounts': [
         'settings-card-accounts-tracking',
+        'settings-card-accounts-profiles',
         'settings-card-accounts-behavior',
-      ),
-      'system': (
+        'settings-card-accounts-discord',
+      ],
+      'system': [
         'settings-card-system-support',
         'settings-card-system-updates',
-      ),
+        'settings-card-system-community',
+        'settings-card-system-storage',
+        'settings-card-system-legal',
+        'settings-card-system-privacy-diagnostics',
+      ],
     };
 
-    for (final entry in pairs.entries) {
+    for (final entry in cardsByArea.entries) {
       await selectArea(tester, entry.key);
-      final left = cardRect(tester, entry.value.$1);
-      final right = cardRect(tester, entry.value.$2);
-      expect(
-        (left.top - right.top).abs(),
-        lessThanOrEqualTo(1),
-        reason: '${entry.key} columns must start on the same baseline.',
+      final list = tester.getRect(
+        find.byKey(const ValueKey('settings-content-list')),
       );
-      expect(
-        horizontalGap(tester, entry.value.$1, entry.value.$2),
-        closeTo(8, 1),
-        reason: '${entry.key} must use the shared TV card gutter.',
-      );
+      final first = cardRect(tester, entry.value.first);
+      expect(first.left, closeTo(list.left, 1));
+      expect(first.right, closeTo(list.right, 1));
+
+      for (var index = 0; index < entry.value.length; index++) {
+        final current = cardRect(tester, entry.value[index]);
+        expect(
+          current.left,
+          closeTo(first.left, 1),
+          reason: '${entry.key} cards must share one left edge.',
+        );
+        expect(
+          current.width,
+          closeTo(first.width, 1),
+          reason: '${entry.key} cards must use the full list width.',
+        );
+        if (index == 0) continue;
+        expect(
+          verticalGap(tester, entry.value[index - 1], entry.value[index]),
+          closeTo(8, 1),
+          reason: '${entry.key} cards must use the shared TV list gap.',
+        );
+      }
     }
 
     final tabRects = [
@@ -320,68 +344,6 @@ void main() {
     for (var index = 1; index < tabRects.length; index++) {
       expect(tabRects[index].width, closeTo(tabRects.first.width, 1));
       expect(tabRects[index].left - tabRects[index - 1].right, closeTo(8, 1));
-    }
-  });
-
-  testWidgets('TV Settings stack cards continuously in each visual column', (
-    tester,
-  ) async {
-    await pumpSettings(tester);
-
-    const columnsByArea = <String, List<List<String>>>{
-      'appearance': [
-        [
-          'appearance-theme-display-card',
-          'appearance-navigation-card',
-          'appearance-home-shelves-card',
-        ],
-        [
-          'appearance-home-screen-card',
-          'appearance-display-options-card',
-          'appearance-input-feedback-card',
-        ],
-      ],
-      'services': [
-        [
-          'settings-card-services-debrid',
-          'settings-card-services-autopick',
-          'settings-card-services-features',
-        ],
-        ['settings-card-services-sources', 'settings-card-services-privacy'],
-      ],
-      'accounts': [
-        ['settings-card-accounts-tracking', 'settings-card-accounts-profiles'],
-        ['settings-card-accounts-behavior', 'settings-card-accounts-discord'],
-      ],
-      'system': [
-        [
-          'settings-card-system-support',
-          'settings-card-system-community',
-          'settings-card-system-privacy-diagnostics',
-        ],
-        [
-          'settings-card-system-updates',
-          'settings-card-system-storage',
-          'settings-card-system-legal',
-        ],
-      ],
-    };
-
-    for (final entry in columnsByArea.entries) {
-      await selectArea(tester, entry.key);
-      for (final column in entry.value) {
-        for (var index = 1; index < column.length; index++) {
-          final previous = cardRect(tester, column[index - 1]);
-          final current = cardRect(tester, column[index]);
-          expect((current.left - previous.left).abs(), lessThanOrEqualTo(1));
-          expect((current.width - previous.width).abs(), lessThanOrEqualTo(1));
-          expect(
-            verticalGap(tester, column[index - 1], column[index]),
-            closeTo(8, 1),
-            reason: '${entry.key} cards must stack without a blank lane.',
-          );
-        }
-      }
     }
   });
 
@@ -458,6 +420,23 @@ void main() {
       ),
       closeTo(18, .5),
     );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('wide non-TV layouts retain their responsive columns', (
+    tester,
+  ) async {
+    await pumpSettings(
+      tester,
+      size: const Size(1280, 720),
+      isTelevision: false,
+    );
+
+    final theme = cardRect(tester, 'appearance-theme-display-card');
+    final home = cardRect(tester, 'appearance-home-screen-card');
+    expect((theme.top - home.top).abs(), lessThanOrEqualTo(1));
+    expect(home.left, greaterThan(theme.right));
+    expect(theme.width, lessThan(home.right - theme.left));
     expect(tester.takeException(), isNull);
   });
 }

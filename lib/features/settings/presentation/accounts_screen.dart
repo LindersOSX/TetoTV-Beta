@@ -157,6 +157,9 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
   final _displaySectionFocus = FocusNode(
     debugLabel: 'accounts.section.display',
   );
+  final _cardDetailsFocus = FocusNode(
+    debugLabel: 'accounts.customization.display.card-details',
+  );
   final _homeNavigationSectionFocus = FocusNode(
     debugLabel: 'accounts.section.home-navigation',
   );
@@ -178,11 +181,17 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
   final _inputFeedbackSectionFocus = FocusNode(
     debugLabel: 'accounts.section.input-feedback',
   );
+  final _clickSoundsFocus = FocusNode(
+    debugLabel: 'accounts.customization.input.click-sounds',
+  );
   final _closedCaptionsSectionFocus = FocusNode(
     debugLabel: 'accounts.section.closed-captions',
   );
   final _captionTextColorFocus = FocusNode(
     debugLabel: 'accounts.captions.text-color',
+  );
+  final _captionTextSizeFocus = FocusNode(
+    debugLabel: 'accounts.captions.text-size',
   );
   final _playerControlsSectionFocus = FocusNode(
     debugLabel: 'accounts.section.player-controls',
@@ -221,6 +230,9 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
   );
   final _anilistFocus = FocusNode(debugLabel: 'accounts.anilist');
   final _malFocus = FocusNode(debugLabel: 'accounts.myanimelist');
+  final _trackingDisconnectFocus = FocusNode(
+    debugLabel: 'accounts.tracking.disconnect',
+  );
   final _anilistTokenFocus = FocusNode(debugLabel: 'accounts.anilist.token');
   final _anilistSaveFocus = FocusNode(debugLabel: 'accounts.anilist.save');
   final _malTokenFocus = FocusNode(debugLabel: 'accounts.myanimelist.token');
@@ -463,6 +475,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     _customizationFocus.dispose();
     _homeShelvesSectionFocus.dispose();
     _displaySectionFocus.dispose();
+    _cardDetailsFocus.dispose();
     _homeNavigationSectionFocus.dispose();
     _featuredHomeContentFocus.dispose();
     _posterMetadataFocus.dispose();
@@ -470,8 +483,10 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     _navigationSizeFocus.dispose();
     _menuOrderFocus.dispose();
     _inputFeedbackSectionFocus.dispose();
+    _clickSoundsFocus.dispose();
     _closedCaptionsSectionFocus.dispose();
     _captionTextColorFocus.dispose();
+    _captionTextSizeFocus.dispose();
     _playerControlsSectionFocus.dispose();
     _customizationResetFocus.dispose();
     _setupFocus.dispose();
@@ -491,6 +506,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     _premiumizeSaveFocus.dispose();
     _anilistFocus.dispose();
     _malFocus.dispose();
+    _trackingDisconnectFocus.dispose();
     _anilistTokenFocus.dispose();
     _anilistSaveFocus.dispose();
     _malTokenFocus.dispose();
@@ -555,6 +571,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       return KeyEventResult.handled;
     }
     final current = FocusManager.instance.primaryFocus;
+    final tvListLayout = layout?.usesTvRail == true;
     bool focusNodeIsMounted(FocusNode node) => node.context?.mounted ?? false;
     final preferences = ref.read(settingsPreferencesProvider);
     final selectedDebridAction = switch (preferences.debridProvider) {
@@ -618,11 +635,14 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       areaNodes.first,
       _homeShelvesSectionFocus,
       _displaySectionFocus,
+      _cardDetailsFocus,
       _homeNavigationSectionFocus,
       ...topNavigationNodes,
       _inputFeedbackSectionFocus,
+      _clickSoundsFocus,
       _closedCaptionsSectionFocus,
       _captionTextColorFocus,
+      _captionTextSizeFocus,
       _playerControlsSectionFocus,
       _customizationResetFocus,
       ...shelfNodes,
@@ -652,6 +672,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       _watchTogetherFocus,
       _trackingProviderFocus,
       selectedTrackingAction,
+      _trackingDisconnectFocus,
       _anilistTokenFocus,
       _anilistSaveFocus,
       _malTokenFocus,
@@ -673,6 +694,22 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       _anonymousCrashReportingFocus,
       _anonymousUsageCountFocus,
     };
+    if (tvListLayout) {
+      leftEdgeNodes.addAll({
+        _featuredHomeContentFocus,
+        _posterMetadataFocus,
+        _continueWatchingFocus,
+        _webStreamsFocus,
+        _directTorrentFocus,
+        _dubEpisodeNotificationsFocus,
+        _discordDisconnectFocus,
+        _calibrationFocus,
+        _diagnosticsFocus,
+        _checkUpdatesFocus,
+        _resetAppFocus,
+        _legalFocus,
+      });
+    }
     if (key == LogicalKeyboardKey.arrowLeft &&
         layout?.usesSideNavigation != true &&
         leftEdgeNodes.contains(current) &&
@@ -712,13 +749,17 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       }
     } else if (shelfIndex >= 0) {
       if (key == LogicalKeyboardKey.arrowUp) {
-        target = shelfIndex > 0
-            ? shelfNodes[shelfIndex - 1]
-            : _continueWatchingFocus;
+        if (shelfIndex > 0) {
+          target = shelfNodes[shelfIndex - 1];
+        } else {
+          target = tvListLayout ? _clickSoundsFocus : _continueWatchingFocus;
+        }
       }
       if (key == LogicalKeyboardKey.arrowDown) {
         if (shelfIndex < shelfNodes.length - 1) {
           target = shelfNodes[shelfIndex + 1];
+        } else if (tvListLayout) {
+          target = _navigationSizeFocus;
         } else {
           return KeyEventResult.handled;
         }
@@ -728,11 +769,13 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     if (areaIndex >= 0 || shelfIndex >= 0) {
       // Settings-area and Home-shelf navigation were handled above.
     } else if (current == _featuredHomeContentFocus) {
-      if (key == LogicalKeyboardKey.arrowLeft) {
+      if (key == LogicalKeyboardKey.arrowLeft && !tvListLayout) {
         target = _customizationFocus;
       }
       if (key == LogicalKeyboardKey.arrowUp) {
-        target = _areaFocusNodes[_SettingsArea.appearance];
+        target = tvListLayout
+            ? _showTitleStyleFocus
+            : _areaFocusNodes[_SettingsArea.appearance];
       }
       if (key == LogicalKeyboardKey.arrowDown) {
         target = _posterMetadataFocus;
@@ -760,7 +803,9 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     } else if (current == _displaySectionFocus) {
       if (_activeArea == _SettingsArea.appearance) {
         if (key == LogicalKeyboardKey.arrowUp) {
-          target = _customizationResetFocus;
+          target = tvListLayout
+              ? _continueWatchingFocus
+              : _customizationResetFocus;
         }
       } else {
         if (key == LogicalKeyboardKey.arrowUp) {
@@ -774,6 +819,10 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
               : _homeNavigationSectionFocus;
         }
       }
+    } else if (current == _cardDetailsFocus) {
+      if (key == LogicalKeyboardKey.arrowDown && tvListLayout) {
+        target = _inputFeedbackSectionFocus;
+      }
     } else if (current == _backFocus) {
       if (key == LogicalKeyboardKey.arrowRight ||
           key == LogicalKeyboardKey.arrowDown) {
@@ -785,7 +834,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       if (key == LogicalKeyboardKey.arrowUp) {
         target = _areaFocusNodes[_SettingsArea.appearance];
       }
-      if (key == LogicalKeyboardKey.arrowRight) {
+      if (key == LogicalKeyboardKey.arrowRight && !tvListLayout) {
         target = _featuredHomeContentFocus;
       }
       if (key == LogicalKeyboardKey.arrowDown) {
@@ -795,7 +844,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       if (key == LogicalKeyboardKey.arrowUp) {
         target = _customizationFocus;
       }
-      if (key == LogicalKeyboardKey.arrowRight) {
+      if (key == LogicalKeyboardKey.arrowRight && !tvListLayout) {
         target = _posterMetadataFocus;
       }
       if (key == LogicalKeyboardKey.arrowDown) {
@@ -805,17 +854,19 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       if (key == LogicalKeyboardKey.arrowUp) {
         target = _titleLanguageFocus;
       }
-      if (key == LogicalKeyboardKey.arrowRight) {
+      if (key == LogicalKeyboardKey.arrowRight && !tvListLayout) {
         target = _continueWatchingFocus;
       }
       if (key == LogicalKeyboardKey.arrowDown) {
-        target = _navigationSizeFocus;
+        target = tvListLayout
+            ? _featuredHomeContentFocus
+            : _navigationSizeFocus;
       }
     } else if (current == _navigationSizeFocus) {
       if (key == LogicalKeyboardKey.arrowUp) {
-        target = _showTitleStyleFocus;
+        target = tvListLayout ? shelfNodes.last : _showTitleStyleFocus;
       }
-      if (key == LogicalKeyboardKey.arrowRight) {
+      if (key == LogicalKeyboardKey.arrowRight && !tvListLayout) {
         target = _continueWatchingFocus;
       }
       if (key == LogicalKeyboardKey.arrowDown) {
@@ -825,14 +876,14 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       if (key == LogicalKeyboardKey.arrowUp) {
         target = _navigationSizeFocus;
       }
-      if (key == LogicalKeyboardKey.arrowRight) {
+      if (key == LogicalKeyboardKey.arrowRight && !tvListLayout) {
         target = _continueWatchingFocus;
       }
       if (key == LogicalKeyboardKey.arrowDown) {
         target = _customizationResetFocus;
       }
     } else if (current == _posterMetadataFocus) {
-      if (key == LogicalKeyboardKey.arrowLeft) {
+      if (key == LogicalKeyboardKey.arrowLeft && !tvListLayout) {
         target = _titleLanguageFocus;
       }
       if (key == LogicalKeyboardKey.arrowUp) {
@@ -842,14 +893,14 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
         target = _continueWatchingFocus;
       }
     } else if (current == _continueWatchingFocus) {
-      if (key == LogicalKeyboardKey.arrowLeft) {
+      if (key == LogicalKeyboardKey.arrowLeft && !tvListLayout) {
         target = _showTitleStyleFocus;
       }
       if (key == LogicalKeyboardKey.arrowUp) {
         target = _posterMetadataFocus;
       }
       if (key == LogicalKeyboardKey.arrowDown) {
-        target = shelfNodes.first;
+        target = tvListLayout ? _displaySectionFocus : shelfNodes.first;
       }
     } else if (current == _homeNavigationSectionFocus) {
       if (key == LogicalKeyboardKey.arrowUp &&
@@ -865,7 +916,11 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
         target = _inputFeedbackSectionFocus;
       }
     } else if (current == _inputFeedbackSectionFocus) {
-      if (_activeArea != _SettingsArea.appearance) {
+      if (_activeArea == _SettingsArea.appearance && tvListLayout) {
+        if (key == LogicalKeyboardKey.arrowUp) {
+          target = _cardDetailsFocus;
+        }
+      } else if (_activeArea != _SettingsArea.appearance) {
         if (key == LogicalKeyboardKey.arrowUp &&
             !_expandedCustomizationSections.contains(
               _CustomizationSection.homeNavigation,
@@ -878,6 +933,10 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
             )) {
           target = _customizationResetFocus;
         }
+      }
+    } else if (current == _clickSoundsFocus) {
+      if (key == LogicalKeyboardKey.arrowDown && tvListLayout) {
+        target = shelfNodes.first;
       }
     } else if (current == _closedCaptionsSectionFocus) {
       if (key == LogicalKeyboardKey.arrowUp) {
@@ -897,14 +956,21 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
             ? _areaFocusNodes[_SettingsArea.playback]
             : _closedCaptionsSectionFocus;
       }
+    } else if (current == _captionTextSizeFocus) {
+      if (key == LogicalKeyboardKey.arrowDown && tvListLayout) {
+        target = _playerControlsSectionFocus;
+      }
     } else if (current == _playerControlsSectionFocus) {
-      if (key == LogicalKeyboardKey.arrowUp &&
-          !_expandedCustomizationSections.contains(
-            _CustomizationSection.closedCaptions,
-          )) {
-        target = _activeArea == _SettingsArea.playback
-            ? _captionTextColorFocus
-            : _closedCaptionsSectionFocus;
+      if (key == LogicalKeyboardKey.arrowUp) {
+        if (tvListLayout && _activeArea == _SettingsArea.playback) {
+          target = _captionTextSizeFocus;
+        } else if (!_expandedCustomizationSections.contains(
+          _CustomizationSection.closedCaptions,
+        )) {
+          target = _activeArea == _SettingsArea.playback
+              ? _captionTextColorFocus
+              : _closedCaptionsSectionFocus;
+        }
       }
     } else if (current == _customizationResetFocus) {
       if (key == LogicalKeyboardKey.arrowUp) {
@@ -913,6 +979,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
             : _inputFeedbackSectionFocus;
       }
       if (key == LogicalKeyboardKey.arrowRight &&
+          !tvListLayout &&
           _activeArea == _SettingsArea.appearance) {
         target = _continueWatchingFocus;
       }
@@ -945,33 +1012,53 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
             ? selectedDebridLast
             : selectedDebridAction;
       }
-      if (key == LogicalKeyboardKey.arrowRight) target = _webStreamsFocus;
-      if (key == LogicalKeyboardKey.arrowDown) target = _debridSortFocus;
+      if (key == LogicalKeyboardKey.arrowRight && !tvListLayout) {
+        target = _webStreamsFocus;
+      }
+      if (key == LogicalKeyboardKey.arrowDown) {
+        target = tvListLayout ? _webStreamsFocus : _debridSortFocus;
+      }
     } else if (current == _webStreamsFocus) {
       if (key == LogicalKeyboardKey.arrowUp) {
-        target = focusNodeIsMounted(selectedDebridLast)
+        target = tvListLayout
+            ? _debridStreamsFocus
+            : focusNodeIsMounted(selectedDebridLast)
             ? selectedDebridLast
             : selectedDebridAction;
       }
-      if (key == LogicalKeyboardKey.arrowLeft) target = _debridStreamsFocus;
-      if (key == LogicalKeyboardKey.arrowRight) {
+      if (key == LogicalKeyboardKey.arrowLeft && !tvListLayout) {
+        target = _debridStreamsFocus;
+      }
+      if (key == LogicalKeyboardKey.arrowRight && !tvListLayout) {
         target = _directTorrentFocus;
       }
-      if (key == LogicalKeyboardKey.arrowDown) target = _debridSortFocus;
+      if (key == LogicalKeyboardKey.arrowDown) {
+        target = tvListLayout ? _directTorrentFocus : _debridSortFocus;
+      }
     } else if (current == _directTorrentFocus) {
       if (key == LogicalKeyboardKey.arrowUp) {
-        target = focusNodeIsMounted(selectedDebridLast)
+        target = tvListLayout
+            ? _webStreamsFocus
+            : focusNodeIsMounted(selectedDebridLast)
             ? selectedDebridLast
             : selectedDebridAction;
       }
-      if (key == LogicalKeyboardKey.arrowLeft) target = _webStreamsFocus;
-      if (key == LogicalKeyboardKey.arrowRight) target = _marketplaceFocus;
-      if (key == LogicalKeyboardKey.arrowDown) target = _debridSortFocus;
+      if (key == LogicalKeyboardKey.arrowLeft && !tvListLayout) {
+        target = _webStreamsFocus;
+      }
+      if (key == LogicalKeyboardKey.arrowRight && !tvListLayout) {
+        target = _marketplaceFocus;
+      }
+      if (key == LogicalKeyboardKey.arrowDown) {
+        target = tvListLayout ? _marketplaceFocus : _debridSortFocus;
+      }
     } else if (current == _marketplaceFocus) {
       if (key == LogicalKeyboardKey.arrowUp) target = _directTorrentFocus;
       if (key == LogicalKeyboardKey.arrowDown) target = _debridSortFocus;
     } else if (current == _debridSortFocus) {
-      if (key == LogicalKeyboardKey.arrowUp) target = _debridStreamsFocus;
+      if (key == LogicalKeyboardKey.arrowUp) {
+        target = tvListLayout ? _marketplaceFocus : _debridStreamsFocus;
+      }
       if (key == LogicalKeyboardKey.arrowDown) target = _sourcePriorityFocus;
     } else if (current == _sourcePriorityFocus) {
       if (key == LogicalKeyboardKey.arrowUp) target = _debridSortFocus;
@@ -1092,7 +1179,9 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
           focusNodeIsMounted(_anilistTokenFocus)) {
         target = _anilistTokenFocus;
       } else if (key == LogicalKeyboardKey.arrowDown) {
-        target = _localProfilesFocus;
+        target = tvListLayout && focusNodeIsMounted(_trackingDisconnectFocus)
+            ? _trackingDisconnectFocus
+            : _localProfilesFocus;
       }
       if (key == LogicalKeyboardKey.arrowUp) target = _trackingProviderFocus;
     } else if (current == _malFocus) {
@@ -1100,7 +1189,9 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
           focusNodeIsMounted(_malTokenFocus)) {
         target = _malTokenFocus;
       } else if (key == LogicalKeyboardKey.arrowDown) {
-        target = _localProfilesFocus;
+        target = tvListLayout && focusNodeIsMounted(_trackingDisconnectFocus)
+            ? _trackingDisconnectFocus
+            : _localProfilesFocus;
       }
       if (key == LogicalKeyboardKey.arrowUp) target = _trackingProviderFocus;
     } else if (current == _anilistTokenFocus) {
@@ -1119,15 +1210,26 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       if (key == LogicalKeyboardKey.arrowDown) {
         target = _localProfilesFocus;
       }
+    } else if (current == _trackingDisconnectFocus) {
+      if (key == LogicalKeyboardKey.arrowUp) {
+        target = selectedTrackingAction;
+      }
+      if (key == LogicalKeyboardKey.arrowDown) {
+        target = _localProfilesFocus;
+      }
     } else if (current == _localProfilesFocus) {
       if (key == LogicalKeyboardKey.arrowUp) {
-        final selectedSave =
-            preferences.trackingProvider == TrackingProvider.anilist
-            ? _anilistSaveFocus
-            : _malSaveFocus;
-        target = focusNodeIsMounted(selectedSave)
-            ? selectedSave
-            : selectedTrackingAction;
+        if (tvListLayout && focusNodeIsMounted(_trackingDisconnectFocus)) {
+          target = _trackingDisconnectFocus;
+        } else {
+          final selectedSave =
+              preferences.trackingProvider == TrackingProvider.anilist
+              ? _anilistSaveFocus
+              : _malSaveFocus;
+          target = focusNodeIsMounted(selectedSave)
+              ? selectedSave
+              : selectedTrackingAction;
+        }
       }
       if (key == LogicalKeyboardKey.arrowDown) {
         target = _trackingThresholdFocus;
@@ -1143,11 +1245,13 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       if (key == LogicalKeyboardKey.arrowUp) {
         target = _trackingThresholdFocus;
       }
-      if (key == LogicalKeyboardKey.arrowRight) {
+      if (key == LogicalKeyboardKey.arrowRight && !tvListLayout) {
         target = _dubEpisodeNotificationsFocus;
       }
       if (key == LogicalKeyboardKey.arrowDown) {
-        if (focusNodeIsMounted(_discordPresenceFocus) &&
+        if (tvListLayout) {
+          target = _dubEpisodeNotificationsFocus;
+        } else if (focusNodeIsMounted(_discordPresenceFocus) &&
             _discordPresenceFocus.canRequestFocus) {
           target = _discordPresenceFocus;
         } else {
@@ -1156,9 +1260,11 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       }
     } else if (current == _dubEpisodeNotificationsFocus) {
       if (key == LogicalKeyboardKey.arrowUp) {
-        target = _trackingThresholdFocus;
+        target = tvListLayout
+            ? _subEpisodeNotificationsFocus
+            : _trackingThresholdFocus;
       }
-      if (key == LogicalKeyboardKey.arrowLeft) {
+      if (key == LogicalKeyboardKey.arrowLeft && !tvListLayout) {
         target = _subEpisodeNotificationsFocus;
       }
       if (key == LogicalKeyboardKey.arrowDown) {
@@ -1173,34 +1279,52 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       if (key == LogicalKeyboardKey.arrowUp) {
         target = _areaFocusNodes[_SettingsArea.system];
       }
-      if (key == LogicalKeyboardKey.arrowRight) target = _calibrationFocus;
+      if (key == LogicalKeyboardKey.arrowRight && !tvListLayout) {
+        target = _calibrationFocus;
+      }
       if (key == LogicalKeyboardKey.arrowDown) {
-        target = _automaticUpdatesFocus;
+        target = tvListLayout ? _calibrationFocus : _automaticUpdatesFocus;
       }
     } else if (current == _calibrationFocus) {
       if (key == LogicalKeyboardKey.arrowUp) {
-        target = _areaFocusNodes[_SettingsArea.system];
+        target = tvListLayout
+            ? _setupFocus
+            : _areaFocusNodes[_SettingsArea.system];
       }
-      if (key == LogicalKeyboardKey.arrowLeft) target = _setupFocus;
-      if (key == LogicalKeyboardKey.arrowRight) target = _diagnosticsFocus;
+      if (key == LogicalKeyboardKey.arrowLeft && !tvListLayout) {
+        target = _setupFocus;
+      }
+      if (key == LogicalKeyboardKey.arrowRight && !tvListLayout) {
+        target = _diagnosticsFocus;
+      }
       if (key == LogicalKeyboardKey.arrowDown) {
-        target = _automaticUpdatesFocus;
+        target = tvListLayout ? _diagnosticsFocus : _automaticUpdatesFocus;
       }
     } else if (current == _diagnosticsFocus) {
       if (key == LogicalKeyboardKey.arrowUp) {
-        target = _areaFocusNodes[_SettingsArea.system];
+        target = tvListLayout
+            ? _calibrationFocus
+            : _areaFocusNodes[_SettingsArea.system];
       }
-      if (key == LogicalKeyboardKey.arrowLeft) target = _calibrationFocus;
+      if (key == LogicalKeyboardKey.arrowLeft && !tvListLayout) {
+        target = _calibrationFocus;
+      }
       if (key == LogicalKeyboardKey.arrowDown) {
         target = _automaticUpdatesFocus;
       }
     } else if (current == _automaticUpdatesFocus) {
-      if (key == LogicalKeyboardKey.arrowUp) target = _setupFocus;
-      if (key == LogicalKeyboardKey.arrowRight) target = _checkUpdatesFocus;
+      if (key == LogicalKeyboardKey.arrowUp) {
+        target = tvListLayout ? _diagnosticsFocus : _setupFocus;
+      }
+      if (key == LogicalKeyboardKey.arrowRight && !tvListLayout) {
+        target = _checkUpdatesFocus;
+      }
       if (key == LogicalKeyboardKey.arrowDown) target = _checkUpdatesFocus;
     } else if (current == _checkUpdatesFocus) {
-      if (key == LogicalKeyboardKey.arrowUp) target = _setupFocus;
-      if (key == LogicalKeyboardKey.arrowLeft) {
+      if (key == LogicalKeyboardKey.arrowUp) {
+        target = tvListLayout ? _automaticUpdatesFocus : _setupFocus;
+      }
+      if (key == LogicalKeyboardKey.arrowLeft && !tvListLayout) {
         target = _automaticUpdatesFocus;
       }
       if (key == LogicalKeyboardKey.arrowDown) {
@@ -1216,19 +1340,32 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       if (key == LogicalKeyboardKey.arrowDown) target = _discordQrFocus;
     } else if (current == _discordPresenceFocus) {
       if (key == LogicalKeyboardKey.arrowUp) {
-        target = _subEpisodeNotificationsFocus;
+        target = tvListLayout
+            ? _dubEpisodeNotificationsFocus
+            : _subEpisodeNotificationsFocus;
       }
       if (key == LogicalKeyboardKey.arrowRight &&
+          !tvListLayout &&
           focusNodeIsMounted(_discordDisconnectFocus)) {
         target = _discordDisconnectFocus;
       }
       if (key == LogicalKeyboardKey.arrowDown) {
-        return KeyEventResult.handled;
+        if (tvListLayout &&
+            focusNodeIsMounted(_discordDisconnectFocus) &&
+            _discordDisconnectFocus.canRequestFocus) {
+          target = _discordDisconnectFocus;
+        } else {
+          return KeyEventResult.handled;
+        }
       }
     } else if (current == _discordDisconnectFocus) {
-      if (key == LogicalKeyboardKey.arrowLeft) target = _discordPresenceFocus;
+      if (key == LogicalKeyboardKey.arrowLeft && !tvListLayout) {
+        target = _discordPresenceFocus;
+      }
       if (key == LogicalKeyboardKey.arrowUp) {
-        target = _subEpisodeNotificationsFocus;
+        target = tvListLayout
+            ? _discordPresenceFocus
+            : _subEpisodeNotificationsFocus;
       }
       if (key == LogicalKeyboardKey.arrowDown) {
         return KeyEventResult.handled;
@@ -1269,14 +1406,24 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       if (key == LogicalKeyboardKey.arrowDown) target = _clearCacheFocus;
     } else if (current == _clearCacheFocus) {
       if (key == LogicalKeyboardKey.arrowUp) target = _donateFocus;
-      if (key == LogicalKeyboardKey.arrowRight) target = _resetAppFocus;
-      if (key == LogicalKeyboardKey.arrowDown) target = _privacyFocus;
+      if (key == LogicalKeyboardKey.arrowRight && !tvListLayout) {
+        target = _resetAppFocus;
+      }
+      if (key == LogicalKeyboardKey.arrowDown) {
+        target = tvListLayout ? _resetAppFocus : _privacyFocus;
+      }
     } else if (current == _resetAppFocus) {
-      if (key == LogicalKeyboardKey.arrowUp) target = _donateFocus;
-      if (key == LogicalKeyboardKey.arrowLeft) target = _clearCacheFocus;
+      if (key == LogicalKeyboardKey.arrowUp) {
+        target = tvListLayout ? _clearCacheFocus : _donateFocus;
+      }
+      if (key == LogicalKeyboardKey.arrowLeft && !tvListLayout) {
+        target = _clearCacheFocus;
+      }
       if (key == LogicalKeyboardKey.arrowDown) target = _privacyFocus;
     } else if (current == _privacyFocus) {
-      if (key == LogicalKeyboardKey.arrowUp) target = _clearCacheFocus;
+      if (key == LogicalKeyboardKey.arrowUp) {
+        target = tvListLayout ? _resetAppFocus : _clearCacheFocus;
+      }
       if (key == LogicalKeyboardKey.arrowRight ||
           key == LogicalKeyboardKey.arrowDown) {
         target = _legalFocus;
@@ -1497,6 +1644,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       inputFeedbackSectionFocusNode: _inputFeedbackSectionFocus,
       closedCaptionsSectionFocusNode: _closedCaptionsSectionFocus,
       captionTextColorFocusNode: _captionTextColorFocus,
+      captionTextSizeFocusNode: _captionTextSizeFocus,
       playerControlsSectionFocusNode: _playerControlsSectionFocus,
       resetFocusNode: _customizationResetFocus,
       expandedSections: _expandedCustomizationSections,
@@ -1681,6 +1829,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       subtitle:
           'Join the TetoTV Discord for announcements, support, and feature requests.',
       child: _CommunityPanels(
+        forceSingleColumn: isTelevision,
         discordQrFocusNode: _discordQrFocus,
         discordFocusNode: _discordFocus,
         donationQrFocusNode: _donationQrFocus,
@@ -1693,6 +1842,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       title: 'Storage & reset',
       subtitle: 'Remove temporary files or return TetoTV to first-time setup.',
       child: _StorageResetPanel(
+        forceSingleColumn: isTelevision,
         clearCacheFocusNode: _clearCacheFocus,
         resetAppFocusNode: _resetAppFocus,
       ),
@@ -1846,6 +1996,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                       const SizedBox(height: 8),
                     ],
                     _AppearanceSettingsLayout(
+                      usesTvListLayout: layout.usesTvRail,
                       preferences: preferences,
                       titlePreference: titlePreference,
                       homeShelves: homeShelves,
@@ -1863,7 +2014,9 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                       posterMetadataFocusNode: _posterMetadataFocus,
                       continueWatchingFocusNode: _continueWatchingFocus,
                       displayOptionsFirstFocusNode: _displaySectionFocus,
+                      cardDetailsFocusNode: _cardDetailsFocus,
                       inputFeedbackFirstFocusNode: _inputFeedbackSectionFocus,
+                      clickSoundsFocusNode: _clickSoundsFocus,
                       shelfFocusNodes: _shelfFocusNodes,
                       onOpenThemeStudio: () =>
                           context.push(ThemeStudioScreen.routePath),
@@ -1892,6 +2045,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                       const SizedBox(height: 8),
                     ],
                     _SettingsResponsiveColumns(
+                      forceSingleColumn: layout.usesTvRail,
                       left: _SettingsSectionCard(
                         key: const ValueKey('settings-card-playback-captions'),
                         title: 'Closed captions',
@@ -1924,6 +2078,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                       const SizedBox(height: 8),
                     ],
                     _SettingsResponsiveColumns(
+                      forceSingleColumn: layout.usesTvRail,
                       left: _SettingsCardLane(
                         children: [
                           _SettingsSectionCard(
@@ -2124,8 +2279,6 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                               ],
                             ),
                           ),
-                          if (layout.usesTvRail) automaticSourceSelectionCard(),
-                          if (layout.usesTvRail) librariesAndFeaturesCard(),
                         ],
                       ),
                       right: _SettingsCardLane(
@@ -2186,6 +2339,8 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                               ],
                             ),
                           ),
+                          if (layout.usesTvRail) automaticSourceSelectionCard(),
+                          if (layout.usesTvRail) librariesAndFeaturesCard(),
                           if (layout.usesTvRail) streamingPrivacyCard(),
                         ],
                       ),
@@ -2215,6 +2370,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                       const SizedBox(height: 8),
                     ],
                     _SettingsResponsiveColumns(
+                      forceSingleColumn: layout.usesTvRail,
                       left: _SettingsCardLane(
                         children: [
                           _SettingsSectionCard(
@@ -2310,6 +2466,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                                           TrackingProvider.anilist
                                       ? _anilistSaveFocus
                                       : _malSaveFocus,
+                                  disconnectFocusNode: _trackingDisconnectFocus,
                                 ),
                               ],
                             ),
@@ -2422,6 +2579,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                       const SizedBox(height: 8),
                     ],
                     _SettingsResponsiveColumns(
+                      forceSingleColumn: layout.usesTvRail,
                       left: _SettingsCardLane(
                         children: [
                           _SettingsSectionCard(
@@ -2462,8 +2620,6 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                               ],
                             ),
                           ),
-                          if (layout.usesTvRail) communityCard(),
-                          if (layout.usesTvRail) privacyAndDiagnosticsCard(),
                         ],
                       ),
                       right: _SettingsCardLane(
@@ -2477,6 +2633,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                               crossAxisAlignment: CrossAxisAlignment.stretch,
                               children: [
                                 _AppUpdatePanel(
+                                  forceSingleColumn: isTelevision,
                                   state: appUpdate,
                                   automaticFocusNode: _automaticUpdatesFocus,
                                   checkFocusNode: _checkUpdatesFocus,
@@ -2524,8 +2681,10 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                               ],
                             ),
                           ),
+                          if (layout.usesTvRail) communityCard(),
                           if (layout.usesTvRail) storageAndResetCard(),
                           if (layout.usesTvRail) legalNoticesCard(),
+                          if (layout.usesTvRail) privacyAndDiagnosticsCard(),
                         ],
                       ),
                     ),
@@ -2697,6 +2856,7 @@ class _SettingsResponsiveColumns extends StatelessWidget {
     this.leftFlex = 1,
     this.rightFlex = 1,
     this.gap = 20,
+    this.forceSingleColumn = false,
   });
 
   final Widget left;
@@ -2704,11 +2864,15 @@ class _SettingsResponsiveColumns extends StatelessWidget {
   final int leftFlex;
   final int rightFlex;
   final double gap;
+  final bool forceSingleColumn;
   static const double _breakpoint = 800;
 
   @override
   Widget build(BuildContext context) => LayoutBuilder(
     builder: (context, constraints) {
+      if (forceSingleColumn) {
+        return _SettingsCardLane(children: [left, right]);
+      }
       if (constraints.maxWidth < _breakpoint) {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -2818,6 +2982,7 @@ class _SettingsCardScope extends InheritedWidget {
 
 class _AppearanceSettingsLayout extends StatelessWidget {
   const _AppearanceSettingsLayout({
+    required this.usesTvListLayout,
     required this.preferences,
     required this.titlePreference,
     required this.homeShelves,
@@ -2833,7 +2998,9 @@ class _AppearanceSettingsLayout extends StatelessWidget {
     required this.posterMetadataFocusNode,
     required this.continueWatchingFocusNode,
     required this.displayOptionsFirstFocusNode,
+    required this.cardDetailsFocusNode,
     required this.inputFeedbackFirstFocusNode,
+    required this.clickSoundsFocusNode,
     required this.shelfFocusNodes,
     required this.onOpenThemeStudio,
     required this.onOpenMenuOrder,
@@ -2843,6 +3010,7 @@ class _AppearanceSettingsLayout extends StatelessWidget {
     required this.onShelfMove,
   });
 
+  final bool usesTvListLayout;
   final SettingsPreferences preferences;
   final TitleLanguagePreference titlePreference;
   final Set<HomeShelf> homeShelves;
@@ -2858,7 +3026,9 @@ class _AppearanceSettingsLayout extends StatelessWidget {
   final FocusNode posterMetadataFocusNode;
   final FocusNode continueWatchingFocusNode;
   final FocusNode displayOptionsFirstFocusNode;
+  final FocusNode cardDetailsFocusNode;
   final FocusNode inputFeedbackFirstFocusNode;
+  final FocusNode clickSoundsFocusNode;
   final Map<HomeShelf, FocusNode> shelfFocusNodes;
   final VoidCallback onOpenThemeStudio;
   final VoidCallback onOpenMenuOrder;
@@ -3105,6 +3275,7 @@ class _AppearanceSettingsLayout extends StatelessWidget {
           subtitle: 'Show supporting text beneath posters and media cards.',
           icon: Icons.subtitles_outlined,
           value: preferences.showCardSubtitles,
+          focusNode: cardDetailsFocusNode,
           onChanged: controller.setShowCardSubtitles,
         ),
       ],
@@ -3140,6 +3311,7 @@ class _AppearanceSettingsLayout extends StatelessWidget {
           subtitle: 'Play confirmation feedback when selecting an option.',
           icon: Icons.touch_app_outlined,
           value: preferences.clickSounds,
+          focusNode: clickSoundsFocusNode,
           onChanged: controller.setClickSounds,
         ),
       ],
@@ -3167,16 +3339,16 @@ class _AppearanceSettingsLayout extends StatelessWidget {
       ],
     );
 
-    if (usesTvDashboard) {
-      return _SettingsResponsiveColumns(
-        leftFlex: 51,
-        rightFlex: 49,
-        left: _SettingsCardLane(
-          children: [themeAndDisplay, navigation, homeShelvesPanel],
-        ),
-        right: _SettingsCardLane(
-          children: [homeScreen, displayOptions, inputAndFeedback],
-        ),
+    if (usesTvListLayout) {
+      return _SettingsCardLane(
+        children: [
+          themeAndDisplay,
+          homeScreen,
+          displayOptions,
+          inputAndFeedback,
+          homeShelvesPanel,
+          navigation,
+        ],
       );
     }
 
@@ -3854,6 +4026,7 @@ class _CustomizationPanel extends StatelessWidget {
     required this.inputFeedbackSectionFocusNode,
     required this.closedCaptionsSectionFocusNode,
     required this.captionTextColorFocusNode,
+    required this.captionTextSizeFocusNode,
     required this.playerControlsSectionFocusNode,
     required this.resetFocusNode,
     required this.expandedSections,
@@ -3884,6 +4057,7 @@ class _CustomizationPanel extends StatelessWidget {
   final FocusNode inputFeedbackSectionFocusNode;
   final FocusNode closedCaptionsSectionFocusNode;
   final FocusNode captionTextColorFocusNode;
+  final FocusNode captionTextSizeFocusNode;
   final FocusNode playerControlsSectionFocusNode;
   final FocusNode resetFocusNode;
   final Set<_CustomizationSection> expandedSections;
@@ -4242,6 +4416,7 @@ class _CustomizationPanel extends StatelessWidget {
                   label: 'Text size',
                   icon: Icons.text_fields_rounded,
                   value: preferences.captionTextSize,
+                  focusNode: captionTextSizeFocusNode,
                   valueLabel: '${preferences.captionTextSize.round()}',
                   options: [
                     for (final size in const [28.0, 34.0, 42.0, 50.0])
@@ -5516,6 +5691,7 @@ class _DeveloperUpdatePanel extends StatelessWidget {
 
 class _AppUpdatePanel extends StatelessWidget {
   const _AppUpdatePanel({
+    required this.forceSingleColumn,
     required this.state,
     required this.automaticFocusNode,
     required this.checkFocusNode,
@@ -5523,6 +5699,7 @@ class _AppUpdatePanel extends StatelessWidget {
     required this.onCheckOrInstall,
   });
 
+  final bool forceSingleColumn;
   final AppUpdateState state;
   final FocusNode automaticFocusNode;
   final FocusNode checkFocusNode;
@@ -5678,7 +5855,7 @@ class _AppUpdatePanel extends StatelessWidget {
                   : Icons.update_disabled_rounded,
               onPressed: state.isBusy ? null : onToggleAutomatic,
               focusNode: automaticFocusNode,
-              showDivider: !tvScale,
+              showDivider: forceSingleColumn || !tvScale,
             );
             final check = _SettingsPanelActionRow(
               label: checkLabel,
@@ -5690,7 +5867,7 @@ class _AppUpdatePanel extends StatelessWidget {
               onPressed: state.isBusy ? null : onCheckOrInstall,
               focusNode: checkFocusNode,
             );
-            if (!tvScale) {
+            if (forceSingleColumn || !tvScale) {
               return Column(children: [automatic, check]);
             }
             return Row(
@@ -6392,12 +6569,14 @@ class _LegalNoticesPanel extends StatelessWidget {
 
 class _CommunityPanels extends StatelessWidget {
   const _CommunityPanels({
+    required this.forceSingleColumn,
     required this.discordQrFocusNode,
     required this.discordFocusNode,
     required this.donationQrFocusNode,
     required this.donationFocusNode,
   });
 
+  final bool forceSingleColumn;
   final FocusNode discordQrFocusNode;
   final FocusNode discordFocusNode;
   final FocusNode donationQrFocusNode;
@@ -6415,7 +6594,7 @@ class _CommunityPanels extends StatelessWidget {
     );
     return LayoutBuilder(
       builder: (context, constraints) {
-        if (constraints.maxWidth < 900) {
+        if (constraints.maxWidth < 900 || forceSingleColumn) {
           return Column(
             children: [
               discord,
@@ -7579,6 +7758,7 @@ class _TrackingPanel extends StatefulWidget {
     required this.focusNode,
     required this.tokenFocusNode,
     required this.saveFocusNode,
+    required this.disconnectFocusNode,
     required this.isLoading,
     this.username,
     this.error,
@@ -7593,6 +7773,7 @@ class _TrackingPanel extends StatefulWidget {
   final FocusNode focusNode;
   final FocusNode tokenFocusNode;
   final FocusNode saveFocusNode;
+  final FocusNode disconnectFocusNode;
   final bool isLoading;
   final String? username;
   final String? error;
@@ -7668,6 +7849,7 @@ class _TrackingPanelState extends State<_TrackingPanel> {
             subtitle:
                 'Remove this ${widget.provider.displayName} connection from TetoTV.',
             icon: Icons.link_off_rounded,
+            focusNode: widget.disconnectFocusNode,
             destructive: true,
             onPressed: widget.onDisconnect,
           ),
@@ -7869,10 +8051,12 @@ class _Panel extends StatelessWidget {
 
 class _StorageResetPanel extends StatefulWidget {
   const _StorageResetPanel({
+    required this.forceSingleColumn,
     required this.clearCacheFocusNode,
     required this.resetAppFocusNode,
   });
 
+  final bool forceSingleColumn;
   final FocusNode clearCacheFocusNode;
   final FocusNode resetAppFocusNode;
 
@@ -7962,7 +8146,8 @@ class _StorageResetPanelState extends State<_StorageResetPanel> {
   @override
   Widget build(BuildContext context) => LayoutBuilder(
     builder: (context, constraints) {
-      final compact = !_usesTvSettingsScale(context);
+      final compact =
+          widget.forceSingleColumn || !_usesTvSettingsScale(context);
       final enabled = !_clearingCache && !_resetting;
       final clear = _SettingsPanelActionRow(
         key: const ValueKey('storage-clear-cache'),

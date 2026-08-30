@@ -112,7 +112,10 @@ void main() {
       ),
     );
 
-    await tester.tap(find.text('2.0.10 Beta'));
+    final installedRelease = find.text('2.0.10 Beta');
+    await tester.ensureVisible(installedRelease);
+    await tester.pumpAndSettle();
+    await tester.tap(installedRelease);
     await tester.pumpAndSettle();
     expect(find.text('2.0.9 Beta'), findsOneWidget);
     expect(

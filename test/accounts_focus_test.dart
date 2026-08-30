@@ -1,9 +1,11 @@
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
+import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/features/settings/application/real_debrid_settings_controller.dart';
 import 'package:anime_tv/features/settings/application/home_shelf_preferences_controller.dart';
 import 'package:anime_tv/features/settings/application/app_update_controller.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:anime_tv/features/settings/presentation/accounts_screen.dart';
+import 'package:anime_tv/features/discord/application/discord_presence_controller.dart';
 import 'package:anime_tv/features/streaming/data/real_debrid_models.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
@@ -91,43 +93,40 @@ void main() {
     await tester.pump();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.customization.home-content.featured',
+      'accounts.customization.first',
+      reason:
+          'A vertical Settings list must not jump to another card on Right.',
     );
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
-    await tester.pump();
-    expect(
-      FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.customization.home-content.poster-metadata',
-    );
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
-    await tester.pump();
-    expect(
-      FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.customization.home-content.continue-watching',
-    );
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
-    await tester.pump();
-    expect(
-      FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.shelf.${HomeShelf.values.first.name}',
-    );
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
-    await tester.pump();
-    expect(
-      FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.customization.home-content.continue-watching',
-    );
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
-    await tester.pump();
-    expect(
-      FocusManager.instance.primaryFocus?.debugLabel,
+    for (final expected in const [
+      'accounts.title-language',
       'accounts.show-title-style',
+      'accounts.customization.home-content.featured',
+      'accounts.customization.home-content.poster-metadata',
+      'accounts.customization.home-content.continue-watching',
+      'accounts.section.display',
+    ]) {
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pump();
+      expect(FocusManager.instance.primaryFocus?.debugLabel, expected);
+    }
+
+    final appearanceTab = tester.widget<TvFocusable>(
+      find.byKey(const ValueKey('settings-area-appearance')),
     );
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+    appearanceTab.focusNode!.requestFocus();
+    await tester.pump();
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    await tester.pump();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.area.playback',
+    );
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    await tester.pump();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.area.services',
+    );
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.pumpAndSettle();
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
@@ -157,7 +156,7 @@ void main() {
   });
 
   testWidgets(
-    'TV Settings keep the rail and use the polished two-column tabs',
+    'TV Settings keep the rail and use the polished single-list tabs',
     (tester) async {
       FlutterSecureStorage.setMockInitialValues({});
       tester.view.physicalSize = const Size(960, 540);
@@ -236,9 +235,12 @@ void main() {
       final homeCard = tester.getRect(
         find.byKey(const ValueKey('appearance-home-screen-card')),
       );
-      expect(homeCard.left, greaterThan(themeCard.right));
-      expect((homeCard.top - themeCard.top).abs(), lessThan(3));
-      expect(navigationCard.top, greaterThan(themeCard.bottom));
+      expect((navigationCard.left - themeCard.left).abs(), lessThan(1));
+      expect((homeCard.left - themeCard.left).abs(), lessThan(1));
+      expect((navigationCard.width - themeCard.width).abs(), lessThan(1));
+      expect((homeCard.width - themeCard.width).abs(), lessThan(1));
+      expect(homeCard.top, greaterThan(themeCard.bottom));
+      expect(navigationCard.top, greaterThan(homeCard.bottom));
       expect(
         FocusManager.instance.primaryFocus?.debugLabel,
         'accounts.customization.first',
@@ -474,7 +476,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('every source toggle moves Down to Debrid results', (
+  testWidgets('source controls move Down through the single-list card', (
     tester,
   ) async {
     FlutterSecureStorage.setMockInitialValues({});
@@ -490,11 +492,13 @@ void main() {
     await tester.tap(find.text('Services'));
     await tester.pumpAndSettle();
 
-    for (final debugLabel in const [
-      'accounts.streaming.debrid',
-      'accounts.streaming.web',
-      'accounts.streaming.direct-torrent',
+    for (final transition in const [
+      ('accounts.streaming.debrid', 'accounts.streaming.web'),
+      ('accounts.streaming.web', 'accounts.streaming.direct-torrent'),
+      ('accounts.streaming.direct-torrent', 'accounts.streaming.marketplace'),
+      ('accounts.streaming.marketplace', 'accounts.streaming.debrid-sort'),
     ]) {
+      final debugLabel = transition.$1;
       final focusableFinder = find.byWidgetPredicate(
         (widget) =>
             widget is TvFocusable && widget.focusNode?.debugLabel == debugLabel,
@@ -510,8 +514,8 @@ void main() {
       await tester.pumpAndSettle();
       expect(
         FocusManager.instance.primaryFocus?.debugLabel,
-        'accounts.streaming.debrid-sort',
-        reason: '$debugLabel should enter the ranking controls below sources.',
+        transition.$2,
+        reason: '$debugLabel should move to the next visible source control.',
       );
     }
     expect(tester.takeException(), isNull);
@@ -601,8 +605,13 @@ void main() {
       final menuOrder = find.byKey(
         const ValueKey('settings-appearance-menu-order'),
       );
-      await tester.ensureVisible(menuOrder);
-      await tester.tap(menuOrder);
+      final menuOrderFocusable = find
+          .descendant(of: menuOrder, matching: find.byType(TvFocusable))
+          .first;
+      await tester.ensureVisible(menuOrderFocusable);
+      tester.widget<TvFocusable>(menuOrderFocusable).focusNode!.requestFocus();
+      await tester.pumpAndSettle();
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pumpAndSettle();
       expect(
         find.byKey(const ValueKey('settings-top-navigation-toggle-downloads')),
@@ -869,20 +878,50 @@ void main() {
     for (final expected in const [
       'accounts.title-language',
       'accounts.show-title-style',
-      'accounts.customization.navigation-size',
-      'accounts.customization.menu-order',
-      'accounts.customization.reset',
+      'accounts.customization.home-content.featured',
+      'accounts.customization.home-content.poster-metadata',
+      'accounts.customization.home-content.continue-watching',
+      'accounts.section.display',
     ]) {
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
       await tester.pumpAndSettle();
       expect(FocusManager.instance.primaryFocus?.debugLabel, expected);
     }
+
+    final navigationSize = find.byWidgetPredicate(
+      (widget) =>
+          widget is TvFocusable &&
+          widget.focusNode?.debugLabel ==
+              'accounts.customization.navigation-size',
+    );
+    await tester.ensureVisible(navigationSize);
+    final navigationFocus = tester
+        .widget<TvFocusable>(navigationSize)
+        .focusNode!;
+    navigationFocus.requestFocus();
+    await tester.pumpAndSettle();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.customization.navigation-size',
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.customization.menu-order',
+    );
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pumpAndSettle();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
       'accounts.customization.reset',
-      reason: 'Down stops on the final row in the Appearance column.',
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.customization.reset',
+      reason: 'Reset stays the terminal action in the TV Appearance list.',
     );
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
     await tester.pumpAndSettle();
@@ -1111,7 +1150,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.customization.home-content.continue-watching',
+      'accounts.customization.input.click-sounds',
     );
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pumpAndSettle();
@@ -1127,8 +1166,15 @@ void main() {
     }
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.customization.navigation-size',
+      reason: 'The final shelf row must continue into the Navigation card.',
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+    await tester.pumpAndSettle();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
       'accounts.shelf.${HomeShelf.values.last.name}',
-      reason: 'Down stops at the final visible shelf row.',
+      reason: 'Navigation size must return to the final shelf row on Up.',
     );
     expect(tester.takeException(), isNull);
   });
@@ -1218,7 +1264,7 @@ void main() {
       isTrue,
     );
 
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pumpAndSettle();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
@@ -1343,19 +1389,18 @@ void main() {
     await tester.pumpAndSettle();
 
     await selectSettingsArea(tester, 'system');
-    for (final key in [
-      LogicalKeyboardKey.arrowDown,
-      LogicalKeyboardKey.arrowDown,
+    for (final expected in const [
+      'accounts.system.setup',
+      'accounts.system.calibration',
+      'accounts.system.diagnostics',
+      'accounts.updates.automatic',
     ]) {
-      await tester.sendKeyEvent(key);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
       await tester.pumpAndSettle();
+      expect(FocusManager.instance.primaryFocus?.debugLabel, expected);
     }
 
-    expect(
-      FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.updates.automatic',
-    );
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pumpAndSettle();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
@@ -1365,15 +1410,16 @@ void main() {
     await tester.pumpAndSettle();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.system.setup',
+      'accounts.updates.automatic',
     );
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
     await tester.pumpAndSettle();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.updates.automatic',
+      'accounts.system.diagnostics',
     );
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pumpAndSettle();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
@@ -1409,7 +1455,7 @@ void main() {
       FocusManager.instance.primaryFocus?.debugLabel,
       'accounts.system.clear-cache',
     );
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pumpAndSettle();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
@@ -1567,13 +1613,8 @@ void main() {
       await const FlutterSecureStorage().read(key: 'beta_update_access_key'),
       isNull,
     );
-    for (final key in [
-      LogicalKeyboardKey.arrowDown,
-      LogicalKeyboardKey.arrowDown,
-      LogicalKeyboardKey.arrowDown,
-      LogicalKeyboardKey.arrowDown,
-    ]) {
-      await tester.sendKeyEvent(key);
+    for (var index = 0; index < 6; index++) {
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
       await tester.pumpAndSettle();
     }
     expect(
@@ -1636,11 +1677,10 @@ void main() {
     expect(donationRect.left, greaterThan(donationQrRect.right));
     expect(donationQrRect.top, greaterThan(discordQrRect.bottom));
 
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
-    await tester.pumpAndSettle();
+    for (var index = 0; index < 6; index++) {
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pumpAndSettle();
+    }
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
       'accounts.system.discord-qr',
@@ -1667,14 +1707,32 @@ void main() {
   });
 
   testWidgets('Accounts expose Discord Rich Presence actions', (tester) async {
-    FlutterSecureStorage.setMockInitialValues({});
+    FlutterSecureStorage.setMockInitialValues({
+      'discord_rich_presence_access_token': 'test-access',
+      'discord_rich_presence_refresh_token': 'test-refresh',
+      'discord_rich_presence_token_type': '1',
+      'discord_rich_presence_expires_at': DateTime.now()
+          .add(const Duration(days: 7))
+          .millisecondsSinceEpoch
+          .toString(),
+      'discord_rich_presence_scopes': 'openid sdk.social_layer_presence',
+      'discord_rich_presence_enabled': 'true',
+    });
     tester.view.physicalSize = const Size(1280, 720);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
 
     await tester.pumpWidget(
-      const ProviderScope(child: MaterialApp(home: AccountsScreen())),
+      ProviderScope(
+        overrides: [
+          isTelevisionProvider.overrideWithValue(true),
+          discordPresencePlatformProvider.overrideWithValue(
+            const _SettingsDiscordFocusPlatform(),
+          ),
+        ],
+        child: const MaterialApp(home: TvShortcuts(child: AccountsScreen())),
+      ),
     );
     await tester.pumpAndSettle();
     await tester.tap(find.text('Accounts'));
@@ -1689,6 +1747,36 @@ void main() {
     await tester.ensureVisible(discordActions);
     await tester.pumpAndSettle();
     expect(tester.getSize(discordActions).width, greaterThan(0));
+
+    final primaryAction = find.byWidgetPredicate(
+      (widget) =>
+          widget is TvFocusable &&
+          widget.focusNode?.debugLabel == 'accounts.system.discord-presence',
+    );
+    final unlinkAction = find.byWidgetPredicate(
+      (widget) =>
+          widget is TvFocusable &&
+          widget.focusNode?.debugLabel == 'accounts.system.discord-unlink',
+    );
+    expect(primaryAction, findsOneWidget);
+    expect(unlinkAction, findsOneWidget);
+    await tester.ensureVisible(primaryAction);
+    tester.widget<TvFocusable>(primaryAction).focusNode!.requestFocus();
+    await tester.pumpAndSettle();
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.system.discord-unlink',
+      reason: 'TV Discord actions must form one vertical list.',
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+    await tester.pumpAndSettle();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.system.discord-presence',
+    );
     expect(tester.takeException(), isNull);
   });
 
@@ -2258,12 +2346,8 @@ void main() {
       );
       expect(tester.testTextInput.isVisible, isFalse);
 
-      for (final key in [
-        LogicalKeyboardKey.arrowDown,
-        LogicalKeyboardKey.arrowDown,
-        LogicalKeyboardKey.arrowDown,
-      ]) {
-        await tester.sendKeyEvent(key);
+      for (var index = 0; index < 6; index++) {
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
         await tester.pumpAndSettle();
       }
       expect(
@@ -2272,12 +2356,8 @@ void main() {
       );
       expect(tester.testTextInput.isVisible, isFalse);
 
-      for (final key in [
-        LogicalKeyboardKey.arrowUp,
-        LogicalKeyboardKey.arrowUp,
-        LogicalKeyboardKey.arrowUp,
-      ]) {
-        await tester.sendKeyEvent(key);
+      for (var index = 0; index < 6; index++) {
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
         await tester.pumpAndSettle();
       }
       expect(
@@ -2321,4 +2401,37 @@ class _ClassicSettingsController extends SettingsPreferencesController {
 
   @override
   Future<void> load() async {}
+}
+
+class _SettingsDiscordFocusPlatform implements DiscordPresencePlatform {
+  const _SettingsDiscordFocusPlatform();
+
+  @override
+  Stream<DiscordBridgeEvent> get events => const Stream.empty();
+
+  @override
+  Future<Map<Object?, Object?>> sdkInfo() async => const {
+    'available': true,
+    'status': 'disconnected',
+    'version': 'test',
+  };
+
+  @override
+  Future<DiscordTokenBundle> authenticate() => throw UnimplementedError();
+
+  @override
+  Future<void> cancelAuthentication() async {}
+
+  @override
+  Future<DiscordTokenBundle> refreshToken(String refreshToken) =>
+      throw UnimplementedError();
+
+  @override
+  Future<void> connect(DiscordTokenBundle token) async {}
+
+  @override
+  Future<bool> revoke(String token) async => true;
+
+  @override
+  Future<void> disconnect() async {}
 }

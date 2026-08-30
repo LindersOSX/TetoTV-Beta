@@ -82,6 +82,19 @@ void main() {
     expect(publisher, contains('"--draft=false"'));
     expect(publisher, contains('Remove-GitHubDraftAfterFailure'));
     expect(publisher, contains('Assert-GitHubReleaseAuthorityBoundary'));
+    expect(publisher, contains('function Get-GitHubApiItems('));
+    expect(
+      publisher,
+      contains(r'if ($null -eq $value) { return }'),
+      reason:
+          'empty GitHub JSON arrays must remain zero-item PowerShell pipelines',
+    );
+    expect(
+      publisher,
+      isNot(contains(r'@(Get-GitHubApiJson "repos/$Repository/')),
+      reason:
+          'wrapping a null ConvertFrom-Json result directly would count it as one item',
+    );
     expect(publisher, contains('collaborators?affiliation=all&per_page=100'));
     expect(publisher, contains('unexpected collaborators are present'));
     expect(publisher, contains('immutable future releases must be enabled'));

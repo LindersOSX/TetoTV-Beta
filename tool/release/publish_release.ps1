@@ -291,6 +291,15 @@ function Get-GitHubApiJson([string]$Path) {
     }
 }
 
+function Get-GitHubApiItems([string]$Path) {
+    $value = Get-GitHubApiJson $Path
+    # ConvertFrom-Json emits no object for an empty JSON array. Returning the
+    # value directly preserves that as an empty PowerShell pipeline, so callers
+    # can safely wrap the result in @() without turning $null into one item.
+    if ($null -eq $value) { return }
+    $value
+}
+
 function Assert-GitHubReleaseAuthorityBoundary(
     [string]$Repository,
     [string]$ExpectedOwner,
@@ -334,7 +343,7 @@ function Assert-GitHubReleaseAuthorityBoundary(
         throw "The GitHub repository owner, visibility, default branch, or archive state does not match the reviewed release boundary."
     }
 
-    $collaborators = @(Get-GitHubApiJson "repos/$Repository/collaborators?affiliation=all&per_page=100")
+    $collaborators = @(Get-GitHubApiItems "repos/$Repository/collaborators?affiliation=all&per_page=100")
     if (
         $collaborators.Count -ne 1 -or
         [string]$collaborators[0].login -cne $ExpectedOwner -or
@@ -342,10 +351,10 @@ function Assert-GitHubReleaseAuthorityBoundary(
     ) {
         throw "Publication requires the audited single-owner authority boundary; unexpected collaborators are present."
     }
-    if (@(Get-GitHubApiJson "repos/$Repository/invitations").Count -ne 0) {
+    if (@(Get-GitHubApiItems "repos/$Repository/invitations").Count -ne 0) {
         throw "Publication is blocked while repository collaborator invitations are pending."
     }
-    if (@(Get-GitHubApiJson "repos/$Repository/hooks").Count -ne 0) {
+    if (@(Get-GitHubApiItems "repos/$Repository/hooks").Count -ne 0) {
         throw "Publication is blocked while a repository webhook is configured."
     }
     $runners = Get-GitHubApiJson "repos/$Repository/actions/runners"
@@ -353,7 +362,7 @@ function Assert-GitHubReleaseAuthorityBoundary(
         throw "Publication is blocked while a self-hosted repository runner is registered."
     }
     $writeDeployKeys = @(
-        @(Get-GitHubApiJson "repos/$Repository/keys") |
+        @(Get-GitHubApiItems "repos/$Repository/keys") |
             Where-Object { -not [bool]$_.read_only }
     )
     if ($writeDeployKeys.Count -ne 0) {

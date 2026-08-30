@@ -35,9 +35,9 @@ and the MPL-covered source snapshots when redistributing the APK.
 
 ## Security and lifecycle boundary
 
-- ARM64 reports the capability on 4 KiB and 16 KiB page-size devices. The
-  pinned upstream ARM32 binary is 4 KiB-aligned, so ARM32 reports the
-  capability only on a 4 KiB runtime and fails closed on larger page sizes.
+- ARM64 and ARM32 report the capability on 4 KiB and 16 KiB page-size devices.
+  The TetoTV ARMv7 source build explicitly links 16 KiB maximum/common page
+  sizes because NDK r28's default ARMv7 layout is only 4 KiB-aligned.
 - The app accepts a magnet only through its internal platform call. It is not
   returned to Flutter, persisted, or logged.
 - MPV receives a `127.0.0.1` URL with a random 256-bit path. The bridge accepts

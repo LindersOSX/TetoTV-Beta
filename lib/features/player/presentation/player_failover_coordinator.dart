@@ -100,6 +100,35 @@ class PlayerMediaReadinessException implements Exception {
       'No video frames were rendered after the stream was opened.';
 }
 
+/// Returns a readiness budget that accounts for app-owned HLS proxy startup.
+///
+/// A proxied HLS master can require one additional, DNS-pinned request to load
+/// the selected rendition before MPV receives its first media bytes. Ordinary
+/// candidates keep the original 12-second bound; HLS web streams get the same
+/// 20-second ceiling used by the proxy and native network layer. This prevents
+/// a healthy rendition that delivers its first bytes just after 12 seconds
+/// from being abandoned while still keeping dead candidates bounded.
+int playerMediaReadinessMaxPolls({
+  required bool isWebStream,
+  required String? mediaContentType,
+  Duration pollInterval = const Duration(milliseconds: 200),
+}) {
+  final normalizedType = mediaContentType
+      ?.toLowerCase()
+      .split(';')
+      .first
+      .trim();
+  final isHls =
+      normalizedType == 'application/vnd.apple.mpegurl' ||
+      normalizedType == 'application/x-mpegurl';
+  final timeout = isWebStream && isHls
+      ? const Duration(seconds: 20)
+      : const Duration(seconds: 12);
+  final intervalMicros = pollInterval.inMicroseconds;
+  if (intervalMicros <= 0) return 1;
+  return (timeout.inMicroseconds / intervalMicros).ceil().clamp(1, 1000);
+}
+
 /// Waits for the player to prove that a newly opened candidate can decode
 /// video. `Player.open` only confirms that MPV accepted the URL; it can return
 /// before a manifest, segment, or decoder has produced any media.

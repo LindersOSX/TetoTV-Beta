@@ -38,8 +38,12 @@ accepted only when all expected prior output JARs are present.
 The two default JARs contain self-built `libmpv.so` and
 `libmediakitandroidhelper.so`. The Android libtorrent JARs contain self-built
 `libtorrent4j.so`; the core JAR contains the wrapper compiled from the pinned
-Java source. JAR entry times and source-build environment values are fixed
-where practical.
+Java source. The current set is identified as `2.1.0-38-tetotv.2` in the
+release manifest while retaining upstream-compatible JAR file names. JAR entry
+times and source-build environment values are fixed where practical. Both ARM
+libtorrent outputs use 16 KiB-compatible ELF LOAD alignment. The build adds the
+required maximum/common page-size linker options only for ARMv7 because NDK
+r28 already produces compliant ARM64 segments.
 
 ## Source and toolchain policy
 

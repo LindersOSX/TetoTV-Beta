@@ -61,8 +61,11 @@ void main() {
       find.textContaining('Latest 2.0.10 Beta • Aug 20, 2026'),
       findsWidgets,
     );
-    expect(find.text('2.0.10 Beta • Aug 20, 2026'), findsOneWidget);
-    await tester.tap(find.text('2.0.10 Beta • Aug 20, 2026'));
+    final latestHistoryEntry = find.text('2.0.10 Beta • Aug 20, 2026');
+    expect(latestHistoryEntry, findsOneWidget);
+    await tester.ensureVisible(latestHistoryEntry);
+    await tester.pumpAndSettle();
+    await tester.tap(latestHistoryEntry);
     await tester.pumpAndSettle();
     expect(find.text('2.0.9 Beta • Aug 12, 2026'), findsOneWidget);
     expect(
@@ -88,6 +91,44 @@ void main() {
 
     expect(find.text('TetoTV 1.0.2+410001'), findsOneWidget);
     expect(find.textContaining('Jan 1, 1970'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('lower Android builds stay visible but cannot be selected', (
+    tester,
+  ) async {
+    final installed = _release('2.0.10', androidVersionCode: 410010);
+    final blocked = _release('2.0.9', androidVersionCode: 410009);
+    await _pumpSystemUpdates(
+      tester,
+      AppUpdateState(
+        phase: AppUpdatePhase.upToDate,
+        currentVersion: '2.0.10+410010',
+        latestVersion: installed.version,
+        release: installed,
+        updateChannel: AppUpdateChannel.beta,
+        developerMode: true,
+        releaseHistory: [installed, blocked],
+      ),
+    );
+
+    await tester.tap(find.text('2.0.10 Beta'));
+    await tester.pumpAndSettle();
+    expect(find.text('2.0.9 Beta'), findsOneWidget);
+    expect(
+      find.text(
+        'Blocked by Android • build 410009 is lower than installed build 410010',
+      ),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.text('2.0.9 Beta'), warnIfMissed: false);
+    await tester.pumpAndSettle();
+    expect(
+      find.text('Choose a compatible signed release'),
+      findsWidgets,
+      reason: 'A blocked downgrade must not close the release picker.',
+    );
     expect(tester.takeException(), isNull);
   });
 }
@@ -117,11 +158,13 @@ Future<void> _pumpSystemUpdates(
 AppReleaseInfo _release(
   String version, {
   DateTime? releasedAtUtc,
+  int? androidVersionCode,
 }) => AppReleaseInfo(
   tagName: 'v$version',
   version: version,
   name: 'TetoTV $version',
   releasedAtUtc: releasedAtUtc,
+  androidVersionCode: androidVersionCode,
   asset: AppReleaseAsset(
     name: 'TetoTV-v$version-universal.apk',
     apiUrl:

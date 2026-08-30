@@ -227,10 +227,26 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 180));
 
+      expect(
+        find.byKey(const ValueKey('settings-area-downloads')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const ValueKey('phone-bottom-navigation')),
+        entry.name == 'portrait' ? findsOneWidget : findsNothing,
+        reason: 'Settings must keep portrait phone navigation visible.',
+      );
+      expect(
+        find.byKey(const ValueKey('main-navigation')),
+        entry.name == 'landscape' ? findsOneWidget : findsNothing,
+        reason: 'Settings must keep landscape phone navigation visible.',
+      );
+
       for (final section in const [
-        'Customize',
-        'Streaming',
-        'Tracking',
+        'Appearance',
+        'Playback',
+        'Services',
+        'Accounts',
         'System',
       ]) {
         await tester.tap(find.text(section).first);
@@ -242,6 +258,53 @@ void main() {
           isNull,
           reason: '$section overflowed at the top in ${entry.name}',
         );
+
+        if (section == 'Appearance') {
+          expect(
+            find.byKey(const ValueKey('appearance-theme-display-card')),
+            findsOneWidget,
+          );
+          expect(
+            find.byKey(const ValueKey('appearance-navigation-card')),
+            findsOneWidget,
+          );
+          expect(
+            find.byKey(const ValueKey('appearance-home-screen-card')),
+            findsOneWidget,
+          );
+          expect(find.text('Expand all'), findsNothing);
+          expect(
+            find.byKey(const ValueKey('customize-toggle-all-sections')),
+            findsNothing,
+          );
+        }
+
+        if (section == 'Services') {
+          for (
+            var scroll = 0;
+            scroll < 20 &&
+                find
+                    .byKey(const ValueKey('settings-offline-downloads-toggle'))
+                    .evaluate()
+                    .isEmpty;
+            scroll++
+          ) {
+            await tester.drag(
+              find.byKey(const ValueKey('settings-content-list')),
+              const Offset(0, -400),
+            );
+            await tester.pump();
+          }
+          expect(
+            find.byKey(const ValueKey('settings-offline-downloads-toggle')),
+            findsOneWidget,
+            reason: 'Offline download controls must remain usable in Services.',
+          );
+          expect(
+            find.byKey(const ValueKey('settings-download-manager-button')),
+            findsOneWidget,
+          );
+        }
 
         final verticalScroll = find.byWidgetPredicate(
           (widget) =>
@@ -265,6 +328,14 @@ void main() {
             await tester.pump();
           }
         }
+        expect(
+          find.byKey(const ValueKey('phone-bottom-navigation')),
+          entry.name == 'portrait' ? findsOneWidget : findsNothing,
+        );
+        expect(
+          find.byKey(const ValueKey('main-navigation')),
+          entry.name == 'landscape' ? findsOneWidget : findsNothing,
+        );
       }
     });
   }

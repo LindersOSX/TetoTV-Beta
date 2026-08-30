@@ -108,10 +108,24 @@ enum PlaybackDiagnosticOutcome {
   final String wireValue;
 }
 
+class PlaybackDiagnosticInterruption {
+  const PlaybackDiagnosticInterruption({
+    required this.timestamp,
+    required this.reasonCode,
+  });
+
+  final DateTime timestamp;
+  final String reasonCode;
+}
+
 /// Builds privacy-safe playback timelines from the bounded diagnostic event
 /// ring. Only a strict vocabulary of technical fields is copied. Free-form
 /// messages and unknown context never enter a playback session summary.
-Map<String, Object?> derivePlaybackSessionDiagnostics(Object? rawEvents) {
+Map<String, Object?> derivePlaybackSessionDiagnostics(
+  Object? rawEvents, {
+  Iterable<PlaybackDiagnosticInterruption> interruptions =
+      const <PlaybackDiagnosticInterruption>[],
+}) {
   final grouped = <String, List<Map<String, Object?>>>{};
   if (rawEvents is Iterable) {
     for (final raw in rawEvents) {
@@ -304,6 +318,64 @@ Map<String, Object?> derivePlaybackSessionDiagnostics(Object? rawEvents) {
       'droppedTimelineEvents': timeline.length - boundedTimeline.length,
       'timeline': boundedTimeline,
     });
+  }
+  final safeInterruptions =
+      interruptions
+          .map(
+            (value) => PlaybackDiagnosticInterruption(
+              timestamp: value.timestamp.toUtc(),
+              reasonCode: value.reasonCode,
+            ),
+          )
+          .toList(growable: false)
+        ..sort((left, right) => left.timestamp.compareTo(right.timestamp));
+  final interruptionReasonsBySessionId = <Object?, String>{};
+  for (final interruption in safeInterruptions) {
+    final timestamp = interruption.timestamp;
+    Map<String, Object?>? nearest;
+    DateTime? nearestLastEvent;
+    for (final session in sessions) {
+      if (session['finalOutcome'] != 'in_progress') continue;
+      final lastEventAt = DateTime.tryParse(
+        session['lastEventAt']?.toString() ?? '',
+      )?.toUtc();
+      if (lastEventAt == null) continue;
+      final delay = timestamp.difference(lastEventAt);
+      if (delay.isNegative || delay > const Duration(minutes: 5)) continue;
+      if (nearestLastEvent == null || lastEventAt.isAfter(nearestLastEvent)) {
+        nearest = session;
+        nearestLastEvent = lastEventAt;
+      }
+    }
+    if (nearest != null) {
+      interruptionReasonsBySessionId[nearest['sessionId']] =
+          interruption.reasonCode;
+    }
+  }
+  for (final session in sessions) {
+    if (session['finalOutcome'] != 'in_progress') continue;
+    final lastEventAt = DateTime.tryParse(
+      session['lastEventAt']?.toString() ?? '',
+    )?.toUtc();
+    if (lastEventAt == null) continue;
+    final interruptionReason =
+        interruptionReasonsBySessionId[session['sessionId']];
+    if (interruptionReason != null) {
+      session['finalOutcome'] = 'failed';
+      session['finalReasonCode'] = interruptionReason;
+      continue;
+    }
+    final superseded = sessions.any((candidate) {
+      if (identical(candidate, session)) return false;
+      final candidateStart = DateTime.tryParse(
+        candidate['startedAt']?.toString() ?? '',
+      )?.toUtc();
+      return candidateStart != null && candidateStart.isAfter(lastEventAt);
+    });
+    if (superseded) {
+      session['finalOutcome'] = 'failed';
+      session['finalReasonCode'] = 'session_superseded';
+    }
   }
   sessions.sort(
     (left, right) => right['lastEventAt'].toString().compareTo(

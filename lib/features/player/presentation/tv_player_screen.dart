@@ -2662,6 +2662,10 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
               mounted &&
               !_engineHandoffInProgress &&
               _mediaOpenRevision == readinessRevision,
+          maxPolls: playerMediaReadinessMaxPolls(
+            isWebStream: _currentStream.isWebStream,
+            mediaContentType: _currentStream.mediaContentType,
+          ),
         );
         if (!mediaReady) {
           // Route disposal and an intentional player handoff are cancellation,
@@ -3220,6 +3224,23 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     return null;
   }
 
+  Future<void> _recordStreamFailureBestEffort({
+    required String deviceKey,
+    required String infoHash,
+    required Object reason,
+  }) async {
+    try {
+      await _database.recordStreamFailure(
+        deviceKey: deviceKey,
+        infoHash: infoHash,
+        reason: reason.toString(),
+      );
+    } catch (_) {
+      // Failure history is diagnostic state. A database write must never stop
+      // the player from trying the next candidate.
+    }
+  }
+
   Future<void> _tryNextStream(
     String reason, {
     bool notify = true,
@@ -3251,7 +3272,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       );
       final profile = await AndroidTvBridge.instance.getDeviceProfile();
       if (!mounted || _engineHandoffInProgress) return;
-      await _database.recordStreamFailure(
+      await _recordStreamFailureBestEffort(
         deviceKey: profile.key,
         infoHash: _currentRelease.infoHash,
         reason: reason,
@@ -3283,7 +3304,14 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
               await resolvedStream?.playbackLease?.close();
               return false;
             }
-            if (ready == null) continue;
+            if (ready == null) {
+              await _recordStreamFailureBestEffort(
+                deviceKey: profile.key,
+                infoHash: candidate.infoHash,
+                reason: 'Fallback resolution returned no playable stream.',
+              );
+              continue;
+            }
             _source = ready.uri.toString();
             _currentRelease = candidate;
             _currentStream = ready;
@@ -3334,6 +3362,11 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
             _softwareFallbackUsed = previousSoftwareFallbackUsed;
             _decoderMode = previousDecoderMode;
             _videoFrameSeen = previousVideoFrameSeen;
+            await _recordStreamFailureBestEffort(
+              deviceKey: profile.key,
+              infoHash: candidate.infoHash,
+              reason: error,
+            );
             if (isTerminalDebridFailoverFailure(error)) {
               terminalFailure = error;
               return false;
@@ -3392,6 +3425,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
                 candidates: directCandidates,
                 failoverReason: reason,
                 notify: notify,
+                deviceKey: profile.key,
               ),
               PlayerFailoverClass.debrid =>
                 playerFailoverClassIsAvailable(
@@ -3438,6 +3472,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     Iterable<PlaybackStreamOption>? candidates,
     Object? failoverReason,
     bool notify = true,
+    required String deviceKey,
   }) async {
     if (!mounted || _engineHandoffInProgress) {
       return false;
@@ -3522,7 +3557,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
             );
           }
           return true;
-        } catch (_) {
+        } catch (error) {
           await preparedOption?.stream.playbackLease?.close();
           if (!mounted || _engineHandoffInProgress) rethrow;
           _source = previousSource;
@@ -3534,6 +3569,11 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
           _softwareFallbackUsed = previousSoftwareFallbackUsed;
           _decoderMode = previousDecoderMode;
           _videoFrameSeen = previousVideoFrameSeen;
+          await _recordStreamFailureBestEffort(
+            deviceKey: deviceKey,
+            infoHash: candidate.release.infoHash,
+            reason: error,
+          );
           rethrow;
         }
       },
@@ -4462,6 +4502,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
           "${error.toString().replaceFirst('FormatException: ', '')}",
         );
       }
+      if (silent) rethrow;
       return null;
     }
   }

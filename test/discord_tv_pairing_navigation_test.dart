@@ -1,5 +1,6 @@
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
+import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/features/discord/application/discord_account_link_resolver.dart';
 import 'package:anime_tv/features/discord/application/discord_presence_controller.dart';
 import 'package:anime_tv/features/settings/presentation/accounts_screen.dart';
@@ -120,11 +121,20 @@ Future<_SettingsDiscordPlatform> _pumpAccounts(
 }
 
 Future<void> _tapConnectDiscord(WidgetTester tester) async {
-  await tester.tap(find.text('System'));
+  final accountsTab = find.byKey(const ValueKey('settings-area-accounts'));
+  await tester.ensureVisible(accountsTab);
+  tester.widget<TvFocusable>(accountsTab).onPressed();
   await tester.pumpAndSettle();
   final connect = find.text('Connect Discord');
+  await tester.scrollUntilVisible(
+    connect,
+    500,
+    scrollable: find.descendant(
+      of: find.byKey(const ValueKey('settings-content-list')),
+      matching: find.byType(Scrollable),
+    ),
+  );
   expect(connect, findsOneWidget);
-  await tester.ensureVisible(connect);
   await tester.pumpAndSettle();
   await tester.tap(connect);
   await tester.pumpAndSettle();

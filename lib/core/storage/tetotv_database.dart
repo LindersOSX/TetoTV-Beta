@@ -14,8 +14,10 @@ const diagnosticHistoryWindow = Duration(hours: 48);
 // it; 240 entries allowed title-artwork noise to evict the evidence needed to
 // correlate a source-picker result with an intermittent player failure. Keep
 // this aligned with the explicit report sanitizer's full-size list bound so a
-// chronological export never drops the newest events.
-const maximumPersistedDiagnosticEvents = 300;
+// chronological export never drops the newest events. Five hundred entries
+// cover several provider searches plus their playback fallbacks while still
+// fitting inside the explicit report's hard size limit in normal operation.
+const maximumPersistedDiagnosticEvents = 500;
 const diagnosticEventSchema = 'tetotv-diagnostic-events-v3';
 
 const _diagnosticDroppedAgeKey = 'dropped_age';
@@ -1276,18 +1278,26 @@ Future<Map<String, Object?>> loadRecentDiagnosticOperationalHistory(
   final end = (now ?? DateTime.now()).toUtc();
   final start = end.subtract(diagnosticHistoryWindow);
   final arguments = [start.millisecondsSinceEpoch, end.millisecondsSinceEpoch];
+  // A direct/Web fallback frequently changes its privacy-sensitive stream
+  // identity while preserving the same technical failure. Group by the safe
+  // reason at export time so a run of identical failures is visible as one
+  // useful counter instead of many indistinguishable `count: 1` rows.
   final failures = await database.rawQuery(
     '''
-      SELECT reason, failure_count, last_failed_at
+      SELECT COALESCE(reason, '') AS reason,
+             SUM(failure_count) AS failure_count,
+             COUNT(*) AS failure_record_count,
+             MAX(last_failed_at) AS last_failed_at
       FROM stream_failures
       WHERE last_failed_at >= ? AND last_failed_at <= ?
+      GROUP BY COALESCE(reason, '')
       ORDER BY last_failed_at DESC LIMIT ?
     ''',
     [...arguments, failureCapacity],
   );
   final failureCount = Sqflite.firstIntValue(
     await database.rawQuery('''
-        SELECT COUNT(*) FROM stream_failures
+        SELECT COUNT(DISTINCT COALESCE(reason, '')) FROM stream_failures
         WHERE last_failed_at >= ? AND last_failed_at <= ?
       ''', arguments),
   );
@@ -1326,6 +1336,8 @@ Future<Map<String, Object?>> loadRecentDiagnosticOperationalHistory(
           if (row['reason'] case final String reason)
             'reason': redactDiagnosticValue(reason),
           'lifetimeFailureCount': (row['failure_count'] as num?)?.toInt() ?? 0,
+          'failureRecordCount':
+              (row['failure_record_count'] as num?)?.toInt() ?? 0,
           'lastFailedAt': row['last_failed_at'],
         },
     ],

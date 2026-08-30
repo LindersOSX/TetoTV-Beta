@@ -223,7 +223,110 @@ void main() {
       expect(contexts.last, isNot(contains('reason_code')));
     },
   );
+
+  test('orphaned sessions are classified after supersession or a crash', () {
+    final first = DateTime.utc(2026, 8, 30, 4, 34);
+    final second = first.add(const Duration(minutes: 1));
+    final third = second.add(const Duration(minutes: 1));
+    final events = <Map<String, Object?>>[
+      _playbackEvent(
+        timestamp: first,
+        sessionId: 'pbs-orphanedSession123',
+        sequence: 1,
+        stage: 'source_selected',
+        status: 'selected_by_user',
+      ),
+      _playbackEvent(
+        timestamp: second,
+        sessionId: 'pbs-workingSession5678',
+        sequence: 1,
+        stage: 'source_selected',
+        status: 'selected_by_user',
+      ),
+      _playbackEvent(
+        timestamp: second.add(const Duration(seconds: 1)),
+        sessionId: 'pbs-workingSession5678',
+        sequence: 2,
+        stage: 'final_outcome',
+        status: 'working',
+      ),
+      _playbackEvent(
+        timestamp: third,
+        sessionId: 'pbs-crashedSession9012',
+        sequence: 1,
+        stage: 'fallback_attempted',
+        status: 'attempted',
+      ),
+    ];
+
+    final derived = derivePlaybackSessionDiagnostics(
+      events,
+      interruptions: [
+        PlaybackDiagnosticInterruption(
+          timestamp: third.add(const Duration(milliseconds: 100)),
+          reasonCode: 'native_crash',
+        ),
+      ],
+    );
+    final sessions = (derived['playbackSessions']! as List).cast<Map>();
+    final orphaned = sessions.singleWhere(
+      (session) => session['sessionId'] == 'pbs-orphanedSession123',
+    );
+    final crashed = sessions.singleWhere(
+      (session) => session['sessionId'] == 'pbs-crashedSession9012',
+    );
+
+    expect(orphaned['finalOutcome'], 'failed');
+    expect(orphaned['finalReasonCode'], 'session_superseded');
+    expect(crashed['finalOutcome'], 'failed');
+    expect(crashed['finalReasonCode'], 'native_crash');
+    expect((derived['playbackSessionComparison'] as Map)['available'], isTrue);
+  });
+
+  test('crash correlation preserves the platform failure kind', () {
+    final startedAt = DateTime.utc(2026, 8, 30, 4, 36);
+    final derived = derivePlaybackSessionDiagnostics(
+      [
+        _playbackEvent(
+          timestamp: startedAt,
+          sessionId: 'pbs-javaCrashSession12',
+          sequence: 1,
+          stage: 'source_selected',
+          status: 'selected_by_user',
+        ),
+      ],
+      interruptions: [
+        PlaybackDiagnosticInterruption(
+          timestamp: startedAt.add(const Duration(seconds: 1)),
+          reasonCode: 'java_crash',
+        ),
+      ],
+    );
+
+    final session = ((derived['playbackSessions']! as List).single as Map);
+    expect(session['finalOutcome'], 'failed');
+    expect(session['finalReasonCode'], 'java_crash');
+  });
 }
+
+Map<String, Object?> _playbackEvent({
+  required DateTime timestamp,
+  required String sessionId,
+  required int sequence,
+  required String stage,
+  required String status,
+}) => {
+  'timestamp': timestamp.toUtc().toIso8601String(),
+  'component': playbackSessionDiagnosticComponent,
+  'severity': 'info',
+  'message': 'Playback session event',
+  'context': {
+    'session_id': sessionId,
+    'sequence': sequence,
+    'stage': stage,
+    'status': status,
+  },
+};
 
 Future<void> _createDiagnosticTables(Database database) async {
   await database.execute('''

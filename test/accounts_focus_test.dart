@@ -52,7 +52,7 @@ void main() {
       expect(find.byKey(const ValueKey('main-navigation')), findsNothing);
       expect(
         FocusManager.instance.primaryFocus?.debugLabel,
-        'accounts.area.customize',
+        'accounts.customization.first',
       );
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
       await tester.pump();
@@ -61,13 +61,13 @@ void main() {
       await tester.pump();
       expect(
         FocusManager.instance.primaryFocus?.debugLabel,
-        'accounts.area.customize',
+        'accounts.customization.first',
       );
       expect(tester.takeException(), isNull);
     });
   }
 
-  testWidgets('D-pad reaches Home shelves and switches to streaming', (
+  testWidgets('D-pad traverses Appearance and switches to Services', (
     tester,
   ) async {
     FlutterSecureStorage.setMockInitialValues({});
@@ -85,38 +85,48 @@ void main() {
 
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.area.customize',
+      'accounts.customization.first',
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    await tester.pump();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.customization.home-content.featured',
     );
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pump();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.customization.toggle-all',
+      'accounts.customization.home-content.poster-metadata',
     );
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pump();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.section.home-shelves',
-    );
-    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-    await tester.pumpAndSettle();
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
-    await tester.pump();
-    expect(
-      FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.shelf.tracking',
+      'accounts.customization.home-content.continue-watching',
     );
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pump();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.shelf.history',
+      'accounts.shelf.${HomeShelf.values.first.name}',
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+    await tester.pump();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.customization.home-content.continue-watching',
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+    await tester.pump();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.show-title-style',
     );
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.pumpAndSettle();
@@ -147,6 +157,97 @@ void main() {
   });
 
   testWidgets(
+    'TV Settings keep the rail and use the polished two-column tabs',
+    (tester) async {
+      FlutterSecureStorage.setMockInitialValues({});
+      tester.view.physicalSize = const Size(960, 540);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [isTelevisionProvider.overrideWithValue(true)],
+          child: const MaterialApp(home: TvShortcuts(child: AccountsScreen())),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const ValueKey('main-nav-settings')), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('settings-area-downloads')),
+        findsNothing,
+      );
+      expect(find.text('Settings'), findsNothing);
+      expect(find.text('APPEARANCE'), findsNothing);
+      expect(find.text('Expand all'), findsNothing);
+      expect(find.text('Collapse all'), findsNothing);
+      expect(
+        find.byKey(const ValueKey('customize-toggle-all-sections')),
+        findsNothing,
+      );
+
+      final appearanceTab = find.byKey(
+        const ValueKey('settings-area-appearance'),
+      );
+      expect(
+        find.descendant(
+          of: appearanceTab,
+          matching: find.byIcon(Icons.palette_rounded),
+        ),
+        findsNothing,
+      );
+      final appearanceLabel = find.descendant(
+        of: appearanceTab,
+        matching: find.text('Appearance'),
+      );
+      expect(tester.widget<Text>(appearanceLabel).style?.fontSize, 16);
+      final activeTabSurfaces = tester
+          .widgetList<AnimatedContainer>(
+            find.descendant(
+              of: appearanceTab,
+              matching: find.byType(AnimatedContainer),
+            ),
+          )
+          .where(
+            (widget) =>
+                widget.decoration is BoxDecoration &&
+                (widget.decoration! as BoxDecoration).gradient != null,
+          );
+      expect(activeTabSurfaces, isEmpty);
+
+      expect(find.text('Theme & display'), findsOneWidget);
+      expect(find.text('Navigation'), findsWidgets);
+      expect(find.text('Home screen'), findsOneWidget);
+      expect(find.text('Theme Studio'), findsOneWidget);
+      expect(find.text('Title language'), findsOneWidget);
+      expect(find.text('Show title style'), findsOneWidget);
+      expect(find.text('Menu order'), findsOneWidget);
+      expect(find.text('Featured hero'), findsOneWidget);
+      expect(find.text('Poster metadata'), findsOneWidget);
+      expect(find.text('Continue watching'), findsWidgets);
+
+      final themeCard = tester.getRect(
+        find.byKey(const ValueKey('appearance-theme-display-card')),
+      );
+      final navigationCard = tester.getRect(
+        find.byKey(const ValueKey('appearance-navigation-card')),
+      );
+      final homeCard = tester.getRect(
+        find.byKey(const ValueKey('appearance-home-screen-card')),
+      );
+      expect(homeCard.left, greaterThan(themeCard.right));
+      expect((homeCard.top - themeCard.top).abs(), lessThan(3));
+      expect(navigationCard.top, greaterThan(themeCard.bottom));
+      expect(
+        FocusManager.instance.primaryFocus?.debugLabel,
+        'accounts.customization.first',
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
     'Settings option rows exit Left through the active Settings rail item',
     (tester) async {
       FlutterSecureStorage.setMockInitialValues({});
@@ -165,66 +266,12 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      final displayToggle = find.byKey(
-        const ValueKey('inline-section-toggle-display'),
-      );
-      await tester.tap(displayToggle);
-      await tester.pumpAndSettle();
-
-      // This chip deliberately owns an anonymous TvFocusable node. It covers
-      // Settings controls which are not part of the screen's explicit graph.
-      final smallChip = find
-          .ancestor(
-            of: find.text('Small').first,
-            matching: find.byType(TvFocusable),
-          )
-          .first;
-      await tester.tap(smallChip);
-      await tester.pumpAndSettle();
-      final mediumChip = find
-          .ancestor(
-            of: find.text('Medium').first,
-            matching: find.byType(TvFocusable),
-          )
-          .first;
-      await tester.tap(mediumChip);
-      await tester.pumpAndSettle();
-      final smallFocus = tester
-          .widget<FocusableActionDetector>(
-            find.descendant(
-              of: smallChip,
-              matching: find.byType(FocusableActionDetector),
-            ),
-          )
-          .focusNode!;
-      final mediumFocus = tester
-          .widget<FocusableActionDetector>(
-            find.descendant(
-              of: mediumChip,
-              matching: find.byType(FocusableActionDetector),
-            ),
-          )
-          .focusNode!;
-      expect(mediumFocus.hasFocus, isTrue);
-
-      // LEFT still moves normally inside a Settings option row.
-      await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
-      await tester.pump();
-      expect(smallFocus.hasFocus, isTrue);
       expect(
         FocusManager.instance.primaryFocus?.debugLabel,
-        'TV mouse/D-pad control',
+        'accounts.customization.first',
       );
-
-      for (var press = 0; press < 8; press++) {
-        if (FocusManager.instance.primaryFocus?.debugLabel ==
-            'top-level.active-navigation') {
-          break;
-        }
-        await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
-        await tester.pump();
-      }
-
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+      await tester.pump();
       expect(
         FocusManager.instance.primaryFocus?.debugLabel,
         'top-level.active-navigation',
@@ -248,7 +295,7 @@ void main() {
       await tester.pump();
       expect(
         FocusManager.instance.primaryFocus?.debugLabel,
-        'accounts.area.customize',
+        'accounts.customization.first',
       );
       expect(tester.takeException(), isNull);
     },
@@ -272,11 +319,12 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Streaming'));
+    await tester.tap(find.text('Services'));
     await tester.pumpAndSettle();
 
     final toggle = find.byKey(
       const ValueKey('settings-auto-pick-source-enabled'),
+      skipOffstage: false,
     );
     expect(toggle, findsOneWidget);
     expect(
@@ -288,6 +336,8 @@ void main() {
       findsNothing,
     );
 
+    await tester.ensureVisible(toggle);
+    await tester.pumpAndSettle();
     await tester.tap(toggle);
     await tester.pumpAndSettle();
 
@@ -378,25 +428,19 @@ void main() {
     await tester.pumpAndSettle();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.streaming.offline-downloads',
-    );
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
-    await tester.pumpAndSettle();
-    expect(
-      FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.streaming.download-manager',
+      'accounts.streaming.local-media',
     );
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pumpAndSettle();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.streaming.local-media',
+      'accounts.streaming.watch-together',
     );
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
     await tester.pumpAndSettle();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.streaming.download-manager',
+      'accounts.streaming.local-media',
     );
 
     await tester.tap(
@@ -443,18 +487,23 @@ void main() {
       const ProviderScope(child: MaterialApp(home: AccountsScreen())),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Streaming'));
+    await tester.tap(find.text('Services'));
     await tester.pumpAndSettle();
 
-    for (final prefix in const ['DEBRID', 'WEB', 'DIRECT PEER']) {
-      final label = find.byWidgetPredicate(
+    for (final debugLabel in const [
+      'accounts.streaming.debrid',
+      'accounts.streaming.web',
+      'accounts.streaming.direct-torrent',
+    ]) {
+      final focusableFinder = find.byWidgetPredicate(
         (widget) =>
-            widget is Text &&
-            RegExp('^$prefix (ON|OFF)\$').hasMatch(widget.data ?? ''),
+            widget is TvFocusable && widget.focusNode?.debugLabel == debugLabel,
+        skipOffstage: false,
       );
-      final focusable = tester.widget<TvFocusable>(
-        find.ancestor(of: label, matching: find.byType(TvFocusable)).first,
-      );
+      expect(focusableFinder, findsOneWidget);
+      await tester.ensureVisible(focusableFinder);
+      await tester.pumpAndSettle();
+      final focusable = tester.widget<TvFocusable>(focusableFinder);
       focusable.focusNode!.requestFocus();
       await tester.pump();
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
@@ -462,7 +511,7 @@ void main() {
       expect(
         FocusManager.instance.primaryFocus?.debugLabel,
         'accounts.streaming.debrid-sort',
-        reason: '$prefix should enter the ranking controls below sources.',
+        reason: '$debugLabel should enter the ranking controls below sources.',
       );
     }
     expect(tester.takeException(), isNull);
@@ -486,18 +535,33 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Streaming'));
+      expect(
+        find.byKey(const ValueKey('settings-area-downloads')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const ValueKey('main-nav-settings')),
+        findsOneWidget,
+        reason: 'Settings must keep the persistent TV navigation rail visible.',
+      );
+      await tester.tap(find.text('Services'));
       await tester.pumpAndSettle();
 
       final toggle = find.byKey(
         const ValueKey('settings-offline-downloads-toggle'),
+        skipOffstage: false,
       );
       expect(toggle, findsOneWidget);
       expect(
-        find.byKey(const ValueKey('settings-download-manager-button')),
+        find.byKey(
+          const ValueKey('settings-download-manager-button'),
+          skipOffstage: false,
+        ),
         findsOneWidget,
       );
 
+      await tester.ensureVisible(toggle);
+      await tester.pumpAndSettle();
       await tester.tap(toggle);
       await tester.pumpAndSettle();
 
@@ -514,17 +578,31 @@ void main() {
         isFalse,
       );
       expect(
-        find.byKey(const ValueKey('settings-download-manager-button')),
+        find.byKey(
+          const ValueKey('settings-download-manager-button'),
+          skipOffstage: false,
+        ),
         findsNothing,
       );
-
-      await tester.tap(find.text('Customize'));
-      await tester.pumpAndSettle();
-      final homeNavigation = find.byKey(
-        const ValueKey('inline-section-toggle-home-navigation'),
+      expect(
+        FocusManager.instance.primaryFocus?.debugLabel,
+        'accounts.streaming.offline-downloads',
       );
-      await tester.ensureVisible(homeNavigation);
-      await tester.tap(homeNavigation);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pumpAndSettle();
+      expect(
+        FocusManager.instance.primaryFocus?.debugLabel,
+        'accounts.streaming.offline-downloads',
+        reason: 'Down must stop on the last mounted Services control.',
+      );
+
+      await tester.tap(find.text('Appearance'));
+      await tester.pumpAndSettle();
+      final menuOrder = find.byKey(
+        const ValueKey('settings-appearance-menu-order'),
+      );
+      await tester.ensureVisible(menuOrder);
+      await tester.tap(menuOrder);
       await tester.pumpAndSettle();
       expect(
         find.byKey(const ValueKey('settings-top-navigation-toggle-downloads')),
@@ -556,7 +634,7 @@ void main() {
           const ProviderScope(child: MaterialApp(home: AccountsScreen())),
         );
         await tester.pumpAndSettle();
-        await tester.tap(find.text('Streaming'));
+        await tester.tap(find.text('Services'));
         await tester.pumpAndSettle();
         for (
           var scroll = 0;
@@ -572,18 +650,31 @@ void main() {
         }
 
         expect(find.text('Local, Jellyfin & Plex sources'), findsOneWidget);
-        expect(find.text('Manage sources'), findsOneWidget);
+        expect(find.text('Manage sources'), findsWidgets);
+        expect(
+          find.byKey(const ValueKey('settings-card-services-features')),
+          findsOneWidget,
+        );
         expect(find.text('Watch Party'), findsOneWidget);
         expect(
           find.byKey(const ValueKey('settings-watch-party-toggle')),
           findsOneWidget,
+        );
+        expect(
+          find.byKey(const ValueKey('settings-offline-downloads-toggle')),
+          findsOneWidget,
+          reason: 'Offline download controls belong in Services.',
+        );
+        expect(
+          find.byKey(const ValueKey('settings-area-downloads')),
+          findsNothing,
         );
         expect(tester.takeException(), isNull);
       },
     );
   }
 
-  testWidgets('Home shelves expand inline from a collapsed heading', (
+  testWidgets('Home shelves remain directly available below the dashboard', (
     tester,
   ) async {
     FlutterSecureStorage.setMockInitialValues({});
@@ -597,15 +688,13 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Home section'), findsNothing);
-    expect(find.text('Continue watching'), findsNothing);
-
-    await tester.tap(
+    expect(
       find.byKey(const ValueKey('inline-section-toggle-home-shelves')),
+      findsNothing,
+      reason: 'Appearance no longer hides settings in an accordion.',
     );
-    await tester.pumpAndSettle();
-
-    expect(find.text('Continue watching'), findsOneWidget);
+    expect(find.text('Home shelves'), findsOneWidget);
+    expect(find.text('Continue watching'), findsNWidgets(2));
     expect(find.text('Watch history'), findsOneWidget);
     expect(find.text('Recently released'), findsOneWidget);
     expect(find.text('Trending now'), findsOneWidget);
@@ -639,11 +728,6 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(
-      find.byKey(const ValueKey('inline-section-toggle-home-shelves')),
-    );
-    await tester.pumpAndSettle();
-
     expect(
       tester.widget<Scaffold>(find.byType(Scaffold).first).backgroundColor,
       palette.background,
@@ -653,9 +737,12 @@ void main() {
         (widget) =>
             widget is AnimatedContainer &&
             widget.decoration is BoxDecoration &&
-            (widget.decoration! as BoxDecoration).color == palette.accent,
+            ((widget.decoration! as BoxDecoration).border as Border?)
+                    ?.bottom
+                    .color ==
+                palette.accentBright,
       ),
-      findsOneWidget,
+      findsWidgets,
     );
     expect(
       find.byWidgetPredicate(
@@ -699,12 +786,13 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(
-      find.byKey(const ValueKey('inline-section-toggle-home-shelves')),
+    final trackingShelf = find.byWidgetPredicate(
+      (widget) =>
+          widget is TvFocusable &&
+          widget.focusNode?.debugLabel == 'accounts.shelf.tracking',
     );
-    await tester.pumpAndSettle();
-
-    await tester.tap(find.text('Continue watching'));
+    await tester.ensureVisible(trackingShelf);
+    tester.widget<TvFocusable>(trackingShelf).onPressed();
     await tester.pumpAndSettle();
     expect(
       container.read(homeShelfPreferencesProvider),
@@ -718,11 +806,31 @@ void main() {
       container.read(homeShelfOrderProvider).take(2),
       orderedEquals([HomeShelf.history, HomeShelf.tracking]),
     );
-    expect(find.text('Home section'), findsNothing);
+    expect(find.text('Home shelves'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('D-pad Expand all and Collapse all update all Customize groups', (
+  Future<void> selectSettingsArea(WidgetTester tester, String area) async {
+    final tab = find.byKey(ValueKey('settings-area-$area'));
+    for (var attempt = 0; attempt < 4 && tab.evaluate().isEmpty; attempt++) {
+      final tabs = find.ancestor(
+        of: find.byKey(const ValueKey('settings-area-appearance')),
+        matching: find.byWidgetPredicate(
+          (widget) =>
+              widget is ListView && widget.scrollDirection == Axis.horizontal,
+        ),
+      );
+      await tester.drag(tabs, const Offset(-260, 0));
+      await tester.pumpAndSettle();
+    }
+    final focusable = tester.widget<TvFocusable>(tab);
+    focusable.focusNode!.requestFocus();
+    await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+  }
+
+  testWidgets('Appearance dashboard is direct and D-pad ordered', (
     tester,
   ) async {
     FlutterSecureStorage.setMockInitialValues({});
@@ -738,93 +846,54 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    final toggleAll = find.byKey(
-      const ValueKey('customize-toggle-all-sections'),
-    );
-    expect(find.text('Expand all'), findsOneWidget);
-    for (final label in const [
-      'Continue watching',
-      'Theme Studio',
-      'Default landing page',
-      'On-screen keyboard',
-      'Text color',
-      'Preferred audio',
-    ]) {
-      expect(find.text(label), findsNothing);
-    }
-
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
-    await tester.pumpAndSettle();
+    expect(find.text('Expand all'), findsNothing);
+    expect(find.text('Collapse all'), findsNothing);
     expect(
-      FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.customization.toggle-all',
+      find.byKey(const ValueKey('customize-toggle-all-sections')),
+      findsNothing,
     );
-    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-    await tester.pumpAndSettle();
-
-    expect(find.text('Collapse all'), findsOneWidget);
     for (final label in const [
-      'Continue watching',
       'Theme Studio',
-      'Default landing page',
-      'On-screen keyboard',
-      'Text color',
-      'Preferred audio',
+      'Title language',
+      'Show title style',
+      'Navigation size',
+      'Menu order',
+      'Reset appearance and navigation',
     ]) {
       expect(find.text(label), findsOneWidget);
     }
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.customization.toggle-all',
+      'accounts.customization.first',
     );
-
-    final displayToggle = find.byKey(
-      const ValueKey('inline-section-toggle-display'),
-    );
-    tester.widget<TvFocusable>(displayToggle).onPressed();
-    await tester.pumpAndSettle();
-    expect(find.text('Expand all'), findsOneWidget);
-    expect(find.text('Theme Studio'), findsNothing);
-    expect(find.text('Continue watching'), findsOneWidget);
-    expect(find.text('Default landing page'), findsOneWidget);
-
-    tester
-        .widget<TvFocusable>(
-          find.descendant(of: toggleAll, matching: find.byType(TvFocusable)),
-        )
-        .onPressed();
-    await tester.pumpAndSettle();
-    expect(find.text('Collapse all'), findsOneWidget);
-    expect(find.text('Theme Studio'), findsOneWidget);
-    expect(find.text('Screen layout'), findsNothing);
-
-    tester
-        .widget<TvFocusable>(
-          find.descendant(of: toggleAll, matching: find.byType(TvFocusable)),
-        )
-        .onPressed();
-    await tester.pumpAndSettle();
-    expect(find.text('Expand all'), findsOneWidget);
-    for (final label in const [
-      'Continue watching',
-      'Theme Studio',
-      'Default landing page',
-      'On-screen keyboard',
-      'Text color',
-      'Preferred audio',
+    for (final expected in const [
+      'accounts.title-language',
+      'accounts.show-title-style',
+      'accounts.customization.navigation-size',
+      'accounts.customization.menu-order',
+      'accounts.customization.reset',
     ]) {
-      expect(find.text(label), findsNothing);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pumpAndSettle();
+      expect(FocusManager.instance.primaryFocus?.debugLabel, expected);
     }
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.customization.reset',
+      reason: 'Down stops on the final row in the Appearance column.',
+    );
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
     await tester.pumpAndSettle();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.area.system',
+      'top-level.active-navigation',
     );
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('Customize groups expand and collapse independently', (
+  testWidgets('Appearance keeps direct dashboard and advanced controls', (
     tester,
   ) async {
     FlutterSecureStorage.setMockInitialValues({});
@@ -839,70 +908,33 @@ void main() {
     await tester.pumpAndSettle();
 
     for (final key in const [
-      ValueKey('customize-section-home-shelves'),
-      ValueKey('customize-section-display'),
-      ValueKey('customize-section-home-navigation'),
-      ValueKey('customize-section-input-feedback'),
-      ValueKey('customize-section-closed-captions'),
-      ValueKey('customize-section-player-controls'),
+      ValueKey('appearance-theme-display-card'),
+      ValueKey('appearance-navigation-card'),
+      ValueKey('appearance-home-screen-card'),
     ]) {
       expect(find.byKey(key), findsOneWidget);
     }
-
-    expect(find.text('Continue watching'), findsNothing);
-    expect(find.text('Screen layout'), findsNothing);
-    expect(find.text('Theme Studio'), findsNothing);
-    expect(find.text('Title language'), findsNothing);
-    expect(find.text('Show title style'), findsNothing);
-    expect(find.text('Text color'), findsNothing);
-
-    final shelvesToggle = find.byKey(
-      const ValueKey('inline-section-toggle-home-shelves'),
-    );
-    await tester.tap(shelvesToggle);
-    await tester.pumpAndSettle();
-    expect(find.text('Continue watching'), findsOneWidget);
-    expect(find.text('Screen layout'), findsNothing);
-    expect(find.text('Theme Studio'), findsNothing);
-
-    await tester.tap(shelvesToggle);
-    await tester.pumpAndSettle();
-    expect(find.text('Continue watching'), findsNothing);
-
-    final displayToggle = find.byKey(
-      const ValueKey('inline-section-toggle-display'),
-    );
-    await tester.ensureVisible(displayToggle);
-    await tester.tap(displayToggle);
-    await tester.pumpAndSettle();
-    expect(find.text('Screen layout'), findsNothing);
     expect(find.text('Theme Studio'), findsOneWidget);
     expect(find.byKey(const ValueKey('open-theme-studio')), findsOneWidget);
     expect(find.textContaining('Classic Layout'), findsNothing);
     expect(find.text('Title language'), findsOneWidget);
     expect(find.text('Show title style'), findsOneWidget);
-    expect(
-      find.byKey(const ValueKey('show-title-style-englishLogo')),
-      findsOneWidget,
-    );
-    expect(find.byKey(const ValueKey('show-title-style-text')), findsOneWidget);
-    expect(find.text('HOME & NAVIGATION'), findsOneWidget);
+    expect(find.text('Display options'), findsOneWidget);
+    expect(find.text('Input & feedback'), findsOneWidget);
+    expect(find.text('Home shelves'), findsOneWidget);
+    expect(find.text('Default landing page'), findsOneWidget);
+    expect(find.text('On-screen keyboard'), findsOneWidget);
     expect(
       tester.getTopLeft(find.text('Title language')).dy,
-      greaterThan(tester.getTopLeft(find.text('Layout style')).dy),
+      greaterThan(tester.getTopLeft(find.text('Theme Studio')).dy),
     );
-
-    await tester.tap(displayToggle);
-    await tester.pumpAndSettle();
-    expect(find.text('Screen layout'), findsNothing);
-    expect(find.text('Theme Studio'), findsNothing);
-    expect(find.text('Title language'), findsNothing);
-    expect(find.text('Show title style'), findsNothing);
+    expect(find.text('Expand all'), findsNothing);
+    expect(find.text('Collapse all'), findsNothing);
     expect(tester.takeException(), isNull);
   });
 
   testWidgets(
-    'Closed Captions expands into its first control and collapses safely',
+    'Playback exposes direct polished rows without nested accordions',
     (tester) async {
       FlutterSecureStorage.setMockInitialValues({});
       tester.view.physicalSize = const Size(960, 540);
@@ -917,68 +949,44 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      final captionsToggle = find.byKey(
-        const ValueKey('inline-section-toggle-closed-captions'),
-      );
-      expect(captionsToggle, findsOneWidget);
-      expect(find.text('Text color'), findsNothing);
-
-      await tester.ensureVisible(captionsToggle);
-      final header = tester.widget<TvFocusable>(captionsToggle);
-      header.focusNode!.requestFocus();
-      await tester.pump();
-      expect(
-        FocusManager.instance.primaryFocus?.debugLabel,
-        'accounts.section.closed-captions',
-      );
-
-      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.tap(find.text('Playback'));
       await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const ValueKey('inline-section-toggle-closed-captions')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const ValueKey('inline-section-toggle-player-controls')),
+        findsNothing,
+      );
       expect(find.text('Text color'), findsOneWidget);
+      expect(find.text('Default player'), findsOneWidget);
+
+      final playbackTab = tester.widget<TvFocusable>(
+        find.byKey(const ValueKey('settings-area-playback')),
+      );
+      playbackTab.focusNode!.requestFocus();
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pumpAndSettle();
       expect(
         FocusManager.instance.primaryFocus?.debugLabel,
         'accounts.captions.text-color',
       );
-      final whiteControl = tester.widget<TvFocusable>(
-        find
-            .ancestor(
-              of: find.text('White'),
-              matching: find.byType(TvFocusable),
-            )
-            .first,
-      );
-      final hiddenChildFocus = whiteControl.focusNode!;
-      expect(hiddenChildFocus.context, isNotNull);
 
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
       await tester.pumpAndSettle();
       expect(
         FocusManager.instance.primaryFocus?.debugLabel,
-        'accounts.section.closed-captions',
-      );
-      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-      await tester.pumpAndSettle();
-
-      expect(find.text('Text color'), findsNothing);
-      expect(hiddenChildFocus.context?.mounted ?? false, isFalse);
-      expect(hiddenChildFocus.hasFocus, isFalse);
-      expect(
-        FocusManager.instance.primaryFocus?.debugLabel,
-        'accounts.section.closed-captions',
-      );
-
-      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
-      await tester.pumpAndSettle();
-      expect(
-        FocusManager.instance.primaryFocus?.debugLabel,
-        'accounts.section.player-controls',
+        'accounts.area.playback',
       );
       expect(tester.takeException(), isNull);
     },
   );
 
   testWidgets(
-    'D-pad scrolling continues after a Customize section is collapsed',
+    'advanced Appearance controls remain mounted below the dashboard',
     (tester) async {
       FlutterSecureStorage.setMockInitialValues({});
       tester.view.physicalSize = const Size(960, 360);
@@ -993,26 +1001,6 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      final displayToggle = find.byKey(
-        const ValueKey('inline-section-toggle-display'),
-      );
-      await tester.ensureVisible(displayToggle);
-      final displayHeader = tester.widget<TvFocusable>(displayToggle);
-      displayHeader.focusNode!.requestFocus();
-      await tester.pump();
-
-      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-      await tester.pumpAndSettle();
-      expect(find.text('Theme Studio'), findsOneWidget);
-      expect(find.text('Screen layout'), findsNothing);
-      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-      await tester.pumpAndSettle();
-      expect(find.text('Theme Studio'), findsNothing);
-      expect(
-        FocusManager.instance.primaryFocus?.debugLabel,
-        'accounts.section.display',
-      );
-
       final settingsList = find.byWidgetPredicate(
         (widget) =>
             widget is ListView && widget.scrollDirection == Axis.vertical,
@@ -1022,87 +1010,77 @@ void main() {
         find.descendant(of: settingsList, matching: find.byType(Scrollable)),
       );
       final before = list.position.pixels;
-
-      for (final expected in const [
-        'accounts.section.home-navigation',
-        'accounts.section.input-feedback',
-        'accounts.section.closed-captions',
-        'accounts.section.player-controls',
-        'accounts.customization.reset',
-      ]) {
-        await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
-        await tester.pumpAndSettle();
-        expect(FocusManager.instance.primaryFocus?.debugLabel, expected);
-      }
-
-      expect(list.position.pixels, greaterThan(before));
-      expect(tester.takeException(), isNull);
-    },
-  );
-
-  testWidgets(
-    'Reset appearance consumes Down and exits to Settings rail only on Left',
-    (tester) async {
-      FlutterSecureStorage.setMockInitialValues({});
-      tester.view.physicalSize = const Size(1280, 720);
-      tester.view.devicePixelRatio = 1;
-      addTearDown(tester.view.resetPhysicalSize);
-      addTearDown(tester.view.resetDevicePixelRatio);
-
-      await tester.pumpWidget(
-        ProviderScope(
-          child: MaterialApp(
-            theme: AppTheme.dark,
-            home: const TvShortcuts(child: AccountsScreen()),
-          ),
-        ),
-      );
+      final landingPage = find.text('Default landing page');
+      await tester.ensureVisible(landingPage);
       await tester.pumpAndSettle();
-
-      final resetButton = find
-          .ancestor(
-            of: find.text('Reset appearance & navigation'),
-            matching: find.byType(TvFocusable),
-          )
-          .first;
-      await tester.ensureVisible(resetButton);
-      final resetFocus = tester.widget<TvFocusable>(resetButton).focusNode!;
-      resetFocus.requestFocus();
-      await tester.pump();
-      expect(
-        FocusManager.instance.primaryFocus?.debugLabel,
-        'accounts.customization.reset',
-      );
-
-      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
-      await tester.pump();
-      expect(resetFocus.hasFocus, isTrue);
-      expect(
-        FocusManager.instance.primaryFocus?.debugLabel,
-        'accounts.customization.reset',
-      );
-
-      await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
-      await tester.pump();
-      expect(
-        FocusManager.instance.primaryFocus?.debugLabel,
-        'top-level.active-navigation',
-      );
-      final settingsAction = find.byKey(const ValueKey('main-nav-settings'));
-      final settingsFocusable = find.descendant(
-        of: settingsAction,
-        matching: find.byType(FocusableActionDetector),
-      );
-      expect(
-        tester
-            .widget<FocusableActionDetector>(settingsFocusable)
-            .focusNode
-            ?.hasFocus,
-        isTrue,
-      );
+      expect(list.position.pixels, greaterThan(before));
+      expect(find.text('Display options'), findsOneWidget);
+      expect(find.text('Input & feedback'), findsOneWidget);
+      expect(find.text('Home shelves'), findsOneWidget);
+      expect(find.text('On-screen keyboard'), findsOneWidget);
+      expect(find.text('Watch history'), findsOneWidget);
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets('Reset appearance stops Down and exits Left to Settings rail', (
+    tester,
+  ) async {
+    FlutterSecureStorage.setMockInitialValues({});
+    tester.view.physicalSize = const Size(1280, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(
+          theme: AppTheme.dark,
+          home: const TvShortcuts(child: AccountsScreen()),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final resetButton = find
+        .ancestor(
+          of: find.text('Reset appearance and navigation'),
+          matching: find.byType(TvFocusable),
+        )
+        .first;
+    await tester.ensureVisible(resetButton);
+    final resetFocus = tester.widget<TvFocusable>(resetButton).focusNode!;
+    resetFocus.requestFocus();
+    await tester.pump();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.customization.reset',
+    );
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    expect(resetFocus.hasFocus, isTrue);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+    await tester.pump();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'top-level.active-navigation',
+    );
+    final settingsAction = find.byKey(const ValueKey('main-nav-settings'));
+    final settingsFocusable = find.descendant(
+      of: settingsAction,
+      matching: find.byType(FocusableActionDetector),
+    );
+    expect(
+      tester
+          .widget<FocusableActionDetector>(settingsFocusable)
+          .focusNode
+          ?.hasFocus,
+      isTrue,
+    );
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets('D-pad traverses all seven visible Home shelf rows in order', (
     tester,
@@ -1120,37 +1098,26 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
-    await tester.pumpAndSettle();
-
-    expect(
-      FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.customization.toggle-all',
+    final firstShelf = find.byWidgetPredicate(
+      (widget) =>
+          widget is TvFocusable &&
+          widget.focusNode?.debugLabel ==
+              'accounts.shelf.${HomeShelf.values.first.name}',
     );
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.ensureVisible(firstShelf);
+    tester.widget<TvFocusable>(firstShelf).focusNode!.requestFocus();
     await tester.pumpAndSettle();
-    expect(
-      FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.section.home-shelves',
-    );
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
-    await tester.pumpAndSettle();
-    expect(
-      FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.section.display',
-    );
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
     await tester.pumpAndSettle();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.section.home-shelves',
+      'accounts.customization.home-content.continue-watching',
     );
-    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-    await tester.pumpAndSettle();
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pumpAndSettle();
 
-    for (final shelf in HomeShelf.values) {
+    for (var index = 0; index < HomeShelf.values.length; index++) {
+      final shelf = HomeShelf.values[index];
       expect(
         FocusManager.instance.primaryFocus?.debugLabel,
         'accounts.shelf.${shelf.name}',
@@ -1160,15 +1127,8 @@ void main() {
     }
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.section.display',
-    );
-    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-    await tester.pumpAndSettle();
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
-    await tester.pumpAndSettle();
-    expect(
-      FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.customization.first',
+      'accounts.shelf.${HomeShelf.values.last.name}',
+      reason: 'Down stops at the final visible shelf row.',
     );
     expect(tester.takeException(), isNull);
   });
@@ -1190,14 +1150,12 @@ void main() {
     expect(find.text('Optional private-repository token'), findsNothing);
     expect(find.text('Read-only GitHub token'), findsNothing);
 
+    await selectSettingsArea(tester, 'accounts');
     for (final key in [
-      LogicalKeyboardKey.arrowRight,
-      LogicalKeyboardKey.arrowRight,
-      LogicalKeyboardKey.enter,
       LogicalKeyboardKey.arrowDown,
       LogicalKeyboardKey.arrowDown,
       LogicalKeyboardKey.arrowDown,
-      LogicalKeyboardKey.arrowRight,
+      LogicalKeyboardKey.arrowDown,
     ]) {
       await tester.sendKeyEvent(key);
       await tester.pumpAndSettle();
@@ -1226,14 +1184,12 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    await selectSettingsArea(tester, 'accounts');
     for (final key in [
-      LogicalKeyboardKey.arrowRight,
-      LogicalKeyboardKey.arrowRight,
-      LogicalKeyboardKey.enter,
       LogicalKeyboardKey.arrowDown,
       LogicalKeyboardKey.arrowDown,
       LogicalKeyboardKey.arrowDown,
-      LogicalKeyboardKey.arrowRight,
+      LogicalKeyboardKey.arrowDown,
       LogicalKeyboardKey.arrowDown,
       LogicalKeyboardKey.arrowDown,
       LogicalKeyboardKey.arrowDown,
@@ -1272,19 +1228,12 @@ void main() {
       find.byKey(const ValueKey('settings-dub-episode-notifications')),
       findsOneWidget,
     );
-    final settingsScrollable = find.ancestor(
-      of: find.byKey(const ValueKey('settings-dub-episode-notifications')),
-      matching: find.byType(Scrollable),
-    );
-    final position = tester
-        .state<ScrollableState>(settingsScrollable.first)
-        .position;
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pumpAndSettle();
-    expect(position.pixels, closeTo(position.maxScrollExtent, .5));
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
       'accounts.tracking.dub-notifications',
+      reason: 'Down stops when the Discord action is unavailable and disabled.',
     );
     expect(tester.takeException(), isNull);
   });
@@ -1301,23 +1250,14 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.textContaining('Titles:'), findsNothing);
-    expect(find.text('Title language'), findsNothing);
-    await tester.tap(
-      find.byKey(const ValueKey('inline-section-toggle-display')),
-    );
-    await tester.pumpAndSettle();
     expect(find.text('Title language'), findsOneWidget);
-    final languageDetector = find.descendant(
-      of: find.ancestor(
-        of: find.text('Title language'),
+    final languageControl = tester.widget<TvFocusable>(
+      find.descendant(
+        of: find.byKey(const ValueKey('settings-appearance-title-language')),
         matching: find.byType(TvFocusable),
       ),
-      matching: find.byType(FocusableActionDetector),
     );
-    final languageFocus = tester
-        .widget<FocusableActionDetector>(languageDetector)
-        .focusNode!;
+    final languageFocus = languageControl.focusNode!;
     languageFocus.requestFocus();
     await tester.pump();
     expect(
@@ -1333,7 +1273,7 @@ void main() {
     );
     final titleStyleControl = tester.widget<TvFocusable>(
       find.descendant(
-        of: find.byKey(const ValueKey('show-title-style-englishLogo')),
+        of: find.byKey(const ValueKey('settings-appearance-show-title-style')),
         matching: find.byType(TvFocusable),
       ),
     );
@@ -1371,9 +1311,7 @@ void main() {
     expect(find.text('Advanced: personal token'), findsNothing);
     expect(find.text('TorBox API token'), findsNothing);
 
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
-    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-    await tester.pumpAndSettle();
+    await selectSettingsArea(tester, 'services');
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pump();
     expect(find.text('Advanced: personal token'), findsNothing);
@@ -1404,11 +1342,8 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    await selectSettingsArea(tester, 'system');
     for (final key in [
-      LogicalKeyboardKey.arrowRight,
-      LogicalKeyboardKey.arrowRight,
-      LogicalKeyboardKey.arrowRight,
-      LogicalKeyboardKey.enter,
       LogicalKeyboardKey.arrowDown,
       LogicalKeyboardKey.arrowDown,
     ]) {
@@ -1443,12 +1378,6 @@ void main() {
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
       'accounts.updates.check',
-    );
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
-    await tester.pumpAndSettle();
-    expect(
-      FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.system.discord-presence',
     );
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pumpAndSettle();
@@ -1530,9 +1459,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    for (var index = 0; index < 3; index++) {
-      await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
-    }
+    await selectSettingsArea(tester, 'system');
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
       'accounts.area.system',
@@ -1565,9 +1492,7 @@ void main() {
       findsOneWidget,
     );
     expect(
-      find.textContaining(
-        'Developer mode cannot bypass Android downgrade protection',
-      ),
+      find.textContaining('Developer Mode cannot bypass that rule'),
       findsOneWidget,
     );
     expect(
@@ -1632,11 +1557,7 @@ void main() {
       const ProviderScope(child: MaterialApp(home: AccountsScreen())),
     );
     await tester.pumpAndSettle();
-    for (var index = 0; index < 3; index++) {
-      await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
-    }
-    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-    await tester.pumpAndSettle();
+    await selectSettingsArea(tester, 'system');
 
     expect(find.text('Load release history'), findsOneWidget);
     expect(find.textContaining('Beta key'), findsNothing);
@@ -1657,6 +1578,12 @@ void main() {
     }
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.updates.channel',
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
       'accounts.updates.release-history',
     );
     expect(tester.takeException(), isNull);
@@ -1675,15 +1602,7 @@ void main() {
       const ProviderScope(child: MaterialApp(home: AccountsScreen())),
     );
     await tester.pumpAndSettle();
-    for (final key in [
-      LogicalKeyboardKey.arrowRight,
-      LogicalKeyboardKey.arrowRight,
-      LogicalKeyboardKey.arrowRight,
-      LogicalKeyboardKey.enter,
-    ]) {
-      await tester.sendKeyEvent(key);
-      await tester.pumpAndSettle();
-    }
+    await selectSettingsArea(tester, 'system');
 
     expect(find.byType(QrImageView, skipOffstage: false), findsNWidgets(2));
     expect(
@@ -1696,7 +1615,7 @@ void main() {
     );
     expect(
       find.text('Discord Rich Presence', skipOffstage: false),
-      findsOneWidget,
+      findsNothing,
     );
     expect(
       find.text('Double-click or press OK twice to copy', skipOffstage: false),
@@ -1709,28 +1628,17 @@ void main() {
     final donationTitle = find.text('Support TetoTV', skipOffstage: false);
     final discordRect = tester.getRect(discordTitle);
     final donationRect = tester.getRect(donationTitle);
-    expect(donationRect.left, greaterThan(discordRect.right));
-    expect((donationRect.top - discordRect.top).abs(), lessThan(2));
+    expect(donationRect.top, greaterThan(discordRect.bottom));
     final qrCodes = find.byType(QrImageView, skipOffstage: false);
     final discordQrRect = tester.getRect(qrCodes.at(0));
     final donationQrRect = tester.getRect(qrCodes.at(1));
     expect(discordRect.left, greaterThan(discordQrRect.right));
     expect(donationRect.left, greaterThan(donationQrRect.right));
-    expect(donationQrRect.left, greaterThan(discordQrRect.right));
-    expect(
-      (donationQrRect.top - discordQrRect.top).abs(),
-      lessThanOrEqualTo(2),
-    );
+    expect(donationQrRect.top, greaterThan(discordQrRect.bottom));
 
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
-    await tester.pumpAndSettle();
-    expect(
-      FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.system.discord-presence',
-    );
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pumpAndSettle();
     expect(
@@ -1758,9 +1666,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('Discord Rich Presence actions align with update actions', (
-    tester,
-  ) async {
+  testWidgets('Accounts expose Discord Rich Presence actions', (tester) async {
     FlutterSecureStorage.setMockInitialValues({});
     tester.view.physicalSize = const Size(1280, 720);
     tester.view.devicePixelRatio = 1;
@@ -1771,26 +1677,18 @@ void main() {
       const ProviderScope(child: MaterialApp(home: AccountsScreen())),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.text('System'));
+    await tester.tap(find.text('Accounts'));
     await tester.pumpAndSettle();
 
-    final updateActions = find.byKey(
-      const ValueKey('app-update-actions'),
-      skipOffstage: false,
-    );
     final discordActions = find.byKey(
       const ValueKey('discord-presence-actions'),
       skipOffstage: false,
     );
-    expect(updateActions, findsOneWidget);
     expect(discordActions, findsOneWidget);
 
     await tester.ensureVisible(discordActions);
     await tester.pumpAndSettle();
-    expect(
-      tester.getRect(discordActions).right,
-      closeTo(tester.getRect(updateActions).right, 0.1),
-    );
+    expect(tester.getSize(discordActions).width, greaterThan(0));
     expect(tester.takeException(), isNull);
   });
 
@@ -1975,9 +1873,8 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    await selectSettingsArea(tester, 'services');
     for (final key in [
-      LogicalKeyboardKey.arrowRight,
-      LogicalKeyboardKey.enter,
       LogicalKeyboardKey.arrowDown,
       LogicalKeyboardKey.arrowDown,
     ]) {
@@ -2011,17 +1908,46 @@ void main() {
       'accounts.debrid.connect',
     );
 
+    expect(find.byKey(const ValueKey('settings-area-downloads')), findsNothing);
+    Finder localMediaButton() => find.byWidgetPredicate(
+      (widget) =>
+          widget is TvFocusable &&
+          widget.focusNode?.debugLabel == 'accounts.streaming.local-media',
+    );
+    for (
+      var scroll = 0;
+      scroll < 20 && localMediaButton().evaluate().isEmpty;
+      scroll++
+    ) {
+      await tester.drag(
+        find.byKey(const ValueKey('settings-content-list')),
+        const Offset(0, -450),
+      );
+      await tester.pumpAndSettle();
+    }
+    expect(localMediaButton(), findsOneWidget);
+    tester.widget<TvFocusable>(localMediaButton()).focusNode!.requestFocus();
+    await tester.pumpAndSettle();
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.streaming.watch-together',
+    );
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pumpAndSettle();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
       'accounts.streaming.offline-downloads',
     );
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+    await tester.pumpAndSettle();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.streaming.watch-together',
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
     await tester.pumpAndSettle();
     expect(
@@ -2036,24 +1962,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.streaming.local-media',
-    );
-    expect(find.text('Manage sources'), findsWidgets);
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
-    await tester.pumpAndSettle();
-    expect(
-      FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.streaming.watch-together',
-    );
-    expect(
-      find.byKey(const ValueKey('settings-watch-party-toggle')),
-      findsOneWidget,
-    );
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
-    await tester.pumpAndSettle();
-    expect(
-      FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.streaming.watch-together',
+      'accounts.streaming.download-manager',
     );
     expect(tester.takeException(), isNull);
   });
@@ -2073,10 +1982,16 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Settings'), findsWidgets);
+    expect(find.text('Appearance'), findsWidgets);
+    expect(find.text('Playback'), findsOneWidget);
+    expect(find.text('Services'), findsOneWidget);
+    expect(find.text('Accounts'), findsOneWidget);
+    expect(find.byKey(const ValueKey('settings-area-downloads')), findsNothing);
     expect(find.text('Customize'), findsOneWidget);
-    expect(find.text('Streaming'), findsOneWidget);
-    expect(find.text('Appearance'), findsNothing);
-    expect(find.text('APPEARANCE & NAVIGATION'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('appearance-theme-display-card')),
+      findsOneWidget,
+    );
     expect(find.text('10-foot layout'), findsNothing);
     expect(find.text('Denser handheld layout'), findsNothing);
     final container = ProviderScope.containerOf(
@@ -2099,16 +2014,21 @@ void main() {
     );
     expect(tester.takeException(), isNull);
 
-    final inputFeedbackToggle = find.byKey(
-      const ValueKey('inline-section-toggle-input-feedback'),
+    await selectSettingsArea(tester, 'system');
+    expect(
+      find.text(
+        'Manage this device, updates, diagnostics, privacy, storage, and legal information.',
+      ),
+      findsOneWidget,
     );
-    await tester.ensureVisible(inputFeedbackToggle);
-    await tester.tap(inputFeedbackToggle);
-    await tester.pumpAndSettle();
-    final crashToggle = find.textContaining('Anonymous error reports');
+    final crashToggle = find.text(
+      'Anonymous crash reports',
+      skipOffstage: false,
+    );
     expect(crashToggle, findsOneWidget);
     await tester.ensureVisible(crashToggle);
     await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
     await tester.tap(crashToggle);
     await tester.pumpAndSettle();
     expect(
@@ -2118,6 +2038,48 @@ void main() {
       isTrue,
     );
 
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('switching Settings tabs starts the new tab at the top', (
+    tester,
+  ) async {
+    FlutterSecureStorage.setMockInitialValues({});
+    tester.view.physicalSize = const Size(390, 600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [isTelevisionProvider.overrideWithValue(false)],
+        child: const MaterialApp(home: AccountsScreen()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final settingsList = find.byKey(const ValueKey('settings-content-list'));
+    final scrollable = find.descendant(
+      of: settingsList,
+      matching: find.byType(Scrollable),
+    );
+    final scrollState = tester.state<ScrollableState>(scrollable.first);
+    expect(scrollState.position.maxScrollExtent, greaterThan(0));
+    scrollState.position.jumpTo(scrollState.position.maxScrollExtent);
+    await tester.pump();
+    expect(scrollState.position.pixels, greaterThan(0));
+
+    await tester.tap(
+      find.byKey(const ValueKey('settings-area-services')),
+      warnIfMissed: false,
+    );
+    await tester.pumpAndSettle();
+
+    expect(scrollState.position.pixels, 0);
+    expect(
+      find.byKey(const ValueKey('settings-card-services-debrid')),
+      findsOneWidget,
+    );
     expect(tester.takeException(), isNull);
   });
 
@@ -2137,23 +2099,25 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      final homeNavigationToggle = find.byKey(
-        const ValueKey('inline-section-toggle-home-navigation'),
+      final menuOrder = find.byKey(
+        const ValueKey('settings-appearance-menu-order'),
       );
-      await tester.ensureVisible(homeNavigationToggle);
-      await tester.tap(homeNavigationToggle);
+      tester
+          .widget<TvFocusable>(
+            find.descendant(of: menuOrder, matching: find.byType(TvFocusable)),
+          )
+          .onPressed();
       await tester.pumpAndSettle();
+      expect(find.text('Navigation bar'), findsOneWidget);
       final homeToggle = find.byKey(
         const ValueKey('settings-top-navigation-toggle-home'),
       );
       await tester.ensureVisible(homeToggle);
       tester.widget<TvFocusable>(homeToggle).focusNode!.requestFocus();
       await tester.pumpAndSettle();
-      await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
-      await tester.pumpAndSettle();
       expect(
         FocusManager.instance.primaryFocus?.debugLabel,
-        'accounts.customization.home-content.featured',
+        'accounts.customization.menu-order.home',
       );
 
       final moveSearchLater = find.byKey(
@@ -2233,22 +2197,19 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    final playerControlsToggle = find.byKey(
-      const ValueKey('inline-section-toggle-player-controls'),
-    );
-    await tester.ensureVisible(playerControlsToggle);
-    await tester.tap(playerControlsToggle);
+    await tester.tap(find.text('Playback'));
     await tester.pumpAndSettle();
-    final enabledLabel = find.text('Show filler episode labels ON');
-    expect(enabledLabel, findsOneWidget);
-    await tester.ensureVisible(enabledLabel);
+
+    final fillerLabel = find.text('Filler episode labels', skipOffstage: false);
+    expect(fillerLabel, findsOneWidget);
+    await tester.ensureVisible(fillerLabel);
     await tester.pumpAndSettle();
     expect(
-      find.ancestor(of: enabledLabel, matching: find.byType(TvFocusable)),
+      find.ancestor(of: fillerLabel, matching: find.byType(TvFocusable)),
       findsOneWidget,
     );
 
-    await tester.tap(enabledLabel);
+    await tester.tap(fillerLabel);
     await tester.pumpAndSettle();
 
     final container = ProviderScope.containerOf(
@@ -2258,7 +2219,7 @@ void main() {
       container.read(settingsPreferencesProvider).showFillerIndicators,
       isFalse,
     );
-    expect(find.text('Show filler episode labels OFF'), findsOneWidget);
+    expect(find.text('Filler episode labels'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -2278,9 +2239,8 @@ void main() {
       );
       await tester.pumpAndSettle();
 
+      await selectSettingsArea(tester, 'services');
       for (final key in [
-        LogicalKeyboardKey.arrowRight,
-        LogicalKeyboardKey.enter,
         LogicalKeyboardKey.arrowDown,
         LogicalKeyboardKey.enter,
         LogicalKeyboardKey.arrowDown,
@@ -2299,7 +2259,7 @@ void main() {
       expect(tester.testTextInput.isVisible, isFalse);
 
       for (final key in [
-        LogicalKeyboardKey.arrowRight,
+        LogicalKeyboardKey.arrowDown,
         LogicalKeyboardKey.arrowDown,
         LogicalKeyboardKey.arrowDown,
       ]) {
@@ -2315,7 +2275,7 @@ void main() {
       for (final key in [
         LogicalKeyboardKey.arrowUp,
         LogicalKeyboardKey.arrowUp,
-        LogicalKeyboardKey.arrowLeft,
+        LogicalKeyboardKey.arrowUp,
       ]) {
         await tester.sendKeyEvent(key);
         await tester.pumpAndSettle();

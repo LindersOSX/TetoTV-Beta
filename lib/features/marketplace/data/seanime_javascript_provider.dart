@@ -675,18 +675,18 @@ Future<List<Map<String, dynamic>>> _expandHlsVariants(
   // the manifest still owns switchable English/Japanese audio renditions.
   // Inspect every bounded HLS candidate rather than only Auto/Adaptive labels;
   // otherwise those masters retain the provider's generic Sub label.
-  final hlsCandidates = raw.where(isHlsInspectionCandidate).take(6).toList();
-  for (var offset = 0; offset < hlsCandidates.length; offset += 2) {
-    cancellation?.throwIfCancelled();
-    final end = (offset + 2).clamp(0, hlsCandidates.length);
-    final groups = await Future.wait(
-      hlsCandidates
-          .sublist(offset, end)
-          .map((item) => _hlsVariantsForItem(item, cancellation)),
-    );
-    for (final variants in groups) {
-      result.addAll(variants);
-    }
+  // Enrichment is optional: the original streams remain usable even when a
+  // master cannot be inspected. Deduplicate mirrors before doing I/O and run
+  // the small bounded set together. The previous three sequential batches
+  // could consume nearly the provider's entire 20-second deadline after the
+  // provider had already returned valid streams.
+  final hlsCandidates = selectHlsInspectionCandidates(raw);
+  cancellation?.throwIfCancelled();
+  final groups = await Future.wait(
+    hlsCandidates.map((item) => _hlsVariantsForItem(item, cancellation)),
+  );
+  for (final variants in groups) {
+    result.addAll(variants);
   }
   return mergeDuplicateWebStreamItems(result).take(120).toList(growable: false);
 }
@@ -754,6 +754,25 @@ bool isHlsInspectionCandidate(Map<String, dynamic> item) {
   return url.contains('.m3u8') ||
       RegExp(r'(^|\s)(hls|m3u8)(\s|$)').hasMatch(normalizedType) ||
       normalizedType.contains('mpegurl');
+}
+
+/// Selects a small, unique set of safe HLS URLs for optional metadata
+/// inspection. Providers commonly repeat one master under several labels;
+/// inspecting those duplicates only delays the stream picker.
+List<Map<String, dynamic>> selectHlsInspectionCandidates(
+  Iterable<Map<String, dynamic>> items, {
+  int maximum = 4,
+}) {
+  if (maximum <= 0) return const [];
+  final selected = <String, Map<String, dynamic>>{};
+  for (final item in items) {
+    if (!isHlsInspectionCandidate(item)) continue;
+    final uri = safePublicHttpsUri(item['url']);
+    if (uri == null) continue;
+    selected.putIfAbsent(uri.toString(), () => item);
+    if (selected.length >= maximum) break;
+  }
+  return selected.values.toList(growable: false);
 }
 
 bool _isTransientHlsInspectionStatus(int status) =>
@@ -846,9 +865,9 @@ Future<List<Map<String, dynamic>>> _hlsVariantsForItem(
             'headers': item['headers'] is Map ? item['headers'] : const {},
           },
         },
-        connectTimeout: Duration(seconds: attempt == 0 ? 4 : 3),
-        receiveTimeout: Duration(seconds: attempt == 0 ? 4 : 3),
-        overallTimeout: Duration(seconds: attempt == 0 ? 6 : 4),
+        connectTimeout: Duration(seconds: attempt == 0 ? 3 : 2),
+        receiveTimeout: Duration(seconds: attempt == 0 ? 3 : 2),
+        overallTimeout: Duration(seconds: attempt == 0 ? 4 : 3),
         maximumResponseBytes: 512 * 1024,
         cancellation: cancellation,
       ),

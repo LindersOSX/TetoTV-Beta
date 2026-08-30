@@ -161,8 +161,7 @@ for debug/emulator builds only. CPU marketing names are not sufficient: a
 device with a 64-bit CPU can still expose only a 32-bit app ABI.
 
 The optional direct-torrent engine is available only on `armeabi-v7a` and
-`arm64-v8a`. Its pinned upstream Android artifacts target API 24. ARM64 is
-16 KiB page-aligned; the upstream ARM32 binary is only 4 KiB-aligned, so its
-runtime capability fails closed on ARM32 devices with larger page sizes. The setting
-cannot be enabled on an unsupported ABI, and every release must re-check
-16-KiB APK/ELF page alignment before claiming Android 15/16 compatibility.
+`arm64-v8a`. Its pinned TetoTV source-built Android artifacts target API 24
+and are 16 KiB page-aligned for both ABIs. The setting cannot be enabled on an
+unsupported ABI, and every release must re-check 16-KiB APK/ELF page alignment
+before claiming Android 15/16 compatibility.

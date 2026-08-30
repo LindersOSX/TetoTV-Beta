@@ -35,6 +35,7 @@ std::thread g_worker;
 std::atomic<bool> g_running{false};
 std::atomic<bool> g_ready{false};
 std::atomic<std::uint64_t> g_auth_generation{0};
+std::atomic<std::uint64_t> g_connection_generation{0};
 std::unique_ptr<discordpp::Client> g_client;
 
 struct Presence {
@@ -47,6 +48,16 @@ struct Presence {
 };
 
 std::optional<Presence> g_pending_presence;
+std::optional<Presence> g_last_submitted_presence;
+std::chrono::steady_clock::time_point g_last_presence_submission{};
+bool g_presence_update_in_flight = false;
+bool g_clear_presence_pending = false;
+std::uint64_t g_presence_operation_generation = 0;
+bool g_connection_requested = false;
+bool g_manual_connect_after_token_update = false;
+std::uint64_t g_token_ready_connection_generation = 0;
+
+constexpr auto kPresenceTimelineTolerance = std::chrono::seconds(2);
 
 std::string from_jstring(JNIEnv* env, jstring value) {
     if (value == nullptr) return {};
@@ -183,9 +194,66 @@ void post(std::function<void()> command) {
     g_command_cv.notify_one();
 }
 
-void publish_presence(const Presence& value) {
-    if (!g_client || !g_ready.load()) {
-        g_pending_presence = value;
+bool connect_pending_if_disconnected() {
+    if (!g_client || !g_connection_requested ||
+        !g_manual_connect_after_token_update ||
+        g_token_ready_connection_generation != g_connection_generation.load() ||
+        g_client->GetStatus() != discordpp::Client::Status::Disconnected) {
+        return false;
+    }
+    // Consume the request before entering the SDK so a duplicate Disconnected
+    // callback cannot open a second websocket.
+    g_manual_connect_after_token_update = false;
+    g_token_ready_connection_generation = 0;
+    g_client->Connect();
+    return true;
+}
+
+bool same_presence_timeline(const Presence& previous,
+                            const Presence& next,
+                            std::chrono::steady_clock::time_point now) {
+    if (previous.title != next.title || previous.episode != next.episode ||
+        previous.playing != next.playing || previous.duration_ms != next.duration_ms ||
+        previous.artwork_url != next.artwork_url) {
+        return false;
+    }
+    if (!next.playing) return true;
+
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                             now - g_last_presence_submission)
+                             .count();
+    const auto expected_position = previous.position_ms + elapsed;
+    const auto delta = next.position_ms >= expected_position
+                           ? next.position_ms - expected_position
+                           : expected_position - next.position_ms;
+    return delta <=
+           std::chrono::duration_cast<std::chrono::milliseconds>(kPresenceTimelineTolerance)
+               .count();
+}
+
+void flush_pending_presence();
+
+void publish_presence(Presence value) {
+    // Flutter updates Android's media session every few seconds and emits
+    // back-to-back playing transitions while replacing a failed source. The
+    // Discord SDK completes presence writes asynchronously on its websocket.
+    // Retain only the newest desired state and never overlap those writes.
+    g_clear_presence_pending = false;
+    g_pending_presence = std::move(value);
+    flush_pending_presence();
+}
+
+void flush_pending_presence() {
+    if (!g_client || !g_ready.load() || g_presence_update_in_flight ||
+        !g_pending_presence.has_value()) {
+        return;
+    }
+
+    Presence value = std::move(*g_pending_presence);
+    g_pending_presence.reset();
+    const auto submitted_at = std::chrono::steady_clock::now();
+    if (g_last_submitted_presence.has_value() &&
+        same_presence_timeline(*g_last_submitted_presence, value, submitted_at)) {
         return;
     }
 
@@ -223,10 +291,36 @@ void publish_presence(const Presence& value) {
         activity.SetTimestamps(timestamps);
     }
 
+    g_presence_update_in_flight = true;
+    const auto presence_generation = ++g_presence_operation_generation;
     g_client->UpdateRichPresence(
-        std::move(activity), [](discordpp::ClientResult result) {
-            notify_simple("onPresenceResult", succeeded(result),
-                          succeeded(result) ? std::string{} : safe_error(result));
+        std::move(activity),
+        [value = std::move(value), submitted_at, presence_generation](
+            discordpp::ClientResult result) mutable {
+            const bool ok = succeeded(result);
+            std::string error = ok ? std::string{} : safe_error(result);
+            // Return from the SDK callback before starting another SDK
+            // operation. Some SDK callbacks may originate while its websocket
+            // state machine is still unwinding.
+            post([value = std::move(value),
+                  submitted_at,
+                  presence_generation,
+                  ok,
+                  error = std::move(error)]() mutable {
+                if (presence_generation != g_presence_operation_generation) return;
+                g_presence_update_in_flight = false;
+                if (ok) {
+                    g_last_submitted_presence = std::move(value);
+                    g_last_presence_submission = submitted_at;
+                }
+                notify_simple("onPresenceResult", ok, error);
+                if (g_clear_presence_pending) {
+                    g_clear_presence_pending = false;
+                    if (g_client && g_ready.load()) g_client->ClearRichPresence();
+                    return;
+                }
+                flush_pending_presence();
+            });
         });
 }
 
@@ -241,42 +335,66 @@ void start_worker() {
             [](discordpp::Client::Status status,
                discordpp::Client::Error error,
                std::int32_t error_detail) {
-                const bool ready = status == discordpp::Client::Status::Ready;
-                g_ready.store(ready);
-                switch (status) {
-                    case discordpp::Client::Status::Ready:
-                        notify_status("ready");
-                        if (g_pending_presence.has_value()) {
-                            Presence pending = std::move(*g_pending_presence);
-                            g_pending_presence.reset();
-                            publish_presence(pending);
-                        }
-                        break;
-                    case discordpp::Client::Status::Connecting:
-                    case discordpp::Client::Status::Connected:
-                        notify_status("connecting");
-                        break;
-                    case discordpp::Client::Status::Reconnecting:
-                    case discordpp::Client::Status::HttpWait:
-                        notify_status("reconnecting");
-                        break;
-                    case discordpp::Client::Status::Disconnecting:
-                        notify_status("disconnecting");
-                        break;
-                    case discordpp::Client::Status::Disconnected:
-                        notify_status(
-                            "disconnected",
-                            error == discordpp::Client::Error::None
-                                ? std::string{}
-                                : "Discord disconnected (" + std::to_string(error_detail) + ").");
-                        break;
-                }
+                post([status, error, error_detail] {
+                    const bool ready = status == discordpp::Client::Status::Ready;
+                    g_ready.store(ready);
+                    switch (status) {
+                        case discordpp::Client::Status::Ready:
+                            g_connection_requested = false;
+                            g_manual_connect_after_token_update = false;
+                            g_token_ready_connection_generation = 0;
+                            notify_status("ready");
+                            flush_pending_presence();
+                            break;
+                        case discordpp::Client::Status::Connecting:
+                        case discordpp::Client::Status::Connected:
+                            notify_status("connecting");
+                            break;
+                        case discordpp::Client::Status::Reconnecting:
+                        case discordpp::Client::Status::HttpWait:
+                            notify_status("reconnecting");
+                            break;
+                        case discordpp::Client::Status::Disconnecting:
+                            notify_status("disconnecting");
+                            break;
+                        case discordpp::Client::Status::Disconnected:
+                            // The SDK guarantees all socket teardown is done at
+                            // this status, so no prior presence write can still
+                            // block a later clean connection.
+                            ++g_presence_operation_generation;
+                            g_presence_update_in_flight = false;
+                            g_clear_presence_pending = false;
+                            // A fresh socket needs a fresh activity publish;
+                            // otherwise the timeline de-duplicator can mistake
+                            // the last pre-disconnect state for a live one.
+                            g_last_submitted_presence.reset();
+                            if (g_connection_requested) {
+                                if (!connect_pending_if_disconnected()) {
+                                    // UpdateToken owns reconnecting a client
+                                    // that was already connected. If teardown
+                                    // won the race, its token callback will
+                                    // return here once the new token is ready.
+                                    notify_status("connecting");
+                                }
+                                break;
+                            }
+                            notify_status(
+                                "disconnected",
+                                error == discordpp::Client::Error::None
+                                    ? std::string{}
+                                    : "Discord disconnected (" +
+                                          std::to_string(error_detail) + ").");
+                            break;
+                    }
+                });
             });
         g_client->SetTokenExpirationCallback([] {
-            with_bridge([](JNIEnv* env, jclass bridge) {
-                const jmethodID callback =
-                    env->GetStaticMethodID(bridge, "onTokenExpiring", "()V");
-                if (callback != nullptr) env->CallStaticVoidMethod(bridge, callback);
+            post([] {
+                with_bridge([](JNIEnv* env, jclass bridge) {
+                    const jmethodID callback =
+                        env->GetStaticMethodID(bridge, "onTokenExpiring", "()V");
+                    if (callback != nullptr) env->CallStaticVoidMethod(bridge, callback);
+                });
             });
         });
 
@@ -474,17 +592,48 @@ Java_dev_animetv_anime_1tv_DiscordRichPresenceBridge_nativeConnect(JNIEnv* env,
                                                                     jstring token,
                                                                     jint token_type) {
     const std::string access_token = from_jstring(env, token);
-    post([access_token, token_type] {
-        if (!g_client) return;
+    const auto connection_generation = g_connection_generation.fetch_add(1) + 1;
+    post([access_token, token_type, connection_generation] {
+        if (!g_client || connection_generation != g_connection_generation.load()) return;
+        g_connection_requested = true;
+        const auto initial_status = g_client->GetStatus();
+        g_manual_connect_after_token_update =
+            initial_status == discordpp::Client::Status::Disconnected ||
+            initial_status == discordpp::Client::Status::Disconnecting;
+        g_token_ready_connection_generation = 0;
         g_client->UpdateToken(
             static_cast<discordpp::AuthorizationTokenType>(token_type),
             access_token,
-            [](discordpp::ClientResult result) {
-                if (!succeeded(result)) {
-                    notify_status("error", safe_error(result));
-                    return;
-                }
-                g_client->Connect();
+            [connection_generation](discordpp::ClientResult result) {
+                const bool ok = succeeded(result);
+                std::string error = ok ? std::string{} : safe_error(result);
+                post([connection_generation, ok, error = std::move(error)] {
+                    if (!g_client ||
+                        connection_generation != g_connection_generation.load()) {
+                        return;
+                    }
+                    if (!ok) {
+                        g_connection_requested = false;
+                        g_manual_connect_after_token_update = false;
+                        g_token_ready_connection_generation = 0;
+                        notify_status("error", error);
+                        return;
+                    }
+                    g_token_ready_connection_generation = connection_generation;
+                    // UpdateToken may reconnect an already-connected client by
+                    // itself. Calling Connect unconditionally here creates a
+                    // second websocket transition. Manually connect only when
+                    // this request began with a fully disconnected client.
+                    if (connect_pending_if_disconnected()) return;
+                    const auto status = g_client->GetStatus();
+                    if (status == discordpp::Client::Status::Ready) {
+                        g_connection_requested = false;
+                        g_manual_connect_after_token_update = false;
+                        g_token_ready_connection_generation = 0;
+                        notify_status("ready");
+                        flush_pending_presence();
+                    }
+                });
             });
     });
 }
@@ -528,18 +677,37 @@ extern "C" JNIEXPORT void JNICALL
 Java_dev_animetv_anime_1tv_DiscordRichPresenceBridge_nativeClearPresence(JNIEnv*, jobject) {
     post([] {
         g_pending_presence.reset();
-        if (g_client && g_ready.load()) g_client->ClearRichPresence();
+        g_last_submitted_presence.reset();
+        if (!g_client || !g_ready.load()) return;
+        if (g_presence_update_in_flight) {
+            g_clear_presence_pending = true;
+            return;
+        }
+        g_client->ClearRichPresence();
     });
 }
 
 extern "C" JNIEXPORT void JNICALL
 Java_dev_animetv_anime_1tv_DiscordRichPresenceBridge_nativeDisconnect(JNIEnv*, jobject) {
+    // Invalidate an UpdateToken callback before its queued worker command can
+    // race this disconnect and open a replacement websocket afterward.
+    g_connection_generation.fetch_add(1);
     post([] {
         g_pending_presence.reset();
+        g_last_submitted_presence.reset();
+        g_clear_presence_pending = false;
+        const bool had_presence_update_in_flight = g_presence_update_in_flight;
+        ++g_presence_operation_generation;
+        g_presence_update_in_flight = false;
+        g_connection_requested = false;
+        g_manual_connect_after_token_update = false;
+        g_token_ready_connection_generation = 0;
         g_ready.store(false);
         if (g_client) {
-            g_client->AbortAuthorize();
-            g_client->ClearRichPresence();
+            // Do not overlap a synchronous clear with an asynchronous
+            // UpdateRichPresence write. Disconnect itself tears down the
+            // remote activity and the SDK's websocket.
+            if (!had_presence_update_in_flight) g_client->ClearRichPresence();
             g_client->Disconnect();
         }
     });

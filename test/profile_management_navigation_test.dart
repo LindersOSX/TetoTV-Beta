@@ -165,8 +165,14 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byType(AccountsScreen), findsOneWidget);
-    expect(find.text('ANIME TRACKING'), findsOneWidget);
-    expect(find.text('APPEARANCE & NAVIGATION'), findsNothing);
+    expect(
+      find.byKey(const ValueKey('settings-card-accounts-tracking')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('appearance-theme-display-card')),
+      findsNothing,
+    );
     expect(tester.takeException(), isNull);
   });
 }

@@ -374,8 +374,8 @@
   "apkNativeLibraries": [
     {
       "path": "lib/arm64-v8a/libapp.so",
-      "size": 12256144,
-      "sha256": "84f8b185da7257cc0666588863105c80efe2aac775efbd13f4a829cb24da78dc",
+      "size": 12321680,
+      "sha256": "37a1b15a85c9244776ec27a140023bcf3e5a44c55d493f814a6c6471f0ef1f1e",
       "origin": "TetoTV Flutter application AOT 2.0.52",
       "license": "MIT",
       "sourceLocator": "Git tag v2.0.52",
@@ -455,8 +455,8 @@
     },
     {
       "path": "lib/armeabi-v7a/libapp.so",
-      "size": 13419084,
-      "sha256": "acf6a2ea7014231fc7940d6b5f705ff56c14406e0b2dafef352ed384ca152ae2",
+      "size": 13484620,
+      "sha256": "00212563aa8f04e25cbebf72b2348c31d4b78f5d3c6efd20aaf2712ae0c10c40",
       "origin": "TetoTV Flutter application AOT 2.0.52",
       "license": "MIT",
       "sourceLocator": "Git tag v2.0.52",

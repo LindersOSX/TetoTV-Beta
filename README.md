@@ -28,6 +28,9 @@
 
 TetoTV runs directly on the Android device with no companion server required for normal browsing and playback. This repository contains the complete application source and the Beta release channel—not only APK downloads.
 
+> [!NOTE]
+> **AI-assisted development:** TetoTV uses AI tools to assist with code, design iteration, documentation, tests, and review. The maintainer directs project decisions and remains responsible for validating changes and approving releases. AI assistance is not an independent legal or security certification.
+
 ## See TetoTV in action
 
 <p align="center">

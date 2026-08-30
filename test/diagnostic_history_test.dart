@@ -199,6 +199,7 @@ void main() {
               'community_marker_count': 2,
               'community_status': 'found_nearby_runtime',
               'community_status_class': 'partial_transient_failure',
+              'community_lookup_source': 'stale_cache',
               'community_failure_reason': 'connection_timeout',
               'community_transient_failure_count': 1,
               'community_probe_count': 4,
@@ -218,6 +219,7 @@ void main() {
     expect(sanitized['community_status'], 'found_nearby_runtime');
     expect(sanitized['community_probe_count'], 4);
     expect(sanitized['community_status_class'], 'partial_transient_failure');
+    expect(sanitized['community_lookup_source'], 'stale_cache');
     expect(sanitized['community_failure_reason'], 'connection_timeout');
     expect(sanitized['community_transient_failure_count'], 1);
     expect(sanitized['duration_fallback_used'], isTrue);

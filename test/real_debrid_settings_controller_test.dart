@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:anime_tv/features/auth/data/real_debrid_oauth_client.dart';
 import 'package:anime_tv/features/settings/application/real_debrid_settings_controller.dart';
 import 'package:anime_tv/features/streaming/data/real_debrid_client.dart';
@@ -160,6 +162,46 @@ void main() {
     expect(controller.state.account?.isPremium, isTrue);
     expect(controller.state.errorMessage, isNull);
   });
+
+  test('an in-flight account load is inert after disposal', () async {
+    FlutterSecureStorage.setMockInitialValues({
+      realDebridTokenStorageKey: 'saved-token',
+    });
+    final accountRequested = Completer<void>();
+    final accountResult = Completer<RealDebridAccount>();
+    final controller = RealDebridSettingsController(
+      storage,
+      (_) => _DeferredRealDebridClient(accountRequested, accountResult),
+    );
+
+    final load = controller.load();
+    await accountRequested.future;
+    controller.dispose();
+    accountResult.complete(
+      const RealDebridAccount(id: 3, username: 'late-user', type: 'premium'),
+    );
+
+    await expectLater(load, completes);
+  });
+
+  test('a failed in-flight account load is inert after disposal', () async {
+    FlutterSecureStorage.setMockInitialValues({
+      realDebridTokenStorageKey: 'saved-token',
+    });
+    final accountRequested = Completer<void>();
+    final accountResult = Completer<RealDebridAccount>();
+    final controller = RealDebridSettingsController(
+      storage,
+      (_) => _DeferredRealDebridClient(accountRequested, accountResult),
+    );
+
+    final load = controller.load();
+    await accountRequested.future;
+    controller.dispose();
+    accountResult.completeError(StateError('late account failure'));
+
+    await expectLater(load, completes);
+  });
 }
 
 class _ValidRealDebridClient extends RealDebridClient {
@@ -176,6 +218,19 @@ class _FreeRealDebridClient extends RealDebridClient {
   @override
   Future<RealDebridAccount> account() async =>
       const RealDebridAccount(id: 2, username: 'free-user', type: 'free');
+}
+
+class _DeferredRealDebridClient extends RealDebridClient {
+  _DeferredRealDebridClient(this.requested, this.result) : super(token: 'test');
+
+  final Completer<void> requested;
+  final Completer<RealDebridAccount> result;
+
+  @override
+  Future<RealDebridAccount> account() {
+    if (!requested.isCompleted) requested.complete();
+    return result.future;
+  }
 }
 
 class _FailingOAuthClient extends RealDebridOAuthClient {

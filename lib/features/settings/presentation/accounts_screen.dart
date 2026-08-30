@@ -7,6 +7,7 @@ import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
+import 'package:anime_tv/core/tv/tv_navigation.dart';
 import 'package:anime_tv/core/tv/tv_shelf_focus.dart';
 import 'package:anime_tv/core/widgets/teto_top_level_shell.dart';
 import 'package:anime_tv/core/widgets/tv_text_input.dart';
@@ -46,6 +47,332 @@ final directTorrentSettingsCapabilityReaderProvider =
 
 enum _SettingsArea { appearance, playback, services, accounts, system }
 
+extension _SettingsAreaMetadata on _SettingsArea {
+  String get label => switch (this) {
+    _SettingsArea.appearance => 'Appearance',
+    _SettingsArea.playback => 'Playback',
+    _SettingsArea.services => 'Services',
+    _SettingsArea.accounts => 'Accounts',
+    _SettingsArea.system => 'System',
+  };
+}
+
+enum _SettingsSection {
+  themeDisplay,
+  homeScreen,
+  displayOptions,
+  inputFeedback,
+  homeShelves,
+  navigation,
+  closedCaptions,
+  playerControls,
+  debridStreaming,
+  sourcesStreamOrder,
+  automaticSourceSelection,
+  librariesFeatures,
+  streamingPrivacy,
+  animeTracking,
+  profiles,
+  progressNotifications,
+  discordRichPresence,
+  deviceSupport,
+  appUpdates,
+  community,
+  storageReset,
+  aboutLegal,
+  privacyDiagnostics,
+}
+
+extension _SettingsSectionMetadata on _SettingsSection {
+  _SettingsArea get area => switch (this) {
+    _SettingsSection.themeDisplay ||
+    _SettingsSection.homeScreen ||
+    _SettingsSection.displayOptions ||
+    _SettingsSection.inputFeedback ||
+    _SettingsSection.homeShelves ||
+    _SettingsSection.navigation => _SettingsArea.appearance,
+    _SettingsSection.closedCaptions ||
+    _SettingsSection.playerControls => _SettingsArea.playback,
+    _SettingsSection.debridStreaming ||
+    _SettingsSection.sourcesStreamOrder ||
+    _SettingsSection.automaticSourceSelection ||
+    _SettingsSection.librariesFeatures ||
+    _SettingsSection.streamingPrivacy => _SettingsArea.services,
+    _SettingsSection.animeTracking ||
+    _SettingsSection.profiles ||
+    _SettingsSection.progressNotifications ||
+    _SettingsSection.discordRichPresence => _SettingsArea.accounts,
+    _SettingsSection.deviceSupport ||
+    _SettingsSection.appUpdates ||
+    _SettingsSection.community ||
+    _SettingsSection.storageReset ||
+    _SettingsSection.aboutLegal ||
+    _SettingsSection.privacyDiagnostics => _SettingsArea.system,
+  };
+
+  String get slug => switch (this) {
+    _SettingsSection.themeDisplay => 'theme-display',
+    _SettingsSection.homeScreen => 'home-screen',
+    _SettingsSection.displayOptions => 'display-options',
+    _SettingsSection.inputFeedback => 'input-feedback',
+    _SettingsSection.homeShelves => 'home-shelves',
+    _SettingsSection.navigation => 'navigation',
+    _SettingsSection.closedCaptions => 'closed-captions',
+    _SettingsSection.playerControls => 'player-controls',
+    _SettingsSection.debridStreaming => 'debrid-streaming',
+    _SettingsSection.sourcesStreamOrder => 'sources-stream-order',
+    _SettingsSection.automaticSourceSelection => 'automatic-source-selection',
+    _SettingsSection.librariesFeatures => 'libraries-features',
+    _SettingsSection.streamingPrivacy => 'streaming-privacy',
+    _SettingsSection.animeTracking => 'anime-tracking',
+    _SettingsSection.profiles => 'profiles',
+    _SettingsSection.progressNotifications => 'progress-notifications',
+    _SettingsSection.discordRichPresence => 'discord-rich-presence',
+    _SettingsSection.deviceSupport => 'device-support',
+    _SettingsSection.appUpdates => 'app-updates',
+    _SettingsSection.community => 'community',
+    _SettingsSection.storageReset => 'storage-reset',
+    _SettingsSection.aboutLegal => 'about-legal',
+    _SettingsSection.privacyDiagnostics => 'privacy-diagnostics',
+  };
+
+  String get title => switch (this) {
+    _SettingsSection.themeDisplay => 'Theme & display',
+    _SettingsSection.homeScreen => 'Home screen',
+    _SettingsSection.displayOptions => 'Display options',
+    _SettingsSection.inputFeedback => 'Input & feedback',
+    _SettingsSection.homeShelves => 'Home shelves',
+    _SettingsSection.navigation => 'Navigation',
+    _SettingsSection.closedCaptions => 'Closed captions',
+    _SettingsSection.playerControls => 'Player controls',
+    _SettingsSection.debridStreaming => 'Debrid streaming',
+    _SettingsSection.sourcesStreamOrder => 'Sources & stream order',
+    _SettingsSection.automaticSourceSelection => 'Automatic source selection',
+    _SettingsSection.librariesFeatures => 'Libraries & features',
+    _SettingsSection.streamingPrivacy => 'Streaming privacy',
+    _SettingsSection.animeTracking => 'Anime tracking',
+    _SettingsSection.profiles => 'Profiles',
+    _SettingsSection.progressNotifications => 'Progress & notifications',
+    _SettingsSection.discordRichPresence => 'Discord Rich Presence',
+    _SettingsSection.deviceSupport => 'Device & support',
+    _SettingsSection.appUpdates => 'App updates',
+    _SettingsSection.community => 'Community',
+    _SettingsSection.storageReset => 'Storage & reset',
+    _SettingsSection.aboutLegal => 'About & legal',
+    _SettingsSection.privacyDiagnostics => 'Privacy & diagnostics',
+  };
+
+  List<String> get searchLabels => switch (this) {
+    _SettingsSection.themeDisplay => const [
+      'Theme & display',
+      'Theme Studio',
+      'Title language',
+      'Show title style',
+      'Colors',
+      'Appearance',
+    ],
+    _SettingsSection.homeScreen => const [
+      'Home screen',
+      'Featured hero',
+      'Poster metadata',
+      'Continue watching',
+    ],
+    _SettingsSection.displayOptions => const [
+      'Display options',
+      'Interface scale',
+      'Content density',
+      'Thumbnail size',
+      'Layout style',
+      'Default landing page',
+      'Card details',
+    ],
+    _SettingsSection.inputFeedback => const [
+      'Input & feedback',
+      'On-screen keyboard',
+      'Built-in keyboard',
+      'Device keyboard',
+      'Navigation sounds',
+      'Click sounds',
+    ],
+    _SettingsSection.homeShelves => const [
+      'Home shelves',
+      'Continue watching',
+      'Watch history',
+      'Recently released',
+      'Trending now',
+      'Plan to watch',
+      'Airing soon',
+      'Recently completed',
+    ],
+    _SettingsSection.navigation => const [
+      'Navigation',
+      'Navigation size',
+      'Menu order',
+      'Reset appearance and navigation',
+      'Settings placement',
+      'Home',
+      'Search',
+      'My List',
+      'Discover',
+      'Calendar',
+      'Watch Party',
+      'Downloads',
+    ],
+    _SettingsSection.closedCaptions => const [
+      'Closed captions',
+      'Subtitles',
+      'Text color',
+      'Caption background',
+      'Text size',
+    ],
+    _SettingsSection.playerControls => const [
+      'Player controls',
+      'Default player',
+      'Preferred audio',
+      'Open externally',
+      'Rewind',
+      'Fast-forward',
+      'Auto-skip intros',
+      'Auto-skip outros',
+      'Filler episode labels',
+    ],
+    _SettingsSection.debridStreaming => const [
+      'Debrid streaming',
+      'Debrid provider',
+      'Real-Debrid',
+      'TorBox',
+      'AllDebrid',
+      'Premiumize',
+      'Connect debrid',
+    ],
+    _SettingsSection.sourcesStreamOrder => const [
+      'Sources & stream order',
+      'Debrid streams',
+      'Web streams',
+      'Direct torrent',
+      'Extension marketplace',
+      'Debrid sort',
+      'Source priority',
+      'Web quality',
+    ],
+    _SettingsSection.automaticSourceSelection => const [
+      'Automatic source selection',
+      'Auto-pick sources',
+      'Source order',
+      'Quality order',
+      'Audio preference',
+    ],
+    _SettingsSection.librariesFeatures => const [
+      'Libraries & features',
+      'Local sources',
+      'Jellyfin',
+      'Plex',
+      'Watch Party',
+      'Offline downloads',
+      'Download manager',
+    ],
+    _SettingsSection.streamingPrivacy => const [
+      'Streaming privacy',
+      'Privacy',
+      'Playback privacy',
+      'Direct peer torrents',
+    ],
+    _SettingsSection.animeTracking => const [
+      'Anime tracking',
+      'Anime-list provider',
+      'AniList',
+      'MyAnimeList',
+      'MAL',
+      'Connect tracker',
+    ],
+    _SettingsSection.profiles => const [
+      'Profiles',
+      'Local profiles',
+      'Manage viewers',
+      'Profile switcher',
+    ],
+    _SettingsSection.progressNotifications => const [
+      'Progress & notifications',
+      'Episode progress',
+      'Tracking threshold',
+      'Sub alerts',
+      'Simulcast alerts',
+      'Dub alerts',
+      'Notifications',
+    ],
+    _SettingsSection.discordRichPresence => const [
+      'Discord Rich Presence',
+      'Discord',
+      'Activity status',
+      'Link Discord',
+    ],
+    _SettingsSection.deviceSupport => const [
+      'Device & support',
+      'Run setup again',
+      'Device calibration',
+      'Diagnostics',
+      'Setup',
+    ],
+    _SettingsSection.appUpdates => const [
+      'App updates',
+      'Automatic updates',
+      'Check for updates',
+      'Update channel',
+      'Release history',
+      'Developer mode',
+      'Downgrade',
+    ],
+    _SettingsSection.community => const [
+      'Community',
+      'TetoTV Discord',
+      'Support',
+      'Donate',
+    ],
+    _SettingsSection.storageReset => const [
+      'Storage & reset',
+      'Clear cache',
+      'Reset app',
+      'First-time setup',
+    ],
+    _SettingsSection.aboutLegal => const [
+      'About & legal',
+      'Privacy policy',
+      'Open-source licenses',
+      'Third-party notices',
+      'Attribution',
+    ],
+    _SettingsSection.privacyDiagnostics => const [
+      'Privacy & diagnostics',
+      'Anonymous crash reports',
+      'Anonymous live count',
+      'Telemetry',
+      'Usage reporting',
+    ],
+  };
+}
+
+class _SettingsSearchMatch {
+  const _SettingsSearchMatch({
+    required this.section,
+    required this.matchedLabel,
+    required this.score,
+  });
+
+  final _SettingsSection section;
+  final String matchedLabel;
+  final int score;
+}
+
+String _normalizeSettingsSearchText(String value) =>
+    value.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), ' ').trim();
+
+String _settingsSearchResultSlug(String value) =>
+    _normalizeSettingsSearchText(value).replaceAll(' ', '-');
+
+String _settingsSearchResultKey(_SettingsSearchMatch match) =>
+    'settings-search-result-${match.section.slug}-'
+    '${_settingsSearchResultSlug(match.matchedLabel)}';
+
 enum _CustomizationSection {
   homeShelves,
   display,
@@ -81,6 +408,26 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
   final _torBoxTokenController = TextEditingController();
   final _allDebridTokenController = TextEditingController();
   final _premiumizeTokenController = TextEditingController();
+  final _settingsSearchController = TextEditingController();
+  final _settingsSearchFocus = FocusNode(debugLabel: 'accounts.search');
+  final _settingsToggleAllFocus = FocusNode(
+    debugLabel: 'accounts.sections.toggle-all',
+  );
+  late final List<FocusNode> _settingsSearchResultFocusNodes = List.generate(
+    6,
+    (index) => FocusNode(debugLabel: 'accounts.search.result.$index'),
+  );
+  late final Map<_SettingsSection, FocusNode> _settingsSectionFocusNodes = {
+    for (final section in _SettingsSection.values)
+      section: FocusNode(
+        debugLabel: 'accounts.settings-section.${section.slug}',
+      ),
+  };
+  final Set<_SettingsSection> _expandedSettingsSections = {
+    ..._SettingsSection.values,
+  };
+  bool _settingsSearchResultsVisible = false;
+  bool _settingsSearchEditing = false;
   final _backFocus = FocusNode(debugLabel: 'accounts.back');
   final _contentFocus = FocusNode(debugLabel: 'accounts.content');
   final _titleLanguageFocus = FocusNode(debugLabel: 'accounts.title-language');
@@ -195,6 +542,9 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
   );
   final _playerControlsSectionFocus = FocusNode(
     debugLabel: 'accounts.section.player-controls',
+  );
+  final _fillerIndicatorsFocus = FocusNode(
+    debugLabel: 'accounts.playback.filler-indicators',
   );
   final _customizationResetFocus = FocusNode(
     debugLabel: 'accounts.customization.reset',
@@ -362,6 +712,387 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     );
   }
 
+  List<_SettingsSection> _sectionsForArea(_SettingsArea area) => [
+    for (final section in _SettingsSection.values)
+      if (section.area == area) section,
+  ];
+
+  bool get _allActiveSettingsSectionsExpanded =>
+      _sectionsForArea(_activeArea).every(_expandedSettingsSections.contains);
+
+  void _setSettingsSectionExpanded(_SettingsSection section, bool expanded) {
+    setState(() {
+      if (expanded) {
+        _expandedSettingsSections.add(section);
+      } else {
+        _expandedSettingsSections.remove(section);
+      }
+    });
+  }
+
+  void _toggleAllSettingsSections() {
+    final sections = _sectionsForArea(_activeArea);
+    final collapse = sections.every(_expandedSettingsSections.contains);
+    setState(() {
+      if (collapse) {
+        _expandedSettingsSections.removeAll(sections);
+      } else {
+        _expandedSettingsSections.addAll(sections);
+      }
+    });
+  }
+
+  bool _settingsSearchLabelIsAvailable(_SettingsSection section, String label) {
+    final normalized = _normalizeSettingsSearchText(label);
+    final preferences = ref.read(settingsPreferencesProvider);
+    if (section == _SettingsSection.automaticSourceSelection &&
+        const {
+          'source order',
+          'quality order',
+          'audio preference',
+        }.contains(normalized)) {
+      return preferences.autoPickSourceEnabled;
+    }
+    if (section == _SettingsSection.librariesFeatures &&
+        normalized == 'download manager') {
+      return preferences.offlineDownloadsEnabled;
+    }
+    if (section == _SettingsSection.appUpdates &&
+        normalized == 'release history') {
+      return ref.read(appUpdateControllerProvider).developerMode;
+    }
+    if (section == _SettingsSection.privacyDiagnostics &&
+        normalized == 'anonymous live count') {
+      return ref.read(isInstalledBetaBuildProvider);
+    }
+    return true;
+  }
+
+  List<_SettingsSearchMatch> get _settingsSearchMatches {
+    final query = _normalizeSettingsSearchText(_settingsSearchController.text);
+    if (query.isEmpty) return const [];
+    final queryWords = query.split(' ').where((word) => word.isNotEmpty);
+    final matches = <_SettingsSearchMatch>[];
+    for (final section in _SettingsSection.values) {
+      _SettingsSearchMatch? best;
+      for (final label in section.searchLabels) {
+        if (!_settingsSearchLabelIsAvailable(section, label)) continue;
+        final normalizedLabel = _normalizeSettingsSearchText(label);
+        final searchable =
+            '$normalizedLabel ${section.area.label.toLowerCase()}';
+        if (!queryWords.every(searchable.contains)) continue;
+        final score = normalizedLabel == query
+            ? 0
+            : normalizedLabel.startsWith(query)
+            ? 1
+            : section.title == label
+            ? 2
+            : 3;
+        final candidate = _SettingsSearchMatch(
+          section: section,
+          matchedLabel: label,
+          score: score,
+        );
+        if (best == null ||
+            candidate.score < best.score ||
+            (candidate.score == best.score &&
+                candidate.matchedLabel.length < best.matchedLabel.length)) {
+          best = candidate;
+        }
+      }
+      if (best != null) matches.add(best);
+    }
+    matches.sort((left, right) {
+      final byScore = left.score.compareTo(right.score);
+      if (byScore != 0) return byScore;
+      final byArea = left.section.area.index.compareTo(
+        right.section.area.index,
+      );
+      if (byArea != 0) return byArea;
+      return left.section.index.compareTo(right.section.index);
+    });
+    return matches.take(_settingsSearchResultFocusNodes.length).toList();
+  }
+
+  void _handleSettingsSearchChanged(String value) {
+    // Rebuild for every query, not only when the empty/non-empty state flips;
+    // otherwise results would remain frozen after the first typed term.
+    setState(() => _settingsSearchResultsVisible = value.trim().isNotEmpty);
+  }
+
+  void _handleSettingsSearchEditingChanged(bool editing) {
+    if (_settingsSearchEditing == editing) return;
+    setState(() => _settingsSearchEditing = editing);
+  }
+
+  void _exitSettingsSearchHeaderDown() {
+    if (_settingsSearchResultsVisible ||
+        _settingsSearchController.text.isNotEmpty) {
+      _settingsSearchController.clear();
+      setState(() => _settingsSearchResultsVisible = false);
+    }
+    requestTvFocusAndReveal(_areaFocusNodes[_activeArea]!);
+  }
+
+  FocusNode? get _firstHomeShelfFocusNode {
+    final shelves = ref.read(homeShelfOrderProvider);
+    return shelves.isEmpty ? null : _shelfFocusNodes[shelves.first];
+  }
+
+  FocusNode? _firstFocusNodeForSection(_SettingsSection section) =>
+      switch (section) {
+        _SettingsSection.themeDisplay => _customizationFocus,
+        _SettingsSection.homeScreen => _featuredHomeContentFocus,
+        _SettingsSection.displayOptions => _displaySectionFocus,
+        _SettingsSection.inputFeedback => _inputFeedbackSectionFocus,
+        _SettingsSection.homeShelves => _firstHomeShelfFocusNode,
+        _SettingsSection.navigation => _navigationSizeFocus,
+        _SettingsSection.closedCaptions => _captionTextColorFocus,
+        _SettingsSection.playerControls => _playerControlsSectionFocus,
+        _SettingsSection.debridStreaming => _debridProviderFocus,
+        _SettingsSection.sourcesStreamOrder => _debridStreamsFocus,
+        _SettingsSection.automaticSourceSelection => _autoPickEnabledFocus,
+        _SettingsSection.librariesFeatures => _localMediaFocus,
+        _SettingsSection.streamingPrivacy => null,
+        _SettingsSection.animeTracking => _trackingProviderFocus,
+        _SettingsSection.profiles => _localProfilesFocus,
+        _SettingsSection.progressNotifications => _trackingThresholdFocus,
+        _SettingsSection.discordRichPresence => _discordPresenceFocus,
+        _SettingsSection.deviceSupport => _setupFocus,
+        _SettingsSection.appUpdates => _automaticUpdatesFocus,
+        _SettingsSection.community => _discordQrFocus,
+        _SettingsSection.storageReset => _clearCacheFocus,
+        _SettingsSection.aboutLegal => _privacyFocus,
+        _SettingsSection.privacyDiagnostics => _anonymousCrashReportingFocus,
+      };
+
+  FocusNode? _lastFocusNodeForSection(
+    _SettingsSection section,
+    SettingsPreferences preferences,
+  ) {
+    FocusNode? lastMounted(Iterable<FocusNode?> candidates) {
+      for (final candidate in candidates) {
+        if (candidate?.context?.mounted == true) return candidate;
+      }
+      return null;
+    }
+
+    final selectedDebridNodes = switch (preferences.debridProvider) {
+      DebridService.realDebrid => <FocusNode?>[
+        _tokenSaveFocus,
+        _tokenFocus,
+        _debridConnectFocus,
+      ],
+      DebridService.torBox => <FocusNode?>[
+        _torBoxSaveFocus,
+        _torBoxTokenFocus,
+        _torBoxActionFocus,
+      ],
+      DebridService.allDebrid => <FocusNode?>[
+        _allDebridSaveFocus,
+        _allDebridTokenFocus,
+        _allDebridActionFocus,
+      ],
+      DebridService.premiumize => <FocusNode?>[
+        _premiumizeSaveFocus,
+        _premiumizeTokenFocus,
+        _premiumizeActionFocus,
+      ],
+    };
+    final selectedTrackingNodes =
+        preferences.trackingProvider == TrackingProvider.anilist
+        ? <FocusNode?>[
+            _anilistSaveFocus,
+            _anilistTokenFocus,
+            _trackingDisconnectFocus,
+            _anilistFocus,
+          ]
+        : <FocusNode?>[
+            _malSaveFocus,
+            _malTokenFocus,
+            _trackingDisconnectFocus,
+            _malFocus,
+          ];
+    return switch (section) {
+      _SettingsSection.themeDisplay => _showTitleStyleFocus,
+      _SettingsSection.homeScreen => _continueWatchingFocus,
+      _SettingsSection.displayOptions => _cardDetailsFocus,
+      _SettingsSection.inputFeedback => _clickSoundsFocus,
+      _SettingsSection.homeShelves => lastMounted(
+        ref
+            .read(homeShelfOrderProvider)
+            .reversed
+            .map((shelf) => _shelfFocusNodes[shelf]),
+      ),
+      _SettingsSection.navigation => _customizationResetFocus,
+      _SettingsSection.closedCaptions => _captionTextSizeFocus,
+      _SettingsSection.playerControls => _fillerIndicatorsFocus,
+      _SettingsSection.debridStreaming => lastMounted(selectedDebridNodes),
+      _SettingsSection.sourcesStreamOrder => _webQualityFocus,
+      _SettingsSection.automaticSourceSelection => lastMounted([
+        _autoPickAudioFocus,
+        _autoPickQualityFocus,
+        _autoPickSourceFocus,
+        _autoPickEnabledFocus,
+      ]),
+      _SettingsSection.librariesFeatures => lastMounted([
+        _downloadManagerFocus,
+        _offlineDownloadsFocus,
+        _watchTogetherFocus,
+        _localMediaFocus,
+      ]),
+      _SettingsSection.streamingPrivacy => null,
+      _SettingsSection.animeTracking => lastMounted(selectedTrackingNodes),
+      _SettingsSection.profiles => _localProfilesFocus,
+      _SettingsSection.progressNotifications => _dubEpisodeNotificationsFocus,
+      _SettingsSection.discordRichPresence => lastMounted([
+        _discordDisconnectFocus,
+        _discordPresenceFocus,
+      ]),
+      _SettingsSection.deviceSupport => _diagnosticsFocus,
+      _SettingsSection.appUpdates => lastMounted([
+        _releaseHistoryFocus,
+        _updateChannelFocus,
+        _checkUpdatesFocus,
+        _automaticUpdatesFocus,
+      ]),
+      _SettingsSection.community => lastMounted([
+        _donateFocus,
+        _donationQrFocus,
+        _discordFocus,
+        _discordQrFocus,
+      ]),
+      _SettingsSection.storageReset => _resetAppFocus,
+      _SettingsSection.aboutLegal => _legalFocus,
+      _SettingsSection.privacyDiagnostics => lastMounted([
+        _anonymousUsageCountFocus,
+        _anonymousCrashReportingFocus,
+      ]),
+    };
+  }
+
+  FocusNode? _focusNodeForSettingsSearchMatch(_SettingsSearchMatch match) {
+    final label = _normalizeSettingsSearchText(match.matchedLabel);
+    final sectionHeader = _settingsSectionFocusNodes[match.section];
+    if (label == _normalizeSettingsSearchText(match.section.title)) {
+      return sectionHeader;
+    }
+    return switch (label) {
+      'theme studio' || 'colors' || 'appearance' => _customizationFocus,
+      'title language' => _titleLanguageFocus,
+      'show title style' => _showTitleStyleFocus,
+      'featured hero' => _featuredHomeContentFocus,
+      'poster metadata' => _posterMetadataFocus,
+      'continue watching' =>
+        match.section == _SettingsSection.homeShelves
+            ? _shelfFocusNodes[HomeShelf.tracking]
+            : _continueWatchingFocus,
+      'watch history' => _shelfFocusNodes[HomeShelf.history],
+      'recently released' => _shelfFocusNodes[HomeShelf.recentlyReleased],
+      'trending now' => _shelfFocusNodes[HomeShelf.trending],
+      'plan to watch' => _shelfFocusNodes[HomeShelf.planned],
+      'airing soon' => _shelfFocusNodes[HomeShelf.airing],
+      'recently completed' => _shelfFocusNodes[HomeShelf.completed],
+      'card details' => _cardDetailsFocus,
+      'on screen keyboard' ||
+      'built in keyboard' ||
+      'device keyboard' => _inputFeedbackSectionFocus,
+      'click sounds' => _clickSoundsFocus,
+      'home' ||
+      'search' ||
+      'my list' ||
+      'discover' ||
+      'calendar' ||
+      'downloads' => _menuOrderFocus,
+      'watch party' =>
+        match.section == _SettingsSection.librariesFeatures
+            ? _watchTogetherFocus
+            : _menuOrderFocus,
+      'navigation size' => _navigationSizeFocus,
+      'menu order' || 'settings placement' => _menuOrderFocus,
+      'reset appearance and navigation' => _customizationResetFocus,
+      'text color' => _captionTextColorFocus,
+      'text size' => _captionTextSizeFocus,
+      'default player' => _playerControlsSectionFocus,
+      'filler episode labels' => _fillerIndicatorsFocus,
+      'debrid provider' ||
+      'real debrid' ||
+      'torbox' ||
+      'alldebrid' ||
+      'premiumize' ||
+      'connect debrid' => _debridProviderFocus,
+      'debrid streams' => _debridStreamsFocus,
+      'web streams' => _webStreamsFocus,
+      'direct torrent' => _directTorrentFocus,
+      'extension marketplace' => _marketplaceFocus,
+      'debrid sort' => _debridSortFocus,
+      'source priority' => _sourcePriorityFocus,
+      'web quality' => _webQualityFocus,
+      'auto pick sources' => _autoPickEnabledFocus,
+      'source order' => _autoPickSourceFocus,
+      'quality order' => _autoPickQualityFocus,
+      'audio preference' => _autoPickAudioFocus,
+      'local sources' || 'jellyfin' || 'plex' => _localMediaFocus,
+      'offline downloads' => _offlineDownloadsFocus,
+      'download manager' => _downloadManagerFocus,
+      'anime list provider' ||
+      'anilist' ||
+      'myanimelist' ||
+      'mal' ||
+      'connect tracker' => _trackingProviderFocus,
+      'local profiles' ||
+      'manage viewers' ||
+      'profile switcher' => _localProfilesFocus,
+      'episode progress' || 'tracking threshold' => _trackingThresholdFocus,
+      'sub alerts' ||
+      'simulcast alerts' ||
+      'notifications' => _subEpisodeNotificationsFocus,
+      'dub alerts' => _dubEpisodeNotificationsFocus,
+      'discord' || 'activity status' || 'link discord' => _discordPresenceFocus,
+      'run setup again' || 'setup' => _setupFocus,
+      'device calibration' => _calibrationFocus,
+      'diagnostics' => _diagnosticsFocus,
+      'automatic updates' => _automaticUpdatesFocus,
+      'check for updates' => _checkUpdatesFocus,
+      'update channel' ||
+      'developer mode' ||
+      'downgrade' => _updateChannelFocus,
+      'release history' => _releaseHistoryFocus,
+      'tetotv discord' || 'support' => _discordFocus,
+      'donate' => _donateFocus,
+      'clear cache' => _clearCacheFocus,
+      'reset app' || 'first time setup' => _resetAppFocus,
+      'privacy policy' => _privacyFocus,
+      'open source licenses' ||
+      'third party notices' ||
+      'attribution' => _legalFocus,
+      'anonymous crash reports' || 'telemetry' => _anonymousCrashReportingFocus,
+      'anonymous live count' || 'usage reporting' => _anonymousUsageCountFocus,
+      // Labels without a dedicated retained FocusNode land on their exact
+      // section header instead of pretending a neighboring row is the match.
+      _ => sectionHeader,
+    };
+  }
+
+  Future<void> _openSettingsSearchMatch(_SettingsSearchMatch match) async {
+    setState(() {
+      _activeArea = match.section.area;
+      _expandedSettingsSections.add(match.section);
+      _settingsSearchResultsVisible = false;
+      _settingsSearchController.clear();
+      _systemActivationCount = 0;
+    });
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted) return;
+    var target = _focusNodeForSettingsSearchMatch(match);
+    if (target?.context?.mounted != true) {
+      target = _settingsSectionFocusNodes[match.section];
+    }
+    if (target?.context?.mounted == true) {
+      requestTvFocusAndReveal(target!);
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -447,6 +1178,15 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     _torBoxTokenController.dispose();
     _allDebridTokenController.dispose();
     _premiumizeTokenController.dispose();
+    _settingsSearchController.dispose();
+    _settingsSearchFocus.dispose();
+    _settingsToggleAllFocus.dispose();
+    for (final node in _settingsSearchResultFocusNodes) {
+      node.dispose();
+    }
+    for (final node in _settingsSectionFocusNodes.values) {
+      node.dispose();
+    }
     _backFocus.dispose();
     _contentFocus.dispose();
     _titleLanguageFocus.dispose();
@@ -488,6 +1228,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     _captionTextColorFocus.dispose();
     _captionTextSizeFocus.dispose();
     _playerControlsSectionFocus.dispose();
+    _fillerIndicatorsFocus.dispose();
     _customizationResetFocus.dispose();
     _setupFocus.dispose();
     _calibrationFocus.dispose();
@@ -631,8 +1372,30 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       for (final area in _SettingsArea.values) _areaFocusNodes[area]!,
     ];
     final areaIndex = current == null ? -1 : areaNodes.indexOf(current);
+    final activeSections = _sectionsForArea(_activeArea);
+    final activeSectionNodes = [
+      for (final section in activeSections)
+        _settingsSectionFocusNodes[section]!,
+    ];
+    final activeSectionIndex = current == null
+        ? -1
+        : activeSectionNodes.indexOf(current);
+    final activeSectionFirstContentNodes = [
+      for (final section in activeSections) _firstFocusNodeForSection(section),
+    ];
+    final firstContentSectionIndex = current == null
+        ? -1
+        : activeSectionFirstContentNodes.indexOf(current);
+    final activeSectionLastContentNodes = [
+      for (final section in activeSections)
+        _lastFocusNodeForSection(section, preferences),
+    ];
+    final lastContentSectionIndex = current == null
+        ? -1
+        : activeSectionLastContentNodes.indexOf(current);
     final leftEdgeNodes = <FocusNode>{
       areaNodes.first,
+      ...activeSectionNodes,
       _homeShelvesSectionFocus,
       _displaySectionFocus,
       _cardDetailsFocus,
@@ -738,36 +1501,72 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
           areaIndex < areaNodes.length - 1) {
         target = areaNodes[areaIndex + 1];
       }
+      if (key == LogicalKeyboardKey.arrowUp && tvListLayout) {
+        target = _settingsSearchFocus;
+      }
       if (key == LogicalKeyboardKey.arrowDown) {
-        target = switch (_activeArea) {
-          _SettingsArea.appearance => _customizationFocus,
-          _SettingsArea.playback => _captionTextColorFocus,
-          _SettingsArea.services => _debridProviderFocus,
-          _SettingsArea.accounts => _trackingProviderFocus,
-          _SettingsArea.system => _setupFocus,
-        };
+        target = tvListLayout
+            ? activeSectionNodes.first
+            : switch (_activeArea) {
+                _SettingsArea.appearance => _customizationFocus,
+                _SettingsArea.playback => _captionTextColorFocus,
+                _SettingsArea.services => _debridProviderFocus,
+                _SettingsArea.accounts => _trackingProviderFocus,
+                _SettingsArea.system => _setupFocus,
+              };
+      }
+    } else if (activeSectionIndex >= 0) {
+      if (key == LogicalKeyboardKey.arrowUp) {
+        target = activeSectionIndex == 0
+            ? _areaFocusNodes[_activeArea]
+            : activeSectionNodes[activeSectionIndex - 1];
+      }
+      if (key == LogicalKeyboardKey.arrowDown) {
+        final section = activeSections[activeSectionIndex];
+        final firstChild = _expandedSettingsSections.contains(section)
+            ? _firstFocusNodeForSection(section)
+            : null;
+        target = firstChild?.context?.mounted == true
+            ? firstChild
+            : activeSectionIndex < activeSectionNodes.length - 1
+            ? activeSectionNodes[activeSectionIndex + 1]
+            : null;
+        if (target == null) return KeyEventResult.handled;
       }
     } else if (shelfIndex >= 0) {
       if (key == LogicalKeyboardKey.arrowUp) {
         if (shelfIndex > 0) {
           target = shelfNodes[shelfIndex - 1];
         } else {
-          target = tvListLayout ? _clickSoundsFocus : _continueWatchingFocus;
+          target = tvListLayout
+              ? _settingsSectionFocusNodes[_SettingsSection.homeShelves]
+              : _continueWatchingFocus;
         }
       }
       if (key == LogicalKeyboardKey.arrowDown) {
         if (shelfIndex < shelfNodes.length - 1) {
           target = shelfNodes[shelfIndex + 1];
         } else if (tvListLayout) {
-          target = _navigationSizeFocus;
+          target = _settingsSectionFocusNodes[_SettingsSection.navigation];
         } else {
           return KeyEventResult.handled;
         }
       }
     }
 
-    if (areaIndex >= 0 || shelfIndex >= 0) {
+    if (areaIndex >= 0 || activeSectionIndex >= 0 || shelfIndex >= 0) {
       // Settings-area and Home-shelf navigation were handled above.
+    } else if (tvListLayout &&
+        key == LogicalKeyboardKey.arrowDown &&
+        lastContentSectionIndex >= 0) {
+      if (lastContentSectionIndex == activeSectionNodes.length - 1) {
+        return KeyEventResult.handled;
+      }
+      target = activeSectionNodes[lastContentSectionIndex + 1];
+    } else if (tvListLayout &&
+        key == LogicalKeyboardKey.arrowUp &&
+        firstContentSectionIndex >= 0) {
+      target = activeSectionNodes[firstContentSectionIndex];
     } else if (current == _featuredHomeContentFocus) {
       if (key == LogicalKeyboardKey.arrowLeft && !tvListLayout) {
         target = _customizationFocus;
@@ -1328,9 +2127,8 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
         target = _automaticUpdatesFocus;
       }
       if (key == LogicalKeyboardKey.arrowDown) {
-        target = ref.read(appUpdateControllerProvider).developerMode
-            ? _updateChannelFocus
-            : _discordQrFocus;
+        // Update channel is visible in both standard and Developer Mode.
+        target = _updateChannelFocus;
       }
     } else if (current == _updateChannelFocus) {
       if (key == LogicalKeyboardKey.arrowUp) target = _checkUpdatesFocus;
@@ -1623,6 +2421,28 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     final downloads = ref.watch(downloadManagerProvider);
     final isTelevision = ref.watch(isTelevisionProvider);
     final showAnonymousUsageCount = ref.watch(isInstalledBetaBuildProvider);
+    final collapsibleSettings =
+        isTelevision &&
+        preferences.interfaceMode != InterfaceMode.phone &&
+        MediaQuery.sizeOf(context).width >= 840;
+
+    Widget settingsSectionCard({
+      Key? key,
+      required _SettingsSection section,
+      required String subtitle,
+      required Widget child,
+    }) => _SettingsSectionCard(
+      key: key,
+      section: section,
+      title: section.title,
+      subtitle: subtitle,
+      collapsible: collapsibleSettings,
+      expanded: _expandedSettingsSections.contains(section),
+      focusNode: _settingsSectionFocusNodes[section],
+      onExpandedChanged: (expanded) =>
+          _setSettingsSectionExpanded(section, expanded),
+      child: child,
+    );
 
     Widget customizationPanel(
       Set<_CustomizationSection> visibleSections, {
@@ -1646,6 +2466,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       captionTextColorFocusNode: _captionTextColorFocus,
       captionTextSizeFocusNode: _captionTextSizeFocus,
       playerControlsSectionFocusNode: _playerControlsSectionFocus,
+      fillerIndicatorsFocusNode: _fillerIndicatorsFocus,
       resetFocusNode: _customizationResetFocus,
       expandedSections: _expandedCustomizationSections,
       onSectionExpandedChanged: _setCustomizationSectionExpanded,
@@ -1699,9 +2520,9 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       ],
     );
 
-    Widget automaticSourceSelectionCard() => _SettingsSectionCard(
+    Widget automaticSourceSelectionCard() => settingsSectionCard(
       key: const ValueKey('settings-card-services-autopick'),
-      title: 'Automatic source selection',
+      section: _SettingsSection.automaticSourceSelection,
       subtitle:
           'Prioritize source type, quality, and audio when TetoTV chooses for you.',
       child: _AutoPickSourcePanel(
@@ -1743,9 +2564,9 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       ),
     );
 
-    Widget librariesAndFeaturesCard() => _SettingsSectionCard(
+    Widget librariesAndFeaturesCard() => settingsSectionCard(
       key: const ValueKey('settings-card-services-features'),
-      title: 'Libraries & features',
+      section: _SettingsSection.librariesFeatures,
       subtitle: 'Manage local libraries, Watch Party, and offline viewing.',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1779,16 +2600,16 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       ),
     );
 
-    Widget streamingPrivacyCard() => _SettingsSectionCard(
+    Widget streamingPrivacyCard() => settingsSectionCard(
       key: const ValueKey('settings-card-services-privacy'),
-      title: 'Streaming privacy',
+      section: _SettingsSection.streamingPrivacy,
       subtitle: 'Control privacy-sensitive source and playback behavior.',
       child: _StreamingPrivacyPanel(preferences: preferences),
     );
 
-    Widget discordPresenceCard() => _SettingsSectionCard(
+    Widget discordPresenceCard() => settingsSectionCard(
       key: const ValueKey('settings-card-accounts-discord'),
-      title: 'Discord Rich Presence',
+      section: _SettingsSection.discordRichPresence,
       subtitle: 'Control the optional Discord activity shown while you watch.',
       child: _DiscordPresencePanel(
         state: discordPresence,
@@ -1823,9 +2644,9 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       ),
     );
 
-    Widget communityCard() => _SettingsSectionCard(
+    Widget communityCard() => settingsSectionCard(
       key: const ValueKey('settings-card-system-community'),
-      title: 'Community',
+      section: _SettingsSection.community,
       subtitle:
           'Join the TetoTV Discord for announcements, support, and feature requests.',
       child: _CommunityPanels(
@@ -1837,9 +2658,9 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       ),
     );
 
-    Widget storageAndResetCard() => _SettingsSectionCard(
+    Widget storageAndResetCard() => settingsSectionCard(
       key: const ValueKey('settings-card-system-storage'),
-      title: 'Storage & reset',
+      section: _SettingsSection.storageReset,
       subtitle: 'Remove temporary files or return TetoTV to first-time setup.',
       child: _StorageResetPanel(
         forceSingleColumn: isTelevision,
@@ -1848,9 +2669,9 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       ),
     );
 
-    Widget legalNoticesCard() => _SettingsSectionCard(
+    Widget legalNoticesCard() => settingsSectionCard(
       key: const ValueKey('settings-card-system-legal'),
-      title: 'About & legal',
+      section: _SettingsSection.aboutLegal,
       subtitle: 'Privacy, attribution, and open-source notices.',
       child: _LegalNoticesPanel(
         privacyFocusNode: _privacyFocus,
@@ -1858,9 +2679,9 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       ),
     );
 
-    Widget privacyAndDiagnosticsCard() => _SettingsSectionCard(
+    Widget privacyAndDiagnosticsCard() => settingsSectionCard(
       key: const ValueKey('settings-card-system-privacy-diagnostics'),
-      title: 'Privacy & diagnostics',
+      section: _SettingsSection.privacyDiagnostics,
       subtitle:
           'Control optional privacy-safe reporting and Beta activity signals.',
       child: Column(
@@ -1915,10 +2736,47 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     return TetoTopLevelShell(
       preferences: preferences,
       activeDestination: TopNavigationDestination.settings,
-      firstContentFocusNode: _activeArea == _SettingsArea.appearance
+      firstContentFocusNode: collapsibleSettings
+          ? _settingsSearchFocus
+          : _activeArea == _SettingsArea.appearance
           ? _customizationFocus
           : _areaFocusNodes[_activeArea]!,
+      fallbackContentFocusNode: _areaFocusNodes[_activeArea],
       autofocusRail: widget.autofocusNavigation,
+      tvHeaderFocusNodes: [
+        _settingsSearchFocus,
+        _settingsToggleAllFocus,
+        ..._settingsSearchResultFocusNodes,
+      ],
+      tvHeaderBuilder: (context, layout, profileFocusNode) {
+        return _SettingsSearchHeader(
+          controller: _settingsSearchController,
+          searchFocusNode: _settingsSearchFocus,
+          toggleAllFocusNode: _settingsToggleAllFocus,
+          resultFocusNodes: _settingsSearchResultFocusNodes,
+          results: _settingsSearchMatches,
+          resultsVisible: _settingsSearchResultsVisible,
+          editing: _settingsSearchEditing,
+          activeArea: _activeArea,
+          allExpanded: _allActiveSettingsSectionsExpanded,
+          onChanged: _handleSettingsSearchChanged,
+          onEditingChanged: _handleSettingsSearchEditingChanged,
+          onToggleAll: _toggleAllSettingsSections,
+          onResultSelected: (match) =>
+              unawaited(_openSettingsSearchMatch(match)),
+          onExitLeft: layout.focusRail,
+          onExitRight: () {
+            if (profileFocusNode.context?.mounted == true) {
+              profileFocusNode.requestFocus();
+            } else {
+              _areaFocusNodes[_activeArea]!.requestFocus();
+            }
+          },
+          onExitDown: _exitSettingsSearchHeaderDown,
+        );
+      },
+      onTvProfileLeft: _settingsToggleAllFocus.requestFocus,
+      onTvProfileDown: _exitSettingsSearchHeaderDown,
       resizeToAvoidBottomInset: true,
       builder: (context, layout) => Focus(
         focusNode: _contentFocus,
@@ -2018,6 +2876,9 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                       inputFeedbackFirstFocusNode: _inputFeedbackSectionFocus,
                       clickSoundsFocusNode: _clickSoundsFocus,
                       shelfFocusNodes: _shelfFocusNodes,
+                      expandedSections: _expandedSettingsSections,
+                      sectionFocusNodes: _settingsSectionFocusNodes,
+                      onSectionExpandedChanged: _setSettingsSectionExpanded,
                       onOpenThemeStudio: () =>
                           context.push(ThemeStudioScreen.routePath),
                       onOpenMenuOrder: _openMenuOrderDialog,
@@ -2046,18 +2907,18 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                     ],
                     _SettingsResponsiveColumns(
                       forceSingleColumn: layout.usesTvRail,
-                      left: _SettingsSectionCard(
+                      left: settingsSectionCard(
                         key: const ValueKey('settings-card-playback-captions'),
-                        title: 'Closed captions',
+                        section: _SettingsSection.closedCaptions,
                         subtitle:
                             'Style subtitles for comfortable viewing on every screen.',
                         child: customizationPanel(const {
                           _CustomizationSection.closedCaptions,
                         }, showReset: false),
                       ),
-                      right: _SettingsSectionCard(
+                      right: settingsSectionCard(
                         key: const ValueKey('settings-card-playback-player'),
-                        title: 'Player controls',
+                        section: _SettingsSection.playerControls,
                         subtitle:
                             'Choose audio, skipping, seeking, and playback behavior.',
                         child: customizationPanel(const {
@@ -2081,11 +2942,11 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                       forceSingleColumn: layout.usesTvRail,
                       left: _SettingsCardLane(
                         children: [
-                          _SettingsSectionCard(
+                          settingsSectionCard(
                             key: const ValueKey(
                               'settings-card-services-debrid',
                             ),
-                            title: 'Debrid streaming',
+                            section: _SettingsSection.debridStreaming,
                             subtitle:
                                 'Choose and securely connect the provider used to resolve streams.',
                             child: Column(
@@ -2283,11 +3144,11 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                       ),
                       right: _SettingsCardLane(
                         children: [
-                          _SettingsSectionCard(
+                          settingsSectionCard(
                             key: const ValueKey(
                               'settings-card-services-sources',
                             ),
-                            title: 'Sources & stream order',
+                            section: _SettingsSection.sourcesStreamOrder,
                             subtitle:
                                 'Choose which source types are searched and how results are ranked.',
                             child: Column(
@@ -2373,11 +3234,11 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                       forceSingleColumn: layout.usesTvRail,
                       left: _SettingsCardLane(
                         children: [
-                          _SettingsSectionCard(
+                          settingsSectionCard(
                             key: const ValueKey(
                               'settings-card-accounts-tracking',
                             ),
-                            title: 'Anime tracking',
+                            section: _SettingsSection.animeTracking,
                             subtitle:
                                 'Connect a list provider and keep episode progress synchronized.',
                             child: Column(
@@ -2471,11 +3332,11 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                               ],
                             ),
                           ),
-                          _SettingsSectionCard(
+                          settingsSectionCard(
                             key: const ValueKey(
                               'settings-card-accounts-profiles',
                             ),
-                            title: 'Profiles',
+                            section: _SettingsSection.profiles,
                             subtitle:
                                 'Manage local viewers and their separate preferences.',
                             child: _LocalProfilesPanel(
@@ -2487,11 +3348,11 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                       ),
                       right: _SettingsCardLane(
                         children: [
-                          _SettingsSectionCard(
+                          settingsSectionCard(
                             key: const ValueKey(
                               'settings-card-accounts-behavior',
                             ),
-                            title: 'Progress & notifications',
+                            section: _SettingsSection.progressNotifications,
                             subtitle:
                                 'Choose when progress syncs and which episode alerts appear.',
                             child: Column(
@@ -2582,9 +3443,9 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                       forceSingleColumn: layout.usesTvRail,
                       left: _SettingsCardLane(
                         children: [
-                          _SettingsSectionCard(
+                          settingsSectionCard(
                             key: const ValueKey('settings-card-system-support'),
-                            title: 'Device & support',
+                            section: _SettingsSection.deviceSupport,
                             subtitle:
                                 'Setup, device compatibility, calibration, and diagnostics.',
                             child: Column(
@@ -2624,9 +3485,9 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                       ),
                       right: _SettingsCardLane(
                         children: [
-                          _SettingsSectionCard(
+                          settingsSectionCard(
                             key: const ValueKey('settings-card-system-updates'),
-                            title: 'App updates',
+                            section: _SettingsSection.appUpdates,
                             subtitle:
                                 'Stable public releases download directly to this device.',
                             child: Column(
@@ -2849,6 +3710,461 @@ class _SettingsAreaTabs extends StatelessWidget {
   }
 }
 
+class _SettingsSearchHeader extends StatelessWidget {
+  const _SettingsSearchHeader({
+    required this.controller,
+    required this.searchFocusNode,
+    required this.toggleAllFocusNode,
+    required this.resultFocusNodes,
+    required this.results,
+    required this.resultsVisible,
+    required this.editing,
+    required this.activeArea,
+    required this.allExpanded,
+    required this.onChanged,
+    required this.onEditingChanged,
+    required this.onToggleAll,
+    required this.onResultSelected,
+    required this.onExitLeft,
+    required this.onExitRight,
+    required this.onExitDown,
+  });
+
+  final TextEditingController controller;
+  final FocusNode searchFocusNode;
+  final FocusNode toggleAllFocusNode;
+  final List<FocusNode> resultFocusNodes;
+  final List<_SettingsSearchMatch> results;
+  final bool resultsVisible;
+  final bool editing;
+  final _SettingsArea activeArea;
+  final bool allExpanded;
+  final ValueChanged<String> onChanged;
+  final ValueChanged<bool> onEditingChanged;
+  final VoidCallback onToggleAll;
+  final ValueChanged<_SettingsSearchMatch> onResultSelected;
+  final VoidCallback onExitLeft;
+  final VoidCallback onExitRight;
+  final VoidCallback onExitDown;
+
+  @override
+  Widget build(BuildContext context) {
+    final search = Expanded(
+      child: TvTextInput(
+        key: const ValueKey('settings-search-field'),
+        controller: controller,
+        focusNode: searchFocusNode,
+        autofocus: true,
+        labelText: 'Search settings',
+        hintText: 'Search settings',
+        keyboardTitle: 'Search settings',
+        variant: TvTextInputVariant.headerSearch,
+        compactHeader: true,
+        onChanged: onChanged,
+        onSubmitted: onChanged,
+        onEditingChanged: onEditingChanged,
+        onExitLeft: onExitLeft,
+        onExitRight: toggleAllFocusNode.requestFocus,
+        onExitDown: () {
+          if (resultsVisible && results.isNotEmpty) {
+            resultFocusNodes.first.requestFocus();
+          } else {
+            onExitDown();
+          }
+        },
+      ),
+    );
+    final content = Column(
+      key: const ValueKey('settings-tv-header-tools'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            search,
+            const SizedBox(width: 10),
+            _SettingsToggleAllButton(
+              key: const ValueKey('settings-toggle-all-sections'),
+              focusNode: toggleAllFocusNode,
+              label: allExpanded ? 'Collapse all' : 'Expand all',
+              semanticLabel:
+                  '${allExpanded ? 'Collapse' : 'Expand'} all ${activeArea.label} sections',
+              expanded: allExpanded,
+              onPressed: onToggleAll,
+              onExitLeft: searchFocusNode.requestFocus,
+              onExitRight: onExitRight,
+              onExitDown: onExitDown,
+            ),
+          ],
+        ),
+        if (resultsVisible) ...[
+          const SizedBox(height: 8),
+          // Match the search field exactly: 148px action + 10px gap occupy
+          // the right side of the toolbar at every supported TV width.
+          Padding(
+            padding: const EdgeInsets.only(right: 158),
+            child: _SettingsSearchResults(
+              results: results,
+              focusNodes: resultFocusNodes,
+              onSelected: onResultSelected,
+              onReturnToSearch: searchFocusNode.requestFocus,
+              onExitDown: onExitDown,
+            ),
+          ),
+        ],
+      ],
+    );
+    return Shortcuts(
+      // Keep this ancestry stable while the Android keyboard opens. Swapping
+      // between a bare child and Shortcuts would remount TvTextInput and end
+      // device-keyboard editing immediately. Empty shortcuts still let arrow
+      // keys move the text cursor while editing.
+      shortcuts: editing
+          ? const <ShortcutActivator, Intent>{}
+          : const <ShortcutActivator, Intent>{
+              SingleActivator(LogicalKeyboardKey.arrowLeft):
+                  DirectionalFocusIntent(TraversalDirection.left),
+              SingleActivator(LogicalKeyboardKey.arrowRight):
+                  DirectionalFocusIntent(TraversalDirection.right),
+              SingleActivator(LogicalKeyboardKey.arrowUp):
+                  DirectionalFocusIntent(TraversalDirection.up),
+              SingleActivator(LogicalKeyboardKey.arrowDown):
+                  DirectionalFocusIntent(TraversalDirection.down),
+            },
+      child: Actions(
+        actions: <Type, Action<Intent>>{
+          DirectionalFocusIntent: CallbackAction<DirectionalFocusIntent>(
+            onInvoke: (intent) {
+              final current = FocusManager.instance.primaryFocus;
+              if (current == searchFocusNode) {
+                switch (intent.direction) {
+                  case TraversalDirection.left:
+                    onExitLeft();
+                  case TraversalDirection.right:
+                    toggleAllFocusNode.requestFocus();
+                  case TraversalDirection.down:
+                    if (resultsVisible && results.isNotEmpty) {
+                      resultFocusNodes.first.requestFocus();
+                    } else {
+                      onExitDown();
+                    }
+                  case TraversalDirection.up:
+                    break;
+                }
+                return null;
+              }
+              if (current == toggleAllFocusNode) {
+                switch (intent.direction) {
+                  case TraversalDirection.left:
+                    searchFocusNode.requestFocus();
+                  case TraversalDirection.right:
+                    onExitRight();
+                  case TraversalDirection.down:
+                    onExitDown();
+                  case TraversalDirection.up:
+                    break;
+                }
+                return null;
+              }
+              final resultIndex = resultFocusNodes.indexOf(current!);
+              if (resultIndex >= 0 && resultIndex < results.length) {
+                switch (intent.direction) {
+                  case TraversalDirection.left:
+                    searchFocusNode.requestFocus();
+                  case TraversalDirection.up:
+                    (resultIndex == 0
+                            ? searchFocusNode
+                            : resultFocusNodes[resultIndex - 1])
+                        .requestFocus();
+                  case TraversalDirection.down:
+                    if (resultIndex == results.length - 1) {
+                      onExitDown();
+                    } else {
+                      resultFocusNodes[resultIndex + 1].requestFocus();
+                    }
+                  case TraversalDirection.right:
+                    break;
+                }
+              }
+              return null;
+            },
+          ),
+        },
+        child: content,
+      ),
+    );
+  }
+}
+
+class _SettingsToggleAllButton extends StatelessWidget {
+  const _SettingsToggleAllButton({
+    required this.focusNode,
+    required this.label,
+    required this.semanticLabel,
+    required this.expanded,
+    required this.onPressed,
+    required this.onExitLeft,
+    required this.onExitRight,
+    required this.onExitDown,
+    super.key,
+  });
+
+  final FocusNode focusNode;
+  final String label;
+  final String semanticLabel;
+  final bool expanded;
+  final VoidCallback onPressed;
+  final VoidCallback onExitLeft;
+  final VoidCallback onExitRight;
+  final VoidCallback onExitDown;
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+    width: 148,
+    height: 44,
+    child: Semantics(
+      button: true,
+      label: semanticLabel,
+      onTap: onPressed,
+      child: ExcludeSemantics(
+        child: TvFocusable(
+          focusNode: focusNode,
+          borderRadius: BorderRadius.circular(9),
+          focusScale: 1.01,
+          onKeyEvent: (_, event) => handleTvDirectionalFocusEvent(
+            event,
+            TvDirectionalFocusCallbacks(
+              left: onExitLeft,
+              right: onExitRight,
+              down: onExitDown,
+            ),
+          ),
+          onPressed: onPressed,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: .76),
+              borderRadius: BorderRadius.circular(9),
+              border: Border.all(
+                color: context.appPalette.primaryText.withValues(alpha: .28),
+                width: 1.2,
+              ),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    expanded
+                        ? Icons.unfold_less_rounded
+                        : Icons.unfold_more_rounded,
+                    size: 20,
+                  ),
+                  const SizedBox(width: 7),
+                  Flexible(
+                    child: Text(
+                      label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+class _SettingsSearchResults extends StatelessWidget {
+  const _SettingsSearchResults({
+    required this.results,
+    required this.focusNodes,
+    required this.onSelected,
+    required this.onReturnToSearch,
+    required this.onExitDown,
+  });
+
+  final List<_SettingsSearchMatch> results;
+  final List<FocusNode> focusNodes;
+  final ValueChanged<_SettingsSearchMatch> onSelected;
+  final VoidCallback onReturnToSearch;
+  final VoidCallback onExitDown;
+
+  @override
+  Widget build(BuildContext context) {
+    if (results.isEmpty) {
+      return Semantics(
+        liveRegion: true,
+        label: 'No matching settings found',
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
+          decoration: _settingsSearchResultsDecoration(context),
+          child: Text(
+            'No matching settings',
+            style: TextStyle(
+              color: context.appPalette.mutedText,
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+      );
+    }
+    final availableHeight =
+        MediaQuery.sizeOf(context).height -
+        MediaQuery.viewInsetsOf(context).bottom -
+        92;
+    final maxResultsHeight = availableHeight.clamp(120.0, 330.0);
+    void focusResult(int index) {
+      requestTvFocusAndReveal(focusNodes[index]);
+    }
+
+    return Semantics(
+      container: true,
+      liveRegion: true,
+      label:
+          '${results.length} matching setting${results.length == 1 ? '' : 's'}',
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxHeight: maxResultsHeight),
+        child: Container(
+          padding: const EdgeInsets.all(6),
+          decoration: _settingsSearchResultsDecoration(context),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (var index = 0; index < results.length; index++)
+                  _SettingsSearchResultButton(
+                    key: ValueKey(_settingsSearchResultKey(results[index])),
+                    match: results[index],
+                    focusNode: focusNodes[index],
+                    onPressed: () => onSelected(results[index]),
+                    onExitLeft: onReturnToSearch,
+                    onExitUp: index == 0
+                        ? onReturnToSearch
+                        : () => focusResult(index - 1),
+                    onExitDown: index == results.length - 1
+                        ? onExitDown
+                        : () => focusResult(index + 1),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+BoxDecoration _settingsSearchResultsDecoration(BuildContext context) =>
+    BoxDecoration(
+      color: Color.alphaBlend(
+        context.appPalette.accent.withValues(alpha: .08),
+        context.appPalette.background,
+      ),
+      borderRadius: BorderRadius.circular(10),
+      border: Border.all(color: _settingsBorderColor(context, .24)),
+      boxShadow: [
+        BoxShadow(
+          color: Colors.black.withValues(alpha: .52),
+          blurRadius: 18,
+          offset: const Offset(0, 8),
+        ),
+      ],
+    );
+
+class _SettingsSearchResultButton extends StatelessWidget {
+  const _SettingsSearchResultButton({
+    required this.match,
+    required this.focusNode,
+    required this.onPressed,
+    required this.onExitLeft,
+    required this.onExitUp,
+    required this.onExitDown,
+    super.key,
+  });
+
+  final _SettingsSearchMatch match;
+  final FocusNode focusNode;
+  final VoidCallback onPressed;
+  final VoidCallback onExitLeft;
+  final VoidCallback onExitUp;
+  final VoidCallback onExitDown;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    button: true,
+    label:
+        '${match.matchedLabel}, ${match.section.area.label}, ${match.section.title}',
+    onTap: onPressed,
+    child: ExcludeSemantics(
+      child: TvFocusable(
+        focusNode: focusNode,
+        borderRadius: BorderRadius.circular(7),
+        focusScale: 1.01,
+        onKeyEvent: (_, event) => handleTvDirectionalFocusEvent(
+          event,
+          TvDirectionalFocusCallbacks(
+            left: onExitLeft,
+            up: onExitUp,
+            down: onExitDown,
+          ),
+        ),
+        onPressed: onPressed,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 8),
+          child: Row(
+            children: [
+              Icon(
+                Icons.search_rounded,
+                size: 18,
+                color: context.appPalette.secondaryAccent,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      match.matchedLabel,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 1),
+                    Text(
+                      '${match.section.area.label}  ›  ${match.section.title}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: context.appPalette.mutedText,
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const Icon(Icons.arrow_forward_rounded, size: 16),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
 class _SettingsResponsiveColumns extends StatelessWidget {
   const _SettingsResponsiveColumns({
     required this.left,
@@ -2910,19 +4226,37 @@ class _SettingsCardLane extends StatelessWidget {
 
 class _SettingsSectionCard extends StatelessWidget {
   const _SettingsSectionCard({
+    required this.section,
     required this.title,
     required this.subtitle,
     required this.child,
+    this.collapsible = false,
+    this.expanded = true,
+    this.focusNode,
+    this.onExpandedChanged,
     super.key,
   });
 
+  final _SettingsSection section;
   final String title;
   final String subtitle;
   final Widget child;
+  final bool collapsible;
+  final bool expanded;
+  final FocusNode? focusNode;
+  final ValueChanged<bool>? onExpandedChanged;
 
   @override
-  Widget build(BuildContext context) =>
-      _SettingsCardFrame(title: title, subtitle: subtitle, child: child);
+  Widget build(BuildContext context) => _SettingsCardFrame(
+    section: section,
+    title: title,
+    subtitle: subtitle,
+    collapsible: collapsible,
+    expanded: expanded,
+    focusNode: focusNode,
+    onExpandedChanged: onExpandedChanged,
+    child: child,
+  );
 }
 
 class _SettingsCardFrame extends StatelessWidget {
@@ -2930,44 +4264,121 @@ class _SettingsCardFrame extends StatelessWidget {
     required this.title,
     required this.child,
     this.subtitle,
+    this.section,
+    this.collapsible = false,
+    this.expanded = true,
+    this.focusNode,
+    this.onExpandedChanged,
   });
 
   final String title;
   final String? subtitle;
   final Widget child;
+  final _SettingsSection? section;
+  final bool collapsible;
+  final bool expanded;
+  final FocusNode? focusNode;
+  final ValueChanged<bool>? onExpandedChanged;
 
   @override
   Widget build(BuildContext context) {
     final tvScale = _usesTvSettingsScale(context);
+    final body = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (subtitle case final detail?) ...[
+          SizedBox(height: tvScale ? 2 : 4),
+          Text(
+            detail,
+            style: TextStyle(
+              color: context.appPalette.mutedText,
+              fontSize: tvScale ? 11 : 11,
+              height: 1.3,
+            ),
+          ),
+        ],
+        SizedBox(height: tvScale ? 5 : 10),
+        DecoratedBox(
+          key: section == null
+              ? null
+              : ValueKey('settings-section-content-${section!.slug}'),
+          decoration: BoxDecoration(
+            color: context.appPalette.surface.withValues(alpha: .35),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: _settingsBorderColor(context, .14)),
+          ),
+          child: _SettingsCardScope(child: child),
+        ),
+      ],
+    );
     return _Panel(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _AppearanceCardTitle(title),
-          if (subtitle case final detail?) ...[
-            SizedBox(height: tvScale ? 2 : 4),
-            Text(
-              detail,
-              style: TextStyle(
-                color: context.appPalette.mutedText,
-                fontSize: tvScale ? 11 : 11,
-                height: 1.3,
-              ),
-            ),
-          ],
-          SizedBox(height: tvScale ? 5 : 10),
-          DecoratedBox(
-            decoration: BoxDecoration(
-              color: context.appPalette.surface.withValues(alpha: .35),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: _settingsBorderColor(context, .14)),
-            ),
-            child: _SettingsCardScope(child: child),
-          ),
+          if (collapsible && section != null)
+            _SettingsCollapsibleCardHeader(
+              key: ValueKey('settings-section-toggle-${section!.slug}'),
+              title: title,
+              expanded: expanded,
+              focusNode: focusNode,
+              onPressed: () => onExpandedChanged?.call(!expanded),
+            )
+          else
+            _AppearanceCardTitle(title),
+          if (!collapsible || expanded) body,
         ],
       ),
     );
   }
+}
+
+class _SettingsCollapsibleCardHeader extends StatelessWidget {
+  const _SettingsCollapsibleCardHeader({
+    required this.title,
+    required this.expanded,
+    required this.onPressed,
+    this.focusNode,
+    super.key,
+  });
+
+  final String title;
+  final bool expanded;
+  final VoidCallback onPressed;
+  final FocusNode? focusNode;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    button: true,
+    expanded: expanded,
+    label: '$title, ${expanded ? 'expanded' : 'collapsed'}',
+    onTap: onPressed,
+    child: ExcludeSemantics(
+      child: TvFocusable(
+        focusNode: focusNode,
+        focusScale: 1.005,
+        borderRadius: BorderRadius.circular(7),
+        onPressed: onPressed,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 1),
+          child: Row(
+            children: [
+              Expanded(child: _AppearanceCardTitle(title)),
+              AnimatedRotation(
+                turns: expanded ? .5 : 0,
+                duration: const Duration(milliseconds: 140),
+                curve: Curves.easeOutCubic,
+                child: Icon(
+                  Icons.keyboard_arrow_down_rounded,
+                  size: _usesTvSettingsScale(context) ? 22 : 24,
+                  color: context.appPalette.mutedText,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
 }
 
 class _SettingsCardScope extends InheritedWidget {
@@ -3002,6 +4413,9 @@ class _AppearanceSettingsLayout extends StatelessWidget {
     required this.inputFeedbackFirstFocusNode,
     required this.clickSoundsFocusNode,
     required this.shelfFocusNodes,
+    required this.expandedSections,
+    required this.sectionFocusNodes,
+    required this.onSectionExpandedChanged,
     required this.onOpenThemeStudio,
     required this.onOpenMenuOrder,
     required this.onTitleLanguageChanged,
@@ -3030,6 +4444,10 @@ class _AppearanceSettingsLayout extends StatelessWidget {
   final FocusNode inputFeedbackFirstFocusNode;
   final FocusNode clickSoundsFocusNode;
   final Map<HomeShelf, FocusNode> shelfFocusNodes;
+  final Set<_SettingsSection> expandedSections;
+  final Map<_SettingsSection, FocusNode> sectionFocusNodes;
+  final void Function(_SettingsSection section, bool expanded)
+  onSectionExpandedChanged;
   final VoidCallback onOpenThemeStudio;
   final VoidCallback onOpenMenuOrder;
   final ValueChanged<TitleLanguagePreference> onTitleLanguageChanged;
@@ -3065,14 +4483,22 @@ class _AppearanceSettingsLayout extends StatelessWidget {
 
     final themeAndDisplay = _AppearanceCard(
       key: const ValueKey('appearance-theme-display-card'),
+      section: _SettingsSection.themeDisplay,
       title: 'Theme & display',
+      collapsible: usesTvListLayout,
+      expanded: expandedSections.contains(_SettingsSection.themeDisplay),
+      focusNode: sectionFocusNodes[_SettingsSection.themeDisplay],
+      onExpandedChanged: (expanded) =>
+          onSectionExpandedChanged(_SettingsSection.themeDisplay, expanded),
       children: [
         _AppearanceActionRow(
           key: const ValueKey('open-theme-studio'),
           label: 'Theme Studio',
           icon: Icons.palette_outlined,
           focusNode: themeStudioFocusNode,
-          autofocus: true,
+          // The fixed Settings search is the intentional entry point on TV.
+          // Phone/tablet keeps the existing direct-layout autofocus behavior.
+          autofocus: !usesTvListLayout,
           trailing: paletteDots(),
           showDivider: true,
           onPressed: onOpenThemeStudio,
@@ -3109,7 +4535,13 @@ class _AppearanceSettingsLayout extends StatelessWidget {
 
     final navigation = _AppearanceCard(
       key: const ValueKey('appearance-navigation-card'),
+      section: _SettingsSection.navigation,
       title: 'Navigation',
+      collapsible: usesTvListLayout,
+      expanded: expandedSections.contains(_SettingsSection.navigation),
+      focusNode: sectionFocusNodes[_SettingsSection.navigation],
+      onExpandedChanged: (expanded) =>
+          onSectionExpandedChanged(_SettingsSection.navigation, expanded),
       children: [
         _AppearanceSelectionRow<NavigationChromeSize>(
           key: const ValueKey('settings-appearance-navigation-size'),
@@ -3148,7 +4580,13 @@ class _AppearanceSettingsLayout extends StatelessWidget {
 
     final homeScreen = _AppearanceCard(
       key: const ValueKey('appearance-home-screen-card'),
+      section: _SettingsSection.homeScreen,
       title: 'Home screen',
+      collapsible: usesTvListLayout,
+      expanded: expandedSections.contains(_SettingsSection.homeScreen),
+      focusNode: sectionFocusNodes[_SettingsSection.homeScreen],
+      onExpandedChanged: (expanded) =>
+          onSectionExpandedChanged(_SettingsSection.homeScreen, expanded),
       children: [
         _AppearanceToggleRow(
           key: const ValueKey('settings-appearance-featured-hero'),
@@ -3181,7 +4619,13 @@ class _AppearanceSettingsLayout extends StatelessWidget {
 
     final displayOptions = _AppearanceCard(
       key: const ValueKey('appearance-display-options-card'),
+      section: _SettingsSection.displayOptions,
       title: 'Display options',
+      collapsible: usesTvListLayout,
+      expanded: expandedSections.contains(_SettingsSection.displayOptions),
+      focusNode: sectionFocusNodes[_SettingsSection.displayOptions],
+      onExpandedChanged: (expanded) =>
+          onSectionExpandedChanged(_SettingsSection.displayOptions, expanded),
       children: [
         _AppearanceSelectionRow<double>(
           label: 'Interface scale',
@@ -3283,7 +4727,13 @@ class _AppearanceSettingsLayout extends StatelessWidget {
 
     final inputAndFeedback = _AppearanceCard(
       key: const ValueKey('appearance-input-feedback-card'),
+      section: _SettingsSection.inputFeedback,
       title: 'Input & feedback',
+      collapsible: usesTvListLayout,
+      expanded: expandedSections.contains(_SettingsSection.inputFeedback),
+      focusNode: sectionFocusNodes[_SettingsSection.inputFeedback],
+      onExpandedChanged: (expanded) =>
+          onSectionExpandedChanged(_SettingsSection.inputFeedback, expanded),
       children: [
         _AppearanceSelectionRow<bool>(
           label: 'On-screen keyboard',
@@ -3319,9 +4769,15 @@ class _AppearanceSettingsLayout extends StatelessWidget {
 
     final homeShelvesPanel = _AppearanceCard(
       key: const ValueKey('appearance-home-shelves-card'),
+      section: _SettingsSection.homeShelves,
       title: 'Home shelves',
       subtitle:
           'Choose what appears on Home and move favorites toward the top.',
+      collapsible: usesTvListLayout,
+      expanded: expandedSections.contains(_SettingsSection.homeShelves),
+      focusNode: sectionFocusNodes[_SettingsSection.homeShelves],
+      onExpandedChanged: (expanded) =>
+          onSectionExpandedChanged(_SettingsSection.homeShelves, expanded),
       children: [
         for (var index = 0; index < homeShelfOrder.length; index++) ...[
           _HomeShelfRow(
@@ -3387,20 +4843,35 @@ class _AppearanceSettingsLayout extends StatelessWidget {
 
 class _AppearanceCard extends StatelessWidget {
   const _AppearanceCard({
+    required this.section,
     required this.title,
     required this.children,
     this.subtitle,
+    this.collapsible = false,
+    this.expanded = true,
+    this.focusNode,
+    this.onExpandedChanged,
     super.key,
   });
 
+  final _SettingsSection section;
   final String title;
   final String? subtitle;
   final List<Widget> children;
+  final bool collapsible;
+  final bool expanded;
+  final FocusNode? focusNode;
+  final ValueChanged<bool>? onExpandedChanged;
 
   @override
   Widget build(BuildContext context) => _SettingsCardFrame(
+    section: section,
     title: title,
     subtitle: subtitle,
+    collapsible: collapsible,
+    expanded: expanded,
+    focusNode: focusNode,
+    onExpandedChanged: onExpandedChanged,
     child: Column(children: children),
   );
 }
@@ -4028,6 +5499,7 @@ class _CustomizationPanel extends StatelessWidget {
     required this.captionTextColorFocusNode,
     required this.captionTextSizeFocusNode,
     required this.playerControlsSectionFocusNode,
+    required this.fillerIndicatorsFocusNode,
     required this.resetFocusNode,
     required this.expandedSections,
     required this.onSectionExpandedChanged,
@@ -4059,6 +5531,7 @@ class _CustomizationPanel extends StatelessWidget {
   final FocusNode captionTextColorFocusNode;
   final FocusNode captionTextSizeFocusNode;
   final FocusNode playerControlsSectionFocusNode;
+  final FocusNode fillerIndicatorsFocusNode;
   final FocusNode resetFocusNode;
   final Set<_CustomizationSection> expandedSections;
   final void Function(_CustomizationSection section, bool expanded)
@@ -4533,6 +6006,7 @@ class _CustomizationPanel extends StatelessWidget {
                       'Mark episodes identified as anime-original filler.',
                   icon: Icons.info_outline_rounded,
                   value: preferences.showFillerIndicators,
+                  focusNode: fillerIndicatorsFocusNode,
                   onChanged: controller.setShowFillerIndicators,
                 ),
               ],

@@ -220,39 +220,39 @@ APK containing both supported application ABIs.
 Public and Beta updates use anonymous GitHub requests. No Beta key, GitHub
 token, update-proxy URL, or update-specific Dart define is required. Every
 published APK uses the production signing identity. No Public APK is currently
-published. Beta 2.0.51 uses Android build code `410028`. Flutter reuses
+published. Beta 2.0.52 uses Android build code `410029`. Flutter reuses
 `app-release.apk`, so copy and rename the Beta artifact immediately after the
 build:
 
 ```powershell
-New-Item -ItemType Directory -Force .\build\fire-tv\v2.0.51 | Out-Null
+New-Item -ItemType Directory -Force .\build\fire-tv\v2.0.52 | Out-Null
 
-# Beta 2.0.51
+# Beta 2.0.52
 flutter build apk --release --target-platform android-arm,android-arm64 `
-  --build-name 2.0.51 --build-number 410028 --no-tree-shake-icons
+  --build-name 2.0.52 --build-number 410029 --no-tree-shake-icons
 Copy-Item .\build\app\outputs\flutter-apk\app-release.apk `
-  .\build\fire-tv\v2.0.51\TetoTV-v2.0.51-universal.apk
+  .\build\fire-tv\v2.0.52\TetoTV-v2.0.52-universal.apk
 
 .\tool\release\verify_release_apk.ps1 `
   -Channel Beta `
-  -ApkPath .\build\fire-tv\v2.0.51\TetoTV-v2.0.51-universal.apk
+  -ApkPath .\build\fire-tv\v2.0.52\TetoTV-v2.0.52-universal.apk
 
 .\tool\release\verify_native_redistribution.ps1 `
   -RequireResolvedBinaries `
   -ResolvedBinaryDirectory .\build\native-playback\outputs `
-  -StageBundle -ReleaseTag v2.0.51
+  -StageBundle -ReleaseTag v2.0.52
 
 .\tool\release\new_release_checksums.ps1 `
-  -ApkPath .\build\fire-tv\v2.0.51\TetoTV-v2.0.51-universal.apk `
-  -NativeSourcePath .\build\release-compliance\v2.0.51\TetoTV-v2.0.51-native-playback-sources.zip `
-  -OutputPath .\build\fire-tv\v2.0.51\SHA256SUMS
+  -ApkPath .\build\fire-tv\v2.0.52\TetoTV-v2.0.52-universal.apk `
+  -NativeSourcePath .\build\release-compliance\v2.0.52\TetoTV-v2.0.52-native-playback-sources.zip `
+  -OutputPath .\build\fire-tv\v2.0.52\SHA256SUMS
 
 .\tool\release\verify_release_payloads.ps1 `
   -Channel Beta `
-  -ApkPath .\build\fire-tv\v2.0.51\TetoTV-v2.0.51-universal.apk `
-  -NativeSourcePath .\build\release-compliance\v2.0.51\TetoTV-v2.0.51-native-playback-sources.zip `
-  -ChecksumsPath .\build\fire-tv\v2.0.51\SHA256SUMS `
-  -ReleaseNotesPath .\docs\RELEASE_NOTES_2.0.51.md
+  -ApkPath .\build\fire-tv\v2.0.52\TetoTV-v2.0.52-universal.apk `
+  -NativeSourcePath .\build\release-compliance\v2.0.52\TetoTV-v2.0.52-native-playback-sources.zip `
+  -ChecksumsPath .\build\fire-tv\v2.0.52\SHA256SUMS `
+  -ReleaseNotesPath .\docs\RELEASE_NOTES_2.0.52.md
 ```
 
 The final payload check requires all five exact, source-built native JARs

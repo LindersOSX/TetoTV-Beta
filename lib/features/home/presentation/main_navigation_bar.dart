@@ -233,7 +233,13 @@ class _HomeSideNavigationState extends ConsumerState<HomeSideNavigation> {
   ) {
     if (event.logicalKey == LogicalKeyboardKey.arrowRight) {
       if (event is KeyDownEvent || event is KeyRepeatEvent) {
-        if (_repeatGate.accept(event)) widget.onExitRight();
+        if (_repeatGate.accept(event)) {
+          // Focus leaves the rail on this packet, so its KeyUp is delivered to
+          // the content target instead. Reset now rather than carrying a stale
+          // held-key state into the next time the viewer returns to the rail.
+          _repeatGate.reset();
+          widget.onExitRight();
+        }
       } else if (event is KeyUpEvent) {
         _repeatGate.accept(event);
       }

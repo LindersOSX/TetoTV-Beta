@@ -1275,6 +1275,7 @@ class _InformationActions extends StatelessWidget {
             VoidCallback onPressed,
             bool primary,
             double preferredWidth,
+            double compactWidth,
           })
         >[
           if (onTrailer != null)
@@ -1285,7 +1286,8 @@ class _InformationActions extends StatelessWidget {
               icon: Icons.play_arrow_rounded,
               onPressed: onTrailer!,
               primary: true,
-              preferredWidth: large ? 154 : 112,
+              preferredWidth: large ? 132 : 110,
+              compactWidth: large || television ? 90 : 74,
             ),
           if (onCredits != null)
             (
@@ -1295,7 +1297,8 @@ class _InformationActions extends StatelessWidget {
               icon: Icons.groups_rounded,
               onPressed: onCredits!,
               primary: false,
-              preferredWidth: large ? 150 : 105,
+              preferredWidth: large ? 120 : 98,
+              compactWidth: large || television ? 78 : 62,
             ),
           if (onFranchise != null)
             (
@@ -1307,7 +1310,8 @@ class _InformationActions extends StatelessWidget {
               icon: Icons.account_tree_rounded,
               onPressed: onFranchise!,
               primary: false,
-              preferredWidth: large ? 165 : 119,
+              preferredWidth: large ? 130 : 112,
+              compactWidth: large || television ? 90 : 72,
             ),
           if (onDownloadSeason != null)
             (
@@ -1315,17 +1319,20 @@ class _InformationActions extends StatelessWidget {
               surfaceKey: const ValueKey(
                 'anime-details-download-season-surface',
               ),
-              label: downloadSeasonLabel,
+              label: downloadSeasonLabel == 'Cancel season download'
+                  ? 'Cancel download'
+                  : downloadSeasonLabel,
               icon: Icons.download_for_offline_rounded,
               onPressed: onDownloadSeason!,
               primary: false,
-              preferredWidth: large ? 182 : 145,
+              preferredWidth: large ? 148 : 132,
+              compactWidth: large || television ? 100 : 90,
             ),
         ];
-    final spacing = large ? 12.0 : 8.0;
+    final spacing = large ? 8.0 : 6.0;
     final panelPadding = large
-        ? const EdgeInsets.symmetric(horizontal: 8, vertical: 10)
-        : const EdgeInsets.all(6);
+        ? const EdgeInsets.all(5)
+        : const EdgeInsets.all(4);
     final preferredButtonsWidth = actions.fold<double>(
       0,
       (total, action) => total + action.preferredWidth,
@@ -1345,10 +1352,10 @@ class _InformationActions extends StatelessWidget {
         ),
         child: LayoutBuilder(
           builder: (context, constraints) {
-            // One row replaces the old two-row footprint. Never halve the
-            // control widths and then ask FittedBox to make 10-foot text fit:
-            // a constrained canvas keeps all actions visible by stacking each
-            // full-size icon above its (up to two-line) label instead.
+            // Keep the four controls near half of the former tray footprint
+            // without scaling their contents. A constrained canvas stacks each
+            // icon above its full, two-line label and gives every action the
+            // same readable width instead of clipping or scrolling the row.
             final constraintWidth = constraints.hasBoundedWidth
                 ? constraints.maxWidth
                 : preferredStripWidth;
@@ -1357,8 +1364,16 @@ class _InformationActions extends StatelessWidget {
                 .clamp(0.0, preferredStripWidth)
                 .toDouble();
             final compact = boundedWidth < preferredStripWidth;
-            final compactSpacing = large || television ? 6.0 : 5.0;
-            final stripWidth = compact ? boundedWidth : preferredStripWidth;
+            final compactSpacing = 4.0;
+            final compactButtonsWidth = actions.fold<double>(
+              0,
+              (total, action) => total + action.compactWidth,
+            );
+            final compactPreferredWidth =
+                compactButtonsWidth + compactSpacing * (actions.length - 1);
+            final stripWidth = compact
+                ? compactPreferredWidth.clamp(0.0, boundedWidth).toDouble()
+                : preferredStripWidth;
             return SizedBox(
               width: stripWidth,
               child: Row(
@@ -1369,6 +1384,7 @@ class _InformationActions extends StatelessWidget {
                       SizedBox(width: compact ? compactSpacing : spacing),
                     if (compact)
                       Expanded(
+                        flex: (actions[index].compactWidth * 10).round(),
                         child: _InformationButton(
                           key: actions[index].key,
                           surfaceKey: actions[index].surfaceKey,
@@ -1377,7 +1393,7 @@ class _InformationActions extends StatelessWidget {
                           onPressed: actions[index].onPressed,
                           primary: actions[index].primary,
                           large: large,
-                          stacked: true,
+                          compact: true,
                         ),
                       )
                     else
@@ -1413,7 +1429,7 @@ class _InformationButton extends StatelessWidget {
     required this.large,
     required this.surfaceKey,
     this.primary = false,
-    this.stacked = false,
+    this.compact = false,
   });
 
   final String label;
@@ -1421,7 +1437,7 @@ class _InformationButton extends StatelessWidget {
   final VoidCallback onPressed;
   final bool large;
   final bool primary;
-  final bool stacked;
+  final bool compact;
   final Key? surfaceKey;
 
   @override
@@ -1444,22 +1460,20 @@ class _InformationButton extends StatelessWidget {
       },
       child: Container(
         key: surfaceKey,
-        height: stacked ? (large ? 64 : 54) : (large ? 58 : 42),
+        height: compact ? (large ? 42 : 40) : (large ? 38 : 36),
         alignment: Alignment.center,
         padding: EdgeInsets.symmetric(
-          horizontal: stacked ? (large ? 4 : 3) : (large ? 14 : 11),
-          vertical: stacked ? 2 : 0,
+          horizontal: compact ? (large ? 4 : 3) : (large ? 10 : 8),
         ),
         decoration: BoxDecoration(
           color: primary ? context.appPalette.accent : const Color(0xEE171717),
           borderRadius: BorderRadius.circular(10),
           border: Border.all(color: Colors.white.withValues(alpha: .15)),
         ),
-        child: stacked
+        child: compact
             ? Column(
-                mainAxisSize: MainAxisSize.max,
                 children: [
-                  Icon(icon, size: large ? 23 : 18),
+                  Icon(icon, size: 15),
                   const SizedBox(height: 1),
                   Expanded(
                     child: Center(
@@ -1468,8 +1482,8 @@ class _InformationButton extends StatelessWidget {
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         textAlign: TextAlign.center,
-                        style: TextStyle(
-                          fontSize: large ? 16 : 12,
+                        style: const TextStyle(
+                          fontSize: 11,
                           height: 1,
                           fontWeight: FontWeight.w700,
                         ),
@@ -1480,15 +1494,16 @@ class _InformationButton extends StatelessWidget {
               )
             : Row(
                 children: [
-                  Icon(icon, size: large ? 23 : 18),
-                  SizedBox(width: large ? 9 : 7),
+                  Icon(icon, size: large ? 17 : 16),
+                  const SizedBox(width: 5),
                   Expanded(
                     child: Text(
                       label,
-                      maxLines: 1,
+                      maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                        fontSize: large ? 16 : 12,
+                        fontSize: 12,
+                        height: 1,
                         fontWeight: FontWeight.w700,
                       ),
                     ),

@@ -11,11 +11,11 @@ const double _playerControlFocusGutter = 20;
 const double _playerProgressFocusBorderWidth = 1.4;
 const double _compactPlayerSeekBubbleFontSize = 14;
 const double _regularPlayerSeekBubbleFontSize = 18;
-// These reserves include the always-present seek-bubble lane. Keeping the lane
-// in the resting HUD prevents either the chrome or the Skip action from moving
-// when scrubbing starts.
-const double _compactPlayerChromeReservedHeight = 169;
-const double _regularPlayerChromeReservedHeight = 173;
+// Match the tighter pre-2.0.45 resting HUD. The seek bubble paints over the
+// lower control area instead of consuming layout height, so scrubbing does not
+// require a larger reserve or move the separate Skip action.
+const double _compactPlayerChromeReservedHeight = 136;
+const double _regularPlayerChromeReservedHeight = 130;
 const Color _defaultPlayerChromePanel = Color(0xD6080808);
 const Color _defaultPlayerChromeShadow = Color(0xA8000000);
 const Color _defaultPlayerControlSurface = Color(0x8F242429);
@@ -93,9 +93,9 @@ double playerSkipOverlayBottomInset({
   // viewports. Reserve that line so Skip Intro/Outro stays visibly detached
   // from the panel instead of landing on top of its badges or border.
   final expandedHeaderGrowth = expandedHeader ? 44.0 : 0.0;
-  // The bubble lane is part of the resting HUD, so beginning a scrub must not
-  // move either the chrome or the separate Skip action. [scrubbing] remains an
-  // explicit compatibility input but no longer changes geometry.
+  // The bubble overlays the fixed HUD, so beginning a scrub must not move the
+  // chrome or the separate Skip action. [scrubbing] remains an explicit
+  // compatibility input but no longer changes geometry.
   return base +
       accessibleGrowth +
       expandedHeaderGrowth +
@@ -1056,31 +1056,14 @@ class _TetoPlayerProgressScrubberState
       milliseconds: _displayMilliseconds.round(),
     );
     final seekLabel = formatPlayerChromeDuration(displayPosition);
-    return Column(
+    final seekBubbleHeight = _PlayerSeekTimeBubble.heightFor(
+      context,
+      label: seekLabel,
+      compact: widget.compact,
+    );
+    final progressContent = Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        // Reserve the seek-bubble lane even while it is hidden. This keeps the
-        // HUD's outer geometry stable during scrubbing and prevents the bubble
-        // from painting back over the control strip above it.
-        SizedBox(
-          height: _PlayerSeekTimeBubble.heightFor(
-            context,
-            label: seekLabel,
-            compact: widget.compact,
-          ),
-          child: _interacting
-              ? _PlayerSeekTimeBubble(
-                  engineKey: widget.engineKey,
-                  label: seekLabel,
-                  progress: durationAvailable
-                      ? _displayMilliseconds / _scrubMaximumMilliseconds
-                      : 0,
-                  compact: widget.compact,
-                  palette: widget.palette,
-                )
-              : null,
-        ),
-        const SizedBox(height: 2),
         Semantics(
           hint: widget.showSupplementalRow ? null : widget.footerHint,
           child: Focus(
@@ -1202,6 +1185,28 @@ class _TetoPlayerProgressScrubberState
                 ),
               ],
             ],
+          ),
+      ],
+    );
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        progressContent,
+        if (_interacting)
+          Positioned(
+            left: 0,
+            right: 0,
+            top: -seekBubbleHeight - 2,
+            height: seekBubbleHeight,
+            child: _PlayerSeekTimeBubble(
+              engineKey: widget.engineKey,
+              label: seekLabel,
+              progress: durationAvailable
+                  ? _displayMilliseconds / _scrubMaximumMilliseconds
+                  : 0,
+              compact: widget.compact,
+              palette: widget.palette,
+            ),
           ),
       ],
     );

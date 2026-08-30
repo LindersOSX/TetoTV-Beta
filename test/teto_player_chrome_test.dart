@@ -553,7 +553,9 @@ void main() {
         expect(timeRect.left, greaterThan(nextRect.right));
         expect(timeRect.right, lessThan(speedRect.left));
         expect(progressRect.top, greaterThan(playRect.bottom));
-        expect(panelRect.height, inInclusiveRange(145, 153));
+        // Match the tighter pre-2.0.45 HUD rather than reserving an empty
+        // timestamp lane whenever the viewer is not scrubbing.
+        expect(panelRect.height, inInclusiveRange(96, 112));
         expect(tester.takeException(), isNull);
       },
     );
@@ -1045,6 +1047,10 @@ void main() {
 
     progressFocus.requestFocus();
     await tester.pump();
+    final chromeFinder = find.byKey(
+      const ValueKey('compact-target-time-bottom-player-chrome'),
+    );
+    final restingChromeRect = tester.getRect(chromeFinder);
     await tester.sendKeyDownEvent(LogicalKeyboardKey.arrowRight);
     await tester.pump();
 
@@ -1068,6 +1074,11 @@ void main() {
       closeTo(expectedThumbCenter, .01),
     );
     expect(tester.getRect(seekFinder).bottom, lessThan(progressRect.top));
+    expect(
+      tester.getRect(chromeFinder),
+      restingChromeRect,
+      reason: 'compact D-pad scrubbing must not expand or move the HUD',
+    );
 
     await tester.sendKeyUpEvent(LogicalKeyboardKey.arrowRight);
     await tester.pump();
@@ -1247,10 +1258,18 @@ void main() {
         find.byKey(const ValueKey('scrub-hold-player-controls-spaced')),
       );
       final progressRect = tester.getRect(slider);
+      expect(bubbleRect.top, greaterThanOrEqualTo(controlsRect.top));
       expect(
         bubbleRect.top,
-        greaterThanOrEqualTo(controlsRect.bottom),
-        reason: 'the fixed seek-bubble lane must stay below the controls',
+        lessThan(controlsRect.bottom),
+        reason:
+            'the timestamp may overlay the lower control area to preserve '
+            'the tighter HUD',
+      );
+      expect(
+        bubbleRect.width,
+        lessThan(controlsRect.width * .2),
+        reason: 'the overlay should cover only a small part of the button row',
       );
       expect(
         bubbleRect.bottom,
@@ -1524,7 +1543,7 @@ void main() {
         viewport: const Size(1920, 1080),
         controlsVisible: true,
       ),
-      173,
+      130,
     );
     expect(
       playerSkipOverlayBottomInset(
@@ -1532,7 +1551,7 @@ void main() {
         controlsVisible: true,
         safeAreaBottom: 24,
       ),
-      193,
+      160,
     );
     expect(
       playerSkipOverlayBottomInset(
@@ -1541,7 +1560,7 @@ void main() {
         safeAreaBottom: 24,
         textScaleFactor: 2.5,
       ),
-      295,
+      262,
     );
     expect(
       playerSkipOverlayBottomInset(
@@ -1557,7 +1576,7 @@ void main() {
         controlsVisible: true,
         expandedHeader: true,
       ),
-      217,
+      174,
     );
     expect(
       playerSkipOverlayBottomInset(
@@ -1565,7 +1584,7 @@ void main() {
         controlsVisible: true,
         scrubbing: true,
       ),
-      173,
+      130,
     );
     expect(
       playerSkipOverlayBottomInset(
@@ -1574,7 +1593,7 @@ void main() {
         safeAreaBottom: 24,
         scrubbing: true,
       ),
-      193,
+      160,
     );
     expect(
       playerSkipOverlayBottomInset(
@@ -1584,7 +1603,7 @@ void main() {
         textScaleFactor: 2.5,
         scrubbing: true,
       ),
-      295,
+      262,
     );
   });
 

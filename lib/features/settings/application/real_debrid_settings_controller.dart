@@ -87,6 +87,7 @@ class RealDebridSettingsController
 
   Future<void> load() async {
     var token = await _storage.read(key: realDebridTokenStorageKey);
+    if (!mounted) return;
     if (token == null || token.isEmpty) {
       state = const RealDebridSettingsState();
       return;
@@ -98,8 +99,10 @@ class RealDebridSettingsController
     );
     try {
       token = await _refreshIfNeeded(token);
+      if (!mounted) return;
       await _validate(token, persist: false);
     } catch (error) {
+      if (!mounted) return;
       state = RealDebridSettingsState(
         hasSavedToken: true,
         errorMessage: error.toString(),
@@ -190,9 +193,11 @@ class RealDebridSettingsController
   }
 
   Future<bool> _validate(String token, {required bool persist}) async {
+    if (!mounted) return false;
     final hadSavedToken = state.hasSavedToken;
     try {
       final account = await _clientFactory(token).account();
+      if (!mounted) return false;
       if (!account.isPremium) {
         throw const RealDebridException(
           'Real-Debrid streaming requires an active Premium plan.',
@@ -213,10 +218,12 @@ class RealDebridSettingsController
             await _storage.write(key: realDebridTokenStorageKey, value: token);
           },
         );
+        if (!mounted) return false;
       }
       state = RealDebridSettingsState(hasSavedToken: true, account: account);
       return true;
     } catch (error) {
+      if (!mounted) return false;
       state = RealDebridSettingsState(
         hasSavedToken: hadSavedToken,
         errorMessage: error.toString(),

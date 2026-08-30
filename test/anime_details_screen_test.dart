@@ -19,6 +19,7 @@ import 'package:anime_tv/features/tracking/application/my_list_controller.dart';
 import 'package:anime_tv/features/tracking/application/tracking_home_provider.dart';
 import 'package:anime_tv/features/tracking/domain/tracking_repository.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -801,18 +802,19 @@ void main() {
     expect(compactTvInfo.right, lessThan(compactTvActions.left));
     // A television keeps every available action in one compact visible row
     // even when Android exposes a 960px logical canvas.
-    expect(compactTvInformationTray.height, 86);
+    expect(compactTvInformationTray.size, const Size(382, 54));
+    const compactWidths = [90.0, 78.0, 90.0, 100.0];
     for (var index = 0; index < compactInformationActionRects.length; index++) {
       final rect = compactInformationActionRects[index];
-      expect(rect.width, closeTo(90, .01));
-      expect(rect.height, 64);
+      expect(rect.width, closeTo(compactWidths[index], .01));
+      expect(rect.height, 42);
       expect(rect.top, compactInformationActionRects.first.top);
       expect(rect.left, greaterThanOrEqualTo(compactTvInformationTray.left));
       expect(rect.right, lessThanOrEqualTo(compactTvInformationTray.right));
       if (index > 0) {
         expect(
           rect.left - compactInformationActionRects[index - 1].right,
-          closeTo(6, .01),
+          closeTo(4, .01),
         );
       }
     }
@@ -823,11 +825,31 @@ void main() {
       find.descendant(of: informationTray, matching: find.byType(FittedBox)),
       findsNothing,
     );
-    expect(tester.widget<Text>(find.text('Watch trailer')).style?.fontSize, 16);
+    expect(tester.widget<Text>(find.text('Watch trailer')).style?.fontSize, 11);
     for (final icon in tester.widgetList<Icon>(
       find.descendant(of: informationTray, matching: find.byType(Icon)),
     )) {
-      expect(icon.size, 23);
+      expect(icon.size, 15);
+    }
+    for (final label in const [
+      'Watch trailer',
+      'Cast & crew',
+      'Related series',
+      'Download season',
+    ]) {
+      final finder = find.text(label);
+      final text = tester.widget<Text>(finder);
+      final paragraph = tester.renderObject<RenderParagraph>(finder);
+      expect(text.maxLines, 2);
+      expect(text.style?.height, 1);
+      expect(
+        paragraph.didExceedMaxLines,
+        isFalse,
+        reason:
+            '$label must remain fully visible in the compact TV row '
+            '(size=${paragraph.size}, constraints=${paragraph.constraints}, '
+            'boxes=${paragraph.getBoxesForSelection(TextSelection(baseOffset: 0, extentOffset: label.length))})',
+      );
     }
     final compactTrailerControl = tester.widget<FocusableActionDetector>(
       find
@@ -1006,23 +1028,59 @@ void main() {
       expect(
         informationActionRects[index].left -
             informationActionRects[index - 1].right,
-        12,
+        8,
       );
     }
     for (final rect in informationActionRects) {
-      expect(rect.height, 58);
+      expect(rect.height, 38);
     }
     expect(
       informationActionRects.map((rect) => rect.width),
-      orderedEquals(const [154, 150, 165, 182]),
+      orderedEquals(const [132, 120, 130, 148]),
+    );
+    for (final label in const [
+      'Watch trailer',
+      'Cast & crew',
+      'Related series',
+      'Download season',
+    ]) {
+      final finder = find.text(label);
+      final text = tester.widget<Text>(finder);
+      final paragraph = tester.renderObject<RenderParagraph>(finder);
+      expect(text.maxLines, 2);
+      expect(text.style?.height, 1);
+      expect(
+        paragraph.didExceedMaxLines,
+        isFalse,
+        reason:
+            '$label must remain fully visible in the full-HD TV row '
+            '(size=${paragraph.size}, constraints=${paragraph.constraints}, '
+            'boxes=${paragraph.getBoxesForSelection(TextSelection(baseOffset: 0, extentOffset: label.length))})',
+      );
+    }
+    expect(tester.widget<Text>(find.text('Watch trailer')).style?.fontSize, 12);
+    for (final icon in tester.widgetList<Icon>(
+      find.descendant(
+        of: find.byKey(const ValueKey('anime-details-information-actions')),
+        matching: find.byType(Icon),
+      ),
+    )) {
+      expect(icon.size, 17);
+    }
+    final informationTrayRect = tester.getRect(
+      find.byKey(const ValueKey('anime-details-information-actions')),
+    );
+    expect(informationTrayRect.size, const Size(566, 50));
+    // The previous reference tray occupied 703 x 78 logical pixels. Preserve
+    // legible, unscaled content while reducing its total area to about half.
+    expect(
+      informationTrayRect.width * informationTrayRect.height,
+      lessThan(703 * 78 * .52),
     );
     final informationTray = tester.widget<Container>(
       find.byKey(const ValueKey('anime-details-information-actions')),
     );
-    expect(
-      informationTray.padding,
-      const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
-    );
+    expect(informationTray.padding, const EdgeInsets.all(5));
     expect(
       (informationTray.decoration! as BoxDecoration).borderRadius,
       BorderRadius.circular(14),
@@ -1344,7 +1402,7 @@ void main() {
         );
         expect(
           tester.widget<Text>(find.text('Watch trailer')).style?.fontSize,
-          12,
+          size.width <= 412 ? 11 : 12,
         );
         final posterSize = tester.getSize(
           find.byKey(const ValueKey('anime-details-poster')),

@@ -336,12 +336,21 @@ build_libtorrent4j_abi() {
   export AR="${toolchain}/bin/llvm-ar"
   export LD="${toolchain}/bin/ld"
   export RANLIB="${toolchain}/bin/llvm-ranlib"
+  local -a page_size_linkflags=()
+  if [[ "${abi}" == "armeabi-v7a" ]]; then
+    # NDK r28's ARMv7 linker default is still 4 KiB. Keep the already-compliant
+    # ARM64 output unchanged while making this ELF loadable on 16 KiB devices.
+    page_size_linkflags=(
+      "linkflags=-Wl,-z,common-page-size=16384 -Wl,-z,max-page-size=16384"
+    )
+  fi
   (
     cd "${source_copy}/swig"
     "${boost_root}/b2" -j"${JOBS}" \
       --user-config="config/${boost_config}" variant=release \
       toolset="${boost_toolset}" target-os=android \
-      location="bin/release/android/${abi}"
+      location="bin/release/android/${abi}" \
+      "${page_size_linkflags[@]}"
   )
   "${toolchain}/bin/llvm-strip" --strip-unneeded -x \
     "${source_copy}/swig/bin/release/android/${abi}/libtorrent4j.so"

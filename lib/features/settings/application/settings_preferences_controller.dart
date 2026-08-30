@@ -1844,6 +1844,70 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
     });
   }
 
+  /// Restores visual and navigation preferences without changing playback.
+  ///
+  /// Unlike [resetAppearance], this deliberately leaves captions, seeking,
+  /// audio, player selection, filler labels, and external-player data alone.
+  Future<void> resetAppearanceAndNavigation() {
+    const defaults = SettingsPreferences();
+    const keys = [
+      _homeLayoutKey,
+      _showSearchKey,
+      _showHomeKey,
+      _showMyListKey,
+      _showDiscoverKey,
+      _showCalendarKey,
+      _showWatchTogetherKey,
+      _showDownloadsKey,
+      _showSettingsKey,
+      _topNavigationOrderKey,
+      _settingsEntryPlacementKey,
+      _navigationChromeSizeKey,
+      _showHeroKey,
+      _showPosterMetadataKey,
+      _showCardSubtitlesKey,
+      _navigationSoundsKey,
+      _clickSoundsKey,
+      _defaultLandingPageKey,
+      _thumbnailScaleKey,
+      _interfaceScaleKey,
+      _contentDensityKey,
+      _interfaceModeKey,
+      _showTitleStyleKey,
+    ];
+    _markMutated(keys);
+    state = state.copyWith(
+      homeLayout: defaults.homeLayout,
+      showSearch: defaults.showSearch,
+      showHome: defaults.showHome,
+      showMyList: defaults.showMyList,
+      showDiscover: defaults.showDiscover,
+      showCalendar: defaults.showCalendar,
+      showWatchTogether: defaults.showWatchTogether,
+      showDownloads: defaults.showDownloads,
+      showSettings: defaults.showSettings,
+      topNavigationOrder: defaults.topNavigationOrder,
+      settingsEntryPlacement: defaults.settingsEntryPlacement,
+      navigationChromeSize: defaults.navigationChromeSize,
+      showHero: defaults.showHero,
+      showPosterMetadata: defaults.showPosterMetadata,
+      showCardSubtitles: defaults.showCardSubtitles,
+      navigationSounds: defaults.navigationSounds,
+      clickSounds: defaults.clickSounds,
+      defaultLandingPage: defaults.defaultLandingPage,
+      thumbnailScale: defaults.thumbnailScale,
+      interfaceScale: defaults.interfaceScale,
+      contentDensity: defaults.contentDensity,
+      interfaceMode: defaults.interfaceMode,
+      showTitleStyle: defaults.showTitleStyle,
+    );
+    return _enqueueStorage(() async {
+      for (final key in keys) {
+        await _delete(key);
+      }
+    });
+  }
+
   Future<void> resetAppearance() {
     const defaults = SettingsPreferences();
     const keys = [

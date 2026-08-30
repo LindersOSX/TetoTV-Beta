@@ -5,12 +5,13 @@ import java.util.Locale
 internal const val DIRECT_TORRENT_MAX_FILE_BYTES = 6L * 1024L * 1024L * 1024L
 internal const val DIRECT_TORRENT_MIN_FREE_RESERVE_BYTES = 256L * 1024L * 1024L
 internal const val DIRECT_TORRENT_MAX_FILE_COUNT = 5_000
-internal const val DIRECT_TORRENT_ARM32_MAX_PAGE_SIZE_BYTES = 4_096L
+internal const val DIRECT_TORRENT_ARM32_MAX_PAGE_SIZE_BYTES = 16_384L
 internal const val DIRECT_TORRENT_MAX_SELECTED_BASENAME_CHARS = 512
 
 /**
- * The pinned ARM64 artifact is 16 KiB ELF-aligned. Its ARM32 companion is
- * only 4 KiB-aligned, so ARM32 must fail closed on a larger-page runtime.
+ * Both pinned ARM artifacts are 16 KiB ELF-aligned. Keep the explicit ARM32
+ * page-size guard so an unexpected future runtime cannot load an incompatible
+ * native torrent engine.
  */
 internal fun supportsDirectTorrentRuntime(
     processIs64Bit: Boolean,

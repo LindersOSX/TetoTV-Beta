@@ -40,9 +40,6 @@ android {
         minSdkVersion 16
     }
 
-    dependencies {
-        implementation fileTree(dir: "$buildDir/output", include: "*.jar")
-    }
 }
 
 def nativeArtifactDirectory = {
@@ -93,16 +90,15 @@ def stageSelfBuiltNativeLibraries = tasks.register("stageSelfBuiltNativeLibrarie
     }
 }
 
-tasks.named("preBuild").configure {
-    dependsOn(stageSelfBuiltNativeLibraries)
+def stagedNativeLibraries = files(
+    fileTree(dir: "$buildDir/output", include: "*.jar")
+)
+stagedNativeLibraries.builtBy(stageSelfBuiltNativeLibraries)
+
+dependencies {
+    implementation stagedNativeLibraries
 }
 
-// AGP's application-level dependency-report tasks inspect this library's
-// local JAR file dependency directly. Gradle 9 no longer infers that the
-// report must wait for the library preBuild task, so declare the cross-project
-// ordering instead of allowing a report to observe a partially staged JAR.
-rootProject.project(":app").tasks.configureEach { task ->
-    if (task.name == "collectReleaseDependencies") {
-        task.dependsOn(stageSelfBuiltNativeLibraries)
-    }
+tasks.named("preBuild").configure {
+    dependsOn(stageSelfBuiltNativeLibraries)
 }

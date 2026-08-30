@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:math';
 
 import 'package:anime_tv/core/config/app_config.dart';
+import 'package:anime_tv/core/diagnostics/playback_session_diagnostics.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:dio/dio.dart';
@@ -64,8 +65,29 @@ Map<String, Object?> attachRecentCrashSummaries(
   final bounded = retained.length > maximumRecentCrashSummaries
       ? retained.sublist(retained.length - maximumRecentCrashSummaries)
       : retained;
+  final playbackDiagnostics = derivePlaybackSessionDiagnostics(
+    diagnostics['diagnosticEvents'],
+    interruptions: [
+      for (final crash in bounded)
+        if (_crashTimestamp(crash) case final DateTime timestamp)
+          PlaybackDiagnosticInterruption(
+            timestamp: timestamp,
+            reasonCode: switch (crash['kind']?.toString()) {
+              'native' => 'native_crash',
+              'java' => 'java_crash',
+              'anr' => 'anr',
+              'flutter' => 'flutter_crash',
+              _ => 'platform_crash',
+            },
+          ),
+    ],
+  );
   return {
     ...diagnostics,
+    // Re-derive persisted sessions with the platform crash timeline attached.
+    // A process death cannot write its own final playback event, so without
+    // this correlation the last failed session remains misleadingly active.
+    ...playbackDiagnostics,
     'recentCrashSummaryWindow': {
       'schema': 'tetotv-local-crash-summaries-v1',
       'hours': diagnosticHistoryWindow.inHours,
@@ -356,7 +378,7 @@ String buildRedactedDiagnosticsText({
     payload,
     depth: 0,
     stringMaximum: 4000,
-    listMaximum: 300,
+    listMaximum: maximumPersistedDiagnosticEvents,
     truncation: fullTruncation,
   );
   final fullPayload = _snapshotWithCompleteness(
@@ -368,7 +390,8 @@ String buildRedactedDiagnosticsText({
   if (text.length <= maximumExplicitDiagnosticsCharacters) return text;
 
   // Preserve valid, parseable JSON if an unusual device produces an enormous
-  // capability list. The normal path above retains all 300 database events.
+  // capability list. The normal path above retains the complete database
+  // event ring.
   // This fallback keeps representative data from every section and declares
   // the reduction instead of cutting through a JSON value.
   final compactTruncation = _SnapshotTruncation();

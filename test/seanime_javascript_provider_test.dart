@@ -313,6 +313,37 @@ video-720.m3u8
     );
   });
 
+  test('HLS metadata inspection deduplicates and bounds optional probes', () {
+    final selected = selectHlsInspectionCandidates([
+      {'url': 'https://cdn.example/one.m3u8', 'quality': 'Auto'},
+      {
+        'url': 'https://cdn.example/one.m3u8',
+        'quality': '1080p',
+        'streamType': 'hls',
+      },
+      {'url': 'https://cdn.example/two', 'streamType': 'hls'},
+      {'url': 'https://cdn.example/three.m3u8'},
+      {'url': 'https://cdn.example/four.m3u8'},
+      {'url': 'https://cdn.example/five.m3u8'},
+      {'url': 'http://127.0.0.1/private.m3u8'},
+      {'url': 'https://cdn.example/not-hls.mp4'},
+    ]);
+
+    expect(selected, hasLength(4));
+    expect(selected.map((item) => item['url']), [
+      'https://cdn.example/one.m3u8',
+      'https://cdn.example/two',
+      'https://cdn.example/three.m3u8',
+      'https://cdn.example/four.m3u8',
+    ]);
+    expect(
+      selectHlsInspectionCandidates([
+        {'url': 'https://cdn.example/one.m3u8'},
+      ], maximum: 0),
+      isEmpty,
+    );
+  });
+
   test('HLS inspection retries one transient response and timeout', () async {
     var responseAttempts = 0;
     final status = await runHlsInspectionWithTransientRetry<int>(

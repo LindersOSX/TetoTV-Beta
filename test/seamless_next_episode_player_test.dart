@@ -94,6 +94,30 @@ void main() {
     expect(polls, 3);
   });
 
+  test('proxied HLS readiness uses the proxy network ceiling', () {
+    expect(
+      playerMediaReadinessMaxPolls(
+        isWebStream: true,
+        mediaContentType: 'application/vnd.apple.mpegurl; charset=utf-8',
+      ),
+      100,
+    );
+    expect(
+      playerMediaReadinessMaxPolls(
+        isWebStream: true,
+        mediaContentType: 'video/mp4',
+      ),
+      60,
+    );
+    expect(
+      playerMediaReadinessMaxPolls(
+        isWebStream: false,
+        mediaContentType: 'application/vnd.apple.mpegurl',
+      ),
+      60,
+    );
+  });
+
   test(
     'fallback readiness times out and leaves the next candidate usable',
     () async {
@@ -601,7 +625,8 @@ void main() {
       'await _openMedia(',
       'resume: resumePosition',
       'requireDecodedVideo: true',
-      'catch (_)',
+      'catch (error)',
+      'await _recordStreamFailureBestEffort(',
       'rethrow',
     ]);
     expect(source, contains('if (propagateFailure) rethrow'));
@@ -614,7 +639,7 @@ void main() {
       'final tokenService = ref.read(debridTokenServiceProvider)',
       'await AndroidTvBridge.instance.getDeviceProfile()',
       'if (!mounted || _engineHandoffInProgress) return',
-      'await _database.recordStreamFailure(',
+      'await _recordStreamFailureBestEffort(',
       'if (!mounted || _engineHandoffInProgress) return',
       'await _switchToNextDirectStream(',
     ]);
@@ -889,7 +914,7 @@ void main() {
       'requireDecodedVideo: true',
       'await widget.onStreamAdopted(option.stream, option.release)',
       'preparedOption = null',
-      '} catch (_)',
+      '} catch (error)',
       'await preparedOption?.stream.playbackLease?.close()',
     ]);
   });

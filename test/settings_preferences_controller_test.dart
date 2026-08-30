@@ -652,6 +652,41 @@ void main() {
     expect(restored.state.showTitleStyle, ShowTitleStyle.englishLogo);
   });
 
+  test(
+    'appearance and navigation reset preserves playback preferences',
+    () async {
+      FlutterSecureStorage.setMockInitialValues({});
+      const storage = FlutterSecureStorage();
+      final controller = SettingsPreferencesController(storage);
+
+      await controller.setInterfaceScale(.8);
+      await controller.setContentDensity(ContentDensity.compact);
+      await controller.setShowTitleStyle(ShowTitleStyle.text);
+      await controller.setShowHero(false);
+      await controller.setCaptionTextColor(0xFF00FF00);
+      await controller.setSeekBackSeconds(30);
+      await controller.setPreferredAudio(PlaybackAudioPreference.sub);
+
+      await controller.resetAppearanceAndNavigation();
+
+      expect(controller.state.interfaceScale, 1);
+      expect(controller.state.contentDensity, ContentDensity.standard);
+      expect(controller.state.showTitleStyle, ShowTitleStyle.englishLogo);
+      expect(controller.state.showHero, isTrue);
+      expect(controller.state.captionTextColor, 0xFF00FF00);
+      expect(controller.state.seekBackSeconds, 30);
+      expect(controller.state.preferredAudio, PlaybackAudioPreference.sub);
+
+      final restored = SettingsPreferencesController(storage);
+      await restored.load();
+      expect(restored.state.interfaceScale, 1);
+      expect(restored.state.showTitleStyle, ShowTitleStyle.englishLogo);
+      expect(restored.state.captionTextColor, 0xFF00FF00);
+      expect(restored.state.seekBackSeconds, 30);
+      expect(restored.state.preferredAudio, PlaybackAudioPreference.sub);
+    },
+  );
+
   test('explicit built-in keyboard choice is preserved', () async {
     FlutterSecureStorage.setMockInitialValues({
       'input_use_built_in_keyboard': 'true',

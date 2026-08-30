@@ -36,13 +36,20 @@ void main() {
       artifacts.singleWhere(
         (item) => item['id'] == 'libtorrent4j-android-arm',
       )['sha256'],
-      '5a98e854b8f7e338a3746600be5cf22a13055853f88f7894592d62e1681865f6',
+      'fe32deb93d8bada70c7be15918cb9a31e70261cac87ff66bc81e803eaaf2f75d',
     );
     expect(
       artifacts.singleWhere(
         (item) => item['id'] == 'libtorrent4j-android-arm64',
       )['sha256'],
       '223e27338fb0a9dad9b6a6db6add7ec791c8633698a69e958757571c63e7de23',
+    );
+    expect(
+      artifacts
+          .where((item) => (item['id'] as String).startsWith('libtorrent4j-'))
+          .map((item) => item['version'])
+          .toSet(),
+      {'2.1.0-38-tetotv.2'},
     );
     expect(artifacts, hasLength(5));
     final sourceRoots = (manifest['sourceRoots'] as List<dynamic>)
@@ -157,5 +164,85 @@ void main() {
     expect(documentation, contains('independent native-license review'));
     expect(documentation, contains('zipalign'));
     expect(documentation, contains('apksigner'));
+  });
+
+  test('ARMv7 native targets retain 16 KiB ELF linker alignment', () {
+    final discordCmake = File(
+      'android/app/src/main/cpp/CMakeLists.txt',
+    ).readAsStringSync();
+    final discordArm32Options = discordCmake
+        .split('if(ANDROID_ABI STREQUAL "armeabi-v7a")')
+        .last
+        .split('endif()')
+        .first;
+    expect(discordArm32Options, contains('common-page-size=16384'));
+    expect(discordArm32Options, contains('max-page-size=16384'));
+
+    final nativeBuild = File(
+      'tool/native/build_native_playback.sh',
+    ).readAsStringSync();
+    const pageSizeAnchor = 'local -a page_size_linkflags=()';
+    final pageSizeStart = nativeBuild.indexOf(pageSizeAnchor);
+    final buildInvocation = nativeBuild.indexOf(
+      '\n  (\n    cd "\${source_copy}/swig"',
+      pageSizeStart,
+    );
+    expect(pageSizeStart, isNonNegative);
+    expect(buildInvocation, greaterThan(pageSizeStart));
+    final libtorrentArm32Options = nativeBuild.substring(
+      pageSizeStart,
+      buildInvocation,
+    );
+    expect(
+      libtorrentArm32Options,
+      contains('if [[ "\${abi}" == "armeabi-v7a" ]]'),
+    );
+    expect(libtorrentArm32Options, contains('common-page-size=16384'));
+    expect(libtorrentArm32Options, contains('max-page-size=16384'));
+  });
+
+  test('media kit native JARs retain their staging task producer', () {
+    final buildScript = File(
+      'third_party/media_kit_libs_android_video/android/build.gradle',
+    ).readAsStringSync();
+
+    expect(
+      RegExp(
+        r'\bstagedNativeLibraries\s*=\s*files\s*\(\s*fileTree\s*\(',
+      ).hasMatch(buildScript),
+      isTrue,
+    );
+    expect(
+      RegExp(
+        r'\bstagedNativeLibraries\s*\.\s*builtBy\s*'
+        r'\(\s*stageSelfBuiltNativeLibraries\s*\)',
+      ).hasMatch(buildScript),
+      isTrue,
+      reason:
+          'Gradle must know that stageSelfBuiltNativeLibraries produces the '
+          'local JAR dependency before any app task consumes it.',
+    );
+    expect(
+      RegExp(
+        r'\bimplementation\s*(?:\(\s*)?stagedNativeLibraries(?:\s*\))?',
+      ).hasMatch(buildScript),
+      isTrue,
+    );
+    expect(
+      RegExp(
+        r'\bimplementation\s*(?:\(\s*)?fileTree\s*\(',
+      ).hasMatch(buildScript),
+      isFalse,
+      reason:
+          'A bare fileTree loses the staging task dependency and fails Gradle '
+          'implicit-dependency validation when both tasks are in the graph.',
+    );
+    expect(
+      buildScript,
+      isNot(contains('collectReleaseDependencies')),
+      reason:
+          'Producer metadata must cover every consumer and variant without '
+          'task-name-specific app workarounds.',
+    );
   });
 }

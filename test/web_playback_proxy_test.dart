@@ -587,7 +587,7 @@ void main() {
       await session.close();
     });
 
-    test('rejects private nested HLS references and live playlists', () async {
+    test('rejects private nested HLS references', () async {
       Future<void> expectRejected(String manifest) async {
         final upstream = _fakeUpstream(
           (request) async => _textResponse(request, manifest),
@@ -604,8 +604,51 @@ void main() {
         '#EXTM3U\n#EXT-X-TARGETDURATION:10\n#EXTINF:10,\n'
         'https://127.0.0.1/private.ts\n#EXT-X-ENDLIST\n',
       );
-      await expectRejected(
-        '#EXTM3U\n#EXT-X-TARGETDURATION:10\n#EXTINF:10,\nsegment.ts\n',
+    });
+
+    test('closes only a media playlist explicitly declared as VOD', () async {
+      final root = Uri.parse('https://cdn.example/root.m3u8');
+      final segment = Uri.parse('https://cdn.example/segment.ts');
+      final upstream = _fakeUpstream((request) async {
+        if (request.uri == root) {
+          return _textResponse(
+            request,
+            '#EXTM3U\n#EXT-X-PLAYLIST-TYPE:VOD\n'
+            '#EXT-X-TARGETDURATION:10\n#EXTINF:10,\nsegment.ts\n',
+          );
+        }
+        expect(request.uri, segment);
+        return _response(request, contentType: 'video/mp2t', bytes: [7, 8, 9]);
+      });
+      final proxy = WebPlaybackProxy(upstream: upstream);
+      addTearDown(proxy.close);
+
+      final session = await proxy.prepare(uri: root);
+      final media = utf8.decode(
+        (await _localRequest(session.playbackUri)).body,
+      );
+      expect(media, contains('#EXT-X-ENDLIST'));
+      final segmentLocal = Uri.parse(
+        media.split('\n').firstWhere((line) => line.startsWith('http://')),
+      );
+      expect((await _localRequest(segmentLocal)).body, [7, 8, 9]);
+      await session.close();
+    });
+
+    test('does not truncate an ordinary open media playlist', () async {
+      final proxy = WebPlaybackProxy(
+        upstream: _fakeUpstream(
+          (request) async => _textResponse(
+            request,
+            '#EXTM3U\n#EXT-X-TARGETDURATION:10\n#EXTINF:10,\nsegment.ts\n',
+          ),
+        ),
+      );
+      addTearDown(proxy.close);
+
+      await expectLater(
+        proxy.prepare(uri: Uri.parse('https://cdn.example/live.m3u8')),
+        throwsFormatException,
       );
     });
 

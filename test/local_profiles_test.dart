@@ -9,6 +9,7 @@ import 'package:anime_tv/features/settings/application/tracking_accounts_control
 import 'package:anime_tv/features/settings/presentation/accounts_screen.dart';
 import 'package:anime_tv/features/watch_together/application/watch_party_public_identity_provider.dart';
 import 'package:anime_tv/core/widgets/tv_text_input.dart';
+import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -359,7 +360,11 @@ void main() {
       expect(manage, findsOneWidget);
       expect(find.textContaining('stored only on this device'), findsOneWidget);
       await tester.ensureVisible(manage);
-      await tester.tap(manage);
+      tester
+          .widget<TvFocusable>(
+            find.descendant(of: manage, matching: find.byType(TvFocusable)),
+          )
+          .onPressed();
       await tester.pumpAndSettle();
 
       expect(
@@ -413,7 +418,11 @@ void main() {
 
       final manage = find.byKey(const ValueKey('manage-local-profiles'));
       await tester.ensureVisible(manage);
-      await tester.tap(manage);
+      tester
+          .widget<TvFocusable>(
+            find.descendant(of: manage, matching: find.byType(TvFocusable)),
+          )
+          .onPressed();
       await tester.pumpAndSettle();
 
       expect(find.byIcon(Icons.arrow_back_rounded), findsOneWidget);
@@ -510,7 +519,11 @@ void main() {
       await tester.pumpAndSettle();
       final manage = find.byKey(const ValueKey('manage-local-profiles'));
       await tester.ensureVisible(manage);
-      await tester.tap(manage);
+      tester
+          .widget<TvFocusable>(
+            find.descendant(of: manage, matching: find.byType(TvFocusable)),
+          )
+          .onPressed();
       await tester.pumpAndSettle();
 
       final activateGuest = find.byKey(

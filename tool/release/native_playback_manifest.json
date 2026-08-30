@@ -21,7 +21,7 @@
     {
       "id": "libtorrent4j-core",
       "provider": "TetoTV source build",
-      "version": "2.1.0-38-tetotv.1",
+      "version": "2.1.0-38-tetotv.2",
       "fileName": "libtorrent4j-2.1.0-38.jar",
       "size": 764741,
       "sha256": "cb86224533873de990b24360a8ba26cb66286a0842eac3b4facc58a7370fcf91"
@@ -29,15 +29,15 @@
     {
       "id": "libtorrent4j-android-arm",
       "provider": "TetoTV source build",
-      "version": "2.1.0-38-tetotv.1",
+      "version": "2.1.0-38-tetotv.2",
       "fileName": "libtorrent4j-android-arm-2.1.0-38.jar",
-      "size": 5430366,
-      "sha256": "5a98e854b8f7e338a3746600be5cf22a13055853f88f7894592d62e1681865f6"
+      "size": 5430466,
+      "sha256": "fe32deb93d8bada70c7be15918cb9a31e70261cac87ff66bc81e803eaaf2f75d"
     },
     {
       "id": "libtorrent4j-android-arm64",
       "provider": "TetoTV source build",
-      "version": "2.1.0-38-tetotv.1",
+      "version": "2.1.0-38-tetotv.2",
       "fileName": "libtorrent4j-android-arm64-2.1.0-38.jar",
       "size": 6249560,
       "sha256": "223e27338fb0a9dad9b6a6db6add7ec791c8633698a69e958757571c63e7de23"
@@ -45,7 +45,7 @@
   ],
   "build": {
     "scriptPath": "tool/native/build_native_playback.sh",
-    "scriptSha256": "871db10f90865928a772708e81ee0eb5a9a9c60527bdc160393a193f69750de6",
+    "scriptSha256": "b5913bfb68ee0549268ae8168c913320886f0ef3517dba2df31f97a16b205919",
     "sourceDateEpoch": 1704067200,
     "toolchains": [
       {
@@ -374,11 +374,11 @@
   "apkNativeLibraries": [
     {
       "path": "lib/arm64-v8a/libapp.so",
-      "size": 12190608,
-      "sha256": "6833293a74cb4d5fccec4a2c937240e7559b826906bdcf69438c191cf914350f",
-      "origin": "TetoTV Flutter application AOT 2.0.47",
+      "size": 12256144,
+      "sha256": "f1832ec746df2ac6edf49e4907794b8fb9a46f9ceb1704615bb8ea6b65dc428d",
+      "origin": "TetoTV Flutter application AOT 2.0.48",
       "license": "MIT",
-      "sourceLocator": "Git tag v2.0.47",
+      "sourceLocator": "Git tag v2.0.48",
       "noticeLocator": "LICENSE"
     },
     {
@@ -423,7 +423,7 @@
       "sha256": "dc05f53278b2733094f12aeaed54c080329309762ce49e6de4118e4bfb0fff55",
       "origin": "TetoTV source build of media-kit Android helper at 42054e5d479f39ccbb0ae604862e2bcaf59b74c2",
       "license": "MIT",
-      "sourceLocator": "TetoTV-v2.0.47-native-playback-sources.zip: sources/media-kit-android-helper-42054e5d479f39ccbb0ae604862e2bcaf59b74c2.zip",
+      "sourceLocator": "TetoTV-v2.0.48-native-playback-sources.zip: sources/media-kit-android-helper-42054e5d479f39ccbb0ae604862e2bcaf59b74c2.zip",
       "noticeLocator": "assets/legal/native/MEDIA_KIT_ANDROID_HELPER_LICENSE.txt; assets/legal/native/NATIVE_PLAYBACK_NOTICE.txt"
     },
     {
@@ -432,13 +432,13 @@
       "sha256": "a7399d0be70844e5ee94cc5b1acc1516571113c50561fe0a5d05b49101c53ef2",
       "origin": "TetoTV source build of the pinned mpv and FFmpeg native playback stack",
       "license": "LGPL-3.0-or-later (conservative combined classification) plus component terms",
-      "sourceLocator": "TetoTV-v2.0.47-native-playback-sources.zip and tool/native/build_native_playback.sh",
+      "sourceLocator": "TetoTV-v2.0.48-native-playback-sources.zip and tool/native/build_native_playback.sh",
       "noticeLocator": "assets/legal/native/NATIVE_PLAYBACK_NOTICE.txt and its referenced exact license assets"
     },
     {
       "path": "lib/arm64-v8a/libtetotv_discord.so",
-      "size": 752992,
-      "sha256": "8d2caee054011b042dd16f2265b23c6a20c2609a17ad7d24302fd8dd44493bf6",
+      "size": 764040,
+      "sha256": "dd5407f17d342357ca36ae1f054aaa7d6a4c72aed9e831fce9b3a177a17d7e94",
       "origin": "TetoTV Discord JNI wrapper",
       "license": "MIT for the TetoTV wrapper; Discord Social SDK Terms for the dynamically linked SDK",
       "sourceLocator": "android/app/src/main/cpp",
@@ -450,16 +450,16 @@
       "sha256": "263ba714570fb3acfc308cce52776b00506ec8809d225617e52352336144cfa2",
       "origin": "TetoTV source build of the pinned libtorrent4j and libtorrent-rasterbar stack",
       "license": "Mixed MIT, BSD, Boost-1.0, Apache-2.0, and MPL-2.0 component terms",
-      "sourceLocator": "TetoTV-v2.0.47-native-playback-sources.zip and tool/native/build_native_playback.sh",
+      "sourceLocator": "TetoTV-v2.0.48-native-playback-sources.zip and tool/native/build_native_playback.sh",
       "noticeLocator": "assets/legal/native/DIRECT_TORRENT_NATIVE_NOTICE.txt and its referenced exact license assets"
     },
     {
       "path": "lib/armeabi-v7a/libapp.so",
-      "size": 13320780,
-      "sha256": "8cf1db06551eac7f5911a1ff9eed74ea86d139f5270548053cb915f23b1f7c23",
-      "origin": "TetoTV Flutter application AOT 2.0.47",
+      "size": 13402700,
+      "sha256": "ad9ef662c56d6d3b23e5bc5b5640184596a949c3cdd0c32497118457b2f1081e",
+      "origin": "TetoTV Flutter application AOT 2.0.48",
       "license": "MIT",
-      "sourceLocator": "Git tag v2.0.47",
+      "sourceLocator": "Git tag v2.0.48",
       "noticeLocator": "LICENSE"
     },
     {
@@ -504,7 +504,7 @@
       "sha256": "8820a12e07bb3dc45f5b4286acf6918827fba4c265767e7f1cc8f07215c84b6a",
       "origin": "TetoTV source build of media-kit Android helper at 42054e5d479f39ccbb0ae604862e2bcaf59b74c2",
       "license": "MIT",
-      "sourceLocator": "TetoTV-v2.0.47-native-playback-sources.zip: sources/media-kit-android-helper-42054e5d479f39ccbb0ae604862e2bcaf59b74c2.zip",
+      "sourceLocator": "TetoTV-v2.0.48-native-playback-sources.zip: sources/media-kit-android-helper-42054e5d479f39ccbb0ae604862e2bcaf59b74c2.zip",
       "noticeLocator": "assets/legal/native/MEDIA_KIT_ANDROID_HELPER_LICENSE.txt; assets/legal/native/NATIVE_PLAYBACK_NOTICE.txt"
     },
     {
@@ -513,13 +513,13 @@
       "sha256": "d5a220fdf41edde10f161f86addc846ae9cb18137ea48e4db541cd703fec5092",
       "origin": "TetoTV source build of the pinned mpv and FFmpeg native playback stack",
       "license": "LGPL-3.0-or-later (conservative combined classification) plus component terms",
-      "sourceLocator": "TetoTV-v2.0.47-native-playback-sources.zip and tool/native/build_native_playback.sh",
+      "sourceLocator": "TetoTV-v2.0.48-native-playback-sources.zip and tool/native/build_native_playback.sh",
       "noticeLocator": "assets/legal/native/NATIVE_PLAYBACK_NOTICE.txt and its referenced exact license assets"
     },
     {
       "path": "lib/armeabi-v7a/libtetotv_discord.so",
-      "size": 481224,
-      "sha256": "a2c52aaedfeb41a457f717796bc7df6ea26c709ba2d59187d1365d559bcacd69",
+      "size": 488012,
+      "sha256": "15b9aa642e9f21d73342f90d7b99baba5a8dd63973d1daa0470806dab3e699b6",
       "origin": "TetoTV Discord JNI wrapper",
       "license": "MIT for the TetoTV wrapper; Discord Social SDK Terms for the dynamically linked SDK",
       "sourceLocator": "android/app/src/main/cpp",
@@ -528,10 +528,10 @@
     {
       "path": "lib/armeabi-v7a/libtorrent4j.so",
       "size": 13826612,
-      "sha256": "5e090380a7c1c26c16763d40c7f451bdb4fc2542bc5e1b8a410206f66dea4330",
+      "sha256": "ba0a19d2730969b8e6107db1847888ea8d3b8cafd14a535a3259dd04f8b28d60",
       "origin": "TetoTV source build of the pinned libtorrent4j and libtorrent-rasterbar stack",
       "license": "Mixed MIT, BSD, Boost-1.0, Apache-2.0, and MPL-2.0 component terms",
-      "sourceLocator": "TetoTV-v2.0.47-native-playback-sources.zip and tool/native/build_native_playback.sh",
+      "sourceLocator": "TetoTV-v2.0.48-native-playback-sources.zip and tool/native/build_native_playback.sh",
       "noticeLocator": "assets/legal/native/DIRECT_TORRENT_NATIVE_NOTICE.txt and its referenced exact license assets"
     }
   ],

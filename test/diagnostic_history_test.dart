@@ -602,6 +602,15 @@ void main() {
         });
       }
       await database.insert('stream_failures', {
+        'device_key': 'another-device',
+        'info_hash': List<String>.filled(40, 'e').join(),
+        'reason': 'failure-0',
+        'failure_count': 5,
+        'last_failed_at': now
+            .subtract(const Duration(seconds: 30))
+            .millisecondsSinceEpoch,
+      });
+      await database.insert('stream_failures', {
         'device_key': 'example',
         'info_hash': List<String>.filled(40, 'f').join(),
         'reason': 'outside',
@@ -641,6 +650,11 @@ void main() {
       expect(failureWindow['droppedForCapacity'], 2);
       expect(failures.first, contains('lifetimeFailureCount'));
       expect(failures.first, isNot(contains('failure_count')));
+      final repeatedFailure = failures.cast<Map>().singleWhere(
+        (failure) => failure['reason'] == 'failure-0',
+      );
+      expect(repeatedFailure['lifetimeFailureCount'], 15);
+      expect(repeatedFailure['failureRecordCount'], 2);
       expect(timings, hasLength(100));
       expect(timingWindow['retainedCount'], 100);
       expect(timingWindow['droppedForCapacity'], 5);

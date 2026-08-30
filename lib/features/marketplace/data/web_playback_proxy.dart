@@ -657,7 +657,16 @@ class WebPlaybackProxy {
             line.startsWith('#EXT-X-TARGETDURATION:') ||
             line.startsWith('#EXT-X-MEDIA-SEQUENCE:'),
       );
-      if (isMediaPlaylist && !trimmed.contains('#EXT-X-ENDLIST')) {
+      final hasEndList = trimmed.contains('#EXT-X-ENDLIST');
+      final explicitlyVod = trimmed.any(
+        (line) => line.toUpperCase() == '#EXT-X-PLAYLIST-TYPE:VOD',
+      );
+      // A malformed VOD manifest may omit ENDLIST despite explicitly declaring
+      // that it is finite. The proxy already caches an immutable rewrite, so
+      // that declared VOD can be closed safely. Never freeze an ordinary open
+      // media/event playlist: doing so would truncate a real live stream.
+      final closeDeclaredVod = isMediaPlaylist && !hasEndList && explicitlyVod;
+      if (isMediaPlaylist && !hasEndList && !explicitlyVod) {
         throw const FormatException(
           'Live or mutable HLS playlists are not allowed.',
         );
@@ -765,6 +774,7 @@ class WebPlaybackProxy {
           'The HLS manifest has no complete media references.',
         );
       }
+      if (closeDeclaredVod) rewritten.add('#EXT-X-ENDLIST');
       final bytes = utf8.encode(rewritten.join('\n'));
       if (bytes.length > limits.maximumManifestBytes) {
         throw const FormatException(

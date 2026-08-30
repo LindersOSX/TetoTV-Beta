@@ -20,7 +20,7 @@ class DirectTorrentPolicyTest {
     }
 
     @Test
-    fun `runtime capability rejects arm32 on pages larger than 4 KiB`() {
+    fun `runtime capability accepts arm32 through 16 KiB pages`() {
         assertTrue(
             supportsDirectTorrentRuntime(
                 processIs64Bit = false,
@@ -28,11 +28,18 @@ class DirectTorrentPolicyTest {
                 pageSizeBytes = 4_096L,
             ),
         )
-        assertFalse(
+        assertTrue(
             supportsDirectTorrentRuntime(
                 processIs64Bit = false,
                 supportedAbis = listOf("armeabi-v7a"),
                 pageSizeBytes = 16_384L,
+            ),
+        )
+        assertFalse(
+            supportsDirectTorrentRuntime(
+                processIs64Bit = false,
+                supportedAbis = listOf("armeabi-v7a"),
+                pageSizeBytes = 65_536L,
             ),
         )
         assertFalse(

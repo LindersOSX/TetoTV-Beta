@@ -100,8 +100,11 @@ void main() {
         );
       }
 
-      expect(find.text('Expand all'), findsNothing);
-      expect(find.text('Collapse all'), findsNothing);
+      expect(
+        find.byKey(const ValueKey('settings-toggle-all-sections')),
+        findsOneWidget,
+      );
+      expect(find.text('Collapse all'), findsOneWidget);
       expect(tester.takeException(), isNull);
     }
   });

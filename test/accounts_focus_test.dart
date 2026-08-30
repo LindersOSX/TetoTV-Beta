@@ -1,15 +1,19 @@
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
+import 'package:anime_tv/features/auth/application/tracking_token_service.dart';
+import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
 import 'package:anime_tv/features/settings/application/real_debrid_settings_controller.dart';
 import 'package:anime_tv/features/settings/application/home_shelf_preferences_controller.dart';
 import 'package:anime_tv/features/settings/application/app_update_controller.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
+import 'package:anime_tv/features/settings/application/tracking_accounts_controller.dart';
 import 'package:anime_tv/features/settings/presentation/accounts_screen.dart';
 import 'package:anime_tv/features/discord/application/discord_presence_controller.dart';
 import 'package:anime_tv/features/streaming/data/real_debrid_models.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/tv/tv_shortcuts.dart';
+import 'package:anime_tv/core/widgets/tv_text_input.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -85,25 +89,23 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(
-      FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.customization.first',
-    );
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    expect(FocusManager.instance.primaryFocus?.debugLabel, 'accounts.search');
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pump();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.customization.first',
-      reason:
-          'A vertical Settings list must not jump to another card on Right.',
+      'accounts.area.appearance',
     );
     for (final expected in const [
+      'accounts.settings-section.theme-display',
+      'accounts.customization.first',
       'accounts.title-language',
       'accounts.show-title-style',
+      'accounts.settings-section.home-screen',
       'accounts.customization.home-content.featured',
       'accounts.customization.home-content.poster-metadata',
       'accounts.customization.home-content.continue-watching',
-      'accounts.section.display',
+      'accounts.settings-section.display-options',
     ]) {
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
       await tester.pump();
@@ -129,6 +131,12 @@ void main() {
     );
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.pumpAndSettle();
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pump();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.settings-section.debrid-streaming',
+    );
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pump();
     expect(
@@ -166,7 +174,12 @@ void main() {
 
       await tester.pumpWidget(
         ProviderScope(
-          overrides: [isTelevisionProvider.overrideWithValue(true)],
+          overrides: [
+            isTelevisionProvider.overrideWithValue(true),
+            trackingAccountsControllerProvider.overrideWith(
+              (_) => _SettingsProfileController(),
+            ),
+          ],
           child: const MaterialApp(home: TvShortcuts(child: AccountsScreen())),
         ),
       );
@@ -180,10 +193,14 @@ void main() {
       expect(find.text('Settings'), findsNothing);
       expect(find.text('APPEARANCE'), findsNothing);
       expect(find.text('Expand all'), findsNothing);
-      expect(find.text('Collapse all'), findsNothing);
+      expect(find.text('Collapse all'), findsOneWidget);
       expect(
-        find.byKey(const ValueKey('customize-toggle-all-sections')),
-        findsNothing,
+        find.byKey(const ValueKey('settings-toggle-all-sections')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('settings-search-field')),
+        findsOneWidget,
       );
 
       final appearanceTab = find.byKey(
@@ -241,13 +258,575 @@ void main() {
       expect((homeCard.width - themeCard.width).abs(), lessThan(1));
       expect(homeCard.top, greaterThan(themeCard.bottom));
       expect(navigationCard.top, greaterThan(homeCard.bottom));
+      expect(FocusManager.instance.primaryFocus?.debugLabel, 'accounts.search');
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'TV Settings toolbar and collapsible headers follow D-pad order',
+    (tester) async {
+      FlutterSecureStorage.setMockInitialValues({});
+      tester.view.physicalSize = const Size(1280, 720);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            isTelevisionProvider.overrideWithValue(true),
+            trackingAccountsControllerProvider.overrideWith(
+              (_) => _SettingsProfileController(),
+            ),
+          ],
+          child: const MaterialApp(home: TvShortcuts(child: AccountsScreen())),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      FocusNode focusFor(Finder keyed) {
+        final root = tester.widget(keyed);
+        if (root is TvTextInput) return root.focusNode!;
+        if (root is TvFocusable) return root.focusNode!;
+        final nested = find.descendant(
+          of: keyed,
+          matching: find.byType(TvFocusable),
+        );
+        expect(nested, findsOneWidget);
+        return tester.widget<TvFocusable>(nested).focusNode!;
+      }
+
+      final search = find.byKey(const ValueKey('settings-search-field'));
+      final toggleAll = find.byKey(
+        const ValueKey('settings-toggle-all-sections'),
+      );
+      final profile = find.byKey(const ValueKey('top-level-fixed-profile'));
+      final appearance = find.byKey(const ValueKey('settings-area-appearance'));
+      final themeHeader = find.byKey(
+        const ValueKey('settings-section-toggle-theme-display'),
+      );
+      final homeHeader = find.byKey(
+        const ValueKey('settings-section-toggle-home-screen'),
+      );
+      final firstThemeRow = find.byKey(const ValueKey('open-theme-studio'));
+
+      final searchFocus = focusFor(search);
+      final toggleAllFocus = focusFor(toggleAll);
+      final profileFocus = focusFor(profile);
+      final appearanceFocus = focusFor(appearance);
+      final themeHeaderFocus = focusFor(themeHeader);
+      final homeHeaderFocus = focusFor(homeHeader);
+      final firstThemeRowFocus = focusFor(firstThemeRow);
+      final settingsRailDetector = find.descendant(
+        of: find.byKey(const ValueKey('main-nav-settings')),
+        matching: find.byType(FocusableActionDetector),
+      );
+      final settingsRailFocus = tester
+          .widget<FocusableActionDetector>(settingsRailDetector)
+          .focusNode!;
+
+      settingsRailFocus.requestFocus();
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+      await tester.pump();
+      expect(searchFocus.hasFocus, isTrue);
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+      await tester.pump();
+      expect(settingsRailFocus.hasFocus, isTrue);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+      await tester.pump();
       expect(
         FocusManager.instance.primaryFocus?.debugLabel,
-        'accounts.customization.first',
+        'accounts.sections.toggle-all',
+      );
+      expect(toggleAllFocus.hasFocus, isTrue);
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+      await tester.pump();
+      expect(searchFocus.hasFocus, isTrue);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pump();
+      expect(appearanceFocus.hasFocus, isTrue);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+      await tester.pump();
+      expect(searchFocus.hasFocus, isTrue);
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+      await tester.pump();
+      expect(profileFocus.hasFocus, isTrue);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+      await tester.pump();
+      expect(toggleAllFocus.hasFocus, isTrue);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pump();
+      expect(appearanceFocus.hasFocus, isTrue);
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pump();
+      expect(themeHeaderFocus.hasFocus, isTrue);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pump();
+      expect(firstThemeRowFocus.hasFocus, isTrue);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+      await tester.pump();
+      expect(themeHeaderFocus.hasFocus, isTrue);
+
+      toggleAllFocus.requestFocus();
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+      expect(find.text('Expand all'), findsOneWidget);
+      themeHeaderFocus.requestFocus();
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pump();
+      expect(homeHeaderFocus.hasFocus, isTrue);
+
+      themeHeaderFocus.requestFocus();
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('settings-section-content-theme-display')),
+        findsOneWidget,
+      );
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pump();
+      expect(firstThemeRowFocus.hasFocus, isTrue);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'TV Settings search opens the matching area and focuses its setting',
+    (tester) async {
+      FlutterSecureStorage.setMockInitialValues({
+        'input_use_built_in_keyboard': 'false',
+      });
+      tester.view.physicalSize = const Size(1280, 720);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            isTelevisionProvider.overrideWithValue(true),
+            trackingAccountsControllerProvider.overrideWith(
+              (_) => _SettingsProfileController(),
+            ),
+          ],
+          child: const MaterialApp(home: TvShortcuts(child: AccountsScreen())),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final search = find.byKey(const ValueKey('settings-search-field'));
+      final toggleAll = find.byKey(
+        const ValueKey('settings-toggle-all-sections'),
+      );
+      final profile = find.byKey(const ValueKey('top-level-fixed-profile'));
+      expect(search, findsOneWidget);
+      expect(toggleAll, findsOneWidget);
+      expect(profile, findsOneWidget);
+
+      final searchRect = tester.getRect(search);
+      expect(searchRect.width, greaterThan(searchRect.height * 3));
+      expect(tester.getRect(toggleAll).left, greaterThan(searchRect.right));
+      expect(
+        tester.getRect(profile).left,
+        greaterThan(tester.getRect(toggleAll).right),
+      );
+
+      final editable = find.descendant(
+        of: search,
+        matching: find.byType(EditableText),
+      );
+      expect(editable, findsOneWidget);
+      await tester.tap(editable);
+      await tester.pumpAndSettle();
+      expect(tester.testTextInput.isVisible, isTrue);
+      await tester.enterText(editable, 'Watch Party');
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(
+          const ValueKey('settings-search-result-navigation-watch-party'),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(
+          const ValueKey(
+            'settings-search-result-libraries-features-watch-party',
+          ),
+        ),
+        findsOneWidget,
+      );
+
+      await tester.enterText(editable, 'Diagnostics');
+      await tester.pumpAndSettle();
+
+      final result = find.byKey(
+        const ValueKey('settings-search-result-device-support-diagnostics'),
+      );
+      final visibleResultKeys = find
+          .byWidgetPredicate(
+            (widget) =>
+                widget.key is ValueKey<String> &&
+                (widget.key! as ValueKey<String>).value.startsWith(
+                  'settings-search-result-',
+                ),
+          )
+          .evaluate()
+          .map((element) => element.widget.key)
+          .toList();
+      expect(
+        result,
+        findsOneWidget,
+        reason: 'Visible results: $visibleResultKeys',
+      );
+      await tester.tap(result);
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const ValueKey('settings-card-system-support')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('settings-section-content-device-support')),
+        findsOneWidget,
+      );
+      expect(
+        FocusManager.instance.primaryFocus?.debugLabel,
+        'accounts.system.diagnostics',
       );
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets(
+    'TV Settings search sizes results to the field and targets Home shelves',
+    (tester) async {
+      FlutterSecureStorage.setMockInitialValues({
+        'input_use_built_in_keyboard': 'false',
+      });
+      tester.view.physicalSize = const Size(1280, 720);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            isTelevisionProvider.overrideWithValue(true),
+            trackingAccountsControllerProvider.overrideWith(
+              (_) => _SettingsProfileController(),
+            ),
+          ],
+          child: const MaterialApp(home: TvShortcuts(child: AccountsScreen())),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final search = find.byKey(const ValueKey('settings-search-field'));
+      final editable = find.descendant(
+        of: search,
+        matching: find.byType(EditableText),
+      );
+      await tester.tap(editable);
+      await tester.pumpAndSettle();
+      await tester.enterText(editable, 'Recently released');
+      await tester.pumpAndSettle();
+
+      final result = find.byKey(
+        const ValueKey('settings-search-result-home-shelves-recently-released'),
+      );
+      expect(result, findsOneWidget);
+      final dropdown = find.ancestor(
+        of: result,
+        matching: find.byWidgetPredicate(
+          (widget) =>
+              widget is ConstrainedBox &&
+              widget.constraints.maxHeight >= 120 &&
+              widget.constraints.maxHeight <= 330,
+        ),
+      );
+      expect(dropdown, findsOneWidget);
+      expect(
+        (tester.getRect(dropdown).width - tester.getRect(search).width).abs(),
+        lessThanOrEqualTo(1),
+      );
+
+      final resultFocusable = find.descendant(
+        of: result,
+        matching: find.byType(TvFocusable),
+      );
+      expect(resultFocusable, findsOneWidget);
+      tester.widget<TvFocusable>(resultFocusable).focusNode!.requestFocus();
+      await tester.pumpAndSettle();
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pumpAndSettle();
+
+      expect(result, findsNothing);
+      expect(tester.widget<TvTextInput>(search).controller.text, isEmpty);
+      expect(
+        FocusManager.instance.primaryFocus?.debugLabel,
+        'accounts.area.appearance',
+      );
+
+      await tester.tap(editable);
+      await tester.pumpAndSettle();
+      await tester.enterText(editable, 'Recently released');
+      await tester.pumpAndSettle();
+      final refreshedResult = find.byKey(
+        const ValueKey('settings-search-result-home-shelves-recently-released'),
+      );
+      expect(refreshedResult, findsOneWidget);
+      await tester.tap(refreshedResult);
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const ValueKey('settings-section-content-home-shelves')),
+        findsOneWidget,
+      );
+      expect(
+        FocusManager.instance.primaryFocus?.debugLabel,
+        'accounts.shelf.recentlyReleased',
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'TV Settings profile Down closes search results before entering tabs',
+    (tester) async {
+      FlutterSecureStorage.setMockInitialValues({
+        'input_use_built_in_keyboard': 'false',
+      });
+      tester.view.physicalSize = const Size(1280, 720);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            isTelevisionProvider.overrideWithValue(true),
+            trackingAccountsControllerProvider.overrideWith(
+              (_) => _SettingsProfileController(),
+            ),
+          ],
+          child: const MaterialApp(home: TvShortcuts(child: AccountsScreen())),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final search = find.byKey(const ValueKey('settings-search-field'));
+      final editable = find.descendant(
+        of: search,
+        matching: find.byType(EditableText),
+      );
+      await tester.tap(editable);
+      await tester.pumpAndSettle();
+      await tester.enterText(editable, 'Diagnostics');
+      await tester.pumpAndSettle();
+
+      final result = find.byKey(
+        const ValueKey('settings-search-result-device-support-diagnostics'),
+      );
+      expect(result, findsOneWidget);
+
+      final profile = find.byKey(const ValueKey('top-level-fixed-profile'));
+      final profileFocusable = find.descendant(
+        of: profile,
+        matching: find.byType(TvFocusable),
+      );
+      tester.widget<TvFocusable>(profileFocusable).focusNode!.requestFocus();
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pumpAndSettle();
+
+      expect(result, findsNothing);
+      expect(tester.widget<TvTextInput>(search).controller.text, isEmpty);
+      expect(
+        FocusManager.instance.primaryFocus?.debugLabel,
+        'accounts.area.appearance',
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('TV Settings sections collapse alone or all together', (
+    tester,
+  ) async {
+    FlutterSecureStorage.setMockInitialValues({});
+    tester.view.physicalSize = const Size(1280, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [isTelevisionProvider.overrideWithValue(true)],
+        child: const MaterialApp(home: TvShortcuts(child: AccountsScreen())),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    const sectionSlugs = [
+      'theme-display',
+      'home-screen',
+      'display-options',
+      'input-feedback',
+      'home-shelves',
+      'navigation',
+    ];
+    for (final slug in sectionSlugs) {
+      expect(
+        find.byKey(ValueKey('settings-section-toggle-$slug')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(ValueKey('settings-section-content-$slug')),
+        findsOneWidget,
+      );
+    }
+
+    final toggleAll = find.byKey(
+      const ValueKey('settings-toggle-all-sections'),
+    );
+    expect(
+      find.descendant(of: toggleAll, matching: find.text('Collapse all')),
+      findsOneWidget,
+    );
+    await tester.tap(toggleAll);
+    await tester.pumpAndSettle();
+
+    expect(
+      find.descendant(of: toggleAll, matching: find.text('Expand all')),
+      findsOneWidget,
+    );
+    for (final slug in sectionSlugs) {
+      expect(
+        find.byKey(ValueKey('settings-section-content-$slug')),
+        findsNothing,
+      );
+    }
+    expect(find.text('Theme & display'), findsOneWidget);
+    expect(find.text('Home screen'), findsOneWidget);
+    expect(find.text('Navigation'), findsWidgets);
+
+    final themeToggle = find.byKey(
+      const ValueKey('settings-section-toggle-theme-display'),
+    );
+    await tester.tap(themeToggle);
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('settings-section-content-theme-display')),
+      findsOneWidget,
+    );
+    expect(find.text('Title language'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('settings-section-content-home-screen')),
+      findsNothing,
+    );
+
+    await tester.tap(toggleAll);
+    await tester.pumpAndSettle();
+    expect(
+      find.descendant(of: toggleAll, matching: find.text('Collapse all')),
+      findsOneWidget,
+    );
+    for (final slug in sectionSlugs) {
+      expect(
+        find.byKey(ValueKey('settings-section-content-$slug')),
+        findsOneWidget,
+      );
+    }
+
+    await tester.tap(themeToggle);
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('settings-section-content-theme-display')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey('settings-section-content-home-screen')),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.byKey(const ValueKey('settings-area-playback')));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('settings-section-content-closed-captions')),
+      findsOneWidget,
+      reason: 'Collapsing Appearance must not collapse another Settings tab.',
+    );
+    expect(
+      find.byKey(const ValueKey('settings-section-content-player-controls')),
+      findsOneWidget,
+    );
+
+    await tester.tap(toggleAll);
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('settings-section-content-closed-captions')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey('settings-section-content-player-controls')),
+      findsNothing,
+    );
+
+    await tester.tap(find.byKey(const ValueKey('settings-area-appearance')));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('settings-section-content-theme-display')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey('settings-section-content-home-screen')),
+      findsOneWidget,
+      reason: 'The global control must preserve the other tab\'s card state.',
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('phone Settings keep the existing direct layout', (tester) async {
+    FlutterSecureStorage.setMockInitialValues({});
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [isTelevisionProvider.overrideWithValue(false)],
+        child: const MaterialApp(home: AccountsScreen()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('settings-search-field')), findsNothing);
+    expect(
+      find.byKey(const ValueKey('settings-toggle-all-sections')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey('settings-section-toggle-theme-display')),
+      findsNothing,
+    );
+    expect(find.text('Theme Studio'), findsOneWidget);
+    expect(find.text('Title language'), findsOneWidget);
+    expect(find.text('Show title style'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets(
     'Settings option rows exit Left through the active Settings rail item',
@@ -268,10 +847,7 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(
-        FocusManager.instance.primaryFocus?.debugLabel,
-        'accounts.customization.first',
-      );
+      expect(FocusManager.instance.primaryFocus?.debugLabel, 'accounts.search');
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
       await tester.pump();
       expect(
@@ -295,10 +871,7 @@ void main() {
 
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
       await tester.pump();
-      expect(
-        FocusManager.instance.primaryFocus?.debugLabel,
-        'accounts.customization.first',
-      );
+      expect(FocusManager.instance.primaryFocus?.debugLabel, 'accounts.search');
       expect(tester.takeException(), isNull);
     },
   );
@@ -425,6 +998,12 @@ void main() {
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
       'accounts.streaming.auto-pick-audio',
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.settings-section.libraries-features',
     );
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pumpAndSettle();
@@ -596,8 +1175,16 @@ void main() {
       await tester.pumpAndSettle();
       expect(
         FocusManager.instance.primaryFocus?.debugLabel,
-        'accounts.streaming.offline-downloads',
-        reason: 'Down must stop on the last mounted Services control.',
+        'accounts.settings-section.streaming-privacy',
+        reason:
+            'The last Libraries & features row must continue to the final section header.',
+      );
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pumpAndSettle();
+      expect(
+        FocusManager.instance.primaryFocus?.debugLabel,
+        'accounts.settings-section.streaming-privacy',
+        reason: 'Down must stop on the final Services section header.',
       );
 
       await tester.tap(find.text('Appearance'));
@@ -683,7 +1270,7 @@ void main() {
     );
   }
 
-  testWidgets('Home shelves remain directly available below the dashboard', (
+  testWidgets('Home shelves start expanded below the dashboard', (
     tester,
   ) async {
     FlutterSecureStorage.setMockInitialValues({});
@@ -698,9 +1285,12 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(
-      find.byKey(const ValueKey('inline-section-toggle-home-shelves')),
-      findsNothing,
-      reason: 'Appearance no longer hides settings in an accordion.',
+      find.byKey(const ValueKey('settings-section-toggle-home-shelves')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('settings-section-content-home-shelves')),
+      findsOneWidget,
     );
     expect(find.text('Home shelves'), findsOneWidget);
     expect(find.text('Continue watching'), findsNWidgets(2));
@@ -839,7 +1429,7 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  testWidgets('Appearance dashboard is direct and D-pad ordered', (
+  testWidgets('Appearance dashboard starts expanded and is D-pad ordered', (
     tester,
   ) async {
     FlutterSecureStorage.setMockInitialValues({});
@@ -856,10 +1446,10 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Expand all'), findsNothing);
-    expect(find.text('Collapse all'), findsNothing);
+    expect(find.text('Collapse all'), findsOneWidget);
     expect(
-      find.byKey(const ValueKey('customize-toggle-all-sections')),
-      findsNothing,
+      find.byKey(const ValueKey('settings-toggle-all-sections')),
+      findsOneWidget,
     );
     for (final label in const [
       'Theme Studio',
@@ -871,17 +1461,18 @@ void main() {
     ]) {
       expect(find.text(label), findsOneWidget);
     }
-    expect(
-      FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.customization.first',
-    );
+    expect(FocusManager.instance.primaryFocus?.debugLabel, 'accounts.search');
     for (final expected in const [
+      'accounts.area.appearance',
+      'accounts.settings-section.theme-display',
+      'accounts.customization.first',
       'accounts.title-language',
       'accounts.show-title-style',
+      'accounts.settings-section.home-screen',
       'accounts.customization.home-content.featured',
       'accounts.customization.home-content.poster-metadata',
       'accounts.customization.home-content.continue-watching',
-      'accounts.section.display',
+      'accounts.settings-section.display-options',
     ]) {
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
       await tester.pumpAndSettle();
@@ -968,61 +1559,89 @@ void main() {
       greaterThan(tester.getTopLeft(find.text('Theme Studio')).dy),
     );
     expect(find.text('Expand all'), findsNothing);
-    expect(find.text('Collapse all'), findsNothing);
+    expect(find.text('Collapse all'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets(
-    'Playback exposes direct polished rows without nested accordions',
-    (tester) async {
-      FlutterSecureStorage.setMockInitialValues({});
-      tester.view.physicalSize = const Size(960, 540);
-      tester.view.devicePixelRatio = 1;
-      addTearDown(tester.view.resetPhysicalSize);
-      addTearDown(tester.view.resetDevicePixelRatio);
+  testWidgets('Playback starts expanded with polished collapsible cards', (
+    tester,
+  ) async {
+    FlutterSecureStorage.setMockInitialValues({});
+    tester.view.physicalSize = const Size(960, 540);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
 
-      await tester.pumpWidget(
-        const ProviderScope(
-          child: MaterialApp(home: TvShortcuts(child: AccountsScreen())),
-        ),
-      );
-      await tester.pumpAndSettle();
+    await tester.pumpWidget(
+      const ProviderScope(
+        child: MaterialApp(home: TvShortcuts(child: AccountsScreen())),
+      ),
+    );
+    await tester.pumpAndSettle();
 
-      await tester.tap(find.text('Playback'));
-      await tester.pumpAndSettle();
+    await tester.tap(find.text('Playback'));
+    await tester.pumpAndSettle();
 
-      expect(
-        find.byKey(const ValueKey('inline-section-toggle-closed-captions')),
-        findsNothing,
-      );
-      expect(
-        find.byKey(const ValueKey('inline-section-toggle-player-controls')),
-        findsNothing,
-      );
-      expect(find.text('Text color'), findsOneWidget);
-      expect(find.text('Default player'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('inline-section-toggle-closed-captions')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey('inline-section-toggle-player-controls')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey('settings-section-toggle-closed-captions')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('settings-section-toggle-player-controls')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('settings-section-content-closed-captions')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('settings-section-content-player-controls')),
+      findsOneWidget,
+    );
+    expect(find.text('Text color'), findsOneWidget);
+    expect(find.text('Default player'), findsOneWidget);
 
-      final playbackTab = tester.widget<TvFocusable>(
-        find.byKey(const ValueKey('settings-area-playback')),
-      );
-      playbackTab.focusNode!.requestFocus();
-      await tester.pump();
-      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
-      await tester.pumpAndSettle();
-      expect(
-        FocusManager.instance.primaryFocus?.debugLabel,
-        'accounts.captions.text-color',
-      );
+    final playbackTab = tester.widget<TvFocusable>(
+      find.byKey(const ValueKey('settings-area-playback')),
+    );
+    playbackTab.focusNode!.requestFocus();
+    await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.settings-section.closed-captions',
+    );
 
-      await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
-      await tester.pumpAndSettle();
-      expect(
-        FocusManager.instance.primaryFocus?.debugLabel,
-        'accounts.area.playback',
-      );
-      expect(tester.takeException(), isNull);
-    },
-  );
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.captions.text-color',
+    );
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+    await tester.pumpAndSettle();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.settings-section.closed-captions',
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+    await tester.pumpAndSettle();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.area.playback',
+    );
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets(
     'advanced Appearance controls remain mounted below the dashboard',
@@ -1150,7 +1769,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.customization.input.click-sounds',
+      'accounts.settings-section.home-shelves',
     );
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pumpAndSettle();
@@ -1166,15 +1785,27 @@ void main() {
     }
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.settings-section.navigation',
+      reason: 'The final shelf row must continue into the Navigation header.',
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
       'accounts.customization.navigation-size',
-      reason: 'The final shelf row must continue into the Navigation card.',
     );
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
     await tester.pumpAndSettle();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.shelf.${HomeShelf.values.last.name}',
-      reason: 'Navigation size must return to the final shelf row on Up.',
+      'accounts.settings-section.navigation',
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+    await tester.pumpAndSettle();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.settings-section.home-shelves',
+      reason: 'Up from a section header must select the previous header.',
     );
     expect(tester.takeException(), isNull);
   });
@@ -1198,6 +1829,7 @@ void main() {
 
     await selectSettingsArea(tester, 'accounts');
     for (final key in [
+      LogicalKeyboardKey.arrowDown,
       LogicalKeyboardKey.arrowDown,
       LogicalKeyboardKey.arrowDown,
       LogicalKeyboardKey.arrowDown,
@@ -1232,6 +1864,9 @@ void main() {
 
     await selectSettingsArea(tester, 'accounts');
     for (final key in [
+      LogicalKeyboardKey.arrowDown,
+      LogicalKeyboardKey.arrowDown,
+      LogicalKeyboardKey.arrowDown,
       LogicalKeyboardKey.arrowDown,
       LogicalKeyboardKey.arrowDown,
       LogicalKeyboardKey.arrowDown,
@@ -1278,8 +1913,16 @@ void main() {
     await tester.pumpAndSettle();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.tracking.dub-notifications',
-      reason: 'Down stops when the Discord action is unavailable and disabled.',
+      'accounts.settings-section.discord-rich-presence',
+      reason:
+          'The last notification row must continue to the final section header.',
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.settings-section.discord-rich-presence',
+      reason: 'Down stops when the final section has no available action.',
     );
     expect(tester.takeException(), isNull);
   });
@@ -1360,6 +2003,12 @@ void main() {
     await selectSettingsArea(tester, 'services');
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pump();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.settings-section.debrid-streaming',
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pump();
     expect(find.text('Advanced: personal token'), findsNothing);
     expect(find.text('Connect by QR'), findsOneWidget);
     expect(find.text('Debrid provider'), findsWidgets);
@@ -1390,9 +2039,11 @@ void main() {
 
     await selectSettingsArea(tester, 'system');
     for (final expected in const [
+      'accounts.settings-section.device-support',
       'accounts.system.setup',
       'accounts.system.calibration',
       'accounts.system.diagnostics',
+      'accounts.settings-section.app-updates',
       'accounts.updates.automatic',
     ]) {
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
@@ -1416,14 +2067,33 @@ void main() {
     await tester.pumpAndSettle();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.system.diagnostics',
+      'accounts.settings-section.app-updates',
     );
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+    await tester.pumpAndSettle();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.settings-section.device-support',
+    );
+    for (var index = 0; index < 6; index++) {
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pumpAndSettle();
+    }
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.updates.check',
+    );
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pumpAndSettle();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.updates.check',
+      'accounts.updates.channel',
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.settings-section.community',
     );
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pumpAndSettle();
@@ -1453,6 +2123,12 @@ void main() {
     await tester.pumpAndSettle();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.settings-section.storage-reset',
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
       'accounts.system.clear-cache',
     );
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
@@ -1460,6 +2136,12 @@ void main() {
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
       'accounts.system.reset-app',
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.settings-section.about-legal',
     );
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pumpAndSettle();
@@ -1613,7 +2295,7 @@ void main() {
       await const FlutterSecureStorage().read(key: 'beta_update_access_key'),
       isNull,
     );
-    for (var index = 0; index < 6; index++) {
+    for (var index = 0; index < 8; index++) {
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
       await tester.pumpAndSettle();
     }
@@ -1677,7 +2359,7 @@ void main() {
     expect(donationRect.left, greaterThan(donationQrRect.right));
     expect(donationQrRect.top, greaterThan(discordQrRect.bottom));
 
-    for (var index = 0; index < 6; index++) {
+    for (var index = 0; index < 10; index++) {
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
       await tester.pumpAndSettle();
     }
@@ -1965,6 +2647,7 @@ void main() {
     for (final key in [
       LogicalKeyboardKey.arrowDown,
       LogicalKeyboardKey.arrowDown,
+      LogicalKeyboardKey.arrowDown,
     ]) {
       await tester.sendKeyEvent(key);
       await tester.pumpAndSettle();
@@ -1978,22 +2661,38 @@ void main() {
     await tester.pumpAndSettle();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.settings-section.sources-stream-order',
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
       'accounts.streaming.debrid',
     );
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
     await tester.pumpAndSettle();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.debrid.connect',
+      'accounts.settings-section.sources-stream-order',
     );
-
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
     await tester.pumpAndSettle();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.debrid.connect',
+      'accounts.settings-section.debrid-streaming',
+    );
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.debrid.provider',
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+    await tester.pumpAndSettle();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.settings-section.debrid-streaming',
     );
 
     expect(find.byKey(const ValueKey('settings-area-downloads')), findsNothing);
@@ -2050,7 +2749,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.streaming.download-manager',
+      'accounts.settings-section.streaming-privacy',
     );
     expect(tester.takeException(), isNull);
   });
@@ -2330,6 +3029,7 @@ void main() {
       await selectSettingsArea(tester, 'services');
       for (final key in [
         LogicalKeyboardKey.arrowDown,
+        LogicalKeyboardKey.arrowDown,
         LogicalKeyboardKey.enter,
         LogicalKeyboardKey.arrowDown,
         LogicalKeyboardKey.enter,
@@ -2346,7 +3046,7 @@ void main() {
       );
       expect(tester.testTextInput.isVisible, isFalse);
 
-      for (var index = 0; index < 6; index++) {
+      for (var index = 0; index < 7; index++) {
         await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
         await tester.pumpAndSettle();
       }
@@ -2358,6 +3058,14 @@ void main() {
 
       for (var index = 0; index < 6; index++) {
         await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+        await tester.pumpAndSettle();
+      }
+      expect(
+        FocusManager.instance.primaryFocus?.debugLabel,
+        'accounts.settings-section.debrid-streaming',
+      );
+      for (var index = 0; index < 3; index++) {
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
         await tester.pumpAndSettle();
       }
       expect(
@@ -2390,6 +3098,29 @@ class _ConnectedRealDebridController extends RealDebridSettingsController {
   @override
   Future<void> load() async {}
 }
+
+class _SettingsProfileController extends TrackingAccountsController {
+  _SettingsProfileController()
+    : super(
+        _SettingsTrackingRef(),
+        TrackingTokenService(const FlutterSecureStorage()),
+      ) {
+    state = const TrackingAccountsState(
+      usernames: {TrackingProvider.anilist: 'Settings viewer'},
+      profiles: {
+        TrackingProvider.anilist: TrackingAccountProfile(
+          provider: TrackingProvider.anilist,
+          username: 'Settings viewer',
+        ),
+      },
+    );
+  }
+
+  @override
+  Future<void> load() async {}
+}
+
+class _SettingsTrackingRef extends Fake implements Ref {}
 
 class _ClassicSettingsController extends SettingsPreferencesController {
   _ClassicSettingsController() : super(const FlutterSecureStorage()) {

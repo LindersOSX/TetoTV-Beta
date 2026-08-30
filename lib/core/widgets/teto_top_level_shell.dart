@@ -11,6 +11,13 @@ import 'package:go_router/go_router.dart';
 typedef TetoTopLevelBuilder =
     Widget Function(BuildContext context, TetoTopLevelLayout layout);
 
+typedef TetoTopLevelTvHeaderBuilder =
+    Widget Function(
+      BuildContext context,
+      TetoTopLevelLayout layout,
+      FocusNode profileFocusNode,
+    );
+
 enum TetoTopLevelNavigationPlacement {
   classicTop,
   televisionRail,
@@ -61,6 +68,10 @@ class TetoTopLevelShell extends ConsumerStatefulWidget {
     this.fallbackContentFocusNode,
     this.autofocusRail = false,
     this.onActiveDestinationPressed,
+    this.tvHeaderBuilder,
+    this.tvHeaderFocusNodes = const <FocusNode>[],
+    this.onTvProfileLeft,
+    this.onTvProfileDown,
     this.resizeToAvoidBottomInset = true,
     super.key,
   });
@@ -72,6 +83,10 @@ class TetoTopLevelShell extends ConsumerStatefulWidget {
   final TetoTopLevelBuilder builder;
   final bool autofocusRail;
   final VoidCallback? onActiveDestinationPressed;
+  final TetoTopLevelTvHeaderBuilder? tvHeaderBuilder;
+  final List<FocusNode> tvHeaderFocusNodes;
+  final VoidCallback? onTvProfileLeft;
+  final VoidCallback? onTvProfileDown;
   final bool resizeToAvoidBottomInset;
 
   @override
@@ -124,7 +139,11 @@ class _TetoTopLevelShellState extends ConsumerState<TetoTopLevelShell> {
   void _observeContentMetrics(ScrollMetrics metrics) {
     if (metrics.axis != Axis.vertical) return;
     _profileShouldBeVisibleAtTop = metrics.pixels <= .5;
-    if (!_profileShouldBeVisibleAtTop && _profileFocusNode.hasFocus) {
+    final hiddenHeaderOwnsFocus = widget.tvHeaderFocusNodes.any(
+      (node) => node.hasFocus,
+    );
+    if (!_profileShouldBeVisibleAtTop &&
+        (_profileFocusNode.hasFocus || hiddenHeaderOwnsFocus)) {
       if (_railFocusNode.context != null) {
         _railFocusNode.requestFocus();
       } else {
@@ -247,6 +266,32 @@ class _TetoTopLevelShellState extends ConsumerState<TetoTopLevelShell> {
                     metrics: railMetrics,
                   ),
                 ),
+                if (usesTvRail &&
+                    _profileShouldBeVisibleAtTop &&
+                    widget.tvHeaderBuilder != null)
+                  Positioned(
+                    left: railWidth + (size.width >= 1400 ? 34 : 28),
+                    right:
+                        (size.width >= 1400 ? 30 : 22) +
+                        52 +
+                        (size.width >= 1400 ? 14 : 10),
+                    // Search and section controls are 44px high; center them
+                    // against the adjacent 52px profile switcher.
+                    top: 16,
+                    child: Align(
+                      alignment: Alignment.topRight,
+                      child: ConstrainedBox(
+                        constraints: BoxConstraints(
+                          maxWidth: size.width >= 1400 ? 760 : 620,
+                        ),
+                        child: widget.tvHeaderBuilder!(
+                          context,
+                          layout,
+                          _profileFocusNode,
+                        ),
+                      ),
+                    ),
+                  ),
                 // Use the latest observed scroll metrics directly. A layout
                 // mode change can rebuild before the coalesced setState runs;
                 // this prevents a Classic-at-top -> Modern transition from
@@ -262,14 +307,23 @@ class _TetoTopLevelShellState extends ConsumerState<TetoTopLevelShell> {
                         focusNode: _profileFocusNode,
                         compactAvatar: true,
                         onKeyEvent: (_, event) {
-                          final returnsToContent =
-                              event.logicalKey ==
-                                  LogicalKeyboardKey.arrowLeft ||
+                          final isLeft =
+                              event.logicalKey == LogicalKeyboardKey.arrowLeft;
+                          final isDown =
                               event.logicalKey == LogicalKeyboardKey.arrowDown;
-                          if (!returnsToContent) return KeyEventResult.ignored;
+                          if (!isLeft && !isDown) {
+                            return KeyEventResult.ignored;
+                          }
                           if (event is KeyDownEvent ||
                               event is KeyRepeatEvent) {
-                            _focusContent();
+                            if (isLeft && widget.onTvProfileLeft != null) {
+                              widget.onTvProfileLeft!();
+                            } else if (isDown &&
+                                widget.onTvProfileDown != null) {
+                              widget.onTvProfileDown!();
+                            } else {
+                              _focusContent();
+                            }
                           }
                           return KeyEventResult.handled;
                         },

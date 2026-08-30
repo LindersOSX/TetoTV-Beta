@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -295,7 +296,84 @@ video-720.m3u8
       }),
       isFalse,
     );
+    expect(
+      isHlsInspectionCandidate({
+        'url': 'https://cdn.example.com/signed-playback?id=fixture',
+        'streamType': 'hls',
+      }),
+      isTrue,
+      reason: 'an explicit provider type must preserve extensionless masters',
+    );
+    expect(
+      isHlsInspectionCandidate({
+        'url': 'https://cdn.example.com/signed-playback?id=fixture',
+        'type': 'application/vnd.apple.mpegurl',
+      }),
+      isTrue,
+    );
   });
+
+  test('HLS inspection retries one transient response and timeout', () async {
+    var responseAttempts = 0;
+    final status = await runHlsInspectionWithTransientRetry<int>(
+      (_) async {
+        responseAttempts++;
+        return responseAttempts == 1 ? 503 : 200;
+      },
+      shouldRetryResult: (value) => value >= 500,
+      retryDelay: Duration.zero,
+    );
+    expect(status, 200);
+    expect(responseAttempts, 2);
+
+    var timeoutAttempts = 0;
+    final recovered = await runHlsInspectionWithTransientRetry<int>(
+      (_) async {
+        timeoutAttempts++;
+        if (timeoutAttempts == 1) throw TimeoutException('fixture timeout');
+        return 204;
+      },
+      shouldRetryResult: (_) => false,
+      retryDelay: Duration.zero,
+    );
+    expect(recovered, 204);
+    expect(timeoutAttempts, 2);
+  });
+
+  test(
+    'HLS inspection does not retry permanent errors or cancellation',
+    () async {
+      var permanentAttempts = 0;
+      await expectLater(
+        runHlsInspectionWithTransientRetry<int>(
+          (_) async {
+            permanentAttempts++;
+            throw const FormatException('invalid playlist request');
+          },
+          shouldRetryResult: (_) => false,
+          retryDelay: Duration.zero,
+        ),
+        throwsA(isA<FormatException>()),
+      );
+      expect(permanentAttempts, 1);
+
+      final cancellation = WebProviderCancellation();
+      var cancellationAttempts = 0;
+      final pending = runHlsInspectionWithTransientRetry<int>(
+        (_) async {
+          cancellationAttempts++;
+          return 503;
+        },
+        shouldRetryResult: (_) => true,
+        cancellation: cancellation,
+        retryDelay: const Duration(seconds: 1),
+      );
+      await Future<void>.delayed(Duration.zero);
+      cancellation.cancel();
+      await expectLater(pending, throwsA(isA<WebProviderSearchCancelled>()));
+      expect(cancellationAttempts, 1);
+    },
+  );
 
   test('duplicate Sub and Dub provider results merge into dual audio', () {
     final merged = mergeDuplicateWebStreamItems([
@@ -310,6 +388,24 @@ video-720.m3u8
         'quality': '1080p',
         'title': 'DUB / 1080p',
         'audioCapability': 'dub',
+      },
+    ]);
+
+    expect(merged, hasLength(1));
+    expect(merged.single['audioCapability'], 'sub_and_dub');
+  });
+
+  test('duplicate legacy wire audio evidence merges into dual audio', () {
+    final merged = mergeDuplicateWebStreamItems([
+      {
+        'url': 'https://cdn.example.com/shared.mp4',
+        'quality': '1080p',
+        'subOrDub': 'sub',
+      },
+      {
+        'url': 'https://cdn.example.com/shared.mp4',
+        'quality': '1080p',
+        'subOrDub': 'dub',
       },
     ]);
 
@@ -646,6 +742,157 @@ video-720.m3u8
         const EpisodeReference(
           anilistMediaId: 2,
           title: 'Resolved Dual Audio Fixture',
+          episode: 1,
+        ),
+      );
+
+      expect(results, hasLength(1));
+      expect(
+        results.single.effectiveAudioCapability,
+        WebStreamAudioCapability.subAndDub,
+      );
+    },
+    timeout: const Timeout(Duration(seconds: 15)),
+    skip: Platform.isWindows
+        ? 'flutter_js loads its bridge from the packaged Windows app.'
+        : false,
+  );
+
+  test(
+    'truthy string supportsDub runs both provider search modes',
+    () async {
+      final provider = SeanimeJavascriptProvider(
+        _javascriptAddon(
+          id: 'truthy-dub-provider',
+          payload: r'''
+            class Provider {
+              getSettings() {
+                return {episodeServers: ['Fixture'], supportsDub: 'yes'};
+              }
+              async search(input) {
+                return [{
+                  id: input.dub ? 'show-dub' : 'show-sub',
+                  title: input.query,
+                  subOrDub: input.dub ? 'dub' : 'sub'
+                }];
+              }
+              async findEpisodes(id) {
+                return [{id, number: 1, url: id}];
+              }
+              async findEpisodeServer(episode, server) {
+                return {server, videoSources: [{
+                  url: 'https://cdn.example.com/' + episode.url + '.mp4',
+                  quality: '1080p'
+                }]};
+              }
+            }
+          ''',
+        ),
+        validateResultTarget: (_) async {},
+      );
+
+      final results = await provider.streams(
+        const EpisodeReference(
+          anilistMediaId: 3,
+          title: 'Truthy Dub Fixture',
+          episode: 1,
+        ),
+      );
+
+      expect(results, hasLength(2));
+      expect(results.map((item) => item.effectiveAudioCapability).toSet(), {
+        WebStreamAudioCapability.sub,
+        WebStreamAudioCapability.dub,
+      });
+    },
+    timeout: const Timeout(Duration(seconds: 15)),
+    skip: Platform.isWindows
+        ? 'flutter_js loads its bridge from the packaged Windows app.'
+        : false,
+  );
+
+  test(
+    'explicit Dub server overrides a stale Sub search label',
+    () async {
+      final provider = SeanimeJavascriptProvider(
+        _javascriptAddon(
+          id: 'server-labelled-dub-provider',
+          payload: r'''
+            class Provider {
+              getSettings() {
+                return {episodeServers: ['SUB', 'DUB'], supportsDub: false};
+              }
+              async search(input) {
+                return [{id: 'show', title: input.query, subOrDub: 'sub'}];
+              }
+              async findEpisodes(id) {
+                return [{id: 'episode', number: 1, url: 'episode'}];
+              }
+              async findEpisodeServer(episode, server) {
+                return {server, videoSources: [{
+                  url: 'https://cdn.example.com/' + server.toLowerCase() + '.mp4',
+                  quality: '1080p'
+                }]};
+              }
+            }
+          ''',
+        ),
+        validateResultTarget: (_) async {},
+      );
+
+      final results = await provider.streams(
+        const EpisodeReference(
+          anilistMediaId: 4,
+          title: 'Server Dub Fixture',
+          episode: 1,
+        ),
+      );
+
+      expect(results, hasLength(2));
+      expect(results.map((item) => item.effectiveAudioCapability).toSet(), {
+        WebStreamAudioCapability.sub,
+        WebStreamAudioCapability.dub,
+      });
+    },
+    timeout: const Timeout(Duration(seconds: 15)),
+    skip: Platform.isWindows
+        ? 'flutter_js loads its bridge from the packaged Windows app.'
+        : false,
+  );
+
+  test(
+    'Dual Audio server label produces one dual-audio result',
+    () async {
+      final provider = SeanimeJavascriptProvider(
+        _javascriptAddon(
+          id: 'server-labelled-dual-provider',
+          payload: r'''
+            class Provider {
+              getSettings() {
+                return {episodeServers: ['Dual Audio'], supportsDub: false};
+              }
+              async search(input) {
+                return [{id: 'show', title: input.query, subOrDub: 'sub'}];
+              }
+              async findEpisodes(id) {
+                return [{id: 'episode', number: 1, url: 'episode'}];
+              }
+              async findEpisodeServer(episode, server) {
+                return {server, videoSources: [{
+                  url: 'https://cdn.example.com/dual.mp4',
+                  quality: '1080p'
+                }]};
+              }
+            }
+          ''',
+        ),
+        validateResultTarget: (_) async {},
+      );
+
+      final results = await provider.streams(
+        const EpisodeReference(
+          anilistMediaId: 5,
+          title: 'Server Dual Fixture',
           episode: 1,
         ),
       );

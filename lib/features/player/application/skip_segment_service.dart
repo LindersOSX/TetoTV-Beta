@@ -50,29 +50,66 @@ bool skipSegmentLookupIsComplete({
 }
 
 const skipSegmentImmediateLookupAttemptLimit = 4;
-const skipSegmentTotalTransientLookupAttemptLimit = 6;
+const skipSegmentTotalTransientLookupAttemptLimit = 3;
 
 /// Returns a bounded retry delay for an incomplete marker lookup.
 ///
-/// The first four attempts retain the short startup cadence. Transport and
-/// service failures then receive two slower recovery attempts because the
-/// timing service can recover while playback is still active. Clean, exhausted
-/// no-matches never enter this deferred path.
+/// Clean duration-settling misses retain the short startup cadence. Transport
+/// and service failures instead use two delayed recovery attempts, keeping a
+/// community-service outage from producing a burst of identical requests.
+/// Clean, exhausted no-matches never enter this deferred path.
 Duration? skipSegmentLookupRetryDelay({
   required bool lookupComplete,
   required bool transientExternalFailure,
   required int attempts,
 }) {
   if (lookupComplete) return null;
+  if (transientExternalFailure) {
+    return switch (attempts) {
+      1 => const Duration(seconds: 15),
+      2 => const Duration(seconds: 45),
+      _ => null,
+    };
+  }
   if (attempts < skipSegmentImmediateLookupAttemptLimit) {
     return const Duration(milliseconds: 1200);
   }
-  if (!transientExternalFailure) return null;
-  return switch (attempts) {
-    4 => const Duration(seconds: 20),
-    5 => const Duration(seconds: 60),
-    _ => null,
-  };
+  return null;
+}
+
+/// Prevents duration updates from shortening a service-failure backoff.
+///
+/// The player receives frequent duration samples while an HLS manifest
+/// settles. Without a separate gate, one of those samples can cancel a delayed
+/// retry and immediately reschedule the same failed community request.
+class SkipSegmentRetryGate {
+  SkipSegmentRetryGate({DateTime Function()? clock})
+    : _clock = clock ?? DateTime.now;
+
+  final DateTime Function() _clock;
+  DateTime? _notBefore;
+
+  Duration guard(Duration requestedDelay) {
+    final requested = requestedDelay.isNegative
+        ? Duration.zero
+        : requestedDelay;
+    final notBefore = _notBefore;
+    if (notBefore == null) return requested;
+    final remaining = notBefore.difference(_clock());
+    if (remaining <= Duration.zero) return requested;
+    return remaining > requested ? remaining : requested;
+  }
+
+  void defer(Duration delay) {
+    if (delay <= Duration.zero) return;
+    final candidate = _clock().add(delay);
+    final current = _notBefore;
+    if (current == null || candidate.isAfter(current)) {
+      _notBefore = candidate;
+    }
+  }
+
+  void reset() => _notBefore = null;
 }
 
 enum SkipSegmentKind { opening, ending, recap }
@@ -110,6 +147,26 @@ class MediaChapter {
   final Duration start;
 }
 
+abstract interface class AniSkipCacheStore {
+  Future<Map<String, dynamic>?> read(String key, {bool allowExpired = false});
+
+  Future<void> write(
+    String key,
+    Map<String, dynamic> payload, {
+    required Duration maxAge,
+  });
+}
+
+enum AniSkipLookupSource { network, freshCache, staleCache }
+
+extension AniSkipLookupSourceDiagnostics on AniSkipLookupSource {
+  String get diagnosticCode => switch (this) {
+    AniSkipLookupSource.network => 'network',
+    AniSkipLookupSource.freshCache => 'fresh_cache',
+    AniSkipLookupSource.staleCache => 'stale_cache',
+  };
+}
+
 class AniSkipLookupResult {
   const AniSkipLookupResult({
     required this.segments,
@@ -118,6 +175,7 @@ class AniSkipLookupResult {
     required this.runtimeFallbackSearchComplete,
     required this.status,
     required this.transientFailureCount,
+    this.source = AniSkipLookupSource.network,
     this.failureReason,
   });
 
@@ -138,7 +196,10 @@ class AniSkipLookupResult {
 
   final AniSkipLookupStatus status;
   final int transientFailureCount;
+  final AniSkipLookupSource source;
   final AniSkipFailureReason? failureReason;
+
+  bool get usedCachedMarkers => source != AniSkipLookupSource.network;
 
   bool get hasTransientFailure =>
       status == AniSkipLookupStatus.transientFailure ||
@@ -196,19 +257,36 @@ extension AniSkipFailureReasonDiagnostics on AniSkipFailureReason {
 }
 
 class AniSkipClient {
-  AniSkipClient({Dio? dio, this.retryDelay = const Duration(milliseconds: 600)})
-    : _dio =
-          dio ??
-          Dio(
-            BaseOptions(
-              connectTimeout: const Duration(seconds: 6),
-              receiveTimeout: const Duration(seconds: 8),
-              headers: const {'Accept': 'application/json'},
-            ),
-          );
+  AniSkipClient({
+    Dio? dio,
+    this.cacheStore,
+    this.retryDelay = const Duration(milliseconds: 600),
+    this.cacheMaxAge = const Duration(days: 14),
+    this.cacheReadTimeout = const Duration(milliseconds: 500),
+  }) : assert(!cacheMaxAge.isNegative),
+       assert(cacheReadTimeout > Duration.zero),
+       _dio =
+           dio ??
+           Dio(
+             BaseOptions(
+               connectTimeout: const Duration(seconds: 6),
+               sendTimeout: const Duration(seconds: 6),
+               receiveTimeout: const Duration(seconds: 8),
+               headers: const {'Accept': 'application/json'},
+             ),
+           );
+
+  static const _cacheSchema = 1;
+  static const _cachePrefix = 'player-skip:aniskip:v1';
+  static const _maximumCachedMarkers = 32;
 
   final Dio _dio;
+  final AniSkipCacheStore? cacheStore;
   final Duration retryDelay;
+  final Duration cacheMaxAge;
+  final Duration cacheReadTimeout;
+  final Map<String, Map<String, dynamic>> _memoryCache = {};
+  final Map<String, Future<AniSkipLookupResult>> _pending = {};
 
   Future<List<SkipSegment>> segments({
     required int malMediaId,
@@ -227,18 +305,116 @@ class AniSkipClient {
     required int episode,
     required Duration episodeDuration,
     bool allowRuntimeFallback = false,
-  }) async {
+  }) {
     if (malMediaId <= 0 || episode <= 0 || episodeDuration.inSeconds <= 0) {
-      return const AniSkipLookupResult(
-        segments: [],
-        probeCount: 0,
-        usedDurationFallback: false,
-        runtimeFallbackSearchComplete: false,
-        status: AniSkipLookupStatus.permanentFailure,
-        transientFailureCount: 0,
-        failureReason: AniSkipFailureReason.invalidRequest,
+      return Future.value(
+        const AniSkipLookupResult(
+          segments: [],
+          probeCount: 0,
+          usedDurationFallback: false,
+          runtimeFallbackSearchComplete: false,
+          status: AniSkipLookupStatus.permanentFailure,
+          transientFailureCount: 0,
+          failureReason: AniSkipFailureReason.invalidRequest,
+        ),
       );
     }
+    final cacheKey = _cacheKey(malMediaId: malMediaId, episode: episode);
+    final requestKey =
+        '$cacheKey:${episodeDuration.inMilliseconds}:'
+        '$allowRuntimeFallback';
+    return _pending.putIfAbsent(requestKey, () {
+      final operation = _lookupWithCache(
+        cacheKey: cacheKey,
+        malMediaId: malMediaId,
+        episode: episode,
+        episodeDuration: episodeDuration,
+        allowRuntimeFallback: allowRuntimeFallback,
+      );
+      operation.whenComplete(() {
+        if (identical(_pending[requestKey], operation)) {
+          _pending.remove(requestKey);
+        }
+      });
+      return operation;
+    });
+  }
+
+  Future<AniSkipLookupResult> _lookupWithCache({
+    required String cacheKey,
+    required int malMediaId,
+    required int episode,
+    required Duration episodeDuration,
+    required bool allowRuntimeFallback,
+  }) async {
+    final fresh = await _readCachedMarkers(
+      cacheKey,
+      episodeDuration: episodeDuration,
+    );
+    if (fresh != null) {
+      return _cachedResult(fresh, source: AniSkipLookupSource.freshCache);
+    }
+
+    // Start the stale read alongside the network request. If the service times
+    // out, validated cached markers are already available without another
+    // storage round trip on the player's critical intro window.
+    final staleFuture = _readCachedMarkers(
+      cacheKey,
+      episodeDuration: episodeDuration,
+      allowExpired: true,
+    );
+    late final _AniSkipNetworkLookup network;
+    try {
+      network = await _lookupNetwork(
+        malMediaId: malMediaId,
+        episode: episode,
+        episodeDuration: episodeDuration,
+        allowRuntimeFallback: allowRuntimeFallback,
+      );
+    } catch (_) {
+      network = const _AniSkipNetworkLookup(
+        result: AniSkipLookupResult(
+          segments: <SkipSegment>[],
+          probeCount: 0,
+          usedDurationFallback: false,
+          runtimeFallbackSearchComplete: false,
+          status: AniSkipLookupStatus.transientFailure,
+          transientFailureCount: 1,
+          failureReason: AniSkipFailureReason.unknownTransport,
+        ),
+      );
+    }
+    if (network.result.segments.isNotEmpty && network.cacheResults != null) {
+      final payload = _cachePayload(
+        network.cacheResults!,
+        episodeDuration: episodeDuration,
+        usedDurationFallback: network.result.usedDurationFallback,
+      );
+      if (payload != null) {
+        // Keep the safe copy immediately and persist it in the background.
+        // Optional cache I/O must never delay playback controls.
+        _memoryCache[cacheKey] = payload;
+        unawaited(_writeCache(cacheKey, payload));
+      }
+      return network.result;
+    }
+    if (!network.result.hasTransientFailure) return network.result;
+
+    final stale = await staleFuture;
+    if (stale == null) return network.result;
+    return _cachedResult(
+      stale,
+      source: AniSkipLookupSource.staleCache,
+      failedNetworkResult: network.result,
+    );
+  }
+
+  Future<_AniSkipNetworkLookup> _lookupNetwork({
+    required int malMediaId,
+    required int episode,
+    required Duration episodeDuration,
+    required bool allowRuntimeFallback,
+  }) async {
     final actualSeconds = episodeDuration.inMilliseconds / 1000;
     final probeLengths = allowRuntimeFallback
         ? aniSkipRuntimeProbes(episodeDuration)
@@ -248,16 +424,19 @@ class AniSkipClient {
     var observedCleanNoMatch = false;
     var hadUnresolvedTransientFailure = false;
     var transientFailureCount = 0;
+    var probesAttempted = 0;
     for (var probeIndex = 0; probeIndex < probeLengths.length; probeIndex++) {
+      probesAttempted = probeIndex + 1;
       final probeLength = probeLengths[probeIndex];
       final uri = _aniSkipUri(
         malMediaId: malMediaId,
         episode: episode,
         episodeLength: probeLength,
       );
-      // Preserve the existing one-shot transient retry for the exact runtime.
-      // The nearby-duration probes already provide bounded retry diversity and
-      // therefore execute once each to avoid hammering the community API.
+      // Only transport failures at the exact runtime receive one immediate
+      // retry. A 429/5xx response already proves the community service is
+      // reachable but unavailable, so nearby-runtime probes cannot help and
+      // are deferred to the player's bounded recovery cadence.
       final requestAttempts = probeIndex == 0 ? 2 : 1;
       Map<String, dynamic>? body;
       var receivedResponse = false;
@@ -292,61 +471,205 @@ class AniSkipClient {
           }
           final failureReason = _aniSkipFailureReason(error);
           if (!_retryableAniSkipFailure(error)) {
-            return AniSkipLookupResult(
-              segments: const [],
-              probeCount: probeIndex + 1,
-              usedDurationFallback: false,
-              runtimeFallbackSearchComplete: false,
-              status: AniSkipLookupStatus.permanentFailure,
-              transientFailureCount: transientFailureCount,
-              failureReason: failureReason,
+            return _AniSkipNetworkLookup(
+              result: AniSkipLookupResult(
+                segments: const [],
+                probeCount: probesAttempted,
+                usedDurationFallback: false,
+                runtimeFallbackSearchComplete: false,
+                status: AniSkipLookupStatus.permanentFailure,
+                transientFailureCount: transientFailureCount,
+                failureReason: failureReason,
+              ),
             );
           }
           lastTransientFailure = error;
           lastFailureReason = failureReason;
           transientFailureCount++;
-          if (attempt + 1 < requestAttempts) {
-            await Future<void>.delayed(retryDelay);
-          }
+          final retryImmediately =
+              attempt + 1 < requestAttempts &&
+              failureReason != AniSkipFailureReason.serverError &&
+              failureReason != AniSkipFailureReason.rateLimited;
+          if (!retryImmediately) break;
+          await Future<void>.delayed(retryDelay);
         }
       }
-      if (!receivedResponse) hadUnresolvedTransientFailure = true;
+      if (!receivedResponse) {
+        hadUnresolvedTransientFailure = true;
+        break;
+      }
       if (body == null || body['found'] != true || body['results'] is! List) {
         if (body != null) observedCleanNoMatch = true;
         continue;
       }
+      final rawResults = body['results'] as List;
       final segments = _parseAniSkipSegments(
-        body['results'] as List,
+        rawResults,
         actualSeconds: actualSeconds,
       );
       if (segments.isEmpty) continue;
-      return AniSkipLookupResult(
-        segments: segments,
-        probeCount: probeIndex + 1,
-        usedDurationFallback: probeIndex > 0,
-        runtimeFallbackSearchComplete: false,
-        status: AniSkipLookupStatus.found,
-        transientFailureCount: transientFailureCount,
-        failureReason: lastFailureReason,
+      return _AniSkipNetworkLookup(
+        result: AniSkipLookupResult(
+          segments: segments,
+          probeCount: probesAttempted,
+          usedDurationFallback: probeIndex > 0,
+          runtimeFallbackSearchComplete: false,
+          status: AniSkipLookupStatus.found,
+          transientFailureCount: transientFailureCount,
+          failureReason: lastFailureReason,
+        ),
+        cacheResults: rawResults,
       );
     }
     // Retain this assertion in debug builds: a transient count must always
     // carry the source exception that supplied its safe diagnostic class.
     assert(transientFailureCount == 0 || lastTransientFailure != null);
-    return AniSkipLookupResult(
-      segments: const [],
-      probeCount: probeLengths.length,
-      usedDurationFallback: false,
-      runtimeFallbackSearchComplete:
-          allowRuntimeFallback && !hadUnresolvedTransientFailure,
-      status: hadUnresolvedTransientFailure
-          ? observedCleanNoMatch
-                ? AniSkipLookupStatus.partialTransientFailure
-                : AniSkipLookupStatus.transientFailure
-          : AniSkipLookupStatus.noMatch,
-      transientFailureCount: transientFailureCount,
-      failureReason: lastFailureReason,
+    return _AniSkipNetworkLookup(
+      result: AniSkipLookupResult(
+        segments: const [],
+        probeCount: probesAttempted,
+        usedDurationFallback: false,
+        runtimeFallbackSearchComplete:
+            allowRuntimeFallback &&
+            probesAttempted == probeLengths.length &&
+            !hadUnresolvedTransientFailure,
+        status: hadUnresolvedTransientFailure
+            ? observedCleanNoMatch
+                  ? AniSkipLookupStatus.partialTransientFailure
+                  : AniSkipLookupStatus.transientFailure
+            : AniSkipLookupStatus.noMatch,
+        transientFailureCount: transientFailureCount,
+        failureReason: lastFailureReason,
+      ),
     );
+  }
+
+  String _cacheKey({required int malMediaId, required int episode}) =>
+      '$_cachePrefix:$malMediaId:$episode';
+
+  Future<_AniSkipCachedMarkers?> _readCachedMarkers(
+    String key, {
+    required Duration episodeDuration,
+    bool allowExpired = false,
+  }) async {
+    Map<String, dynamic>? payload = _memoryCache[key];
+    if (payload == null) {
+      final store = cacheStore;
+      if (store == null) return null;
+      try {
+        payload = await store
+            .read(key, allowExpired: allowExpired)
+            .timeout(cacheReadTimeout);
+      } catch (_) {
+        return null;
+      }
+    }
+    if (payload == null || payload['schema'] != _cacheSchema) return null;
+    final cachedDurationMs = payload['requested_duration_ms'];
+    if (cachedDurationMs is! num || cachedDurationMs <= 0) return null;
+    if (!skipSegmentDurationsCompatible(
+      Duration(milliseconds: cachedDurationMs.round()),
+      episodeDuration,
+    )) {
+      return null;
+    }
+    final rawResults = payload['results'];
+    if (rawResults is! List) return null;
+    final safeResults = _safeCacheResults(rawResults);
+    if (safeResults.isEmpty) return null;
+    final segments = _parseAniSkipSegments(
+      safeResults,
+      actualSeconds: episodeDuration.inMilliseconds / 1000,
+    );
+    if (segments.isEmpty) return null;
+    return _AniSkipCachedMarkers(
+      segments: segments,
+      usedDurationFallback: payload['used_duration_fallback'] == true,
+    );
+  }
+
+  AniSkipLookupResult _cachedResult(
+    _AniSkipCachedMarkers cached, {
+    required AniSkipLookupSource source,
+    AniSkipLookupResult? failedNetworkResult,
+  }) => AniSkipLookupResult(
+    segments: cached.segments,
+    probeCount: failedNetworkResult?.probeCount ?? 0,
+    usedDurationFallback: cached.usedDurationFallback,
+    runtimeFallbackSearchComplete: false,
+    status: AniSkipLookupStatus.found,
+    transientFailureCount: failedNetworkResult?.transientFailureCount ?? 0,
+    source: source,
+    failureReason: failedNetworkResult?.failureReason,
+  );
+
+  Map<String, dynamic>? _cachePayload(
+    List<dynamic> rawResults, {
+    required Duration episodeDuration,
+    required bool usedDurationFallback,
+  }) {
+    final actualSeconds = episodeDuration.inMilliseconds / 1000;
+    final results = _safeCacheResults(rawResults)
+        .where(
+          (result) => _parseAniSkipSegments(<Map<String, dynamic>>[
+            result,
+          ], actualSeconds: actualSeconds).isNotEmpty,
+        )
+        .toList(growable: false);
+    if (results.isEmpty) return null;
+    return <String, dynamic>{
+      'schema': _cacheSchema,
+      'requested_duration_ms': episodeDuration.inMilliseconds,
+      'used_duration_fallback': usedDurationFallback,
+      'results': results,
+    };
+  }
+
+  List<Map<String, dynamic>> _safeCacheResults(List<dynamic> rawResults) {
+    final safe = <Map<String, dynamic>>[];
+    for (final item in rawResults) {
+      if (item is! Map) continue;
+      final skipType = item['skipType']?.toString();
+      if (_aniSkipKind(skipType) == null) continue;
+      final interval = item['interval'];
+      final start = interval is Map ? interval['startTime'] : null;
+      final end = interval is Map ? interval['endTime'] : null;
+      if (start is! num || end is! num) continue;
+      final startSeconds = start.toDouble();
+      final endSeconds = end.toDouble();
+      if (!startSeconds.isFinite ||
+          !endSeconds.isFinite ||
+          startSeconds < 0 ||
+          endSeconds <= startSeconds) {
+        continue;
+      }
+      final reference = item['episodeLength'];
+      final referenceSeconds = reference is num ? reference.toDouble() : null;
+      if (referenceSeconds != null &&
+          (!referenceSeconds.isFinite || referenceSeconds <= 0)) {
+        continue;
+      }
+      safe.add(<String, dynamic>{
+        'interval': <String, dynamic>{
+          'startTime': startSeconds,
+          'endTime': endSeconds,
+        },
+        'skipType': skipType,
+        'episodeLength': ?referenceSeconds,
+      });
+      if (safe.length >= _maximumCachedMarkers) break;
+    }
+    return safe;
+  }
+
+  Future<void> _writeCache(String key, Map<String, dynamic> payload) async {
+    final store = cacheStore;
+    if (store == null) return;
+    try {
+      await store.write(key, payload, maxAge: cacheMaxAge);
+    } catch (_) {
+      // Marker persistence is an optional playback optimization.
+    }
   }
 
   Uri _aniSkipUri({
@@ -419,6 +742,23 @@ class AniSkipClient {
     selected.sort((a, b) => a.start.compareTo(b.start));
     return selected;
   }
+}
+
+class _AniSkipNetworkLookup {
+  const _AniSkipNetworkLookup({required this.result, this.cacheResults});
+
+  final AniSkipLookupResult result;
+  final List<dynamic>? cacheResults;
+}
+
+class _AniSkipCachedMarkers {
+  const _AniSkipCachedMarkers({
+    required this.segments,
+    required this.usedDurationFallback,
+  });
+
+  final List<SkipSegment> segments;
+  final bool usedDurationFallback;
 }
 
 bool _retryableAniSkipFailure(DioException error) {

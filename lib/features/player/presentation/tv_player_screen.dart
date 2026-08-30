@@ -21,6 +21,7 @@ import 'package:anime_tv/features/local_media/domain/library_episode_source.dart
 import 'package:anime_tv/features/player/application/filler_episode_navigation.dart';
 import 'package:anime_tv/features/player/application/next_episode_prewarm_policy.dart';
 import 'package:anime_tv/features/player/application/skip_segment_service.dart';
+import 'package:anime_tv/features/player/data/aniskip_cache_store.dart';
 import 'package:anime_tv/features/player/domain/library_playback_request.dart';
 import 'package:anime_tv/features/player/presentation/filler_skip_notification.dart';
 import 'package:anime_tv/features/player/presentation/player_control_overlay.dart';
@@ -630,6 +631,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   late final Player _player;
   late final VideoController _controller;
   late final TetoTvDatabase _database;
+  late final AniSkipClient _aniSkipClient;
   late final PlaybackDiagnosticSessionRecorder _playbackDiagnostics;
   late final NextEpisodePreparationController _nextEpisodePreparation;
   late final WatchPartyPlaybackEngineHandle _watchPartyHandle;
@@ -682,12 +684,15 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   StreamSubscription<void>? _completedSubscription;
   List<SkipSegment> _skips = const [];
   Timer? _skipLoadTimer;
+  final SkipSegmentRetryGate _skipLoadRetryGate = SkipSegmentRetryGate();
   Duration? _skipDurationCandidate;
   bool _skipLoadInFlight = false;
   bool _skipLoadComplete = false;
   int _skipLoadAttempts = 0;
   int _skipDurationRestarts = 0;
   int _skipLoadGeneration = 0;
+  bool _skipLoadExhaustedTransientFailure = false;
+  bool _skipTimingUnavailableNoticeShown = false;
   SkipSegment? _activeSkip;
   bool _canSkipNow = false;
   StreamSubscription<VideoParams>? _videoParamsSubscription;
@@ -1174,6 +1179,9 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     // Final checkpoints and preferences are written during State.dispose,
     // after Riverpod has invalidated ConsumerState.ref.
     _database = ref.read(tetoTvDatabaseProvider);
+    _aniSkipClient = AniSkipClient(
+      cacheStore: TetoTvAniSkipCacheStore(_database),
+    );
     _nextEpisodePreparation = ref.read(
       nextEpisodePreparationControllerProvider,
     );
@@ -1824,6 +1832,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       return;
     }
     if (_skipLoadComplete) {
+      if (_skipLoadExhaustedTransientFailure) return;
       final completedDuration = _skipDurationCandidate;
       if (_skips.isNotEmpty ||
           completedDuration == null ||
@@ -1847,7 +1856,8 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     }
     _skipLoadTimer?.cancel();
     final generation = _skipLoadGeneration;
-    _skipLoadTimer = Timer(delay, () {
+    final guardedDelay = _skipLoadRetryGate.guard(delay);
+    _skipLoadTimer = Timer(guardedDelay, () {
       if (generation != _skipLoadGeneration) return;
       unawaited(_loadSkipSegments(duration, generation: generation));
     });
@@ -1888,6 +1898,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     var externalTransientFailure = false;
     var externalTerminalFailure = false;
     var externalStatusClass = 'not_requested';
+    var externalLookupSource = AniSkipLookupSource.network.diagnosticCode;
     String? externalFailureReason;
     var externalTransientFailureCount = 0;
     try {
@@ -1901,7 +1912,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
         externalFuture = Future<List<SkipSegment>>.value(const <SkipSegment>[]);
       } else {
         externalStatus = 'requested';
-        externalFuture = AniSkipClient()
+        externalFuture = _aniSkipClient
             .lookup(
               malMediaId: malMediaId,
               episode: episode,
@@ -1910,6 +1921,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
             )
             .then((result) {
               externalStatusClass = result.status.diagnosticCode;
+              externalLookupSource = result.source.diagnosticCode;
               externalFailureReason = result.failureReason?.diagnosticCode;
               externalTransientFailureCount = result.transientFailureCount;
               externalTransientFailure =
@@ -1935,6 +1947,10 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
                         'no_match_after_nearby_runtimes',
                       _ => 'no_match',
                     }
+                  : result.source == AniSkipLookupSource.staleCache
+                  ? 'found_stale_cache'
+                  : result.source == AniSkipLookupSource.freshCache
+                  ? 'found_cache'
                   : result.usedDurationFallback
                   ? 'found_nearby_runtime'
                   : 'found';
@@ -1983,6 +1999,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
           communityProbeCount: externalProbeCount,
           durationFallbackUsed: externalDurationFallbackUsed,
           communityStatusClass: externalStatusClass,
+          communityLookupSource: externalLookupSource,
           communityFailureReason: externalFailureReason,
           communityTransientFailureCount: externalTransientFailureCount,
         );
@@ -2013,6 +2030,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
         communityProbeCount: externalProbeCount,
         durationFallbackUsed: externalDurationFallbackUsed,
         communityStatusClass: externalStatusClass,
+        communityLookupSource: externalLookupSource,
         communityFailureReason: externalFailureReason,
         communityTransientFailureCount: externalTransientFailureCount,
       );
@@ -2020,6 +2038,19 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       if (generation != _skipLoadGeneration) return;
       // Chapter and community skip data are optional playback enhancements.
       externalFailed = true;
+      externalTransientFailure = true;
+      externalStatus = 'request_failed';
+      if (externalStatusClass == 'not_requested') {
+        externalStatusClass = 'unexpected_failure';
+      }
+      externalFailureReason ??= 'unexpected_error';
+      _skipLoadComplete = skipSegmentLookupIsComplete(
+        isWebStream: _currentStream.isWebStream,
+        externalFailed: true,
+        hasMarkers: _skips.isNotEmpty,
+        attempts: _skipLoadAttempts,
+        transientExternalFailure: true,
+      );
       _recordSkipSegmentDiagnostic(
         status: 'load_failed',
         externalStatus: externalStatus,
@@ -2028,19 +2059,37 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
         requestedDuration: duration,
         currentDuration: _player.state.duration,
         communityStatusClass: externalStatusClass,
+        communityLookupSource: externalLookupSource,
         communityFailureReason: externalFailureReason,
         communityTransientFailureCount: externalTransientFailureCount,
       );
     } finally {
       if (generation == _skipLoadGeneration) {
         _skipLoadInFlight = false;
+        if (externalTransientFailure &&
+            _skipLoadAttempts >= skipSegmentTotalTransientLookupAttemptLimit) {
+          _skipLoadComplete = true;
+          _skipLoadExhaustedTransientFailure = true;
+        } else if (!externalTransientFailure) {
+          _skipLoadExhaustedTransientFailure = false;
+        }
+        if (mounted &&
+            externalTransientFailure &&
+            _skips.isEmpty &&
+            !_skipTimingUnavailableNoticeShown) {
+          _skipTimingUnavailableNoticeShown = true;
+          _showTrackMessage('Intro/outro timing is temporarily unavailable');
+        }
         final retryDelay = skipSegmentLookupRetryDelay(
           lookupComplete: _skipLoadComplete,
           transientExternalFailure: externalTransientFailure,
           attempts: _skipLoadAttempts,
         );
         if (mounted && retryDelay != null) {
+          _skipLoadRetryGate.defer(retryDelay);
           _scheduleSkipSegmentLoad(_player.state.duration, delay: retryDelay);
+        } else if (!externalTransientFailure) {
+          _skipLoadRetryGate.reset();
         }
       }
     }
@@ -2050,11 +2099,14 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     final skipHadFocus = _skipControlFocus.hasFocus;
     _skipLoadGeneration++;
     _skipLoadTimer?.cancel();
+    _skipLoadRetryGate.reset();
     _skipLoadInFlight = false;
     _skipLoadComplete = false;
     _skipLoadAttempts = 0;
     _skipDurationRestarts = 0;
     _skipDurationCandidate = null;
+    _skipLoadExhaustedTransientFailure = false;
+    _skipTimingUnavailableNoticeShown = false;
     _consumedSkipSegments.clear();
     _suppressedAutomaticSkipSegments.clear();
     _diagnosticActivatedSkipKeys.clear();
@@ -2080,6 +2132,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     int communityProbeCount = 0,
     bool durationFallbackUsed = false,
     String? communityStatusClass,
+    String? communityLookupSource,
     String? communityFailureReason,
     int communityTransientFailureCount = 0,
   }) {
@@ -2097,6 +2150,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
           'community_marker_count': externalCount,
           'community_status': externalStatus,
           'community_status_class': ?communityStatusClass,
+          'community_lookup_source': ?communityLookupSource,
           'community_failure_reason': ?communityFailureReason,
           'community_transient_failure_count': communityTransientFailureCount,
           'community_probe_count': communityProbeCount,

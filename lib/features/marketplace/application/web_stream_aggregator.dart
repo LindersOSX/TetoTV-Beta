@@ -103,24 +103,65 @@ class WebStreamAggregator {
         existing.wasAbandoned ||
         expired ||
         (refresh && existing.isComplete);
+    final obsoleteSessions = _sharedSessions.entries
+        .where(
+          (entry) =>
+              entry.key != key &&
+              !entry.value.isComplete &&
+              !entry.value.wasAbandoned,
+        )
+        .map((entry) => entry.value)
+        .toList(growable: false);
     final session = shouldReplace
-        ? _startSharedSession(key, episode)
+        ? _startSharedSession(key, episode, obsoleteSessions: obsoleteSessions)
         : existing;
+    if (!shouldReplace && obsoleteSessions.isNotEmpty) {
+      // A retained route can still be mounted briefly after navigation. Only
+      // the foreground episode should own provider runtimes, even when this
+      // call reattaches to an already-running session for that episode.
+      for (final obsolete in obsoleteSessions) {
+        unawaited(obsolete.cancel());
+      }
+    }
     return session.stream;
   }
 
   _SharedWebSearchSession _startSharedSession(
     String key,
-    EpisodeReference episode,
-  ) {
+    EpisodeReference episode, {
+    List<_SharedWebSearchSession> obsoleteSessions = const [],
+  }) {
     final session = _SharedWebSearchSession(
       zeroListenerGrace: sharedSessionGrace,
     );
+    session.prepare();
     _sharedSessions[key] = session;
     unawaited(
-      session.run(searchIncrementally(episode)).whenComplete(_pruneSessions),
+      _runSharedSession(
+        session,
+        episode,
+        obsoleteSessions: obsoleteSessions,
+      ).whenComplete(_pruneSessions),
     );
     return session;
+  }
+
+  Future<void> _runSharedSession(
+    _SharedWebSearchSession session,
+    EpisodeReference episode, {
+    required List<_SharedWebSearchSession> obsoleteSessions,
+  }) async {
+    try {
+      // Route replacements and rapid Watch Party episode changes can leave
+      // the prior resolver mounted for a few frames. Finish cancelling that
+      // search before starting another provider wave so the two episodes do
+      // not compete for QuickJS runtimes and network capacity.
+      await Future.wait(obsoleteSessions.map((obsolete) => obsolete.cancel()));
+      if (session.isComplete) return;
+      await session.run(searchIncrementally(episode));
+    } catch (error, stackTrace) {
+      await session.fail(error, stackTrace);
+    }
   }
 
   void _pruneSessions() {
@@ -432,13 +473,20 @@ class WebStreamAggregator {
   }
 }
 
-String _episodeSearchKey(EpisodeReference episode) => [
-  episode.anilistMediaId,
-  episode.malMediaId ?? 0,
-  episode.episode,
-  episode.year ?? 0,
-  episode.title.trim().toLowerCase(),
-].join(':');
+String _episodeSearchKey(EpisodeReference episode) {
+  if (episode.anilistMediaId > 0) {
+    return 'anilist:${episode.anilistMediaId}:${episode.episode}';
+  }
+  if ((episode.malMediaId ?? 0) > 0) {
+    return 'mal:${episode.malMediaId}:${episode.episode}';
+  }
+  return [
+    'title',
+    episode.title.trim().toLowerCase(),
+    episode.year ?? 0,
+    episode.episode,
+  ].join(':');
+}
 
 class _SharedWebSearchSession {
   _SharedWebSearchSession({required this.zeroListenerGrace});
@@ -450,10 +498,17 @@ class _SharedWebSearchSession {
   WebStreamSearchProgress? _latest;
   StreamSubscription<WebStreamSearchProgress>? _sourceSubscription;
   Timer? _zeroListenerTimer;
-  Completer<void>? _completion;
+  final Completer<void> _completion = Completer<void>();
   int _listenerCount = 0;
+  bool _prepared = false;
   bool isComplete = false;
   bool wasAbandoned = false;
+
+  void prepare() {
+    if (_prepared || isComplete) return;
+    _prepared = true;
+    _scheduleAbandonedCancellation();
+  }
 
   Stream<WebStreamSearchProgress> get stream => Stream.multi((listener) {
     _listenerCount++;
@@ -474,7 +529,8 @@ class _SharedWebSearchSession {
   });
 
   Future<void> run(Stream<WebStreamSearchProgress> source) {
-    final completion = _completion = Completer<void>();
+    if (isComplete) return _completion.future;
+    _prepared = true;
     _sourceSubscription = source.listen(
       (progress) {
         _latest = progress;
@@ -486,19 +542,36 @@ class _SharedWebSearchSession {
       onDone: _finish,
     );
     _scheduleAbandonedCancellation();
-    return completion.future;
+    return _completion.future;
+  }
+
+  Future<void> cancel() async {
+    if (isComplete) return _completion.future;
+    wasAbandoned = true;
+    try {
+      await _sourceSubscription?.cancel();
+    } catch (_) {
+      // Cancellation is best effort; the shared stream must still close so a
+      // replacement episode can begin instead of hanging behind stale work.
+    } finally {
+      await _finish();
+    }
+  }
+
+  Future<void> fail(Object error, StackTrace stackTrace) async {
+    if (isComplete) return;
+    if (!_updates.isClosed) _updates.addError(error, stackTrace);
+    await _finish();
   }
 
   void _scheduleAbandonedCancellation() {
-    if (isComplete || _listenerCount != 0 || _sourceSubscription == null) {
+    if (isComplete || _listenerCount != 0 || !_prepared) {
       return;
     }
     _zeroListenerTimer?.cancel();
     _zeroListenerTimer = Timer(zeroListenerGrace, () async {
       if (isComplete || _listenerCount != 0) return;
-      wasAbandoned = true;
-      await _sourceSubscription?.cancel();
-      await _finish();
+      await cancel();
     });
   }
 
@@ -508,8 +581,7 @@ class _SharedWebSearchSession {
     _zeroListenerTimer?.cancel();
     _zeroListenerTimer = null;
     if (!_updates.isClosed) await _updates.close();
-    final completion = _completion;
-    if (completion != null && !completion.isCompleted) completion.complete();
+    if (!_completion.isCompleted) _completion.complete();
   }
 }
 
@@ -708,6 +780,12 @@ Map<String, Object?> webProviderVisibilityDiagnosticDetails({
   required int visibleResults,
   required String audioFilter,
   required String qualityFilter,
+  int rawUnknownAudioResults = 0,
+  int rawSubAudioResults = 0,
+  int rawDubAudioResults = 0,
+  int rawDualAudioResults = 0,
+  int strictAudioMatches = 0,
+  int unknownAudioFallbacks = 0,
 }) => {
   'session_id': _safeWebProviderDiagnosticSessionId(diagnosticSessionId),
   'phase': _safeWebProviderDiagnosticPhase(phase),
@@ -716,6 +794,30 @@ Map<String, Object?> webProviderVisibilityDiagnosticDetails({
     {'kind': 'raw_results', 'count': rawResults.clamp(0, 99999)},
     {'kind': 'visible_providers', 'count': visibleProviders.clamp(0, 9999)},
     {'kind': 'visible_results', 'count': visibleResults.clamp(0, 99999)},
+    {
+      'kind': 'raw_audio_unknown_results',
+      'count': rawUnknownAudioResults.clamp(0, 99999),
+    },
+    {
+      'kind': 'raw_audio_sub_results',
+      'count': rawSubAudioResults.clamp(0, 99999),
+    },
+    {
+      'kind': 'raw_audio_dub_results',
+      'count': rawDubAudioResults.clamp(0, 99999),
+    },
+    {
+      'kind': 'raw_audio_dual_results',
+      'count': rawDualAudioResults.clamp(0, 99999),
+    },
+    {
+      'kind': 'strict_audio_matches',
+      'count': strictAudioMatches.clamp(0, 99999),
+    },
+    {
+      'kind': 'unknown_audio_fallbacks',
+      'count': unknownAudioFallbacks.clamp(0, 99999),
+    },
   ],
   'audio_mode': const {'all', 'sub', 'dub'}.contains(audioFilter)
       ? audioFilter
@@ -933,21 +1035,36 @@ Future<_WebProviderOutcome> _searchWebProvider(
   WebProviderSuccessCallback? onSuccess,
   WebProviderFailureCallback? onFailure,
 }) async {
+  final providerCancellation = WebProviderCancellation();
+  final removeParentCancellationListener = cancellation.addListener(
+    providerCancellation.cancel,
+  );
   try {
     cancellation.throwIfCancelled();
+    final providerSearch = provider
+        .streams(episode, cancellation: providerCancellation)
+        .timeout(
+          deadline,
+          onTimeout: () {
+            // The worker-pool deadline must also stop this provider's isolate
+            // and network work. The parent token belongs to every provider,
+            // so cancelling it here would incorrectly discard valid peers.
+            providerCancellation.cancel();
+            throw TimeoutException(
+              'Provider exceeded its discovery deadline.',
+              deadline,
+            );
+          },
+        );
     final streams = await Future.any<List<WebStreamResult>>([
-      provider.streams(episode, cancellation: cancellation),
+      providerSearch,
       cancellation.whenCancelled.then<List<WebStreamResult>>(
         (_) => throw const WebProviderSearchCancelled(),
       ),
-    ]).timeout(deadline);
+    ]);
     cancellation.throwIfCancelled();
     if (streams.isEmpty) {
-      try {
-        await onSuccess?.call(provider, const []);
-      } catch (_) {
-        // Health bookkeeping must not turn a normal no-match into a failure.
-      }
+      _invokeWebProviderSuccess(onSuccess, provider, const []);
       final seanime = provider is SeanimeJavascriptProvider ? provider : null;
       return _WebProviderOutcome(
         providerId: provider.id,
@@ -968,11 +1085,12 @@ Future<_WebProviderOutcome> _searchWebProvider(
         .where((stream) => _webStreamMatchesRequestedEpisode(stream, episode))
         .toList(growable: false);
     if (compatible.isEmpty) {
-      try {
-        await onFailure?.call(provider, const _EpisodeIdentityNoMatch(), true);
-      } catch (_) {
-        // No-match bookkeeping is best effort and must not block discovery.
-      }
+      _invokeWebProviderFailure(
+        onFailure,
+        provider,
+        const _EpisodeIdentityNoMatch(),
+        true,
+      );
       final seanime = provider is SeanimeJavascriptProvider ? provider : null;
       return _WebProviderOutcome(
         providerId: provider.id,
@@ -989,11 +1107,7 @@ Future<_WebProviderOutcome> _searchWebProvider(
         ),
       );
     }
-    try {
-      await onSuccess?.call(provider, compatible);
-    } catch (_) {
-      // Health bookkeeping must not hide a provider's usable streams.
-    }
+    _invokeWebProviderSuccess(onSuccess, provider, compatible);
     return _WebProviderOutcome(providerId: provider.id, streams: compatible);
   } catch (error) {
     if (error is WebProviderSearchCancelled || cancellation.isCancelled) {
@@ -1002,11 +1116,7 @@ Future<_WebProviderOutcome> _searchWebProvider(
     final noMatch = isSeanimeProviderNoMatch(error);
     final details = seanimeProviderFailureDetails(error);
     final seanime = provider is SeanimeJavascriptProvider ? provider : null;
-    try {
-      await onFailure?.call(provider, error, noMatch);
-    } catch (_) {
-      // Diagnostics are best effort and must never block discovery.
-    }
+    _invokeWebProviderFailure(onFailure, provider, error, noMatch);
     return _WebProviderOutcome(
       providerId: provider.id,
       failure: WebProviderFailure(
@@ -1027,7 +1137,34 @@ Future<_WebProviderOutcome> _searchWebProvider(
             : _shortMessage(error),
       ),
     );
+  } finally {
+    removeParentCancellationListener();
   }
+}
+
+void _invokeWebProviderSuccess(
+  WebProviderSuccessCallback? callback,
+  WebStreamingProvider provider,
+  List<WebStreamResult> streams,
+) {
+  if (callback == null) return;
+  unawaited(
+    Future<void>.sync(() => callback(provider, streams)).catchError((_) {}),
+  );
+}
+
+void _invokeWebProviderFailure(
+  WebProviderFailureCallback? callback,
+  WebStreamingProvider provider,
+  Object error,
+  bool noMatch,
+) {
+  if (callback == null) return;
+  unawaited(
+    Future<void>.sync(
+      () => callback(provider, error, noMatch),
+    ).catchError((_) {}),
+  );
 }
 
 /// Internal, bounded signal used only to classify a provider result as a

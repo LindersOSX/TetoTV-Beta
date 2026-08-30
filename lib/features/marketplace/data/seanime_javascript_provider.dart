@@ -725,19 +725,17 @@ List<Map<String, dynamic>> mergeDuplicateWebStreamItems(
       continue;
     }
 
-    final existingCapability = webStreamAudioCapabilityFromWire(
-      existing['audioCapability'],
-    );
-    final itemCapability = webStreamAudioCapabilityFromWire(
-      item['audioCapability'],
-    );
+    // Read the complete bounded provider result rather than only the normalized
+    // field. Older extensions may report complementary `subOrDub`, track, or
+    // boolean evidence on duplicate Sub/Dub results.
+    final existingCapability = webStreamAudioCapabilityFromWire(existing);
+    final itemCapability = webStreamAudioCapabilityFromWire(item);
     final mergedCapability = mergeWebStreamAudioCapabilities(
       existingCapability,
       itemCapability,
     );
     final winner =
-        _rawAudioCapabilityScore(item['audioCapability']) >
-            _rawAudioCapabilityScore(existing['audioCapability'])
+        _rawAudioCapabilityScore(item) > _rawAudioCapabilityScore(existing)
         ? item
         : existing;
     final wireValue = _webStreamAudioCapabilityWireValue(mergedCapability);
@@ -748,7 +746,87 @@ List<Map<String, dynamic>> mergeDuplicateWebStreamItems(
 
 bool isHlsInspectionCandidate(Map<String, dynamic> item) {
   final url = '${item['url'] ?? ''}'.toLowerCase();
-  return url.contains('.m3u8');
+  final declaredType = [
+    item['streamType'],
+    item['type'],
+  ].whereType<Object>().join(' ').trim().toLowerCase();
+  final normalizedType = declaredType.replaceAll(RegExp(r'[^a-z0-9]+'), ' ');
+  return url.contains('.m3u8') ||
+      RegExp(r'(^|\s)(hls|m3u8)(\s|$)').hasMatch(normalizedType) ||
+      normalizedType.contains('mpegurl');
+}
+
+bool _isTransientHlsInspectionStatus(int status) =>
+    status >= 500 && status <= 599;
+
+bool _isTransientHlsInspectionFailure(Object error) {
+  if (error is TimeoutException || error is SocketException) return true;
+  if (error is! DioException) return false;
+  final status = error.response?.statusCode;
+  if (status != null && _isTransientHlsInspectionStatus(status)) return true;
+  if (error.error is TimeoutException || error.error is SocketException) {
+    return true;
+  }
+  return switch (error.type) {
+    DioExceptionType.connectionTimeout ||
+    DioExceptionType.sendTimeout ||
+    DioExceptionType.receiveTimeout ||
+    DioExceptionType.connectionError ||
+    // `_safeAddonRequest` uses cancellation for its bounded overall deadline.
+    // A real provider-search cancellation is rethrown before this is consulted.
+    DioExceptionType.cancel => true,
+    _ => false,
+  };
+}
+
+/// Runs one HLS metadata request and, at most once, retries a transient
+/// network/timeout/5xx outcome. The provider cancellation signal always wins
+/// over the retry so leaving the resolver cannot start another request.
+Future<T> runHlsInspectionWithTransientRetry<T>(
+  Future<T> Function(int attempt) operation, {
+  required bool Function(T result) shouldRetryResult,
+  WebProviderCancellation? cancellation,
+  Duration retryDelay = const Duration(milliseconds: 120),
+}) async {
+  for (var attempt = 0; attempt < 2; attempt++) {
+    cancellation?.throwIfCancelled();
+    try {
+      final result = await operation(attempt);
+      cancellation?.throwIfCancelled();
+      if (attempt == 0 && shouldRetryResult(result)) {
+        await _waitForHlsInspectionRetry(retryDelay, cancellation);
+        continue;
+      }
+      return result;
+    } catch (error, stackTrace) {
+      cancellation?.throwIfCancelled();
+      if (attempt == 0 && _isTransientHlsInspectionFailure(error)) {
+        await _waitForHlsInspectionRetry(retryDelay, cancellation);
+        continue;
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+  }
+  throw StateError('Unreachable HLS inspection retry state.');
+}
+
+Future<void> _waitForHlsInspectionRetry(
+  Duration delay,
+  WebProviderCancellation? cancellation,
+) async {
+  if (delay <= Duration.zero) {
+    cancellation?.throwIfCancelled();
+    return;
+  }
+  if (cancellation == null) {
+    await Future<void>.delayed(delay);
+    return;
+  }
+  await Future.any<void>([
+    Future<void>.delayed(delay),
+    cancellation.whenCancelled,
+  ]);
+  cancellation.throwIfCancelled();
 }
 
 Future<List<Map<String, dynamic>>> _hlsVariantsForItem(
@@ -759,18 +837,23 @@ Future<List<Map<String, dynamic>>> _hlsVariantsForItem(
   final uri = safePublicHttpsUri(item['url']);
   if (uri == null) return const [];
   try {
-    final response = await _safeAddonRequest(
-      {
-        'url': uri.toString(),
-        'options': {
-          'method': 'GET',
-          'headers': item['headers'] is Map ? item['headers'] : const {},
+    final response = await runHlsInspectionWithTransientRetry(
+      (attempt) => _safeAddonRequest(
+        {
+          'url': uri.toString(),
+          'options': {
+            'method': 'GET',
+            'headers': item['headers'] is Map ? item['headers'] : const {},
+          },
         },
-      },
-      connectTimeout: const Duration(seconds: 4),
-      receiveTimeout: const Duration(seconds: 4),
-      overallTimeout: const Duration(seconds: 6),
-      maximumResponseBytes: 512 * 1024,
+        connectTimeout: Duration(seconds: attempt == 0 ? 4 : 3),
+        receiveTimeout: Duration(seconds: attempt == 0 ? 4 : 3),
+        overallTimeout: Duration(seconds: attempt == 0 ? 6 : 4),
+        maximumResponseBytes: 512 * 1024,
+        cancellation: cancellation,
+      ),
+      shouldRetryResult: (response) =>
+          _isTransientHlsInspectionStatus(response['status'] as int? ?? 0),
       cancellation: cancellation,
     );
     final status = response['status'] as int? ?? 0;
@@ -781,7 +864,10 @@ Future<List<Map<String, dynamic>>> _hlsVariantsForItem(
       '${response['body'] ?? ''}',
       Uri.parse('${response['url'] ?? uri}'),
     );
+  } on WebProviderSearchCancelled {
+    rethrow;
   } catch (_) {
+    cancellation?.throwIfCancelled();
     // A media playlist, unavailable master, or failed variant lookup leaves
     // the original Auto stream intact and selectable.
     return const [];
@@ -1145,8 +1231,37 @@ Future<List<Map<String, dynamic>>> _executeProvider(
           if (releaseYear > 0) {
             media.startDate = {year: releaseYear};
           }
-          const supportsDub = settings.supportsDub === true ||
-            settings.supportsDubbed === true || settings.hasDub === true;
+          const enabledSetting = value => value === true || value === 1 ||
+            ['true', 'yes', '1', 'on'].includes(String(value || '').trim().toLowerCase());
+          const serverName = server => server && typeof server === 'object'
+            ? String(server.name || server.label || server.id || server.value || 'Default')
+            : String(server || 'Default');
+          const serverValue = server => server && typeof server === 'object'
+            ? (server.value || server.id || server.name || server.label) : server;
+          const configuredServers = settings.episodeServers || settings.servers;
+          const configuredServerList = Array.isArray(configuredServers)
+            ? configuredServers.slice(0, 6) : [];
+          const serverAudioLabel = server => String(serverName(server) || '')
+            .toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, ' ').trim();
+          const serverSupportsDub = server => {
+            const label = serverAudioLabel(server);
+            const compact = label.replace(/ /g, '');
+            return /(^| )dub(bed)?( |\$)/.test(label) ||
+              compact.includes('dualaudio') || compact.includes('multiaudio') ||
+              compact.includes('subanddub') || compact.includes('dubandsub') ||
+              label === 'both';
+          };
+          const serverIsDubOnly = server => {
+            const label = serverAudioLabel(server);
+            const compact = label.replace(/ /g, '');
+            if (compact.includes('dualaudio') || compact.includes('multiaudio') ||
+                compact.includes('subanddub') || compact.includes('dubandsub') ||
+                label === 'both') return false;
+            return /(^| )dub(bed)?( |\$)/.test(label);
+          };
+          const supportsDub = enabledSetting(settings.supportsDub) ||
+            enabledSetting(settings.supportsDubbed) || enabledSetting(settings.hasDub) ||
+            configuredServerList.some(serverSupportsDub);
           const modes = supportsDub ? [false, true] : [false];
           const output = [];
           const errors = [];
@@ -1452,7 +1567,9 @@ Future<List<Map<String, dynamic>>> _executeProvider(
           const capabilityWithin = item => capabilityFromSupport(
             audioSupportFromMetadata(item) | audioSupportFromTracks(item)
           );
-          const audioCapabilityOf = (source, resolved, selectedResult, requestedDub) => {
+          const audioCapabilityOf = (
+            source, resolved, selectedResult, requestedDub, selectedServerName
+          ) => {
             // Stream-level evidence is more specific than a title-wide mode.
             // This keeps a real Sub-only/Dub-only variant exclusive even when
             // its provider also offers the other language elsewhere.
@@ -1461,9 +1578,17 @@ Future<List<Map<String, dynamic>>> _executeProvider(
             const resolvedCapability = capabilityWithin(resolved);
             if (resolvedCapability) return resolvedCapability;
 
+            // A server label is stream-specific and must not be hidden by a
+            // title-wide stale `subOrDub` value from an older extension.
+            const serverCapability = capabilityWithin({
+              audioCapability: selectedServerName,
+            });
+            if (serverCapability) return serverCapability;
+
             const releaseHint = [
               valueFrom(source, ['title', 'label', 'name']),
               valueFrom(resolved, ['title', 'label', 'name']),
+              selectedServerName,
             ].map(normalize).filter(Boolean).join(' ');
             if (/multi audio|dual audio|sub and dub|dub and sub/.test(releaseHint)) {
               return 'sub_and_dub';
@@ -1594,17 +1719,11 @@ Future<List<Map<String, dynamic>>> _executeProvider(
             }
             if (!selected || !episode) continue;
             foundEpisode = true;
-            const configuredServers = settings.episodeServers || settings.servers;
             let servers = Array.isArray(configuredServers) && configuredServers.length
               ? configuredServers.slice(0, 6) : ['default'];
-            const serverName = server => server && typeof server === 'object'
-              ? String(server.name || server.label || server.id || server.value || 'Default')
-              : String(server || 'Default');
-            const serverValue = server => server && typeof server === 'object'
-              ? (server.value || server.id || server.name || server.label) : server;
-            const dubbedServers = servers.filter(server => /dub/i.test(serverName(server)));
+            const dubbedServers = servers.filter(serverIsDubOnly);
             if (supportsDub && dubbedServers.length) {
-              servers = dub ? dubbedServers : servers.filter(server => !/dub/i.test(serverName(server)));
+              servers = dub ? dubbedServers : servers.filter(server => !serverIsDubOnly(server));
             }
             // Providers commonly mutate instance headers/cookies while
             // resolving a server. Resolve in manifest order on the one
@@ -1681,11 +1800,23 @@ Future<List<Map<String, dynamic>>> _executeProvider(
                       String(source.quality || source.label || 'Auto'),
                     quality: String(source.quality || source.label || 'Auto'),
                     url,
+                    // Preserve a bounded explicit media type so Dart can
+                    // inspect signed/extensionless HLS master URLs.
+                    streamType: String(
+                      source.streamType || source.type || source.format || source.mimeType ||
+                      resolved.streamType || resolved.type || resolved.format || resolved.mimeType || ''
+                    ).slice(0, 64),
                     headers: Object.assign({}, serverHeaders, source.headers || {}),
                     subtitleUrl,
                     subtitleLanguage: english && String(english.language || english.lang || english.label || ''),
-                    audioCapability: audioCapabilityOf(source, resolved, selected.item,
-                      dub || /dub/i.test(String(selected.item.subOrDub || serverName(server)))),
+                    audioCapability: audioCapabilityOf(
+                      source,
+                      resolved,
+                      selected.item,
+                      dub || /dub/i.test(String(selected.item.subOrDub || '')) ||
+                        /dub/i.test(serverName(server)),
+                      serverName(server || resolved.server),
+                    ),
                     matchedEpisodeNumber: explicitEpisodeNumberOf(episode),
                     matchedSeasonNumber: seasonNumberOf(episode),
                     matchedSeriesTitle: candidateTitle(selected.item),

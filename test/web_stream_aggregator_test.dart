@@ -497,6 +497,82 @@ void main() {
     expect(result.failures.single.message, contains('Timed out'));
   });
 
+  test(
+    'a provider deadline cancels only that provider and starts queued work',
+    () async {
+      final stalledStarted = Completer<void>();
+      final stalledCancelled = Completer<void>();
+      var workingStarted = false;
+
+      final result = await aggregateWebStreamingProviders(
+        [
+          _CancellableProvider(
+            'stalled',
+            'Stalled',
+            onStarted: stalledStarted.complete,
+            onCancelled: stalledCancelled.complete,
+          ),
+          _FakeProvider('working', 'Working', () async {
+            workingStarted = true;
+            return [
+              WebStreamResult(
+                providerId: 'working',
+                providerName: 'Working',
+                title: '1080p',
+                uri: Uri.parse('https://cdn.example.com/working.m3u8'),
+              ),
+            ];
+          }),
+        ],
+        const EpisodeReference(anilistMediaId: 1, title: 'Test', episode: 1),
+        deadline: const Duration(milliseconds: 10),
+        maxConcurrentProviders: 1,
+      );
+
+      await stalledStarted.future.timeout(const Duration(seconds: 1));
+      await stalledCancelled.future.timeout(const Duration(seconds: 1));
+      expect(workingStarted, isTrue);
+      expect(result.streams.single.providerId, 'working');
+      expect(result.failures.single.providerId, 'stalled');
+    },
+  );
+
+  test('slow failure bookkeeping does not occupy a provider worker', () async {
+    final bookkeepingRelease = Completer<void>();
+    final workingStarted = Completer<void>();
+    final resultFuture = aggregateWebStreamingProvidersIncrementally(
+      [
+        _FakeProvider(
+          'failed',
+          'Failed',
+          () => throw StateError('provider failed'),
+        ),
+        _FakeProvider('working', 'Working', () async {
+          workingStarted.complete();
+          return [
+            WebStreamResult(
+              providerId: 'working',
+              providerName: 'Working',
+              title: '720p',
+              uri: Uri.parse('https://cdn.example.com/working.m3u8'),
+            ),
+          ];
+        }),
+      ],
+      const EpisodeReference(anilistMediaId: 1, title: 'Test', episode: 1),
+      maxConcurrentProviders: 1,
+      onFailure: (_, _, _) => bookkeepingRelease.future,
+    ).last;
+
+    try {
+      await workingStarted.future.timeout(const Duration(seconds: 1));
+    } finally {
+      if (!bookkeepingRelease.isCompleted) bookkeepingRelease.complete();
+    }
+    final result = await resultFuture;
+    expect(result.aggregation.streams.single.providerId, 'working');
+  });
+
   test('never runs more providers than the configured worker limit', () async {
     var active = 0;
     var maximumActive = 0;
@@ -771,6 +847,12 @@ void main() {
       visibleResults: 8,
       audioFilter: 'dub',
       qualityFilter: 'p1080',
+      rawUnknownAudioResults: -4,
+      rawSubAudioResults: 6,
+      rawDubAudioResults: 5,
+      rawDualAudioResults: 3,
+      strictAudioMatches: 7,
+      unknownAudioFallbacks: 100000,
     );
     final states = (details['state']! as List<Object?>)
         .cast<Map<String, Object>>();
@@ -785,8 +867,14 @@ void main() {
     expect(countFor('raw_results'), 20);
     expect(countFor('visible_providers'), 2);
     expect(countFor('visible_results'), 8);
+    expect(countFor('raw_audio_unknown_results'), 0);
+    expect(countFor('raw_audio_sub_results'), 6);
+    expect(countFor('raw_audio_dub_results'), 5);
+    expect(countFor('raw_audio_dual_results'), 3);
+    expect(countFor('strict_audio_matches'), 7);
+    expect(countFor('unknown_audio_fallbacks'), 99999);
     final sanitized = sanitizeDiagnosticContext(details)! as Map;
-    expect(sanitized['state'], hasLength(4));
+    expect(sanitized['state'], hasLength(10));
     expect(sanitized['audio_mode'], 'dub');
     expect(sanitized['quality'], 'p1080');
     expect(sanitized, isNot(contains('_redactedFieldCount')));
@@ -873,6 +961,44 @@ void main() {
   });
 
   test(
+    'same catalog episode shares discovery despite metadata differences',
+    () async {
+      final release = Completer<void>();
+      final aggregator = _CountingSharedAggregator(release.future);
+      const resolverEpisode = EpisodeReference(
+        anilistMediaId: 77,
+        malMediaId: 770,
+        title: 'English title',
+        year: 2025,
+        episode: 4,
+      );
+      const playerEpisode = EpisodeReference(
+        anilistMediaId: 77,
+        malMediaId: 771,
+        title: 'Romaji title',
+        year: 2026,
+        episode: 4,
+      );
+      final resolver = StreamIterator(
+        aggregator.watchSearchIncrementally(resolverEpisode),
+      );
+      expect(await resolver.moveNext(), isTrue);
+
+      final player = StreamIterator(
+        aggregator.watchSearchIncrementally(playerEpisode),
+      );
+      expect(await player.moveNext(), isTrue);
+      expect(aggregator.searchCalls, 1);
+
+      release.complete();
+      expect(await resolver.moveNext(), isTrue);
+      expect(await player.moveNext(), isTrue);
+      await resolver.cancel();
+      await player.cancel();
+    },
+  );
+
+  test(
     'shared discovery survives route handoff then cancels when abandoned',
     () async {
       final cancelled = Completer<void>();
@@ -911,6 +1037,39 @@ void main() {
 
       await player.cancel();
       await cancelled.future.timeout(const Duration(seconds: 1));
+    },
+  );
+
+  test(
+    'a new episode cancels stale discovery before its provider wave',
+    () async {
+      final aggregator = _SupersedingSharedAggregator();
+      final first = StreamIterator(
+        aggregator.watchSearchIncrementally(
+          const EpisodeReference(
+            anilistMediaId: 90,
+            title: 'Series',
+            episode: 1,
+          ),
+        ),
+      );
+      expect(await first.moveNext(), isTrue);
+
+      final second = StreamIterator(
+        aggregator.watchSearchIncrementally(
+          const EpisodeReference(
+            anilistMediaId: 90,
+            title: 'Series',
+            episode: 2,
+          ),
+        ),
+      );
+      expect(await second.moveNext(), isTrue);
+      expect(aggregator.searchCalls, 2);
+      expect(aggregator.maximumActiveSearches, 1);
+
+      await first.cancel();
+      await second.cancel();
     },
   );
 }
@@ -955,6 +1114,39 @@ class _CancellableSharedAggregator extends WebStreamAggregator {
   ) {
     searchCalls++;
     return source;
+  }
+}
+
+class _SupersedingSharedAggregator extends WebStreamAggregator {
+  _SupersedingSharedAggregator()
+    : super(
+        AddonStore(TetoTvDatabase.instance),
+        sharedSessionGrace: const Duration(seconds: 1),
+      );
+
+  int searchCalls = 0;
+  int activeSearches = 0;
+  int maximumActiveSearches = 0;
+
+  @override
+  Stream<WebStreamSearchProgress> searchIncrementally(
+    EpisodeReference episode,
+  ) async* {
+    searchCalls++;
+    activeSearches++;
+    if (activeSearches > maximumActiveSearches) {
+      maximumActiveSearches = activeSearches;
+    }
+    try {
+      yield const WebStreamSearchProgress(
+        totalProviders: 1,
+        pendingProviderNames: ['Provider'],
+      );
+      await Completer<void>().future;
+    } finally {
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      activeSearches--;
+    }
   }
 }
 

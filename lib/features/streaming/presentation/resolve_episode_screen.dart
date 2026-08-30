@@ -2178,6 +2178,27 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
   void _recordWebProviderVisibilityDiagnostic({required String phase}) {
     if (_webDiagnosticSessionId.isEmpty) return;
     final visibleStreams = _filteredWebStreams(_webStreams);
+    int rawAudioCount(WebStreamAudioCapability capability) => _webStreams
+        .where((stream) => stream.effectiveAudioCapability == capability)
+        .length;
+    final rawUnknownAudioResults = rawAudioCount(
+      WebStreamAudioCapability.unknown,
+    );
+    final rawSubAudioResults = rawAudioCount(WebStreamAudioCapability.sub);
+    final rawDubAudioResults = rawAudioCount(WebStreamAudioCapability.dub);
+    final rawDualAudioResults = rawAudioCount(
+      WebStreamAudioCapability.subAndDub,
+    );
+    final unknownAudioFallbacks = _languageFilter == _StreamLanguageFilter.all
+        ? 0
+        : visibleStreams
+              .where(
+                (stream) =>
+                    stream.effectiveAudioCapability ==
+                    WebStreamAudioCapability.unknown,
+              )
+              .length;
+    final strictAudioMatches = visibleStreams.length - unknownAudioFallbacks;
     final rawProviderCount = _webStreams
         .map(webStreamProviderIdentity)
         .toSet()
@@ -2195,6 +2216,12 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
       visibleStreams.length,
       _languageFilter.name,
       _qualityFilter.name,
+      rawUnknownAudioResults,
+      rawSubAudioResults,
+      rawDubAudioResults,
+      rawDualAudioResults,
+      strictAudioMatches,
+      unknownAudioFallbacks,
     ].join(':');
     if (signature == _lastWebVisibilityDiagnosticSignature) return;
     _lastWebVisibilityDiagnosticSignature = signature;
@@ -2212,6 +2239,12 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
           visibleResults: visibleStreams.length,
           audioFilter: _languageFilter.name,
           qualityFilter: _qualityFilter.name,
+          rawUnknownAudioResults: rawUnknownAudioResults,
+          rawSubAudioResults: rawSubAudioResults,
+          rawDubAudioResults: rawDubAudioResults,
+          rawDualAudioResults: rawDualAudioResults,
+          strictAudioMatches: strictAudioMatches,
+          unknownAudioFallbacks: unknownAudioFallbacks,
         ),
       ),
     );

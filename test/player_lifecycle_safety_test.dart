@@ -386,6 +386,34 @@ void main() {
     },
   );
 
+  test('skip timing outages use cache, guarded backoff, and one notice', () {
+    final schedule = method(
+      'void _scheduleSkipSegmentLoad',
+      'Future<int?> _resolveSkipMalMediaId',
+    );
+    expect(schedule, contains('_skipLoadRetryGate.guard(delay)'));
+    expect(schedule, contains('_skipLoadExhaustedTransientFailure'));
+
+    final load = method(
+      'Future<void> _loadSkipSegments',
+      'Future<List<SkipSegment>> _embeddedChapterSkipsWithRetry',
+    );
+    expect(load, contains('externalFuture = _aniSkipClient'));
+    expect(load, isNot(contains('AniSkipClient()')));
+    expect(load, contains('AniSkipLookupSource.staleCache'));
+    expect(load, contains("'found_stale_cache'"));
+    expect(load, contains('_skipLoadRetryGate.defer(retryDelay)'));
+    expect(load, contains("'Intro/outro timing is temporarily unavailable'"));
+
+    final sourceReset = method(
+      'void _resetSkipSegmentsForSourceChange()',
+      'void _recordSkipSegmentDiagnostic',
+    );
+    expect(sourceReset, contains('_skipLoadRetryGate.reset()'));
+    expect(sourceReset, contains('_skipLoadExhaustedTransientFailure = false'));
+    expect(sourceReset, contains('_skipTimingUnavailableNoticeShown = false'));
+  });
+
   test('private-library playback cannot enter anime source discovery', () {
     final failover = method(
       'Future<void> _tryNextStream',

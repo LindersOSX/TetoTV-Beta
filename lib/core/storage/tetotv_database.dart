@@ -1771,6 +1771,7 @@ bool _isSafeDiagnosticContextKey(String key) {
     'community_marker_count',
     'community_status',
     'community_status_class',
+    'community_lookup_source',
     'community_failure_reason',
     'community_transient_failure_count',
     'community_probe_count',

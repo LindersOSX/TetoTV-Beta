@@ -93,7 +93,7 @@ void main() {
         externalFailed: true,
         transientExternalFailure: true,
         hasMarkers: false,
-        attempts: 4,
+        attempts: 1,
       ),
       isFalse,
     );
@@ -101,17 +101,17 @@ void main() {
       skipSegmentLookupRetryDelay(
         lookupComplete: false,
         transientExternalFailure: true,
-        attempts: 4,
+        attempts: 1,
       ),
-      const Duration(seconds: 20),
+      const Duration(seconds: 15),
     );
     expect(
       skipSegmentLookupRetryDelay(
         lookupComplete: false,
         transientExternalFailure: true,
-        attempts: 5,
+        attempts: 2,
       ),
-      const Duration(seconds: 60),
+      const Duration(seconds: 45),
     );
     expect(
       skipSegmentLookupIsComplete(
@@ -119,7 +119,7 @@ void main() {
         externalFailed: true,
         transientExternalFailure: true,
         hasMarkers: false,
-        attempts: 6,
+        attempts: 3,
       ),
       isTrue,
     );
@@ -127,9 +127,32 @@ void main() {
       skipSegmentLookupRetryDelay(
         lookupComplete: true,
         transientExternalFailure: true,
-        attempts: 6,
+        attempts: 3,
       ),
       isNull,
+    );
+  });
+
+  test('duration updates cannot shorten a transient-failure backoff', () {
+    var now = DateTime.utc(2026, 8, 29, 12);
+    final gate = SkipSegmentRetryGate(clock: () => now);
+
+    gate.defer(const Duration(seconds: 15));
+    now = now.add(const Duration(seconds: 3));
+
+    expect(
+      gate.guard(const Duration(milliseconds: 1200)),
+      const Duration(seconds: 12),
+    );
+    expect(
+      gate.guard(const Duration(seconds: 20)),
+      const Duration(seconds: 20),
+    );
+
+    gate.reset();
+    expect(
+      gate.guard(const Duration(milliseconds: 1200)),
+      const Duration(milliseconds: 1200),
     );
   });
 
@@ -140,7 +163,7 @@ void main() {
         externalFailed: true,
         transientExternalFailure: true,
         hasMarkers: true,
-        attempts: 4,
+        attempts: 2,
       ),
       isFalse,
     );
@@ -595,7 +618,7 @@ void main() {
   });
 
   test(
-    'AniSkip keeps an exhausted probe retryable after later clean no-matches',
+    'AniSkip stops nearby-runtime probes after an exhausted transport retry',
     () async {
       final dio = Dio();
       var requests = 0;
@@ -633,15 +656,87 @@ void main() {
           );
 
       expect(result.segments, isEmpty);
-      expect(result.status, AniSkipLookupStatus.partialTransientFailure);
+      expect(requests, 2);
+      expect(result.status, AniSkipLookupStatus.transientFailure);
       expect(result.transientFailureCount, 2);
       expect(result.runtimeFallbackSearchComplete, isFalse);
       expect(result.hasTransientFailure, isTrue);
     },
   );
 
-  test('AniSkip keeps accepted server-error responses retryable', () async {
-    final dio = Dio(BaseOptions(validateStatus: (_) => true));
+  test(
+    'AniSkip defers accepted server errors without probing runtimes',
+    () async {
+      final dio = Dio(BaseOptions(validateStatus: (_) => true));
+      var requests = 0;
+      dio.interceptors.add(
+        InterceptorsWrapper(
+          onRequest: (options, handler) {
+            requests++;
+            handler.resolve(
+              Response<Map<String, dynamic>>(
+                requestOptions: options,
+                statusCode: 503,
+                data: const <String, dynamic>{'found': false, 'results': []},
+              ),
+            );
+          },
+        ),
+      );
+
+      final result = await AniSkipClient(dio: dio, retryDelay: Duration.zero)
+          .lookup(
+            malMediaId: 1887,
+            episode: 18,
+            episodeDuration: const Duration(minutes: 24),
+            allowRuntimeFallback: true,
+          );
+
+      expect(requests, 1);
+      expect(result.segments, isEmpty);
+      expect(result.status, AniSkipLookupStatus.transientFailure);
+      expect(result.runtimeFallbackSearchComplete, isFalse);
+      expect(result.hasTransientFailure, isTrue);
+      expect(result.failureReason, AniSkipFailureReason.serverError);
+    },
+  );
+
+  test(
+    'AniSkip serves validated fresh markers without a network request',
+    () async {
+      final store = _MemoryAniSkipCacheStore(fresh: _cachedMarkerPayload());
+      final dio = Dio();
+      var requests = 0;
+      dio.interceptors.add(
+        InterceptorsWrapper(
+          onRequest: (options, handler) {
+            requests++;
+            handler.reject(
+              DioException(
+                requestOptions: options,
+                type: DioExceptionType.connectionError,
+              ),
+            );
+          },
+        ),
+      );
+
+      final result = await AniSkipClient(dio: dio, cacheStore: store).lookup(
+        malMediaId: 1887,
+        episode: 18,
+        episodeDuration: const Duration(minutes: 24),
+        allowRuntimeFallback: true,
+      );
+
+      expect(requests, 0);
+      expect(result.source, AniSkipLookupSource.freshCache);
+      expect(result.usedCachedMarkers, isTrue);
+      expect(result.segments.single.kind, SkipSegmentKind.opening);
+    },
+  );
+
+  test('AniSkip coalesces concurrent lookups for the same episode', () async {
+    final dio = Dio();
     var requests = 0;
     dio.interceptors.add(
       InterceptorsWrapper(
@@ -650,29 +745,179 @@ void main() {
           handler.resolve(
             Response<Map<String, dynamic>>(
               requestOptions: options,
-              statusCode: 503,
-              data: const <String, dynamic>{'found': false, 'results': []},
+              statusCode: 200,
+              data: <String, dynamic>{
+                'found': true,
+                'results': _cachedMarkerPayload()['results'],
+              },
             ),
           );
         },
       ),
     );
+    final client = AniSkipClient(dio: dio);
 
-    final result = await AniSkipClient(dio: dio, retryDelay: Duration.zero)
+    final first = client.lookup(
+      malMediaId: 1887,
+      episode: 18,
+      episodeDuration: const Duration(minutes: 24),
+    );
+    final second = client.lookup(
+      malMediaId: 1887,
+      episode: 18,
+      episodeDuration: const Duration(minutes: 24),
+    );
+    final results = await Future.wait(<Future<AniSkipLookupResult>>[
+      first,
+      second,
+    ]);
+
+    expect(identical(first, second), isTrue);
+    expect(requests, 1);
+    expect(results.every((result) => result.segments.length == 1), isTrue);
+  });
+
+  test(
+    'AniSkip falls back to safe stale markers during a server outage',
+    () async {
+      final store = _MemoryAniSkipCacheStore(stale: _cachedMarkerPayload());
+      final dio = Dio(BaseOptions(validateStatus: (_) => true));
+      var requests = 0;
+      dio.interceptors.add(
+        InterceptorsWrapper(
+          onRequest: (options, handler) {
+            requests++;
+            handler.resolve(
+              Response<Map<String, dynamic>>(
+                requestOptions: options,
+                statusCode: 503,
+                data: const <String, dynamic>{'found': false, 'results': []},
+              ),
+            );
+          },
+        ),
+      );
+
+      final result = await AniSkipClient(dio: dio, cacheStore: store).lookup(
+        malMediaId: 1887,
+        episode: 18,
+        episodeDuration: const Duration(minutes: 24),
+        allowRuntimeFallback: true,
+      );
+
+      expect(requests, 1);
+      expect(result.status, AniSkipLookupStatus.found);
+      expect(result.source, AniSkipLookupSource.staleCache);
+      expect(result.failureReason, AniSkipFailureReason.serverError);
+      expect(result.transientFailureCount, 1);
+      expect(result.segments.single.end, const Duration(seconds: 110));
+    },
+  );
+
+  test('AniSkip rejects stale markers from an incompatible runtime', () async {
+    final store = _MemoryAniSkipCacheStore(stale: _cachedMarkerPayload());
+    final dio = Dio(BaseOptions(validateStatus: (_) => true));
+    dio.interceptors.add(
+      InterceptorsWrapper(
+        onRequest: (options, handler) => handler.resolve(
+          Response<Map<String, dynamic>>(
+            requestOptions: options,
+            statusCode: 503,
+            data: const <String, dynamic>{'found': false, 'results': []},
+          ),
+        ),
+      ),
+    );
+
+    final result = await AniSkipClient(dio: dio, cacheStore: store).lookup(
+      malMediaId: 1887,
+      episode: 18,
+      episodeDuration: const Duration(minutes: 48),
+      allowRuntimeFallback: true,
+    );
+
+    expect(result.segments, isEmpty);
+    expect(result.source, AniSkipLookupSource.network);
+    expect(result.status, AniSkipLookupStatus.transientFailure);
+  });
+
+  test('AniSkip cache persistence never delays ready markers', () async {
+    final writeBlocker = Completer<void>();
+    final store = _MemoryAniSkipCacheStore(writeBlocker: writeBlocker);
+    final dio = Dio();
+    dio.interceptors.add(
+      InterceptorsWrapper(
+        onRequest: (options, handler) => handler.resolve(
+          Response<Map<String, dynamic>>(
+            requestOptions: options,
+            statusCode: 200,
+            data: <String, dynamic>{
+              'found': true,
+              'results': _cachedMarkerPayload()['results'],
+            },
+          ),
+        ),
+      ),
+    );
+
+    final result = await AniSkipClient(dio: dio, cacheStore: store)
         .lookup(
           malMediaId: 1887,
           episode: 18,
           episodeDuration: const Duration(minutes: 24),
-          allowRuntimeFallback: true,
-        );
+        )
+        .timeout(const Duration(seconds: 1));
 
-    expect(requests, greaterThan(1));
-    expect(result.segments, isEmpty);
-    expect(result.status, AniSkipLookupStatus.transientFailure);
-    expect(result.runtimeFallbackSearchComplete, isFalse);
-    expect(result.hasTransientFailure, isTrue);
-    expect(result.failureReason, AniSkipFailureReason.serverError);
+    expect(result.segments, hasLength(1));
+    expect(store.writeCount, 1);
+    expect(writeBlocker.isCompleted, isFalse);
+    writeBlocker.complete();
   });
+
+  test(
+    'AniSkip bounds a stalled cache read before using the network',
+    () async {
+      final readBlocker = Completer<Map<String, dynamic>?>();
+      final store = _MemoryAniSkipCacheStore(readBlocker: readBlocker);
+      final dio = Dio();
+      var requests = 0;
+      dio.interceptors.add(
+        InterceptorsWrapper(
+          onRequest: (options, handler) {
+            requests++;
+            handler.resolve(
+              Response<Map<String, dynamic>>(
+                requestOptions: options,
+                statusCode: 200,
+                data: <String, dynamic>{
+                  'found': true,
+                  'results': _cachedMarkerPayload()['results'],
+                },
+              ),
+            );
+          },
+        ),
+      );
+
+      final result =
+          await AniSkipClient(
+                dio: dio,
+                cacheStore: store,
+                cacheReadTimeout: const Duration(milliseconds: 1),
+              )
+              .lookup(
+                malMediaId: 1887,
+                episode: 18,
+                episodeDuration: const Duration(minutes: 24),
+              )
+              .timeout(const Duration(seconds: 1));
+
+      expect(requests, 1);
+      expect(result.segments, hasLength(1));
+      expect(readBlocker.isCompleted, isFalse);
+      readBlocker.complete();
+    },
+  );
 
   test('verified skip seek retries a command the player ignored', () async {
     var position = const Duration(seconds: 10);
@@ -775,4 +1020,54 @@ void main() {
       isFalse,
     );
   });
+}
+
+Map<String, dynamic> _cachedMarkerPayload() => <String, dynamic>{
+  'schema': 1,
+  'requested_duration_ms': const Duration(minutes: 24).inMilliseconds,
+  'used_duration_fallback': false,
+  'results': <Map<String, dynamic>>[
+    <String, dynamic>{
+      'interval': <String, dynamic>{'startTime': 20.0, 'endTime': 110.0},
+      'skipType': 'op',
+      'episodeLength': 1440.0,
+    },
+  ],
+};
+
+class _MemoryAniSkipCacheStore implements AniSkipCacheStore {
+  _MemoryAniSkipCacheStore({
+    this.fresh,
+    this.stale,
+    this.readBlocker,
+    this.writeBlocker,
+  });
+
+  Map<String, dynamic>? fresh;
+  final Map<String, dynamic>? stale;
+  final Completer<Map<String, dynamic>?>? readBlocker;
+  final Completer<void>? writeBlocker;
+  int writeCount = 0;
+
+  @override
+  Future<Map<String, dynamic>?> read(
+    String key, {
+    bool allowExpired = false,
+  }) async {
+    final blocker = readBlocker;
+    if (blocker != null) return blocker.future;
+    return allowExpired ? stale ?? fresh : fresh;
+  }
+
+  @override
+  Future<void> write(
+    String key,
+    Map<String, dynamic> payload, {
+    required Duration maxAge,
+  }) async {
+    writeCount++;
+    fresh = payload;
+    final blocker = writeBlocker;
+    if (blocker != null) await blocker.future;
+  }
 }

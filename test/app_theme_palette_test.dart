@@ -91,4 +91,21 @@ void main() {
       palette.background,
     );
   });
+
+  test('menus and in-app notifications use themed TetoTV surfaces', () {
+    const palette = AppThemePalette.defaults;
+    final theme = AppTheme.darkFor(palette);
+    final popupShape = theme.popupMenuTheme.shape! as RoundedRectangleBorder;
+    final snackShape = theme.snackBarTheme.shape! as RoundedRectangleBorder;
+
+    expect(theme.popupMenuTheme.color, palette.surface);
+    expect(theme.popupMenuTheme.surfaceTintColor, Colors.transparent);
+    expect(popupShape.borderRadius, BorderRadius.circular(14));
+    expect(popupShape.side.color, palette.accent.withValues(alpha: .70));
+    expect(theme.snackBarTheme.behavior, SnackBarBehavior.floating);
+    expect(theme.snackBarTheme.backgroundColor, palette.surfaceRaised);
+    expect(theme.snackBarTheme.actionTextColor, palette.accentBright);
+    expect(snackShape.borderRadius, BorderRadius.circular(12));
+    expect(snackShape.side.color, palette.accent.withValues(alpha: .64));
+  });
 }

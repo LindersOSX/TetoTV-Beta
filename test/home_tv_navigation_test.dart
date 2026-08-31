@@ -1133,8 +1133,8 @@ void main() {
         find.byKey(const ValueKey('main-nav-profile-avatar-anilist')),
       );
       final avatarDecoration = avatar.decoration! as BoxDecoration;
-      expect(avatarDecoration.shape, BoxShape.circle);
-      expect(avatarDecoration.borderRadius, isNull);
+      expect(avatarDecoration.shape, BoxShape.rectangle);
+      expect(avatarDecoration.borderRadius, BorderRadius.circular(10));
       expect(avatarDecoration.border, isNotNull);
       expect(
         tester.getSize(

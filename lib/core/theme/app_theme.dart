@@ -49,6 +49,36 @@ abstract final class AppTheme {
       canvasColor: palette.background,
       cardColor: palette.surface,
       dialogTheme: DialogThemeData(backgroundColor: palette.surface),
+      popupMenuTheme: PopupMenuThemeData(
+        color: palette.surface,
+        surfaceTintColor: Colors.transparent,
+        shadowColor: Colors.black.withValues(alpha: .72),
+        elevation: 14,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(14),
+          side: BorderSide(color: palette.accent.withValues(alpha: .70)),
+        ),
+        textStyle: TextStyle(
+          color: palette.primaryText,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+      snackBarTheme: SnackBarThemeData(
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: palette.surfaceRaised,
+        actionTextColor: palette.accentBright,
+        disabledActionTextColor: palette.mutedText,
+        elevation: 12,
+        contentTextStyle: TextStyle(
+          color: palette.primaryText,
+          fontSize: 14,
+          fontWeight: FontWeight.w700,
+        ),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: BorderSide(color: palette.accent.withValues(alpha: .64)),
+        ),
+      ),
       bottomSheetTheme: BottomSheetThemeData(
         backgroundColor: palette.surface,
         modalBackgroundColor: palette.surface,

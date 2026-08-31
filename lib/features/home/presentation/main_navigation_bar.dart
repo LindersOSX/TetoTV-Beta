@@ -1465,133 +1465,46 @@ class _ProfileMenuButton extends StatelessWidget {
         Overlay.of(context).context.findRenderObject() as RenderBox?;
     if (box == null || overlay == null) return;
     final topLeft = box.localToGlobal(Offset.zero, ancestor: overlay);
-    final availableMenuWidth = (overlay.size.width - 24).clamp(200.0, 430.0);
-    final result = await showMenu<String>(
+    final menuWidth = (overlay.size.width - 24).clamp(280.0, 430.0);
+    final preferredTop = topLeft.dy + box.size.height + 8;
+    final menuTop = preferredTop
+        .clamp(12.0, (overlay.size.height - 180).clamp(12.0, double.infinity))
+        .toDouble();
+    final menuRight = (overlay.size.width - topLeft.dx - box.size.width)
+        .clamp(
+          12.0,
+          (overlay.size.width - menuWidth - 12).clamp(12.0, double.infinity),
+        )
+        .toDouble();
+    final result = await showGeneralDialog<String>(
       context: context,
-      color: context.appPalette.surface,
-      elevation: 14,
-      constraints: BoxConstraints(
-        minWidth: availableMenuWidth,
-        maxWidth: availableMenuWidth,
+      barrierDismissible: true,
+      barrierLabel: 'Close profile menu',
+      barrierColor: context.appPalette.background.withValues(alpha: .58),
+      transitionDuration: const Duration(milliseconds: 120),
+      pageBuilder: (menuContext, _, _) => _ProfileMenuOverlay(
+        trackerProfile: trackerProfile,
+        localProfile: localProfile,
+        savedProfiles: savedProfiles,
+        localProfiles: localProfiles,
+        activeProfileIds: activeProfileIds,
+        activeLocalProfileId: activeLocalProfileId,
+        showSettings: showSettings,
+        width: menuWidth.toDouble(),
+        top: menuTop,
+        right: menuRight,
+        maxHeight: (overlay.size.height - menuTop - 12)
+            .clamp(160.0, overlay.size.height - 24)
+            .toDouble(),
       ),
-      position: RelativeRect.fromRect(
-        Rect.fromLTWH(
-          topLeft.dx,
-          topLeft.dy + box.size.height + 4,
-          box.size.width,
-          box.size.height,
+      transitionBuilder: (context, animation, _, child) => FadeTransition(
+        opacity: CurvedAnimation(
+          parent: animation,
+          curve: Curves.easeOutCubic,
+          reverseCurve: Curves.easeInCubic,
         ),
-        Offset.zero & overlay.size,
+        child: child,
       ),
-      items: [
-        PopupMenuItem<String>(
-          enabled: false,
-          height: 106,
-          child: _ProfileMenuStats(
-            trackerProfile: trackerProfile,
-            localProfile: localProfile,
-          ),
-        ),
-        const PopupMenuDivider(),
-        for (final local in localProfiles)
-          PopupMenuItem<String>(
-            key: ValueKey('main-nav-switch-local-profile-${local.id}'),
-            value: 'local:${local.id}',
-            height: 52,
-            child: Row(
-              children: [
-                Icon(
-                  activeLocalProfileId == local.id
-                      ? Icons.radio_button_checked_rounded
-                      : Icons.radio_button_off_rounded,
-                  size: 19,
-                  color: activeLocalProfileId == local.id
-                      ? context.appPalette.accentBright
-                      : context.appPalette.mutedText,
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    local.displayName,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontWeight: FontWeight.w800),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                const _LocalProfileBadge(),
-              ],
-            ),
-          ),
-        for (final saved in savedProfiles)
-          PopupMenuItem<String>(
-            key: ValueKey(
-              'main-nav-switch-profile-${saved.provider.slug}-${saved.id}',
-            ),
-            value: '${saved.provider.slug}:${saved.id}',
-            height: 52,
-            child: Row(
-              children: [
-                Icon(
-                  localProfile == null &&
-                          saved.provider == trackerProfile?.provider &&
-                          activeProfileIds[saved.provider] == saved.id
-                      ? Icons.radio_button_checked_rounded
-                      : Icons.radio_button_off_rounded,
-                  size: 19,
-                  color:
-                      localProfile == null &&
-                          saved.provider == trackerProfile?.provider &&
-                          activeProfileIds[saved.provider] == saved.id
-                      ? context.appPalette.accentBright
-                      : context.appPalette.mutedText,
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    saved.username,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontWeight: FontWeight.w800),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                _ProviderBadge(provider: saved.provider, compact: true),
-              ],
-            ),
-          ),
-        const PopupMenuDivider(),
-        const PopupMenuItem<String>(
-          key: ValueKey('main-nav-manage-profiles'),
-          value: 'manage',
-          height: 48,
-          child: Row(
-            children: [
-              Icon(Icons.manage_accounts_rounded, size: 20),
-              SizedBox(width: 10),
-              Text(
-                'Add or manage profiles',
-                style: TextStyle(fontWeight: FontWeight.w800),
-              ),
-            ],
-          ),
-        ),
-        if (showSettings) ...[
-          const PopupMenuDivider(),
-          const PopupMenuItem<String>(
-            key: ValueKey('main-nav-profile-settings'),
-            value: 'settings',
-            height: 48,
-            child: Row(
-              children: [
-                Icon(Icons.settings_rounded, size: 20),
-                SizedBox(width: 10),
-                Text('Settings', style: TextStyle(fontWeight: FontWeight.w800)),
-              ],
-            ),
-          ),
-        ],
-      ],
     );
     if (result == null) return;
     if (result == 'manage') {
@@ -1645,7 +1558,7 @@ class _ProfileMenuButton extends StatelessWidget {
           onKeyEvent: onKeyEvent,
           onFocusChanged: onFocusChanged,
           onPressed: isLoading ? () {} : () => _openMenu(buttonContext),
-          borderRadius: BorderRadius.circular(compactAvatar ? 999 : 9),
+          borderRadius: BorderRadius.circular(compactAvatar ? 11 : 9),
           focusScale: compactAvatar ? 1.01 : 1.02,
           child: Container(
             key: ValueKey('main-nav-profile-$slug'),
@@ -1662,13 +1575,13 @@ class _ProfileMenuButton extends StatelessWidget {
                 if (local != null)
                   _LocalProfileAvatar(
                     size: compactAvatar ? 40 : 36,
-                    circular: compactAvatar,
+                    outlined: compactAvatar,
                   )
                 else
                   _ProfileAvatar(
                     profile: tracker!,
                     size: compactAvatar ? 40 : 36,
-                    circular: compactAvatar,
+                    outlined: compactAvatar,
                   ),
                 if (!compactAvatar) ...[
                   const SizedBox(width: 8),
@@ -1700,6 +1613,358 @@ class _ProfileMenuButton extends StatelessWidget {
       ),
     );
   }
+}
+
+class _ProfileMenuOverlay extends StatelessWidget {
+  const _ProfileMenuOverlay({
+    required this.trackerProfile,
+    required this.localProfile,
+    required this.savedProfiles,
+    required this.localProfiles,
+    required this.activeProfileIds,
+    required this.activeLocalProfileId,
+    required this.showSettings,
+    required this.width,
+    required this.top,
+    required this.right,
+    required this.maxHeight,
+  });
+
+  final TrackingAccountProfile? trackerProfile;
+  final LocalProfile? localProfile;
+  final List<StoredTrackingProfile> savedProfiles;
+  final List<LocalProfile> localProfiles;
+  final Map<TrackingProvider, String> activeProfileIds;
+  final String? activeLocalProfileId;
+  final bool showSettings;
+  final double width;
+  final double top;
+  final double right;
+  final double maxHeight;
+
+  bool _isActiveSaved(StoredTrackingProfile profile) =>
+      localProfile == null &&
+      profile.provider == trackerProfile?.provider &&
+      activeProfileIds[profile.provider] == profile.id;
+
+  KeyEventResult _handleDismissKey(
+    BuildContext context,
+    FocusNode _,
+    KeyEvent event,
+  ) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    final key = event.logicalKey;
+    if (key != LogicalKeyboardKey.arrowLeft &&
+        key != LogicalKeyboardKey.escape &&
+        key != LogicalKeyboardKey.goBack &&
+        key != LogicalKeyboardKey.browserBack) {
+      return KeyEventResult.ignored;
+    }
+    Navigator.of(context).pop();
+    return KeyEventResult.handled;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final activeLocalIndex = localProfiles.indexWhere(
+      (profile) => profile.id == activeLocalProfileId,
+    );
+    final activeSavedIndex = savedProfiles.indexWhere(_isActiveSaved);
+    final localAutofocusIndex = activeLocalIndex >= 0
+        ? activeLocalIndex
+        : (savedProfiles.isEmpty && localProfiles.isNotEmpty ? 0 : -1);
+    final savedAutofocusIndex = activeLocalIndex >= 0
+        ? -1
+        : (activeSavedIndex >= 0
+              ? activeSavedIndex
+              : (savedProfiles.isNotEmpty ? 0 : -1));
+    final hasProfiles = localProfiles.isNotEmpty || savedProfiles.isNotEmpty;
+
+    return Stack(
+      children: [
+        Positioned(
+          top: top,
+          right: right,
+          width: width,
+          child: Focus(
+            canRequestFocus: false,
+            onKeyEvent: (node, event) =>
+                _handleDismissKey(context, node, event),
+            child: FocusTraversalGroup(
+              policy: ReadingOrderTraversalPolicy(),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(maxHeight: maxHeight),
+                child: Material(
+                  key: const ValueKey('main-nav-profile-menu-surface'),
+                  color: Colors.transparent,
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: context.appPalette.surface,
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(
+                        color: context.appPalette.accent.withValues(alpha: .72),
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: .58),
+                          blurRadius: 24,
+                          offset: const Offset(0, 10),
+                        ),
+                        BoxShadow(
+                          color: context.appPalette.focusGlow.withValues(
+                            alpha: .24,
+                          ),
+                          blurRadius: 18,
+                        ),
+                      ],
+                    ),
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.all(10),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  'Profile',
+                                  style: TextStyle(
+                                    color: context.appPalette.primaryText,
+                                    fontSize: 17,
+                                    fontWeight: FontWeight.w900,
+                                  ),
+                                ),
+                              ),
+                              TvFocusable(
+                                key: const ValueKey(
+                                  'main-nav-profile-menu-close',
+                                ),
+                                onPressed: () => Navigator.of(context).pop(),
+                                borderRadius: BorderRadius.circular(9),
+                                focusScale: 1.01,
+                                child: Container(
+                                  width: 36,
+                                  height: 36,
+                                  decoration: BoxDecoration(
+                                    color: context.appPalette.surfaceRaised,
+                                    borderRadius: BorderRadius.circular(9),
+                                    border: Border.all(
+                                      color: context.appPalette.primaryText
+                                          .withValues(alpha: .12),
+                                    ),
+                                  ),
+                                  child: Icon(
+                                    Icons.close_rounded,
+                                    size: 21,
+                                    color: context.appPalette.primaryText,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 10,
+                            ),
+                            decoration: BoxDecoration(
+                              color: context.appPalette.surfaceRaised,
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(
+                                color: context.appPalette.primaryText
+                                    .withValues(alpha: .09),
+                              ),
+                            ),
+                            child: _ProfileMenuStats(
+                              trackerProfile: trackerProfile,
+                              localProfile: localProfile,
+                            ),
+                          ),
+                          if (hasProfiles) ...[
+                            const SizedBox(height: 12),
+                            Text(
+                              'SWITCH PROFILE',
+                              style: TextStyle(
+                                color: context.appPalette.accentBright,
+                                fontSize: 10,
+                                fontWeight: FontWeight.w900,
+                                letterSpacing: .9,
+                              ),
+                            ),
+                            const SizedBox(height: 7),
+                          ],
+                          for (
+                            var index = 0;
+                            index < localProfiles.length;
+                            index++
+                          ) ...[
+                            _ProfileMenuActionRow(
+                              key: ValueKey(
+                                'main-nav-switch-local-profile-${localProfiles[index].id}',
+                              ),
+                              title: localProfiles[index].displayName,
+                              selected:
+                                  activeLocalProfileId ==
+                                  localProfiles[index].id,
+                              autofocus: index == localAutofocusIndex,
+                              trailing: const _LocalProfileBadge(),
+                              onPressed: () => Navigator.of(
+                                context,
+                              ).pop('local:${localProfiles[index].id}'),
+                            ),
+                            const SizedBox(height: 6),
+                          ],
+                          for (
+                            var index = 0;
+                            index < savedProfiles.length;
+                            index++
+                          ) ...[
+                            _ProfileMenuActionRow(
+                              key: ValueKey(
+                                'main-nav-switch-profile-${savedProfiles[index].provider.slug}-${savedProfiles[index].id}',
+                              ),
+                              title: savedProfiles[index].username,
+                              selected: _isActiveSaved(savedProfiles[index]),
+                              autofocus: index == savedAutofocusIndex,
+                              trailing: _ProviderBadge(
+                                provider: savedProfiles[index].provider,
+                                compact: true,
+                              ),
+                              onPressed: () => Navigator.of(context).pop(
+                                '${savedProfiles[index].provider.slug}:${savedProfiles[index].id}',
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                          ],
+                          Container(
+                            height: 1,
+                            margin: const EdgeInsets.symmetric(vertical: 5),
+                            color: context.appPalette.primaryText.withValues(
+                              alpha: .09,
+                            ),
+                          ),
+                          _ProfileMenuActionRow(
+                            key: const ValueKey('main-nav-manage-profiles'),
+                            title: 'Add or manage profiles',
+                            icon: Icons.manage_accounts_rounded,
+                            autofocus: !hasProfiles,
+                            onPressed: () =>
+                                Navigator.of(context).pop('manage'),
+                          ),
+                          if (showSettings) ...[
+                            const SizedBox(height: 6),
+                            _ProfileMenuActionRow(
+                              key: const ValueKey('main-nav-profile-settings'),
+                              title: 'Settings',
+                              icon: Icons.settings_rounded,
+                              onPressed: () =>
+                                  Navigator.of(context).pop('settings'),
+                            ),
+                          ],
+                          const SizedBox(height: 9),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(
+                                Icons.keyboard_arrow_left_rounded,
+                                size: 16,
+                                color: context.appPalette.mutedText,
+                              ),
+                              const SizedBox(width: 3),
+                              Text(
+                                'Left or Back closes this menu',
+                                style: TextStyle(
+                                  color: context.appPalette.mutedText,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _ProfileMenuActionRow extends StatelessWidget {
+  const _ProfileMenuActionRow({
+    required this.title,
+    required this.onPressed,
+    this.icon,
+    this.trailing,
+    this.selected = false,
+    this.autofocus = false,
+    super.key,
+  });
+
+  final String title;
+  final VoidCallback onPressed;
+  final IconData? icon;
+  final Widget? trailing;
+  final bool selected;
+  final bool autofocus;
+
+  @override
+  Widget build(BuildContext context) => TvFocusable(
+    autofocus: autofocus,
+    onPressed: onPressed,
+    borderRadius: BorderRadius.circular(10),
+    focusScale: 1.01,
+    child: Container(
+      constraints: const BoxConstraints(minHeight: 50),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+      decoration: BoxDecoration(
+        color: selected
+            ? context.appPalette.accent.withValues(alpha: .25)
+            : context.appPalette.surfaceRaised,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+          color: selected
+              ? context.appPalette.accentBright.withValues(alpha: .72)
+              : context.appPalette.primaryText.withValues(alpha: .09),
+        ),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            icon ??
+                (selected
+                    ? Icons.radio_button_checked_rounded
+                    : Icons.radio_button_off_rounded),
+            size: 20,
+            color: selected
+                ? context.appPalette.accentBright
+                : context.appPalette.mutedText,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: context.appPalette.primaryText,
+                fontSize: 13,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+          ),
+          if (trailing != null) ...[const SizedBox(width: 8), trailing!],
+        ],
+      ),
+    ),
+  );
 }
 
 class _ProfileMenuStats extends StatelessWidget {
@@ -1906,13 +2171,13 @@ class _ProfileAvatar extends StatelessWidget {
     required this.profile,
     required this.size,
     this.identify = true,
-    this.circular = false,
+    this.outlined = false,
   });
 
   final TrackingAccountProfile profile;
   final double size;
   final bool identify;
-  final bool circular;
+  final bool outlined;
 
   @override
   Widget build(BuildContext context) {
@@ -1924,10 +2189,10 @@ class _ProfileAvatar extends StatelessWidget {
       height: size,
       clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
-        shape: circular ? BoxShape.circle : BoxShape.rectangle,
-        borderRadius: circular ? null : BorderRadius.circular(6),
+        shape: BoxShape.rectangle,
+        borderRadius: BorderRadius.circular(size >= 40 ? 10 : 7),
         color: context.appPalette.surfaceRaised,
-        border: circular
+        border: outlined
             ? Border.all(color: context.appPalette.accentBright, width: 2)
             : null,
       ),
@@ -1944,12 +2209,12 @@ class _LocalProfileAvatar extends StatelessWidget {
   const _LocalProfileAvatar({
     required this.size,
     this.identify = true,
-    this.circular = false,
+    this.outlined = false,
   });
 
   final double size;
   final bool identify;
-  final bool circular;
+  final bool outlined;
 
   @override
   Widget build(BuildContext context) => Container(
@@ -1957,10 +2222,10 @@ class _LocalProfileAvatar extends StatelessWidget {
     width: size,
     height: size,
     decoration: BoxDecoration(
-      shape: circular ? BoxShape.circle : BoxShape.rectangle,
-      borderRadius: circular ? null : BorderRadius.circular(6),
+      shape: BoxShape.rectangle,
+      borderRadius: BorderRadius.circular(size >= 40 ? 10 : 7),
       color: context.appPalette.secondaryAccent.withValues(alpha: .18),
-      border: circular
+      border: outlined
           ? Border.all(color: context.appPalette.accentBright, width: 2)
           : null,
     ),

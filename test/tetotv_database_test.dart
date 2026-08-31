@@ -34,10 +34,14 @@ void main() {
       preferredReleaseGroup: 'subsplease',
     );
 
-    final restored = SeriesPlaybackPreferences.fromJson(preferences.toJson());
+    final encoded = preferences.toJson();
+    final restored = SeriesPlaybackPreferences.fromJson(encoded);
 
     expect(restored.audioLanguage, 'jpn');
     expect(restored.audioPreferenceSet, isTrue);
+    expect(encoded['subtitlePreferenceExplicit'], isTrue);
+    expect(restored.subtitleLanguage, 'eng');
+    expect(restored.subtitleEnabled, isTrue);
     expect(restored.subtitlePreferenceSet, isTrue);
     expect(restored.subtitleSize, 42);
     expect(restored.skipFillerEpisodes, isTrue);
@@ -50,6 +54,46 @@ void main() {
     expect(restored.preferredReleaseProvider, 'User source');
     expect(restored.preferredReleaseGroup, 'subsplease');
   });
+
+  test('explicit subtitle off preference retains its language in JSON', () {
+    const preferences = SeriesPlaybackPreferences(
+      subtitleLanguage: 'jpn',
+      subtitleEnabled: false,
+      subtitlePreferenceSet: true,
+    );
+
+    final encoded = preferences.toJson();
+    final restored = SeriesPlaybackPreferences.fromJson(encoded);
+
+    expect(encoded['subtitleLanguage'], 'jpn');
+    expect(encoded['subtitleEnabled'], isFalse);
+    expect(encoded['subtitlePreferenceSet'], isTrue);
+    expect(encoded['subtitlePreferenceExplicit'], isTrue);
+    expect(restored.subtitleLanguage, 'jpn');
+    expect(restored.subtitleEnabled, isFalse);
+    expect(restored.subtitlePreferenceSet, isTrue);
+  });
+
+  test(
+    'legacy subtitle intent without the explicit marker is non-explicit',
+    () {
+      for (final enabled in [true, false]) {
+        final restored = SeriesPlaybackPreferences.fromJson({
+          'subtitleLanguage': 'jpn',
+          'subtitleEnabled': enabled,
+          'subtitlePreferenceSet': true,
+        });
+
+        expect(restored.subtitleLanguage, 'eng');
+        expect(restored.subtitleEnabled, isTrue);
+        expect(
+          restored.subtitlePreferenceSet,
+          isFalse,
+          reason: 'legacy ${enabled ? 'On' : 'Off'} must allow global default',
+        );
+      }
+    },
+  );
 
   test('skip filler remains off for existing per-series preferences', () {
     final restored = SeriesPlaybackPreferences.fromJson(const {

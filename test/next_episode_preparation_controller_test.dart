@@ -1495,6 +1495,74 @@ void main() {
     await controller.dispose();
   });
 
+  for (final subtitleChange
+      in <
+        ({
+          String label,
+          NextEpisodePreparationRequest preparedRequest,
+          NextEpisodePreparationRequest currentRequest,
+        })
+      >[
+        (
+          label: 'subtitle language',
+          preparedRequest: _request(
+            subtitleLanguage: 'eng',
+            subtitlePreferenceSet: true,
+          ),
+          currentRequest: _request(
+            subtitleLanguage: 'jpn',
+            subtitlePreferenceSet: true,
+          ),
+        ),
+        (
+          label: 'subtitle enabled state',
+          preparedRequest: _request(
+            subtitleEnabled: true,
+            subtitlePreferenceSet: true,
+          ),
+          currentRequest: _request(
+            subtitleEnabled: false,
+            subtitlePreferenceSet: true,
+          ),
+        ),
+        (
+          label: 'subtitle preference-set state',
+          preparedRequest: _request(subtitlePreferenceSet: false),
+          currentRequest: _request(subtitlePreferenceSet: true),
+        ),
+      ]) {
+    test(
+      'changed ${subtitleChange.label} rejects and closes a prepared lease',
+      () async {
+        final lease = _FakeLease();
+        final controller = _controller(
+          releases: [_release(hash: 'subtitle-preference-next')],
+          resolver: (_) => Stream.value(
+            StreamReady(
+              uri: Uri.parse(
+                'https://cdn.example/subtitle-preference-next.mkv',
+              ),
+              displayName: 'Subtitle preference next',
+              debridService: DebridService.realDebrid,
+              playbackLease: lease,
+            ),
+          ),
+        );
+        await controller.warm(subtitleChange.preparedRequest);
+
+        final taken = await controller.take(
+          7,
+          1,
+          currentRequest: subtitleChange.currentRequest,
+        );
+
+        expect(taken, isNull);
+        expect(lease.closeCount, 1);
+        await controller.dispose();
+      },
+    );
+  }
+
   test('replacement waits for old resolver cancellation cleanup', () async {
     final listened = Completer<void>();
     final cleanupGate = Completer<void>();
@@ -1795,6 +1863,9 @@ NextEpisodePreparationRequest _request({
   String currentUri = 'https://cdn.example/episode-1.mkv',
   String? currentWebProviderId,
   String audioLanguage = 'eng',
+  String subtitleLanguage = 'eng',
+  bool subtitleEnabled = true,
+  bool subtitlePreferenceSet = false,
   String? currentProvider = 'Same source',
   String currentSourceId = 'stable-source',
   String currentReleaseName = '[Group] Show - 01 Dual Audio',
@@ -1836,6 +1907,9 @@ NextEpisodePreparationRequest _request({
     seriesPreferences: SeriesPlaybackPreferences(
       audioLanguage: audioLanguage,
       audioPreferenceSet: true,
+      subtitleLanguage: subtitleLanguage,
+      subtitleEnabled: subtitleEnabled,
+      subtitlePreferenceSet: subtitlePreferenceSet,
       skipFillerEpisodes: skipFillerEpisodes,
       preferredQuality: preferredQuality,
       preferredCodec: preferredCodec,

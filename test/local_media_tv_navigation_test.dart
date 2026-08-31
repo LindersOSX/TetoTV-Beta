@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
+import 'package:anime_tv/core/preferences/playback_audio_preference.dart';
 import 'package:anime_tv/features/local_media/application/local_media_controller.dart';
 import 'package:anime_tv/features/local_media/application/plex_controller.dart';
 import 'package:anime_tv/features/local_media/application/unified_media_search_controller.dart';
@@ -9,6 +10,7 @@ import 'package:anime_tv/features/local_media/data/plex_client.dart';
 import 'package:anime_tv/features/local_media/domain/jellyfin_models.dart';
 import 'package:anime_tv/features/local_media/domain/plex_models.dart';
 import 'package:anime_tv/features/local_media/presentation/local_media_screen.dart';
+import 'package:anime_tv/features/player/domain/library_playback_request.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -289,6 +291,39 @@ void main() {
     );
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets(
+    'direct Jellyfin browse prepares the globally remembered On language',
+    (tester) async {
+      LibraryPlaybackRequest? openedRequest;
+      final harness = await _pumpMedia(
+        tester,
+        mode: InterfaceMode.television,
+        localState: _connectedJellyfinState(itemCount: 1),
+        settings: const SettingsPreferences(
+          loaded: true,
+          interfaceMode: InterfaceMode.television,
+          preferredCaptionMode: PreferredCaptionMode.enabled,
+          preferredCaptionLanguage: 'spa',
+        ),
+        openLibraryPlayer: (request) async {
+          openedRequest = request;
+        },
+      );
+
+      await tester.scrollUntilVisible(
+        find.byKey(const ValueKey('jellyfin-item-item-0')),
+        250,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('jellyfin-item-item-0')));
+      await tester.pumpAndSettle();
+
+      expect(harness.local.preferredSubtitleLanguage, 'spa');
+      expect(openedRequest, isNotNull);
+    },
+  );
 }
 
 Future<
@@ -305,6 +340,8 @@ _pumpMedia(
   PlexState plexState = const PlexState(loaded: true),
   UnifiedMediaSearchState searchState = const UnifiedMediaSearchState(),
   List<UnifiedMediaSearchItem> nextSearchResults = const [],
+  SettingsPreferences? settings,
+  Future<void> Function(LibraryPlaybackRequest request)? openLibraryPlayer,
 }) async {
   tester.view.physicalSize = const Size(960, 540);
   tester.view.devicePixelRatio = 1;
@@ -327,10 +364,15 @@ _pumpMedia(
         plexControllerProvider.overrideWith((_) => plex),
         unifiedMediaSearchControllerProvider.overrideWith((_) => search),
         settingsPreferencesProvider.overrideWith(
-          (_) => _NavigationSettingsController(storage, mode),
+          (_) => _NavigationSettingsController(
+            storage,
+            settings ?? SettingsPreferences(loaded: true, interfaceMode: mode),
+          ),
         ),
       ],
-      child: const MaterialApp(home: LocalMediaScreen()),
+      child: MaterialApp(
+        home: LocalMediaScreen(openLibraryPlayer: openLibraryPlayer),
+      ),
     ),
   );
   await tester.pumpAndSettle();
@@ -436,11 +478,29 @@ class _NavigationLocalMediaController extends LocalMediaController {
     state = initialState;
   }
 
+  String? preferredSubtitleLanguage;
+
   @override
   Future<void> load() async {}
 
   @override
   Uri? imageUri(JellyfinMediaItem item) => null;
+
+  @override
+  JellyfinPlaybackPlan playbackPlan(
+    JellyfinMediaItem item, {
+    required String playSessionId,
+    String preferredSubtitleLanguage = 'eng',
+    PlaybackAudioPreference? requestedAudio,
+  }) {
+    this.preferredSubtitleLanguage = preferredSubtitleLanguage;
+    return JellyfinPlaybackPlan(
+      uri: Uri.parse('https://jellyfin.example.com/video/${item.id}'),
+      headers: const {},
+      method: JellyfinPlayMethod.directPlay,
+      playSessionId: playSessionId,
+    );
+  }
 
   void replace(LocalMediaState value) => state = value;
 
@@ -530,8 +590,11 @@ class _NavigationSearchController extends UnifiedMediaSearchController {
 }
 
 class _NavigationSettingsController extends SettingsPreferencesController {
-  _NavigationSettingsController(super.storage, InterfaceMode mode) {
-    state = SettingsPreferences(loaded: true, interfaceMode: mode);
+  _NavigationSettingsController(
+    super.storage,
+    SettingsPreferences preferences,
+  ) {
+    state = preferences;
   }
 
   @override

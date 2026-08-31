@@ -5094,6 +5094,8 @@ void main() {
           webStreamsEnabled: false,
           autoPickSourceEnabled: true,
           autoPickAudio: AutoPickAudio.dubOnly,
+          preferredCaptionMode: PreferredCaptionMode.enabled,
+          preferredCaptionLanguage: 'spa',
         ),
         releases: const [],
         libraryService: libraryService,
@@ -5111,7 +5113,42 @@ void main() {
         libraryService.preparedSources.single.stableKey,
         'jellyfin:local-fallback',
       );
+      expect(libraryService.chosenSubtitleLanguage, 'spa');
       expect(find.text('DEBRID STREAMS'), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'Your Media preparation keeps an explicit series caption language',
+    (tester) async {
+      final libraryService = _FixedLibraryEpisodeSourceService([
+        _autoPickLibrarySource('series-caption'),
+      ]);
+      await _pumpAutoPickScenario(
+        tester,
+        mediaId: 99112,
+        settings: const SettingsPreferences(
+          loaded: true,
+          debridStreamsEnabled: false,
+          webStreamsEnabled: false,
+          autoPickSourceEnabled: true,
+          preferredCaptionMode: PreferredCaptionMode.enabled,
+          preferredCaptionLanguage: 'spa',
+        ),
+        seriesPreferences: const SeriesPlaybackPreferences(
+          subtitleLanguage: 'jpn',
+          subtitlePreferenceSet: true,
+        ),
+        releases: const [],
+        libraryService: libraryService,
+      );
+
+      await _pumpUntilCondition(
+        tester,
+        () => libraryService.preparedSources.isNotEmpty,
+      );
+
+      expect(libraryService.chosenSubtitleLanguage, 'jpn');
     },
   );
 
@@ -6266,6 +6303,7 @@ class _FixedLibraryEpisodeSourceService implements LibraryEpisodeSourceService {
   LibraryWatchPartyIdentity? chosenIdentity;
   final List<LibraryEpisodeSource> preparedSources = [];
   int compatibilityPrepareCount = 0;
+  String? chosenSubtitleLanguage;
 
   @override
   bool get hasConnectedServer => connected;
@@ -6288,6 +6326,7 @@ class _FixedLibraryEpisodeSourceService implements LibraryEpisodeSourceService {
     preparedSources.add(source);
     if (forceCompatibility) compatibilityPrepareCount++;
     chosenIdentity = watchPartyIdentity;
+    chosenSubtitleLanguage = preferredSubtitleLanguage;
     final callback = onPreparePlayback;
     if (callback != null) return callback(source);
     return Completer<LibraryPlaybackRequest>().future;
@@ -6362,6 +6401,8 @@ Future<_AutoPickProbe> _pumpAutoPickScenario(
   String episodeTitle = 'Auto Pick test',
   int? episodeYear,
   required SettingsPreferences settings,
+  SeriesPlaybackPreferences seriesPreferences =
+      const SeriesPlaybackPreferences(),
   required List<ReleaseCandidate> releases,
   List<WebStreamResult> webStreams = const [],
   WebStreamAggregator? webAggregator,
@@ -6414,7 +6455,7 @@ Future<_AutoPickProbe> _pumpAutoPickScenario(
         ),
         addonStoreProvider.overrideWithValue(_NoopAddonStore()),
         seriesPreferencesReaderProvider.overrideWithValue(
-          (_) async => const SeriesPlaybackPreferences(),
+          (_) async => seriesPreferences,
         ),
         seriesPreferencesWriterProvider.overrideWithValue((_, _) async {}),
         resolveDeviceProfileReaderProvider.overrideWithValue(

@@ -1254,6 +1254,7 @@ class NextEpisodePreparationController {
           displayName: release.releaseName,
           headers: validated.headers,
           externalSubtitle: validated.subtitleUri,
+          externalSubtitleLanguage: candidate.subtitleLanguage,
           mediaContentType: validated.contentType,
           subtitleContentType: validated.subtitleContentType,
           externalSubtitleRejected: validated.subtitleRejected,
@@ -1453,6 +1454,12 @@ class _PreparationSlot {
           other.seriesPreferences.audioLanguage &&
       request.seriesPreferences.audioPreferenceSet ==
           other.seriesPreferences.audioPreferenceSet &&
+      request.seriesPreferences.subtitleLanguage ==
+          other.seriesPreferences.subtitleLanguage &&
+      request.seriesPreferences.subtitleEnabled ==
+          other.seriesPreferences.subtitleEnabled &&
+      request.seriesPreferences.subtitlePreferenceSet ==
+          other.seriesPreferences.subtitlePreferenceSet &&
       request.seriesPreferences.preferredStreamLanguage ==
           other.seriesPreferences.preferredStreamLanguage &&
       request.seriesPreferences.preferredQuality ==
@@ -1634,6 +1641,7 @@ PlaybackStreamOption _optionForWebStream(WebStreamResult result) {
       displayName: release.releaseName,
       headers: result.headers,
       externalSubtitle: result.subtitleUri,
+      externalSubtitleLanguage: result.subtitleLanguage,
       providerId: result.providerId,
       providerName: '${result.providerName} web stream',
       providerEpisodeIdentity: ProviderEpisodeIdentity.fromFields(

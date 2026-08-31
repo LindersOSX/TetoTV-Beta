@@ -32,6 +32,7 @@ PlaybackStreamOption playbackOptionForWebStream(WebStreamResult result) {
       displayName: release.releaseName,
       headers: result.headers,
       externalSubtitle: result.subtitleUri,
+      externalSubtitleLanguage: result.subtitleLanguage,
       providerId: result.providerId,
       providerName: '${result.providerName} web stream',
       providerEpisodeIdentity: ProviderEpisodeIdentity.fromFields(

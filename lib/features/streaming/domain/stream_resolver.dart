@@ -173,6 +173,7 @@ class StreamReady extends StreamResolution {
     this.debridService,
     this.headers = const {},
     this.externalSubtitle,
+    this.externalSubtitleLanguage,
     this.mediaContentType,
     this.subtitleContentType,
     this.externalSubtitleRejected = false,
@@ -189,6 +190,7 @@ class StreamReady extends StreamResolution {
   final DebridService? debridService;
   final Map<String, String> headers;
   final Uri? externalSubtitle;
+  final String? externalSubtitleLanguage;
   final String? mediaContentType;
   final String? subtitleContentType;
   final bool externalSubtitleRejected;

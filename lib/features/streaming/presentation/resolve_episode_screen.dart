@@ -634,6 +634,16 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
   SettingsPreferences get _streamPreferences =>
       ref.read(settingsPreferencesProvider);
 
+  String get _preferredSubtitleLanguageForPreparation {
+    final settings = _streamPreferences;
+    return preferredCaptionLanguageForPreparation(
+      seriesLanguage: _seriesPreferences.subtitleLanguage,
+      seriesPreferenceSet: _seriesPreferences.subtitlePreferenceSet,
+      globalMode: settings.preferredCaptionMode,
+      globalLanguage: settings.preferredCaptionLanguage,
+    );
+  }
+
   bool get _autoPickActive =>
       _autoPickEnabledForOpen && !_autoPickManualFallback;
 
@@ -2314,6 +2324,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
       externalSubtitle: validatedUri == null
           ? stream.subtitleUri
           : validatedSubtitleUri,
+      externalSubtitleLanguage: stream.subtitleLanguage,
       mediaContentType: mediaContentType,
       subtitleContentType: subtitleContentType,
       externalSubtitleRejected: externalSubtitleRejected,
@@ -2823,7 +2834,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
       var request = await service.preparePlayback(
         source,
         watchPartyIdentity: _libraryWatchPartyIdentity,
-        preferredSubtitleLanguage: _seriesPreferences.subtitleLanguage,
+        preferredSubtitleLanguage: _preferredSubtitleLanguageForPreparation,
         requestedAudio: requestedAudio,
       );
       if (!mounted ||
@@ -2859,7 +2870,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
         request = await service.preparePlayback(
           source,
           watchPartyIdentity: _libraryWatchPartyIdentity,
-          preferredSubtitleLanguage: _seriesPreferences.subtitleLanguage,
+          preferredSubtitleLanguage: _preferredSubtitleLanguageForPreparation,
           requestedAudio: requestedAudio,
           forceCompatibility: true,
         );

@@ -44,6 +44,25 @@ void main() {
     expect(unlabeled.release.audioIntent, ReleaseAudioIntent.unknown);
   });
 
+  test('web playback launch preserves external subtitle language metadata', () {
+    final option = playbackOptionForWebStream(
+      WebStreamResult(
+        providerId: 'provider',
+        providerName: 'Provider',
+        title: '1080p',
+        uri: Uri.parse('https://video.example/episode.m3u8'),
+        subtitleUri: Uri.parse('https://video.example/subtitles/es.vtt'),
+        subtitleLanguage: 'Spanish',
+      ),
+    );
+
+    expect(
+      option.stream.externalSubtitle,
+      Uri.parse('https://video.example/subtitles/es.vtt'),
+    );
+    expect(option.stream.externalSubtitleLanguage, 'Spanish');
+  });
+
   test(
     'web playback option preserves structured provider episode identity',
     () {

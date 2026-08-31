@@ -18,6 +18,16 @@ class PlayerHandoffGate {
 
 enum PlayerFailoverClass { directWeb, debrid }
 
+/// An automatic recovery attempt may only continue while the source the
+/// attempt started for is still authoritative. A manual source selection
+/// temporarily owns that decision while it validates and opens its choice.
+bool playerFailoverGenerationIsActive({
+  required int expectedGeneration,
+  required int activeGeneration,
+  required bool manualSourceSelectionInProgress,
+}) =>
+    !manualSourceSelectionInProgress && expectedGeneration == activeGeneration;
+
 List<PlayerFailoverClass> playerFailoverClassOrder({
   required bool currentIsWeb,
 }) => currentIsWeb

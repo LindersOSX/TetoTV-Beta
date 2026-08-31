@@ -195,6 +195,10 @@ class SeriesPlaybackPreferences {
     'subtitleLanguage': subtitleLanguage,
     'subtitleEnabled': subtitleEnabled,
     'subtitlePreferenceSet': subtitlePreferenceSet,
+    // v2.0.52 could persist subtitlePreferenceSet from transient player state.
+    // This independent marker proves that the value came from the corrected
+    // explicit-intent serializer instead of that legacy behavior.
+    'subtitlePreferenceExplicit': subtitlePreferenceSet,
     'subtitleSize': subtitleSize,
     'subtitlePosition': subtitlePosition,
     'subtitleDelayMs': subtitleDelayMs,
@@ -214,32 +218,43 @@ class SeriesPlaybackPreferences {
     'preferredReleaseGroup': preferredReleaseGroup,
   };
 
-  factory SeriesPlaybackPreferences.fromJson(Map<String, dynamic> json) =>
-      SeriesPlaybackPreferences(
-        audioLanguage: json['audioLanguage'] as String? ?? 'eng',
-        audioPreferenceSet: json['audioPreferenceSet'] as bool? ?? false,
-        subtitleLanguage: json['subtitleLanguage'] as String? ?? 'eng',
-        subtitleEnabled: json['subtitleEnabled'] as bool? ?? true,
-        subtitlePreferenceSet: json['subtitlePreferenceSet'] as bool? ?? false,
-        subtitleSize: (json['subtitleSize'] as num?)?.toDouble() ?? 34,
-        subtitlePosition: json['subtitlePosition'] as int? ?? 100,
-        subtitleDelayMs: json['subtitleDelayMs'] as int? ?? 0,
-        audioDelayMs: json['audioDelayMs'] as int? ?? 0,
-        decoder: json['decoder'] as String? ?? 'hardware-safe',
-        videoFit: json['videoFit'] as String? ?? 'contain',
-        highContrastSubtitles: json['highContrastSubtitles'] as bool? ?? false,
-        autoplayNextEpisode: json['autoplayNextEpisode'] as bool? ?? true,
-        skipFillerEpisodes: json['skipFillerEpisodes'] as bool? ?? false,
-        preferredStreamLanguage:
-            json['preferredStreamLanguage'] as String? ?? 'dub',
-        preferredQuality: json['preferredQuality'] as String? ?? 'any',
-        preferredCodec: json['preferredCodec'] as String? ?? 'any',
-        preferredHdrMode: json['preferredHdrMode'] as String? ?? 'any',
-        allowBatchStreams: json['allowBatchStreams'] as bool? ?? true,
-        streamSortMode: json['streamSortMode'] as String? ?? 'compatibility',
-        preferredReleaseProvider: json['preferredReleaseProvider'] as String?,
-        preferredReleaseGroup: json['preferredReleaseGroup'] as String?,
-      );
+  factory SeriesPlaybackPreferences.fromJson(Map<String, dynamic> json) {
+    final hasExplicitSubtitlePreference =
+        json['subtitlePreferenceExplicit'] == true &&
+        json['subtitlePreferenceSet'] == true;
+    return SeriesPlaybackPreferences(
+      audioLanguage: json['audioLanguage'] as String? ?? 'eng',
+      audioPreferenceSet: json['audioPreferenceSet'] as bool? ?? false,
+      subtitleLanguage: hasExplicitSubtitlePreference
+          ? json['subtitleLanguage'] as String? ?? 'eng'
+          : 'eng',
+      subtitleEnabled: hasExplicitSubtitlePreference
+          ? json['subtitleEnabled'] as bool? ?? true
+          : true,
+      // Rows written before the explicit marker existed must not override
+      // the global Preferred CC default. New manual choices serialize both
+      // fields, so their On/Off/language intent remains authoritative.
+      subtitlePreferenceSet: hasExplicitSubtitlePreference,
+      subtitleSize: (json['subtitleSize'] as num?)?.toDouble() ?? 34,
+      subtitlePosition: json['subtitlePosition'] as int? ?? 100,
+      subtitleDelayMs: json['subtitleDelayMs'] as int? ?? 0,
+      audioDelayMs: json['audioDelayMs'] as int? ?? 0,
+      decoder: json['decoder'] as String? ?? 'hardware-safe',
+      videoFit: json['videoFit'] as String? ?? 'contain',
+      highContrastSubtitles: json['highContrastSubtitles'] as bool? ?? false,
+      autoplayNextEpisode: json['autoplayNextEpisode'] as bool? ?? true,
+      skipFillerEpisodes: json['skipFillerEpisodes'] as bool? ?? false,
+      preferredStreamLanguage:
+          json['preferredStreamLanguage'] as String? ?? 'dub',
+      preferredQuality: json['preferredQuality'] as String? ?? 'any',
+      preferredCodec: json['preferredCodec'] as String? ?? 'any',
+      preferredHdrMode: json['preferredHdrMode'] as String? ?? 'any',
+      allowBatchStreams: json['allowBatchStreams'] as bool? ?? true,
+      streamSortMode: json['streamSortMode'] as String? ?? 'compatibility',
+      preferredReleaseProvider: json['preferredReleaseProvider'] as String?,
+      preferredReleaseGroup: json['preferredReleaseGroup'] as String?,
+    );
+  }
 }
 
 class ProviderHealth {

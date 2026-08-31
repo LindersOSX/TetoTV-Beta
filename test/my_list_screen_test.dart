@@ -336,7 +336,7 @@ void main() {
             (_) => accountsController,
           ),
         ],
-        child: const MaterialApp(home: MyListScreen()),
+        child: MaterialApp(theme: AppTheme.dark, home: const MyListScreen()),
       ),
     );
     await tester.pump();
@@ -355,9 +355,13 @@ void main() {
       find.byKey(const ValueKey('main-nav-profile-avatar-anilist')),
     );
     final avatarDecoration = avatar.decoration! as BoxDecoration;
-    expect(avatarDecoration.shape, BoxShape.circle);
-    expect(avatarDecoration.borderRadius, isNull);
+    expect(avatarDecoration.shape, BoxShape.rectangle);
+    expect(avatarDecoration.borderRadius, BorderRadius.circular(10));
     expect(avatarDecoration.border, isNotNull);
+    final profileFocusable = tester.widget<TvFocusable>(
+      find.descendant(of: profileSwitcher, matching: find.byType(TvFocusable)),
+    );
+    expect(profileFocusable.borderRadius, BorderRadius.circular(11));
     expect(find.byKey(const ValueKey('main-nav-settings')), findsOneWidget);
     expect(find.text('TetoFan'), findsNothing);
     expect(find.text('MALFan'), findsNothing);
@@ -372,7 +376,57 @@ void main() {
     );
     expect(artwork.url, 'https://img.anili.st/avatar.png');
 
-    await tester.tap(find.byKey(const ValueKey('main-nav-profile-summary')));
+    final profileDetector = tester.widget<FocusableActionDetector>(
+      find.descendant(
+        of: profileSwitcher,
+        matching: find.byType(FocusableActionDetector),
+      ),
+    );
+    profileDetector.focusNode!.requestFocus();
+    await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+
+    final menuSurface = find.byKey(
+      const ValueKey('main-nav-profile-menu-surface'),
+    );
+    final menuClose = find.byKey(const ValueKey('main-nav-profile-menu-close'));
+    expect(menuSurface, findsOneWidget);
+    expect(menuClose, findsOneWidget);
+    expect(find.text('Left or Back closes this menu'), findsOneWidget);
+    final surfaceMaterial = tester.widget<Material>(menuSurface);
+    final surfaceDecoration =
+        (surfaceMaterial.child! as DecoratedBox).decoration as BoxDecoration;
+    expect(surfaceDecoration.color, AppThemePalette.defaults.surface);
+    expect(surfaceDecoration.borderRadius, BorderRadius.circular(14));
+    expect(surfaceDecoration.border, isNotNull);
+
+    final activeProfileRow = find.byKey(
+      const ValueKey('main-nav-switch-profile-anilist-anilist-tetofan'),
+    );
+    final activeProfileDetector = tester.widget<FocusableActionDetector>(
+      find.descendant(
+        of: activeProfileRow,
+        matching: find.byType(FocusableActionDetector),
+      ),
+    );
+    expect(activeProfileDetector.focusNode!.hasFocus, isTrue);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+    await tester.pumpAndSettle();
+    expect(menuSurface, findsNothing);
+    expect(profileDetector.focusNode!.hasFocus, isTrue);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+    expect(menuSurface, findsOneWidget);
+    await tester.tapAt(const Offset(4, 4));
+    await tester.pumpAndSettle();
+    expect(menuSurface, findsNothing);
+
+    profileDetector.focusNode!.requestFocus();
+    await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.pumpAndSettle();
     expect(find.text('AniList'), findsWidgets);
     expect(find.text('MALFan'), findsOneWidget);
@@ -816,8 +870,8 @@ void main() {
                 .decoration!
             as BoxDecoration;
     expect(avatarDecoration.border, isNotNull);
-    expect(avatarDecoration.shape, BoxShape.circle);
-    expect(avatarDecoration.borderRadius, isNull);
+    expect(avatarDecoration.shape, BoxShape.rectangle);
+    expect(avatarDecoration.borderRadius, BorderRadius.circular(10));
     expect(
       find.descendant(
         of: find.byKey(const ValueKey('main-nav-my-list')),

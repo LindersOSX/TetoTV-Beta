@@ -108,9 +108,11 @@ class _TetoTopLevelShellState extends ConsumerState<TetoTopLevelShell> {
   }
 
   void _focusRail() {
-    if (_railFocusNode.context != null) {
+    if (_railFocusNode.context?.mounted == true &&
+        _railFocusNode.canRequestFocus) {
       _railFocusNode.requestFocus();
-    } else if (_profileFocusNode.context != null) {
+    } else if (_profileFocusNode.context?.mounted == true &&
+        _profileFocusNode.canRequestFocus) {
       // Settings may live under the profile menu while every optional rail
       // destination is disabled. The profile remains a deterministic escape
       // target instead of leaving LEFT trapped in Settings content.
@@ -119,9 +121,11 @@ class _TetoTopLevelShellState extends ConsumerState<TetoTopLevelShell> {
   }
 
   void _focusContent() {
-    if (widget.firstContentFocusNode.context != null) {
+    if (widget.firstContentFocusNode.context?.mounted == true &&
+        widget.firstContentFocusNode.canRequestFocus) {
       requestTvFocusAndReveal(widget.firstContentFocusNode);
-    } else if (widget.fallbackContentFocusNode?.context != null) {
+    } else if (widget.fallbackContentFocusNode?.context?.mounted == true &&
+        widget.fallbackContentFocusNode!.canRequestFocus) {
       requestTvFocusAndReveal(widget.fallbackContentFocusNode!);
     }
   }
@@ -144,7 +148,8 @@ class _TetoTopLevelShellState extends ConsumerState<TetoTopLevelShell> {
     );
     if (!_profileShouldBeVisibleAtTop &&
         (_profileFocusNode.hasFocus || hiddenHeaderOwnsFocus)) {
-      if (_railFocusNode.context != null) {
+      if (_railFocusNode.context?.mounted == true &&
+          _railFocusNode.canRequestFocus) {
         _railFocusNode.requestFocus();
       } else {
         _focusContent();

@@ -960,6 +960,42 @@ void main() {
         isTrue,
       );
 
+      // Settings is already the active destination.  Activating its rail
+      // item must restore this screen's content focus, not push a duplicate
+      // AccountsScreen route with a second, competing focus graph.
+      await tester.tap(settingsAction);
+      await tester.pumpAndSettle();
+      expect(find.byType(AccountsScreen), findsOneWidget);
+      expect(FocusManager.instance.primaryFocus?.debugLabel, 'accounts.search');
+
+      // Once the list is scrolled, the fixed search header is intentionally
+      // removed. Re-activating Settings must use the visible area tab instead
+      // of handing the shell that detached search FocusNode.
+      final settingsList = tester.widget<ListView>(
+        find.byKey(const ValueKey('settings-content-list')),
+      );
+      settingsList.controller!.jumpTo(240);
+      await tester.pump();
+      await tester.pump();
+      expect(
+        find.byKey(const ValueKey('top-level-fixed-profile')),
+        findsNothing,
+      );
+      await tester.tap(settingsAction);
+      await tester.pumpAndSettle();
+      expect(find.byType(AccountsScreen), findsOneWidget);
+      expect(
+        FocusManager.instance.primaryFocus?.debugLabel,
+        'accounts.area.appearance',
+      );
+
+      // The keyboard path should have the same behavior as a click: focus can
+      // leave the content for the rail and immediately return with RIGHT.
+      settingsList.controller!.jumpTo(0);
+      await tester.pump();
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+      await tester.pump();
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
       await tester.pump();
       expect(FocusManager.instance.primaryFocus?.debugLabel, 'accounts.search');
@@ -1610,6 +1646,65 @@ void main() {
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
       'top-level.active-navigation',
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('TV settings fallback rows stay inside the content list', (
+    tester,
+  ) async {
+    FlutterSecureStorage.setMockInitialValues({});
+    tester.view.physicalSize = const Size(1280, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      const ProviderScope(
+        child: MaterialApp(home: TvShortcuts(child: AccountsScreen())),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final displaySection = find.byWidgetPredicate(
+      (widget) =>
+          widget is TvFocusable &&
+          widget.focusNode?.debugLabel == 'accounts.section.display',
+    );
+    final displayFocus = tester.widget<TvFocusable>(displaySection).focusNode!;
+    displayFocus.requestFocus();
+    await tester.pumpAndSettle();
+
+    // The secondary Display options rows intentionally use fallback focus
+    // nodes. Two Down presses must advance through that list, not escape to
+    // the fixed Settings rail via the app-wide reading-order policy.
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pump();
+    final firstFallbackFocus = FocusManager.instance.primaryFocus;
+    expect(firstFallbackFocus?.debugLabel, 'TV mouse/D-pad control');
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pump();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      isNot('top-level.active-navigation'),
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+    await tester.pump();
+    expect(FocusManager.instance.primaryFocus, same(firstFallbackFocus));
+    // Even an anonymous option row must have a deterministic LEFT escape to
+    // the active Settings rail item.
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+    await tester.pump();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'top-level.active-navigation',
+    );
+    await tester.pump(const Duration(milliseconds: 120));
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    await tester.pumpAndSettle();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      anyOf('accounts.search', 'accounts.area.appearance'),
     );
     expect(tester.takeException(), isNull);
   });

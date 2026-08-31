@@ -646,6 +646,18 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     repeatInterval: const Duration(milliseconds: 92),
   );
   final _settingsScrollController = ScrollController();
+  // Incremented for every accepted D-pad event so delayed reveals from an
+  // earlier move cannot scroll the list after focus has already moved on.
+  int _settingsRevealGeneration = 0;
+  // TV settings are rendered as one vertical list. Keep that list in its own
+  // focus scope so Flutter's fallback traversal cannot escape into the app
+  // rail when a row does not have an explicit directional mapping.
+  final _settingsListFocusScope = FocusScopeNode(
+    debugLabel: 'accounts.settings-list',
+    skipTraversal: true,
+    traversalEdgeBehavior: TraversalEdgeBehavior.stop,
+    directionalTraversalEdgeBehavior: TraversalEdgeBehavior.stop,
+  );
   final Set<_CustomizationSection> _expandedCustomizationSections = {};
   final Set<_AutoPickPrioritySection> _expandedAutoPickPrioritySections = {
     _AutoPickPrioritySection.source,
@@ -1185,7 +1197,9 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
   @override
   void dispose() {
     _directionalRepeatGate.reset();
+    _settingsRevealGeneration++;
     _settingsScrollController.dispose();
+    _settingsListFocusScope.dispose();
     _torBoxTokenController.dispose();
     _allDebridTokenController.dispose();
     _premiumizeTokenController.dispose();
@@ -1325,6 +1339,19 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     }
     final current = FocusManager.instance.primaryFocus;
     final tvListLayout = layout?.usesTvRail == true;
+    // Stop a previous TV-list reveal before handling this packet. Without
+    // this, a held D-pad can leave an old ensureVisible animation driving the
+    // viewport toward a stale target. The generation invalidates callbacks
+    // already queued for that target as well.
+    final revealGeneration = ++_settingsRevealGeneration;
+    if (tvListLayout && _settingsScrollController.hasClients) {
+      final position = _settingsScrollController.position;
+      if (position.isScrollingNotifier.value) {
+        // jumpTo cancels Driven/Ballistic activities through the public
+        // ScrollPosition API while preserving the current offset.
+        position.jumpTo(position.pixels);
+      }
+    }
     bool focusNodeIsMounted(FocusNode node) => node.context?.mounted ?? false;
     final preferences = ref.read(settingsPreferencesProvider);
     final selectedDebridAction = switch (preferences.debridProvider) {
@@ -2273,6 +2300,25 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     }
 
     if (target == null || !focusNodeIsMounted(target)) {
+      if (tvListLayout &&
+          current != null &&
+          (key == LogicalKeyboardKey.arrowUp ||
+              key == LogicalKeyboardKey.arrowDown)) {
+        // Anonymous rows (for example the secondary display options) do not
+        // have an explicit node in the screen's directional graph. Traverse
+        // them through the TV list scope instead of allowing the global
+        // reading-order policy to jump to the navigation rail. The scope's
+        // `stop` edge behavior keeps an edge press in place; named rows above
+        // already provide the intentional cross-section transitions.
+        if (identical(current.nearestScope, _settingsListFocusScope)) {
+          if (key == LogicalKeyboardKey.arrowUp) {
+            _settingsListFocusScope.previousFocus();
+          } else {
+            _settingsListFocusScope.nextFocus();
+          }
+          return KeyEventResult.handled;
+        }
+      }
       // Some Settings rows intentionally let Flutter traverse between their
       // anonymous option nodes (for example Small -> Medium -> Large). When
       // LEFT leaves the final option, the default directional policy chooses
@@ -2282,19 +2328,28 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       if (key == LogicalKeyboardKey.arrowLeft &&
           layout?.usesSideNavigation == true) {
         final origin = current;
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (!mounted) return;
+        final activeLayout = layout;
+        scheduleMicrotask(() {
+          if (!mounted || activeLayout == null) return;
           final primary = FocusManager.instance.primaryFocus;
-          final leftSettingsContent = !_contentFocus.hasFocus;
+          // Check the list scope itself instead of the broader content
+          // ancestor. This preserves horizontal child controls when Flutter
+          // successfully moved within the list, while normalizing a genuine
+          // content-to-rail exit to the active Settings action.
+          final stayedInSettingsList =
+              primary != null &&
+              (identical(primary, _settingsListFocusScope) ||
+                  primary.ancestors.contains(_settingsListFocusScope));
           final wasTrappedAtLeftEdge = identical(primary, origin);
-          if (leftSettingsContent || wasTrappedAtLeftEdge) {
-            layout!.focusRail();
+          if (!stayedInSettingsList || wasTrappedAtLeftEdge) {
+            activeLayout.focusRail();
           }
         });
       }
       return KeyEventResult.ignored;
     }
-    target.requestFocus();
+    final targetToReveal = target;
+    targetToReveal.requestFocus();
     // Settings intentionally uses a screen-local focus graph for a few
     // cross-column transitions, so reveal that explicit target exactly once.
     // Normal app-wide D-pad traversal is revealed by Flutter's policy.
@@ -2303,11 +2358,17 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
         ? ScrollPositionAlignmentPolicy.keepVisibleAtStart
         : ScrollPositionAlignmentPolicy.keepVisibleAtEnd;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final targetContext = target?.context;
-      if (mounted && targetContext != null && targetContext.mounted) {
+      final targetContext = targetToReveal.context;
+      if (mounted &&
+          revealGeneration == _settingsRevealGeneration &&
+          targetToReveal.hasFocus &&
+          targetContext != null &&
+          targetContext.mounted) {
         Scrollable.ensureVisible(
           targetContext,
-          duration: const Duration(milliseconds: 120),
+          duration: tvListLayout
+              ? Duration.zero
+              : const Duration(milliseconds: 120),
           curve: Curves.easeOutCubic,
           alignmentPolicy: alignmentPolicy,
         );
@@ -2764,6 +2825,28 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
           : _areaFocusNodes[_activeArea]!,
       fallbackContentFocusNode: _areaFocusNodes[_activeArea],
       autofocusRail: widget.autofocusNavigation,
+      // Settings is itself the active rail destination.  Pressing the
+      // already-selected rail item must return focus to this screen's content
+      // instead of pushing a second `/settings/accounts` route.  A duplicate
+      // route leaves two independent focus graphs mounted and is the source
+      // of the intermittent "right does nothing" behavior after exiting to
+      // the rail.
+      onActiveDestinationPressed: () {
+        final preferredTarget = collapsibleSettings
+            ? _settingsSearchFocus
+            : _activeArea == _SettingsArea.appearance
+            ? _customizationFocus
+            : _areaFocusNodes[_activeArea]!;
+        // The fixed search header is removed while the settings list is
+        // scrolled. Its FocusNode can retain a non-null context briefly after
+        // removal, so do not hand that detached node back to the shell.
+        final target =
+            preferredTarget.context?.mounted == true &&
+                preferredTarget.canRequestFocus
+            ? preferredTarget
+            : _areaFocusNodes[_activeArea]!;
+        requestTvFocusAndReveal(target);
+      },
       tvHeaderFocusNodes: [
         _settingsSearchFocus,
         _settingsToggleAllFocus,
@@ -2852,748 +2935,806 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                   : (_activeArea == _SettingsArea.appearance ? 16 : 12),
             ),
             Expanded(
-              child: ListView(
-                key: const ValueKey('settings-content-list'),
-                controller: _settingsScrollController,
-                scrollCacheExtent: const ScrollCacheExtent.pixels(5000),
-                keyboardDismissBehavior:
-                    ScrollViewKeyboardDismissBehavior.onDrag,
-                padding: EdgeInsets.only(
-                  bottom:
-                      MediaQuery.viewInsetsOf(context).bottom +
-                      (layout.usesTvRail ? 16 : 24),
-                ),
-                children: [
-                  if (_activeArea == _SettingsArea.appearance) ...[
-                    if (!layout.usesTvRail) ...[
-                      const _SectionHeader(
-                        icon: Icons.palette_rounded,
-                        title: 'APPEARANCE',
-                        subtitle:
-                            'Personalize TetoTV, the Home screen, navigation, and feedback.',
-                      ),
-                      const SizedBox(height: 8),
-                    ],
-                    _AppearanceSettingsLayout(
-                      usesTvListLayout: layout.usesTvRail,
-                      preferences: preferences,
-                      titlePreference: titlePreference,
-                      homeShelves: homeShelves,
-                      homeShelfOrder: homeShelfOrder,
-                      controller: ref.read(
-                        settingsPreferencesProvider.notifier,
-                      ),
-                      themeStudioFocusNode: _customizationFocus,
-                      titleLanguageFocusNode: _titleLanguageFocus,
-                      showTitleStyleFocusNode: _showTitleStyleFocus,
-                      navigationSizeFocusNode: _navigationSizeFocus,
-                      menuOrderFocusNode: _menuOrderFocus,
-                      resetFocusNode: _customizationResetFocus,
-                      featuredFocusNode: _featuredHomeContentFocus,
-                      posterMetadataFocusNode: _posterMetadataFocus,
-                      continueWatchingFocusNode: _continueWatchingFocus,
-                      displayOptionsFirstFocusNode: _displaySectionFocus,
-                      cardDetailsFocusNode: _cardDetailsFocus,
-                      inputFeedbackFirstFocusNode: _inputFeedbackSectionFocus,
-                      clickSoundsFocusNode: _clickSoundsFocus,
-                      shelfFocusNodes: _shelfFocusNodes,
-                      expandedSections: _expandedSettingsSections,
-                      sectionFocusNodes: _settingsSectionFocusNodes,
-                      onSectionExpandedChanged: _setSettingsSectionExpanded,
-                      onOpenThemeStudio: () =>
-                          context.push(ThemeStudioScreen.routePath),
-                      onOpenMenuOrder: _openMenuOrderDialog,
-                      onTitleLanguageChanged: (preference) => ref
-                          .read(titleLanguagePreferenceProvider.notifier)
-                          .setPreference(preference),
-                      onReset: resetAppearance,
-                      onShelfToggle: (shelf) => ref
-                          .read(homeShelfPreferencesProvider.notifier)
-                          .toggle(shelf),
-                      onShelfMove: (shelf, offset) => ref
-                          .read(homeShelfOrderProvider.notifier)
-                          .move(shelf, offset),
+              child: FocusScope(
+                node: _settingsListFocusScope,
+                skipTraversal: true,
+                child: FocusTraversalGroup(
+                  policy: WidgetOrderTraversalPolicy(),
+                  child: ListView(
+                    key: const ValueKey('settings-content-list'),
+                    controller: _settingsScrollController,
+                    scrollCacheExtent: const ScrollCacheExtent.pixels(5000),
+                    keyboardDismissBehavior:
+                        ScrollViewKeyboardDismissBehavior.onDrag,
+                    padding: EdgeInsets.only(
+                      bottom:
+                          MediaQuery.viewInsetsOf(context).bottom +
+                          (layout.usesTvRail ? 16 : 24),
                     ),
-                    SizedBox(height: layout.usesTvRail ? 5 : 10),
-                  ],
-                  if (_activeArea == _SettingsArea.playback) ...[
-                    if (!layout.usesTvRail) ...[
-                      const _SectionHeader(
-                        icon: Icons.play_circle_rounded,
-                        title: 'PLAYBACK',
-                        subtitle:
-                            'Tune captions, player behavior, audio, skipping, and seeking.',
-                      ),
-                      const SizedBox(height: 8),
-                    ],
-                    _SettingsResponsiveColumns(
-                      forceSingleColumn: layout.usesTvRail,
-                      left: settingsSectionCard(
-                        key: const ValueKey('settings-card-playback-captions'),
-                        section: _SettingsSection.closedCaptions,
-                        subtitle:
-                            'Style subtitles for comfortable viewing on every screen.',
-                        child: customizationPanel(const {
-                          _CustomizationSection.closedCaptions,
-                        }, showReset: false),
-                      ),
-                      right: settingsSectionCard(
-                        key: const ValueKey('settings-card-playback-player'),
-                        section: _SettingsSection.playerControls,
-                        subtitle:
-                            'Choose audio, skipping, seeking, and playback behavior.',
-                        child: customizationPanel(const {
-                          _CustomizationSection.playerControls,
-                        }, showReset: false),
-                      ),
-                    ),
-                    SizedBox(height: layout.usesTvRail ? 5 : 10),
-                  ],
-                  if (_activeArea == _SettingsArea.services) ...[
-                    if (!layout.usesTvRail) ...[
-                      const _SectionHeader(
-                        icon: Icons.hub_rounded,
-                        title: 'SERVICES',
-                        subtitle:
-                            'Connect providers and choose how episode sources are found.',
-                      ),
-                      const SizedBox(height: 8),
-                    ],
-                    _SettingsResponsiveColumns(
-                      forceSingleColumn: layout.usesTvRail,
-                      left: _SettingsCardLane(
-                        children: [
-                          settingsSectionCard(
-                            key: const ValueKey(
-                              'settings-card-services-debrid',
-                            ),
-                            section: _SettingsSection.debridStreaming,
+                    children: [
+                      if (_activeArea == _SettingsArea.appearance) ...[
+                        if (!layout.usesTvRail) ...[
+                          const _SectionHeader(
+                            icon: Icons.palette_rounded,
+                            title: 'APPEARANCE',
                             subtitle:
-                                'Choose and securely connect the provider used to resolve streams.',
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                _SettingsSelection<DebridService>(
-                                  focusNode: _debridProviderFocus,
-                                  label: 'Debrid provider',
-                                  value: preferences.debridProvider,
-                                  options: [
-                                    for (final service in DebridService.values)
-                                      _SettingsOption(
-                                        value: service,
-                                        label: service.displayName,
-                                        detail:
-                                            switch (service) {
-                                              DebridService.realDebrid =>
-                                                debrid.hasSavedToken,
-                                              DebridService.torBox =>
-                                                torBox.hasSavedToken,
-                                              DebridService.allDebrid =>
-                                                allDebrid.hasSavedToken,
-                                              DebridService.premiumize =>
-                                                premiumize.hasSavedToken,
-                                            }
-                                            ? 'Connected'
-                                            : 'Not connected',
-                                      ),
-                                  ],
-                                  onSelected: ref
-                                      .read(
-                                        settingsPreferencesProvider.notifier,
-                                      )
-                                      .setDebridProvider,
-                                  showDivider: true,
-                                ),
-                                switch (preferences.debridProvider) {
-                                  DebridService.realDebrid => _RealDebridPanel(
-                                    state: debrid,
-                                    onDisconnect: () => ref
-                                        .read(
-                                          realDebridSettingsControllerProvider
-                                              .notifier,
-                                        )
-                                        .disconnect(),
-                                    onDeviceConnect: () =>
-                                        context.push('/pair/realdebrid'),
-                                    connectFocusNode: _debridConnectFocus,
-                                  ),
-                                  DebridService.torBox => _TorBoxPanel(
-                                    state: torBox,
-                                    tokenController: _torBoxTokenController,
-                                    onSave: () async {
-                                      final saved = await ref
-                                          .read(
-                                            torBoxSettingsControllerProvider
-                                                .notifier,
-                                          )
-                                          .saveAndValidate(
-                                            _torBoxTokenController.text,
-                                          );
-                                      if (saved) _torBoxTokenController.clear();
-                                    },
-                                    onDisconnect: () => ref
-                                        .read(
-                                          torBoxSettingsControllerProvider
-                                              .notifier,
-                                        )
-                                        .disconnect(),
-                                    onDeviceConnect: () async {
-                                      await context.push('/pair/torbox');
-                                      await ref
-                                          .read(
-                                            torBoxSettingsControllerProvider
-                                                .notifier,
-                                          )
-                                          .load();
-                                    },
-                                    actionFocusNode: _torBoxActionFocus,
-                                    tokenFocusNode: _torBoxTokenFocus,
-                                    saveFocusNode: _torBoxSaveFocus,
-                                  ),
-                                  DebridService.allDebrid => _ApiKeyDebridPanel(
-                                    title: 'AllDebrid',
-                                    icon: Icons.cloud_sync_rounded,
-                                    gradient: [
-                                      context.appPalette.accent,
-                                      context.appPalette.secondaryAccent,
-                                    ],
-                                    connected: allDebrid.account != null,
-                                    hasSavedToken: allDebrid.hasSavedToken,
-                                    connectedLabel: 'PREMIUM',
-                                    description: allDebrid.account == null
-                                        ? 'Authorize with AllDebrid PIN, or enter a personal API key.'
-                                        : 'Connected as ${allDebrid.account!.username}. '
-                                              'Torrent files resolve through AllDebrid only.',
-                                    errorMessage: allDebrid.errorMessage,
-                                    isLoading: allDebrid.isLoading,
-                                    tokenController: _allDebridTokenController,
-                                    tokenTitle: 'AllDebrid API key',
-                                    keyboardTitle: 'Enter AllDebrid API key',
-                                    connectLabel: 'Connect by PIN',
-                                    connectIcon: Icons.qr_code_rounded,
-                                    onSave: () async {
-                                      final saved = await ref
-                                          .read(
-                                            allDebridSettingsControllerProvider
-                                                .notifier,
-                                          )
-                                          .saveAndValidate(
-                                            _allDebridTokenController.text,
-                                          );
-                                      if (saved) {
-                                        _allDebridTokenController.clear();
-                                      }
-                                    },
-                                    onDisconnect: () => ref
-                                        .read(
-                                          allDebridSettingsControllerProvider
-                                              .notifier,
-                                        )
-                                        .disconnect(),
-                                    onConnect: () async {
-                                      await context.push('/pair/alldebrid');
-                                      await ref
-                                          .read(
-                                            allDebridSettingsControllerProvider
-                                                .notifier,
-                                          )
-                                          .load();
-                                    },
-                                    actionFocusNode: _allDebridActionFocus,
-                                    tokenFocusNode: _allDebridTokenFocus,
-                                    saveFocusNode: _allDebridSaveFocus,
-                                  ),
-                                  DebridService.premiumize => _ApiKeyDebridPanel(
-                                    title: 'Premiumize',
-                                    icon: Icons.cloud_queue_rounded,
-                                    gradient: [
-                                      context.appPalette.secondaryAccent,
-                                      context.appPalette.accentBright,
-                                    ],
-                                    connected: premiumize.account != null,
-                                    hasSavedToken: premiumize.hasSavedToken,
-                                    connectedLabel: 'PREMIUM',
-                                    description: premiumize.account == null
-                                        ? 'Enter the API key from your Premiumize account page.'
-                                        : 'Connected as customer '
-                                              '${premiumize.account!.customerId}. '
-                                              'Torrent files resolve through Premiumize only.',
-                                    errorMessage: premiumize.errorMessage,
-                                    isLoading: premiumize.isLoading,
-                                    tokenController: _premiumizeTokenController,
-                                    tokenTitle: 'Premiumize API key',
-                                    keyboardTitle: 'Enter Premiumize API key',
-                                    connectLabel: 'Connection help',
-                                    connectIcon: Icons.key_rounded,
-                                    onSave: () async {
-                                      final saved = await ref
-                                          .read(
-                                            premiumizeSettingsControllerProvider
-                                                .notifier,
-                                          )
-                                          .saveAndValidate(
-                                            _premiumizeTokenController.text,
-                                          );
-                                      if (saved) {
-                                        _premiumizeTokenController.clear();
-                                      }
-                                    },
-                                    onDisconnect: () => ref
-                                        .read(
-                                          premiumizeSettingsControllerProvider
-                                              .notifier,
-                                        )
-                                        .disconnect(),
-                                    onConnect: () async {
-                                      await context.push('/pair/premiumize');
-                                      await ref
-                                          .read(
-                                            premiumizeSettingsControllerProvider
-                                                .notifier,
-                                          )
-                                          .load();
-                                    },
-                                    actionFocusNode: _premiumizeActionFocus,
-                                    tokenFocusNode: _premiumizeTokenFocus,
-                                    saveFocusNode: _premiumizeSaveFocus,
-                                  ),
-                                },
-                              ],
-                            ),
+                                'Personalize TetoTV, the Home screen, navigation, and feedback.',
                           ),
+                          const SizedBox(height: 8),
                         ],
-                      ),
-                      right: _SettingsCardLane(
-                        children: [
-                          settingsSectionCard(
-                            key: const ValueKey(
-                              'settings-card-services-sources',
-                            ),
-                            section: _SettingsSection.sourcesStreamOrder,
-                            subtitle:
-                                'Choose which source types are searched and how results are ranked.',
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                _StreamingSourcesPanel(
-                                  preferences: preferences,
-                                  debridFocusNode: _debridStreamsFocus,
-                                  webFocusNode: _webStreamsFocus,
-                                  directTorrentFocusNode: _directTorrentFocus,
-                                  marketplaceFocusNode: _marketplaceFocus,
-                                  onDebridChanged: ref
-                                      .read(
-                                        settingsPreferencesProvider.notifier,
-                                      )
-                                      .setDebridStreamsEnabled,
-                                  onWebChanged: ref
-                                      .read(
-                                        settingsPreferencesProvider.notifier,
-                                      )
-                                      .setWebStreamsEnabled,
-                                  onDirectTorrentChanged:
-                                      _setDirectTorrentEnabled,
-                                  onMarketplace: () =>
-                                      context.push('/settings/marketplace'),
-                                ),
-                                const SizedBox(height: 8),
-                                _StreamRankingPanel(
-                                  preferences: preferences,
-                                  debridSortFocusNode: _debridSortFocus,
-                                  sourcePriorityFocusNode: _sourcePriorityFocus,
-                                  webQualityFocusNode: _webQualityFocus,
-                                  onDebridSortSelected: ref
-                                      .read(
-                                        settingsPreferencesProvider.notifier,
-                                      )
-                                      .setDebridStreamSort,
-                                  onSourcePrioritySelected: ref
-                                      .read(
-                                        settingsPreferencesProvider.notifier,
-                                      )
-                                      .setStreamSourcePriority,
-                                  onWebQualitySelected: ref
-                                      .read(
-                                        settingsPreferencesProvider.notifier,
-                                      )
-                                      .setWebStreamQuality,
-                                ),
-                              ],
-                            ),
+                        _AppearanceSettingsLayout(
+                          usesTvListLayout: layout.usesTvRail,
+                          preferences: preferences,
+                          titlePreference: titlePreference,
+                          homeShelves: homeShelves,
+                          homeShelfOrder: homeShelfOrder,
+                          controller: ref.read(
+                            settingsPreferencesProvider.notifier,
                           ),
-                          if (layout.usesTvRail) automaticSourceSelectionCard(),
-                          if (layout.usesTvRail) librariesAndFeaturesCard(),
-                          if (layout.usesTvRail) streamingPrivacyCard(),
-                        ],
-                      ),
-                    ),
-                    if (!layout.usesTvRail) ...[
-                      const SizedBox(height: 8),
-                      automaticSourceSelectionCard(),
-                      const SizedBox(height: 10),
-                    ],
-                  ],
-                  if (_activeArea == _SettingsArea.services &&
-                      !layout.usesTvRail) ...[
-                    _SettingsResponsiveColumns(
-                      left: librariesAndFeaturesCard(),
-                      right: streamingPrivacyCard(),
-                    ),
-                    const SizedBox(height: 10),
-                  ],
-                  if (_activeArea == _SettingsArea.accounts) ...[
-                    if (!layout.usesTvRail) ...[
-                      const _SectionHeader(
-                        icon: Icons.sync_alt_rounded,
-                        title: 'ACCOUNTS',
-                        subtitle:
-                            'Profiles, anime tracking, notifications, and linked services.',
-                      ),
-                      const SizedBox(height: 8),
-                    ],
-                    _SettingsResponsiveColumns(
-                      forceSingleColumn: layout.usesTvRail,
-                      left: _SettingsCardLane(
-                        children: [
-                          settingsSectionCard(
-                            key: const ValueKey(
-                              'settings-card-accounts-tracking',
-                            ),
-                            section: _SettingsSection.animeTracking,
+                          themeStudioFocusNode: _customizationFocus,
+                          titleLanguageFocusNode: _titleLanguageFocus,
+                          showTitleStyleFocusNode: _showTitleStyleFocus,
+                          navigationSizeFocusNode: _navigationSizeFocus,
+                          menuOrderFocusNode: _menuOrderFocus,
+                          resetFocusNode: _customizationResetFocus,
+                          featuredFocusNode: _featuredHomeContentFocus,
+                          posterMetadataFocusNode: _posterMetadataFocus,
+                          continueWatchingFocusNode: _continueWatchingFocus,
+                          displayOptionsFirstFocusNode: _displaySectionFocus,
+                          cardDetailsFocusNode: _cardDetailsFocus,
+                          inputFeedbackFirstFocusNode:
+                              _inputFeedbackSectionFocus,
+                          clickSoundsFocusNode: _clickSoundsFocus,
+                          shelfFocusNodes: _shelfFocusNodes,
+                          expandedSections: _expandedSettingsSections,
+                          sectionFocusNodes: _settingsSectionFocusNodes,
+                          onSectionExpandedChanged: _setSettingsSectionExpanded,
+                          onOpenThemeStudio: () =>
+                              context.push(ThemeStudioScreen.routePath),
+                          onOpenMenuOrder: _openMenuOrderDialog,
+                          onTitleLanguageChanged: (preference) => ref
+                              .read(titleLanguagePreferenceProvider.notifier)
+                              .setPreference(preference),
+                          onReset: resetAppearance,
+                          onShelfToggle: (shelf) => ref
+                              .read(homeShelfPreferencesProvider.notifier)
+                              .toggle(shelf),
+                          onShelfMove: (shelf, offset) => ref
+                              .read(homeShelfOrderProvider.notifier)
+                              .move(shelf, offset),
+                        ),
+                        SizedBox(height: layout.usesTvRail ? 5 : 10),
+                      ],
+                      if (_activeArea == _SettingsArea.playback) ...[
+                        if (!layout.usesTvRail) ...[
+                          const _SectionHeader(
+                            icon: Icons.play_circle_rounded,
+                            title: 'PLAYBACK',
                             subtitle:
-                                'Connect a list provider and keep episode progress synchronized.',
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                _SettingsSelection<TrackingProvider>(
-                                  focusNode: _trackingProviderFocus,
-                                  label: 'Anime-list provider',
-                                  value: preferences.trackingProvider,
-                                  options: [
-                                    for (final provider
-                                        in TrackingProvider.values)
-                                      _SettingsOption(
-                                        value: provider,
-                                        label: provider.displayName,
-                                        detail: tracking.isConnected(provider)
-                                            ? 'Connected as ${tracking.usernames[provider]}'
-                                            : 'Not connected',
-                                      ),
-                                  ],
-                                  onSelected: ref
-                                      .read(
-                                        settingsPreferencesProvider.notifier,
-                                      )
-                                      .setTrackingProvider,
-                                  showDivider: true,
+                                'Tune captions, player behavior, audio, skipping, and seeking.',
+                          ),
+                          const SizedBox(height: 8),
+                        ],
+                        _SettingsResponsiveColumns(
+                          forceSingleColumn: layout.usesTvRail,
+                          left: settingsSectionCard(
+                            key: const ValueKey(
+                              'settings-card-playback-captions',
+                            ),
+                            section: _SettingsSection.closedCaptions,
+                            subtitle:
+                                'Style subtitles for comfortable viewing on every screen.',
+                            child: customizationPanel(const {
+                              _CustomizationSection.closedCaptions,
+                            }, showReset: false),
+                          ),
+                          right: settingsSectionCard(
+                            key: const ValueKey(
+                              'settings-card-playback-player',
+                            ),
+                            section: _SettingsSection.playerControls,
+                            subtitle:
+                                'Choose audio, skipping, seeking, and playback behavior.',
+                            child: customizationPanel(const {
+                              _CustomizationSection.playerControls,
+                            }, showReset: false),
+                          ),
+                        ),
+                        SizedBox(height: layout.usesTvRail ? 5 : 10),
+                      ],
+                      if (_activeArea == _SettingsArea.services) ...[
+                        if (!layout.usesTvRail) ...[
+                          const _SectionHeader(
+                            icon: Icons.hub_rounded,
+                            title: 'SERVICES',
+                            subtitle:
+                                'Connect providers and choose how episode sources are found.',
+                          ),
+                          const SizedBox(height: 8),
+                        ],
+                        _SettingsResponsiveColumns(
+                          forceSingleColumn: layout.usesTvRail,
+                          left: _SettingsCardLane(
+                            children: [
+                              settingsSectionCard(
+                                key: const ValueKey(
+                                  'settings-card-services-debrid',
                                 ),
-                                _TrackingPanel(
-                                  provider: preferences.trackingProvider,
-                                  color:
-                                      preferences.trackingProvider ==
-                                          TrackingProvider.anilist
-                                      ? context.appPalette.accentBright
-                                      : const Color(0xFFB41F3D),
-                                  description:
-                                      preferences.trackingProvider ==
-                                          TrackingProvider.anilist
-                                      ? 'Seasonal discovery, lists, and automatic episode progress.'
-                                      : 'Sync watch progress and MAL statuses automatically.',
-                                  username: tracking
-                                      .usernames[preferences.trackingProvider],
-                                  error: tracking
-                                      .errors[preferences.trackingProvider],
-                                  isLoading: tracking.isLoading,
-                                  onConnect: () async {
-                                    await context.push(
-                                      preferences.trackingProvider ==
+                                section: _SettingsSection.debridStreaming,
+                                subtitle:
+                                    'Choose and securely connect the provider used to resolve streams.',
+                                child: Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
+                                  children: [
+                                    _SettingsSelection<DebridService>(
+                                      focusNode: _debridProviderFocus,
+                                      label: 'Debrid provider',
+                                      value: preferences.debridProvider,
+                                      options: [
+                                        for (final service
+                                            in DebridService.values)
+                                          _SettingsOption(
+                                            value: service,
+                                            label: service.displayName,
+                                            detail:
+                                                switch (service) {
+                                                  DebridService.realDebrid =>
+                                                    debrid.hasSavedToken,
+                                                  DebridService.torBox =>
+                                                    torBox.hasSavedToken,
+                                                  DebridService.allDebrid =>
+                                                    allDebrid.hasSavedToken,
+                                                  DebridService.premiumize =>
+                                                    premiumize.hasSavedToken,
+                                                }
+                                                ? 'Connected'
+                                                : 'Not connected',
+                                          ),
+                                      ],
+                                      onSelected: ref
+                                          .read(
+                                            settingsPreferencesProvider
+                                                .notifier,
+                                          )
+                                          .setDebridProvider,
+                                      showDivider: true,
+                                    ),
+                                    switch (preferences.debridProvider) {
+                                      DebridService.realDebrid =>
+                                        _RealDebridPanel(
+                                          state: debrid,
+                                          onDisconnect: () => ref
+                                              .read(
+                                                realDebridSettingsControllerProvider
+                                                    .notifier,
+                                              )
+                                              .disconnect(),
+                                          onDeviceConnect: () =>
+                                              context.push('/pair/realdebrid'),
+                                          connectFocusNode: _debridConnectFocus,
+                                        ),
+                                      DebridService.torBox => _TorBoxPanel(
+                                        state: torBox,
+                                        tokenController: _torBoxTokenController,
+                                        onSave: () async {
+                                          final saved = await ref
+                                              .read(
+                                                torBoxSettingsControllerProvider
+                                                    .notifier,
+                                              )
+                                              .saveAndValidate(
+                                                _torBoxTokenController.text,
+                                              );
+                                          if (saved) {
+                                            _torBoxTokenController.clear();
+                                          }
+                                        },
+                                        onDisconnect: () => ref
+                                            .read(
+                                              torBoxSettingsControllerProvider
+                                                  .notifier,
+                                            )
+                                            .disconnect(),
+                                        onDeviceConnect: () async {
+                                          await context.push('/pair/torbox');
+                                          await ref
+                                              .read(
+                                                torBoxSettingsControllerProvider
+                                                    .notifier,
+                                              )
+                                              .load();
+                                        },
+                                        actionFocusNode: _torBoxActionFocus,
+                                        tokenFocusNode: _torBoxTokenFocus,
+                                        saveFocusNode: _torBoxSaveFocus,
+                                      ),
+                                      DebridService.allDebrid => _ApiKeyDebridPanel(
+                                        title: 'AllDebrid',
+                                        icon: Icons.cloud_sync_rounded,
+                                        gradient: [
+                                          context.appPalette.accent,
+                                          context.appPalette.secondaryAccent,
+                                        ],
+                                        connected: allDebrid.account != null,
+                                        hasSavedToken: allDebrid.hasSavedToken,
+                                        connectedLabel: 'PREMIUM',
+                                        description: allDebrid.account == null
+                                            ? 'Authorize with AllDebrid PIN, or enter a personal API key.'
+                                            : 'Connected as ${allDebrid.account!.username}. '
+                                                  'Torrent files resolve through AllDebrid only.',
+                                        errorMessage: allDebrid.errorMessage,
+                                        isLoading: allDebrid.isLoading,
+                                        tokenController:
+                                            _allDebridTokenController,
+                                        tokenTitle: 'AllDebrid API key',
+                                        keyboardTitle:
+                                            'Enter AllDebrid API key',
+                                        connectLabel: 'Connect by PIN',
+                                        connectIcon: Icons.qr_code_rounded,
+                                        onSave: () async {
+                                          final saved = await ref
+                                              .read(
+                                                allDebridSettingsControllerProvider
+                                                    .notifier,
+                                              )
+                                              .saveAndValidate(
+                                                _allDebridTokenController.text,
+                                              );
+                                          if (saved) {
+                                            _allDebridTokenController.clear();
+                                          }
+                                        },
+                                        onDisconnect: () => ref
+                                            .read(
+                                              allDebridSettingsControllerProvider
+                                                  .notifier,
+                                            )
+                                            .disconnect(),
+                                        onConnect: () async {
+                                          await context.push('/pair/alldebrid');
+                                          await ref
+                                              .read(
+                                                allDebridSettingsControllerProvider
+                                                    .notifier,
+                                              )
+                                              .load();
+                                        },
+                                        actionFocusNode: _allDebridActionFocus,
+                                        tokenFocusNode: _allDebridTokenFocus,
+                                        saveFocusNode: _allDebridSaveFocus,
+                                      ),
+                                      DebridService.premiumize => _ApiKeyDebridPanel(
+                                        title: 'Premiumize',
+                                        icon: Icons.cloud_queue_rounded,
+                                        gradient: [
+                                          context.appPalette.secondaryAccent,
+                                          context.appPalette.accentBright,
+                                        ],
+                                        connected: premiumize.account != null,
+                                        hasSavedToken: premiumize.hasSavedToken,
+                                        connectedLabel: 'PREMIUM',
+                                        description: premiumize.account == null
+                                            ? 'Enter the API key from your Premiumize account page.'
+                                            : 'Connected as customer '
+                                                  '${premiumize.account!.customerId}. '
+                                                  'Torrent files resolve through Premiumize only.',
+                                        errorMessage: premiumize.errorMessage,
+                                        isLoading: premiumize.isLoading,
+                                        tokenController:
+                                            _premiumizeTokenController,
+                                        tokenTitle: 'Premiumize API key',
+                                        keyboardTitle:
+                                            'Enter Premiumize API key',
+                                        connectLabel: 'Connection help',
+                                        connectIcon: Icons.key_rounded,
+                                        onSave: () async {
+                                          final saved = await ref
+                                              .read(
+                                                premiumizeSettingsControllerProvider
+                                                    .notifier,
+                                              )
+                                              .saveAndValidate(
+                                                _premiumizeTokenController.text,
+                                              );
+                                          if (saved) {
+                                            _premiumizeTokenController.clear();
+                                          }
+                                        },
+                                        onDisconnect: () => ref
+                                            .read(
+                                              premiumizeSettingsControllerProvider
+                                                  .notifier,
+                                            )
+                                            .disconnect(),
+                                        onConnect: () async {
+                                          await context.push(
+                                            '/pair/premiumize',
+                                          );
+                                          await ref
+                                              .read(
+                                                premiumizeSettingsControllerProvider
+                                                    .notifier,
+                                              )
+                                              .load();
+                                        },
+                                        actionFocusNode: _premiumizeActionFocus,
+                                        tokenFocusNode: _premiumizeTokenFocus,
+                                        saveFocusNode: _premiumizeSaveFocus,
+                                      ),
+                                    },
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                          right: _SettingsCardLane(
+                            children: [
+                              settingsSectionCard(
+                                key: const ValueKey(
+                                  'settings-card-services-sources',
+                                ),
+                                section: _SettingsSection.sourcesStreamOrder,
+                                subtitle:
+                                    'Choose which source types are searched and how results are ranked.',
+                                child: Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
+                                  children: [
+                                    _StreamingSourcesPanel(
+                                      preferences: preferences,
+                                      debridFocusNode: _debridStreamsFocus,
+                                      webFocusNode: _webStreamsFocus,
+                                      directTorrentFocusNode:
+                                          _directTorrentFocus,
+                                      marketplaceFocusNode: _marketplaceFocus,
+                                      onDebridChanged: ref
+                                          .read(
+                                            settingsPreferencesProvider
+                                                .notifier,
+                                          )
+                                          .setDebridStreamsEnabled,
+                                      onWebChanged: ref
+                                          .read(
+                                            settingsPreferencesProvider
+                                                .notifier,
+                                          )
+                                          .setWebStreamsEnabled,
+                                      onDirectTorrentChanged:
+                                          _setDirectTorrentEnabled,
+                                      onMarketplace: () =>
+                                          context.push('/settings/marketplace'),
+                                    ),
+                                    const SizedBox(height: 8),
+                                    _StreamRankingPanel(
+                                      preferences: preferences,
+                                      debridSortFocusNode: _debridSortFocus,
+                                      sourcePriorityFocusNode:
+                                          _sourcePriorityFocus,
+                                      webQualityFocusNode: _webQualityFocus,
+                                      onDebridSortSelected: ref
+                                          .read(
+                                            settingsPreferencesProvider
+                                                .notifier,
+                                          )
+                                          .setDebridStreamSort,
+                                      onSourcePrioritySelected: ref
+                                          .read(
+                                            settingsPreferencesProvider
+                                                .notifier,
+                                          )
+                                          .setStreamSourcePriority,
+                                      onWebQualitySelected: ref
+                                          .read(
+                                            settingsPreferencesProvider
+                                                .notifier,
+                                          )
+                                          .setWebStreamQuality,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              if (layout.usesTvRail)
+                                automaticSourceSelectionCard(),
+                              if (layout.usesTvRail) librariesAndFeaturesCard(),
+                              if (layout.usesTvRail) streamingPrivacyCard(),
+                            ],
+                          ),
+                        ),
+                        if (!layout.usesTvRail) ...[
+                          const SizedBox(height: 8),
+                          automaticSourceSelectionCard(),
+                          const SizedBox(height: 10),
+                        ],
+                      ],
+                      if (_activeArea == _SettingsArea.services &&
+                          !layout.usesTvRail) ...[
+                        _SettingsResponsiveColumns(
+                          left: librariesAndFeaturesCard(),
+                          right: streamingPrivacyCard(),
+                        ),
+                        const SizedBox(height: 10),
+                      ],
+                      if (_activeArea == _SettingsArea.accounts) ...[
+                        if (!layout.usesTvRail) ...[
+                          const _SectionHeader(
+                            icon: Icons.sync_alt_rounded,
+                            title: 'ACCOUNTS',
+                            subtitle:
+                                'Profiles, anime tracking, notifications, and linked services.',
+                          ),
+                          const SizedBox(height: 8),
+                        ],
+                        _SettingsResponsiveColumns(
+                          forceSingleColumn: layout.usesTvRail,
+                          left: _SettingsCardLane(
+                            children: [
+                              settingsSectionCard(
+                                key: const ValueKey(
+                                  'settings-card-accounts-tracking',
+                                ),
+                                section: _SettingsSection.animeTracking,
+                                subtitle:
+                                    'Connect a list provider and keep episode progress synchronized.',
+                                child: Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
+                                  children: [
+                                    _SettingsSelection<TrackingProvider>(
+                                      focusNode: _trackingProviderFocus,
+                                      label: 'Anime-list provider',
+                                      value: preferences.trackingProvider,
+                                      options: [
+                                        for (final provider
+                                            in TrackingProvider.values)
+                                          _SettingsOption(
+                                            value: provider,
+                                            label: provider.displayName,
+                                            detail:
+                                                tracking.isConnected(provider)
+                                                ? 'Connected as ${tracking.usernames[provider]}'
+                                                : 'Not connected',
+                                          ),
+                                      ],
+                                      onSelected: ref
+                                          .read(
+                                            settingsPreferencesProvider
+                                                .notifier,
+                                          )
+                                          .setTrackingProvider,
+                                      showDivider: true,
+                                    ),
+                                    _TrackingPanel(
+                                      provider: preferences.trackingProvider,
+                                      color:
+                                          preferences.trackingProvider ==
                                               TrackingProvider.anilist
-                                          ? '/pair/anilist'
-                                          : '/pair/myanimelist',
-                                    );
-                                    await ref
-                                        .read(
-                                          trackingAccountsControllerProvider
-                                              .notifier,
-                                        )
-                                        .load();
-                                  },
-                                  onDisconnect: () => ref
-                                      .read(
-                                        trackingAccountsControllerProvider
-                                            .notifier,
-                                      )
-                                      .disconnect(preferences.trackingProvider),
-                                  onSaveToken: (token) => ref
-                                      .read(
-                                        trackingAccountsControllerProvider
-                                            .notifier,
-                                      )
-                                      .save(
-                                        preferences.trackingProvider,
-                                        token,
-                                      ),
-                                  focusNode:
-                                      preferences.trackingProvider ==
-                                          TrackingProvider.anilist
-                                      ? _anilistFocus
-                                      : _malFocus,
-                                  tokenFocusNode:
-                                      preferences.trackingProvider ==
-                                          TrackingProvider.anilist
-                                      ? _anilistTokenFocus
-                                      : _malTokenFocus,
-                                  saveFocusNode:
-                                      preferences.trackingProvider ==
-                                          TrackingProvider.anilist
-                                      ? _anilistSaveFocus
-                                      : _malSaveFocus,
-                                  disconnectFocusNode: _trackingDisconnectFocus,
-                                ),
-                              ],
-                            ),
-                          ),
-                          settingsSectionCard(
-                            key: const ValueKey(
-                              'settings-card-accounts-profiles',
-                            ),
-                            section: _SettingsSection.profiles,
-                            subtitle:
-                                'Manage local viewers and their separate preferences.',
-                            child: _LocalProfilesPanel(
-                              state: localProfiles,
-                              focusNode: _localProfilesFocus,
-                            ),
-                          ),
-                        ],
-                      ),
-                      right: _SettingsCardLane(
-                        children: [
-                          settingsSectionCard(
-                            key: const ValueKey(
-                              'settings-card-accounts-behavior',
-                            ),
-                            section: _SettingsSection.progressNotifications,
-                            subtitle:
-                                'Choose when progress syncs and which episode alerts appear.',
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                _SettingsSelection<TrackerUpdateThreshold>(
-                                  key: const ValueKey(
-                                    'settings-tracking-update-threshold',
-                                  ),
-                                  focusNode: _trackingThresholdFocus,
-                                  label: 'When to update episode progress',
-                                  value: preferences.trackerUpdateThreshold,
-                                  options: [
-                                    for (final threshold
-                                        in TrackerUpdateThreshold.values)
-                                      _SettingsOption(
-                                        value: threshold,
-                                        label: threshold.displayName,
-                                        detail: threshold.description,
-                                      ),
+                                          ? context.appPalette.accentBright
+                                          : const Color(0xFFB41F3D),
+                                      description:
+                                          preferences.trackingProvider ==
+                                              TrackingProvider.anilist
+                                          ? 'Seasonal discovery, lists, and automatic episode progress.'
+                                          : 'Sync watch progress and MAL statuses automatically.',
+                                      username:
+                                          tracking.usernames[preferences
+                                              .trackingProvider],
+                                      error: tracking
+                                          .errors[preferences.trackingProvider],
+                                      isLoading: tracking.isLoading,
+                                      onConnect: () async {
+                                        await context.push(
+                                          preferences.trackingProvider ==
+                                                  TrackingProvider.anilist
+                                              ? '/pair/anilist'
+                                              : '/pair/myanimelist',
+                                        );
+                                        await ref
+                                            .read(
+                                              trackingAccountsControllerProvider
+                                                  .notifier,
+                                            )
+                                            .load();
+                                      },
+                                      onDisconnect: () => ref
+                                          .read(
+                                            trackingAccountsControllerProvider
+                                                .notifier,
+                                          )
+                                          .disconnect(
+                                            preferences.trackingProvider,
+                                          ),
+                                      onSaveToken: (token) => ref
+                                          .read(
+                                            trackingAccountsControllerProvider
+                                                .notifier,
+                                          )
+                                          .save(
+                                            preferences.trackingProvider,
+                                            token,
+                                          ),
+                                      focusNode:
+                                          preferences.trackingProvider ==
+                                              TrackingProvider.anilist
+                                          ? _anilistFocus
+                                          : _malFocus,
+                                      tokenFocusNode:
+                                          preferences.trackingProvider ==
+                                              TrackingProvider.anilist
+                                          ? _anilistTokenFocus
+                                          : _malTokenFocus,
+                                      saveFocusNode:
+                                          preferences.trackingProvider ==
+                                              TrackingProvider.anilist
+                                          ? _anilistSaveFocus
+                                          : _malSaveFocus,
+                                      disconnectFocusNode:
+                                          _trackingDisconnectFocus,
+                                    ),
                                   ],
-                                  onSelected: ref
-                                      .read(
-                                        settingsPreferencesProvider.notifier,
-                                      )
-                                      .setTrackerUpdateThreshold,
-                                  showDivider: true,
                                 ),
-                                const _SettingsSupportingText(
-                                  'Trackers store whole completed episodes, so the '
-                                  'selected percentage marks the current episode watched.',
+                              ),
+                              settingsSectionCard(
+                                key: const ValueKey(
+                                  'settings-card-accounts-profiles',
                                 ),
-                                _AppearanceToggleRow(
-                                  key: const ValueKey(
-                                    'settings-sub-episode-notifications',
-                                  ),
-                                  label: 'Sub & simulcast alerts',
-                                  subtitle:
-                                      'Notify when a subtitled or simulcast episode reaches its normal airtime.',
-                                  icon: Icons.subtitles_outlined,
-                                  value: preferences
-                                      .subEpisodeNotificationsEnabled,
-                                  focusNode: _subEpisodeNotificationsFocus,
-                                  showDivider: true,
-                                  onChanged: ref
-                                      .read(
-                                        settingsPreferencesProvider.notifier,
-                                      )
-                                      .setSubEpisodeNotificationsEnabled,
+                                section: _SettingsSection.profiles,
+                                subtitle:
+                                    'Manage local viewers and their separate preferences.',
+                                child: _LocalProfilesPanel(
+                                  state: localProfiles,
+                                  focusNode: _localProfilesFocus,
                                 ),
-                                _AppearanceToggleRow(
-                                  key: const ValueKey(
-                                    'settings-dub-episode-notifications',
-                                  ),
-                                  label: 'Verified dub alerts',
-                                  subtitle:
-                                      'Notify only when a dubbed episode has a verified release schedule.',
-                                  icon: Icons.record_voice_over_outlined,
-                                  value: preferences
-                                      .dubEpisodeNotificationsEnabled,
-                                  focusNode: _dubEpisodeNotificationsFocus,
-                                  onChanged: ref
-                                      .read(
-                                        settingsPreferencesProvider.notifier,
-                                      )
-                                      .setDubEpisodeNotificationsEnabled,
-                                ),
-                              ],
-                            ),
+                              ),
+                            ],
                           ),
-                          if (layout.usesTvRail) discordPresenceCard(),
-                        ],
-                      ),
-                    ),
-                    if (!layout.usesTvRail) const SizedBox(height: 10),
-                  ],
-                  if (_activeArea == _SettingsArea.system) ...[
-                    if (!layout.usesTvRail) ...[
-                      const _SectionHeader(
-                        icon: Icons.settings_rounded,
-                        title: 'SYSTEM',
-                        subtitle:
-                            'Manage this device, updates, diagnostics, privacy, storage, and legal information.',
-                      ),
-                      const SizedBox(height: 8),
-                    ],
-                    _SettingsResponsiveColumns(
-                      forceSingleColumn: layout.usesTvRail,
-                      left: _SettingsCardLane(
-                        children: [
-                          settingsSectionCard(
-                            key: const ValueKey('settings-card-system-support'),
-                            section: _SettingsSection.deviceSupport,
-                            subtitle:
-                                'Setup, device compatibility, calibration, and diagnostics.',
-                            child: Column(
-                              children: [
-                                _AppearanceActionRow(
-                                  label: 'Run setup again',
-                                  subtitle:
-                                      'Change setup method or reconnect your services.',
-                                  icon: Icons.auto_awesome_rounded,
-                                  focusNode: _setupFocus,
-                                  showDivider: true,
-                                  onPressed: () => context.push('/setup/start'),
+                          right: _SettingsCardLane(
+                            children: [
+                              settingsSectionCard(
+                                key: const ValueKey(
+                                  'settings-card-accounts-behavior',
                                 ),
-                                _AppearanceActionRow(
-                                  label: 'Device calibration',
-                                  subtitle:
-                                      'Adjust display fit, input, and playback compatibility.',
-                                  icon: Icons.tune_rounded,
-                                  focusNode: _calibrationFocus,
-                                  showDivider: true,
-                                  onPressed: () =>
-                                      context.push('/settings/device-setup'),
-                                ),
-                                _AppearanceActionRow(
-                                  label: 'Diagnostics',
-                                  subtitle:
-                                      'Review system health and export troubleshooting details.',
-                                  icon: Icons.monitor_heart_rounded,
-                                  focusNode: _diagnosticsFocus,
-                                  onPressed: () =>
-                                      context.push('/settings/diagnostics'),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                      right: _SettingsCardLane(
-                        children: [
-                          settingsSectionCard(
-                            key: const ValueKey('settings-card-system-updates'),
-                            section: _SettingsSection.appUpdates,
-                            subtitle:
-                                'Stable public releases download directly to this device.',
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                _AppUpdatePanel(
-                                  forceSingleColumn: isTelevision,
-                                  state: appUpdate,
-                                  automaticFocusNode: _automaticUpdatesFocus,
-                                  checkFocusNode: _checkUpdatesFocus,
-                                  onToggleAutomatic: () => ref
-                                      .read(
-                                        appUpdateControllerProvider.notifier,
-                                      )
-                                      .setAutomaticUpdates(
-                                        !appUpdate.automaticUpdates,
+                                section: _SettingsSection.progressNotifications,
+                                subtitle:
+                                    'Choose when progress syncs and which episode alerts appear.',
+                                child: Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
+                                  children: [
+                                    _SettingsSelection<TrackerUpdateThreshold>(
+                                      key: const ValueKey(
+                                        'settings-tracking-update-threshold',
                                       ),
-                                  onCheckOrInstall: () {
-                                    final controller = ref.read(
-                                      appUpdateControllerProvider.notifier,
-                                    );
-                                    if (appUpdate.downloadedPath != null) {
-                                      controller.installDownloadedUpdate();
-                                    } else {
-                                      controller.checkForUpdates(
-                                        launchInstaller: true,
-                                      );
-                                    }
-                                  },
+                                      focusNode: _trackingThresholdFocus,
+                                      label: 'When to update episode progress',
+                                      value: preferences.trackerUpdateThreshold,
+                                      options: [
+                                        for (final threshold
+                                            in TrackerUpdateThreshold.values)
+                                          _SettingsOption(
+                                            value: threshold,
+                                            label: threshold.displayName,
+                                            detail: threshold.description,
+                                          ),
+                                      ],
+                                      onSelected: ref
+                                          .read(
+                                            settingsPreferencesProvider
+                                                .notifier,
+                                          )
+                                          .setTrackerUpdateThreshold,
+                                      showDivider: true,
+                                    ),
+                                    const _SettingsSupportingText(
+                                      'Trackers store whole completed episodes, so the '
+                                      'selected percentage marks the current episode watched.',
+                                    ),
+                                    _AppearanceToggleRow(
+                                      key: const ValueKey(
+                                        'settings-sub-episode-notifications',
+                                      ),
+                                      label: 'Sub & simulcast alerts',
+                                      subtitle:
+                                          'Notify when a subtitled or simulcast episode reaches its normal airtime.',
+                                      icon: Icons.subtitles_outlined,
+                                      value: preferences
+                                          .subEpisodeNotificationsEnabled,
+                                      focusNode: _subEpisodeNotificationsFocus,
+                                      showDivider: true,
+                                      onChanged: ref
+                                          .read(
+                                            settingsPreferencesProvider
+                                                .notifier,
+                                          )
+                                          .setSubEpisodeNotificationsEnabled,
+                                    ),
+                                    _AppearanceToggleRow(
+                                      key: const ValueKey(
+                                        'settings-dub-episode-notifications',
+                                      ),
+                                      label: 'Verified dub alerts',
+                                      subtitle:
+                                          'Notify only when a dubbed episode has a verified release schedule.',
+                                      icon: Icons.record_voice_over_outlined,
+                                      value: preferences
+                                          .dubEpisodeNotificationsEnabled,
+                                      focusNode: _dubEpisodeNotificationsFocus,
+                                      onChanged: ref
+                                          .read(
+                                            settingsPreferencesProvider
+                                                .notifier,
+                                          )
+                                          .setDubEpisodeNotificationsEnabled,
+                                    ),
+                                  ],
                                 ),
-                                const SizedBox(height: 8),
-                                _DeveloperUpdatePanel(
-                                  state: appUpdate,
-                                  channelFocusNode: _updateChannelFocus,
-                                  releaseHistoryFocusNode: _releaseHistoryFocus,
-                                  onChannelSelected: ref
-                                      .read(
-                                        appUpdateControllerProvider.notifier,
-                                      )
-                                      .setUpdateChannel,
-                                  onRefreshHistory: ref
-                                      .read(
-                                        appUpdateControllerProvider.notifier,
-                                      )
-                                      .refreshReleaseHistory,
-                                  onReleaseSelected: ref
-                                      .read(
-                                        appUpdateControllerProvider.notifier,
-                                      )
-                                      .installReleaseFromHistory,
-                                ),
-                              ],
-                            ),
+                              ),
+                              if (layout.usesTvRail) discordPresenceCard(),
+                            ],
                           ),
-                          if (layout.usesTvRail) communityCard(),
-                          if (layout.usesTvRail) storageAndResetCard(),
-                          if (layout.usesTvRail) legalNoticesCard(),
-                          if (layout.usesTvRail) privacyAndDiagnosticsCard(),
+                        ),
+                        if (!layout.usesTvRail) const SizedBox(height: 10),
+                      ],
+                      if (_activeArea == _SettingsArea.system) ...[
+                        if (!layout.usesTvRail) ...[
+                          const _SectionHeader(
+                            icon: Icons.settings_rounded,
+                            title: 'SYSTEM',
+                            subtitle:
+                                'Manage this device, updates, diagnostics, privacy, storage, and legal information.',
+                          ),
+                          const SizedBox(height: 8),
                         ],
-                      ),
-                    ),
-                    if (!layout.usesTvRail) const SizedBox(height: 12),
-                  ],
-                  if (_activeArea == _SettingsArea.accounts &&
-                      !layout.usesTvRail) ...[
-                    discordPresenceCard(),
-                    const SizedBox(height: 12),
-                  ],
-                  if (_activeArea == _SettingsArea.system &&
-                      !layout.usesTvRail) ...[
-                    _SettingsResponsiveColumns(
-                      left: communityCard(),
-                      right: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          storageAndResetCard(),
-                          const SizedBox(height: 12),
-                          legalNoticesCard(),
-                          const SizedBox(height: 12),
-                          privacyAndDiagnosticsCard(),
-                        ],
-                      ),
-                    ),
-                  ],
-                ],
+                        _SettingsResponsiveColumns(
+                          forceSingleColumn: layout.usesTvRail,
+                          left: _SettingsCardLane(
+                            children: [
+                              settingsSectionCard(
+                                key: const ValueKey(
+                                  'settings-card-system-support',
+                                ),
+                                section: _SettingsSection.deviceSupport,
+                                subtitle:
+                                    'Setup, device compatibility, calibration, and diagnostics.',
+                                child: Column(
+                                  children: [
+                                    _AppearanceActionRow(
+                                      label: 'Run setup again',
+                                      subtitle:
+                                          'Change setup method or reconnect your services.',
+                                      icon: Icons.auto_awesome_rounded,
+                                      focusNode: _setupFocus,
+                                      showDivider: true,
+                                      onPressed: () =>
+                                          context.push('/setup/start'),
+                                    ),
+                                    _AppearanceActionRow(
+                                      label: 'Device calibration',
+                                      subtitle:
+                                          'Adjust display fit, input, and playback compatibility.',
+                                      icon: Icons.tune_rounded,
+                                      focusNode: _calibrationFocus,
+                                      showDivider: true,
+                                      onPressed: () => context.push(
+                                        '/settings/device-setup',
+                                      ),
+                                    ),
+                                    _AppearanceActionRow(
+                                      label: 'Diagnostics',
+                                      subtitle:
+                                          'Review system health and export troubleshooting details.',
+                                      icon: Icons.monitor_heart_rounded,
+                                      focusNode: _diagnosticsFocus,
+                                      onPressed: () =>
+                                          context.push('/settings/diagnostics'),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                          right: _SettingsCardLane(
+                            children: [
+                              settingsSectionCard(
+                                key: const ValueKey(
+                                  'settings-card-system-updates',
+                                ),
+                                section: _SettingsSection.appUpdates,
+                                subtitle:
+                                    'Stable public releases download directly to this device.',
+                                child: Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
+                                  children: [
+                                    _AppUpdatePanel(
+                                      forceSingleColumn: isTelevision,
+                                      state: appUpdate,
+                                      automaticFocusNode:
+                                          _automaticUpdatesFocus,
+                                      checkFocusNode: _checkUpdatesFocus,
+                                      onToggleAutomatic: () => ref
+                                          .read(
+                                            appUpdateControllerProvider
+                                                .notifier,
+                                          )
+                                          .setAutomaticUpdates(
+                                            !appUpdate.automaticUpdates,
+                                          ),
+                                      onCheckOrInstall: () {
+                                        final controller = ref.read(
+                                          appUpdateControllerProvider.notifier,
+                                        );
+                                        if (appUpdate.downloadedPath != null) {
+                                          controller.installDownloadedUpdate();
+                                        } else {
+                                          controller.checkForUpdates(
+                                            launchInstaller: true,
+                                          );
+                                        }
+                                      },
+                                    ),
+                                    const SizedBox(height: 8),
+                                    _DeveloperUpdatePanel(
+                                      state: appUpdate,
+                                      channelFocusNode: _updateChannelFocus,
+                                      releaseHistoryFocusNode:
+                                          _releaseHistoryFocus,
+                                      onChannelSelected: ref
+                                          .read(
+                                            appUpdateControllerProvider
+                                                .notifier,
+                                          )
+                                          .setUpdateChannel,
+                                      onRefreshHistory: ref
+                                          .read(
+                                            appUpdateControllerProvider
+                                                .notifier,
+                                          )
+                                          .refreshReleaseHistory,
+                                      onReleaseSelected: ref
+                                          .read(
+                                            appUpdateControllerProvider
+                                                .notifier,
+                                          )
+                                          .installReleaseFromHistory,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              if (layout.usesTvRail) communityCard(),
+                              if (layout.usesTvRail) storageAndResetCard(),
+                              if (layout.usesTvRail) legalNoticesCard(),
+                              if (layout.usesTvRail)
+                                privacyAndDiagnosticsCard(),
+                            ],
+                          ),
+                        ),
+                        if (!layout.usesTvRail) const SizedBox(height: 12),
+                      ],
+                      if (_activeArea == _SettingsArea.accounts &&
+                          !layout.usesTvRail) ...[
+                        discordPresenceCard(),
+                        const SizedBox(height: 12),
+                      ],
+                      if (_activeArea == _SettingsArea.system &&
+                          !layout.usesTvRail) ...[
+                        _SettingsResponsiveColumns(
+                          left: communityCard(),
+                          right: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              storageAndResetCard(),
+                              const SizedBox(height: 12),
+                              legalNoticesCard(),
+                              const SizedBox(height: 12),
+                              privacyAndDiagnosticsCard(),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
               ),
             ),
           ],

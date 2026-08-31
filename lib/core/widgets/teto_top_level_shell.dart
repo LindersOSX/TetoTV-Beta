@@ -131,11 +131,18 @@ class _TetoTopLevelShellState extends ConsumerState<TetoTopLevelShell> {
   }
 
   bool _handleContentScroll(ScrollNotification notification) {
+    // The shell header follows the destination's primary viewport only.
+    // Settings contains nested scrollables (dropdowns, reorder lists, and
+    // other compact controls); allowing one of those notifications to update
+    // this state can leave the header hidden even after the main list returns
+    // to its top.
+    if (notification.depth != 0) return false;
     _observeContentMetrics(notification.metrics);
     return false;
   }
 
   bool _handleContentMetrics(ScrollMetricsNotification notification) {
+    if (notification.depth != 0) return false;
     _observeContentMetrics(notification.metrics);
     return false;
   }

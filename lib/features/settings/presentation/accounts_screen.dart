@@ -1557,9 +1557,29 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       }
     } else if (activeSectionIndex >= 0) {
       if (key == LogicalKeyboardKey.arrowUp) {
-        target = activeSectionIndex == 0
-            ? _areaFocusNodes[_activeArea]
-            : activeSectionNodes[activeSectionIndex - 1];
+        if (activeSectionIndex == 0) {
+          target = _areaFocusNodes[_activeArea];
+        } else {
+          // In the TV list, an expanded section is a heading followed by its
+          // rows.  Moving UP from the next section's heading should therefore
+          // land on the previous section's last row, not skip back to that
+          // section's heading.  The old header-to-header jump was especially
+          // noticeable between Home screen and Theme & display (and between
+          // Navigation and Home shelves), making the D-pad appear to reorder
+          // settings.  Collapsed sections intentionally still connect
+          // heading-to-heading.
+          final previousSection = activeSections[activeSectionIndex - 1];
+          final previousLastContent =
+              _expandedSettingsSections.contains(previousSection)
+              ? _lastFocusNodeForSection(previousSection, preferences)
+              : null;
+          target =
+              previousLastContent != null &&
+                  focusNodeIsMounted(previousLastContent) &&
+                  previousLastContent.canRequestFocus
+              ? previousLastContent
+              : activeSectionNodes[activeSectionIndex - 1];
+        }
       }
       if (key == LogicalKeyboardKey.arrowDown) {
         final section = activeSections[activeSectionIndex];

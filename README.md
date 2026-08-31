@@ -52,6 +52,14 @@ TetoTV runs directly on the Android device with no companion server required for
   <img src="docs/screenshots/home-phone.png" alt="TetoTV phone layout with bottom navigation" width="300">
 </p>
 
+<p align="center">
+  <a href="https://www.youtube.com/watch?v=RUNRto8dQEk">
+    <img src="https://img.youtube.com/vi/RUNRto8dQEk/maxresdefault.jpg" alt="Watch the TetoTV setup walkthrough" width="720">
+  </a>
+</p>
+
+<p align="center"><a href="https://www.youtube.com/watch?v=RUNRto8dQEk"><strong>Watch the TetoTV setup walkthrough</strong></a></p>
+
 <p align="center"><em>These captures use synthetic demo titles and local fixtures. The displayed QR points to a reserved <code>.example</code> domain and is not a live pairing session.</em></p>
 
 ## Why TetoTV

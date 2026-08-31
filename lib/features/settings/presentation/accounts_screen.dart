@@ -845,12 +845,59 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
   }
 
   void _exitSettingsSearchHeaderDown() {
+    // Key-up is delivered to the newly focused content subtree, while the
+    // matching key-down was handled by the fixed header outside that subtree.
+    // Reset the content gate so its next D-pad direction is never mistaken
+    // for a held packet.
+    _directionalRepeatGate.reset();
     if (_settingsSearchResultsVisible ||
         _settingsSearchController.text.isNotEmpty) {
       _settingsSearchController.clear();
       setState(() => _settingsSearchResultsVisible = false);
     }
     requestTvFocusAndReveal(_areaFocusNodes[_activeArea]!);
+  }
+
+  void _scrollSettingsToTop() {
+    _settingsRevealGeneration++;
+
+    void jumpIfReady() {
+      if (!mounted || !_settingsScrollController.hasClients) return;
+      final position = _settingsScrollController.position;
+      if ((position.pixels - position.minScrollExtent).abs() > .5) {
+        position.jumpTo(position.minScrollExtent);
+      }
+    }
+
+    jumpIfReady();
+    // Area changes rebuild the list. Repeat after layout so selecting the
+    // active Settings destination or tab always restores the fixed tools.
+    WidgetsBinding.instance.addPostFrameCallback((_) => jumpIfReady());
+  }
+
+  void _restoreSettingsHeaderAndFocusSearch() {
+    _scrollSettingsToTop();
+
+    void requestWhenMounted(int remainingFrames) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        if (_settingsSearchFocus.context?.mounted == true &&
+            _settingsSearchFocus.canRequestFocus) {
+          _settingsSearchFocus.requestFocus();
+          return;
+        }
+        if (remainingFrames > 0) {
+          requestWhenMounted(remainingFrames - 1);
+        } else {
+          _areaFocusNodes[_activeArea]?.requestFocus();
+        }
+      });
+    }
+
+    // TetoTopLevelShell restores its fixed header after observing the list at
+    // offset zero. Give that rebuild a frame before requesting the search
+    // node, which is intentionally unmounted while the list is scrolled.
+    requestWhenMounted(2);
   }
 
   FocusNode? get _firstHomeShelfFocusNode {
@@ -1542,7 +1589,12 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
         target = areaNodes[areaIndex + 1];
       }
       if (key == LogicalKeyboardKey.arrowUp && tvListLayout) {
-        target = _settingsSearchFocus;
+        if (_settingsSearchFocus.context?.mounted == true) {
+          target = _settingsSearchFocus;
+        } else {
+          _restoreSettingsHeaderAndFocusSearch();
+          return KeyEventResult.handled;
+        }
       }
       if (key == LogicalKeyboardKey.arrowDown) {
         target = tvListLayout
@@ -1559,6 +1611,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       if (key == LogicalKeyboardKey.arrowUp) {
         if (activeSectionIndex == 0) {
           target = _areaFocusNodes[_activeArea];
+          if (tvListLayout) _scrollSettingsToTop();
         } else {
           // In the TV list, an expanded section is a heading followed by its
           // rows.  Moving UP from the next section's heading should therefore
@@ -2401,11 +2454,8 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     final changedArea = area != _activeArea;
     if (changedArea) {
       setState(() => _activeArea = area);
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted || !_settingsScrollController.hasClients) return;
-        _settingsScrollController.jumpTo(0);
-      });
     }
+    _scrollSettingsToTop();
     if (area != _SettingsArea.system) {
       _systemActivationCount = 0;
       return;
@@ -2839,7 +2889,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       preferences: preferences,
       activeDestination: TopNavigationDestination.settings,
       firstContentFocusNode: collapsibleSettings
-          ? _settingsSearchFocus
+          ? _areaFocusNodes[_activeArea]!
           : _activeArea == _SettingsArea.appearance
           ? _customizationFocus
           : _areaFocusNodes[_activeArea]!,
@@ -2852,8 +2902,9 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       // of the intermittent "right does nothing" behavior after exiting to
       // the rail.
       onActiveDestinationPressed: () {
+        _scrollSettingsToTop();
         final preferredTarget = collapsibleSettings
-            ? _settingsSearchFocus
+            ? _areaFocusNodes[_activeArea]!
             : _activeArea == _SettingsArea.appearance
             ? _customizationFocus
             : _areaFocusNodes[_activeArea]!;
@@ -2947,6 +2998,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
             _SettingsAreaTabs(
               selected: _activeArea,
               focusNodes: _areaFocusNodes,
+              autofocusSelected: collapsibleSettings,
               onSelected: _selectSettingsArea,
             ),
             SizedBox(
@@ -3768,11 +3820,13 @@ class _SettingsAreaTabs extends StatelessWidget {
   const _SettingsAreaTabs({
     required this.selected,
     required this.focusNodes,
+    required this.autofocusSelected,
     required this.onSelected,
   });
 
   final _SettingsArea selected;
   final Map<_SettingsArea, FocusNode> focusNodes;
+  final bool autofocusSelected;
   final ValueChanged<_SettingsArea> onSelected;
 
   @override
@@ -3791,7 +3845,9 @@ class _SettingsAreaTabs extends StatelessWidget {
       return TvFocusable(
         key: ValueKey('settings-area-${area.name}'),
         focusNode: focusNodes[area],
-        autofocus: area == selected && selected != _SettingsArea.appearance,
+        autofocus:
+            area == selected &&
+            (autofocusSelected || selected != _SettingsArea.appearance),
         onPressed: () => onSelected(area),
         focusScale: 1.01,
         borderRadius: BorderRadius.circular(8),
@@ -3936,7 +3992,7 @@ class _SettingsSearchHeader extends StatelessWidget {
         key: const ValueKey('settings-search-field'),
         controller: controller,
         focusNode: searchFocusNode,
-        autofocus: true,
+        autofocus: false,
         labelText: 'Search settings',
         hintText: 'Search settings',
         keyboardTitle: 'Search settings',
@@ -5119,105 +5175,111 @@ class _AppearanceActionRowState extends State<_AppearanceActionRow> {
     final mediaSize = MediaQuery.sizeOf(context);
     final tvScale =
         mediaSize.width >= 900 && mediaSize.width > mediaSize.height;
-    return TvFocusable(
-      focusNode: widget.focusNode,
-      autofocus: widget.autofocus,
-      onFocusChanged: (focused) {
-        if (_focused != focused) setState(() => _focused = focused);
-      },
-      onPressed: widget.onPressed,
-      focusScale: 1.005,
-      borderRadius: BorderRadius.circular(7),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 100),
-        constraints: BoxConstraints(minHeight: tvScale ? 48 : 64),
-        padding: EdgeInsets.symmetric(
-          horizontal: tvScale ? 10 : 13,
-          vertical: tvScale ? 5 : 11,
-        ),
-        decoration: BoxDecoration(
-          color: context.appPalette.surface,
-          border: Border(
-            bottom: BorderSide(
-              color: widget.showDivider
-                  ? _settingsBorderColor(context, .14)
-                  : Colors.transparent,
+    return Padding(
+      // The TV focus ring and glow render outside the option bounds. Keep a
+      // small lane around every row so the selected outline remains visually
+      // separate from the options immediately above and below it.
+      padding: EdgeInsets.symmetric(vertical: tvScale ? 3 : 0),
+      child: TvFocusable(
+        focusNode: widget.focusNode,
+        autofocus: widget.autofocus,
+        onFocusChanged: (focused) {
+          if (_focused != focused) setState(() => _focused = focused);
+        },
+        onPressed: widget.onPressed,
+        focusScale: 1.005,
+        borderRadius: BorderRadius.circular(7),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 100),
+          constraints: BoxConstraints(minHeight: tvScale ? 48 : 64),
+          padding: EdgeInsets.symmetric(
+            horizontal: tvScale ? 10 : 13,
+            vertical: tvScale ? 5 : 11,
+          ),
+          decoration: BoxDecoration(
+            color: context.appPalette.surface,
+            border: Border(
+              bottom: BorderSide(
+                color: widget.showDivider
+                    ? _settingsBorderColor(context, .14)
+                    : Colors.transparent,
+              ),
             ),
           ),
-        ),
-        child: Row(
-          children: [
-            Icon(
-              widget.icon,
-              size: tvScale ? 22 : 22,
-              color: widget.destructive
-                  ? context.appPalette.mutedText
-                  : (_focused
-                        ? context.appPalette.accentBright
-                        : _settingsPrimaryText(context)),
-            ),
-            SizedBox(width: tvScale ? 8 : 14),
-            Expanded(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    widget.label,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: widget.destructive
-                          ? context.appPalette.mutedText
-                          : _settingsPrimaryText(context),
-                      fontSize: tvScale ? 16 : 14,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                  if (widget.subtitle case final subtitle?) ...[
-                    SizedBox(height: tvScale ? 2 : 3),
+          child: Row(
+            children: [
+              Icon(
+                widget.icon,
+                size: tvScale ? 22 : 22,
+                color: widget.destructive
+                    ? context.appPalette.mutedText
+                    : (_focused
+                          ? context.appPalette.accentBright
+                          : _settingsPrimaryText(context)),
+              ),
+              SizedBox(width: tvScale ? 8 : 14),
+              Expanded(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
                     Text(
-                      subtitle,
-                      maxLines: tvScale ? 2 : 3,
+                      widget.label,
+                      maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                        color: context.appPalette.mutedText,
-                        fontSize: tvScale ? 12 : 11,
-                        height: 1.25,
+                        color: widget.destructive
+                            ? context.appPalette.mutedText
+                            : _settingsPrimaryText(context),
+                        fontSize: tvScale ? 16 : 14,
+                        fontWeight: FontWeight.w700,
                       ),
                     ),
+                    if (widget.subtitle case final subtitle?) ...[
+                      SizedBox(height: tvScale ? 2 : 3),
+                      Text(
+                        subtitle,
+                        maxLines: tvScale ? 2 : 3,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: context.appPalette.mutedText,
+                          fontSize: tvScale ? 12 : 11,
+                          height: 1.25,
+                        ),
+                      ),
+                    ],
                   ],
-                ],
-              ),
-            ),
-            if (widget.trailing case final trailing?) ...[
-              SizedBox(width: tvScale ? 6 : 10),
-              trailing,
-            ] else if (widget.value case final value?) ...[
-              SizedBox(width: tvScale ? 6 : 10),
-              Flexible(
-                child: Text(
-                  value,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  textAlign: TextAlign.end,
-                  style: TextStyle(
-                    color: context.appPalette.mutedText,
-                    fontSize: tvScale ? 14 : 13,
-                    fontWeight: FontWeight.w600,
-                  ),
                 ),
               ),
+              if (widget.trailing case final trailing?) ...[
+                SizedBox(width: tvScale ? 6 : 10),
+                trailing,
+              ] else if (widget.value case final value?) ...[
+                SizedBox(width: tvScale ? 6 : 10),
+                Flexible(
+                  child: Text(
+                    value,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.end,
+                    style: TextStyle(
+                      color: context.appPalette.mutedText,
+                      fontSize: tvScale ? 14 : 13,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
+              if (widget.showChevron) ...[
+                SizedBox(width: tvScale ? 5 : 8),
+                Icon(
+                  Icons.chevron_right_rounded,
+                  size: tvScale ? 22 : 22,
+                  color: _settingsPrimaryText(context),
+                ),
+              ],
             ],
-            if (widget.showChevron) ...[
-              SizedBox(width: tvScale ? 5 : 8),
-              Icon(
-                Icons.chevron_right_rounded,
-                size: tvScale ? 22 : 22,
-                color: _settingsPrimaryText(context),
-              ),
-            ],
-          ],
+          ),
         ),
       ),
     );

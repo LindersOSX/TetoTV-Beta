@@ -89,9 +89,6 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(FocusManager.instance.primaryFocus?.debugLabel, 'accounts.search');
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
-    await tester.pump();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
       'accounts.area.appearance',
@@ -243,6 +240,24 @@ void main() {
       expect(find.text('Poster metadata'), findsOneWidget);
       expect(find.text('Continue watching'), findsWidgets);
 
+      final themeStudioFocusable = find.descendant(
+        of: find.byKey(const ValueKey('open-theme-studio')),
+        matching: find.byType(TvFocusable),
+      );
+      final titleLanguageFocusable = find.descendant(
+        of: find.byKey(
+          const ValueKey('settings-appearance-title-language'),
+        ),
+        matching: find.byType(TvFocusable),
+      );
+      final themeStudioRect = tester.getRect(themeStudioFocusable);
+      final titleLanguageRect = tester.getRect(titleLanguageFocusable);
+      expect(
+        titleLanguageRect.top - themeStudioRect.bottom,
+        greaterThanOrEqualTo(5),
+        reason: 'TV focus glows need a clear lane between Settings options.',
+      );
+
       final themeCard = tester.getRect(
         find.byKey(const ValueKey('appearance-theme-display-card')),
       );
@@ -258,7 +273,10 @@ void main() {
       expect((homeCard.width - themeCard.width).abs(), lessThan(1));
       expect(homeCard.top, greaterThan(themeCard.bottom));
       expect(navigationCard.top, greaterThan(homeCard.bottom));
-      expect(FocusManager.instance.primaryFocus?.debugLabel, 'accounts.search');
+      expect(
+        FocusManager.instance.primaryFocus?.debugLabel,
+        'accounts.area.appearance',
+      );
       expect(tester.takeException(), isNull);
     },
   );
@@ -330,13 +348,17 @@ void main() {
       await tester.pump();
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
       await tester.pump();
-      expect(searchFocus.hasFocus, isTrue);
+      expect(appearanceFocus.hasFocus, isTrue);
 
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
       await tester.pump();
       expect(settingsRailFocus.hasFocus, isTrue);
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
       await tester.pump();
+      expect(appearanceFocus.hasFocus, isTrue);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+      await tester.pump();
+      expect(FocusManager.instance.primaryFocus?.debugLabel, 'accounts.search');
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
       await tester.pump();
       expect(
@@ -351,9 +373,10 @@ void main() {
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
       await tester.pump();
       expect(appearanceFocus.hasFocus, isTrue);
+      await tester.pump(const Duration(milliseconds: 120));
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
       await tester.pump();
-      expect(searchFocus.hasFocus, isTrue);
+      expect(FocusManager.instance.primaryFocus?.debugLabel, 'accounts.search');
 
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
       await tester.pump();
@@ -376,6 +399,26 @@ void main() {
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
       await tester.pump();
       expect(themeHeaderFocus.hasFocus, isTrue);
+
+      final settingsList = tester.widget<ListView>(
+        find.byKey(const ValueKey('settings-content-list')),
+      );
+      settingsList.controller!.jumpTo(240);
+      await tester.pump();
+      await tester.pump();
+      expect(find.byKey(const ValueKey('settings-search-field')), findsNothing);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+      await tester.pumpAndSettle();
+      expect(appearanceFocus.hasFocus, isTrue);
+      expect(settingsList.controller!.offset, 0);
+      expect(
+        find.byKey(const ValueKey('settings-search-field')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('settings-toggle-all-sections')),
+        findsOneWidget,
+      );
 
       // Expanded section headers are part of the same linear TV list.  UP
       // from Home screen must return to Theme & display's final row rather
@@ -953,7 +996,10 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(FocusManager.instance.primaryFocus?.debugLabel, 'accounts.search');
+      expect(
+        FocusManager.instance.primaryFocus?.debugLabel,
+        'accounts.area.appearance',
+      );
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
       await tester.pump();
       expect(
@@ -981,11 +1027,13 @@ void main() {
       await tester.tap(settingsAction);
       await tester.pumpAndSettle();
       expect(find.byType(AccountsScreen), findsOneWidget);
-      expect(FocusManager.instance.primaryFocus?.debugLabel, 'accounts.search');
+      expect(
+        FocusManager.instance.primaryFocus?.debugLabel,
+        'accounts.area.appearance',
+      );
 
       // Once the list is scrolled, the fixed search header is intentionally
-      // removed. Re-activating Settings must use the visible area tab instead
-      // of handing the shell that detached search FocusNode.
+      // removed. Re-activating Settings keeps the active area selected.
       final settingsList = tester.widget<ListView>(
         find.byKey(const ValueKey('settings-content-list')),
       );
@@ -999,20 +1047,37 @@ void main() {
       await tester.tap(settingsAction);
       await tester.pumpAndSettle();
       expect(find.byType(AccountsScreen), findsOneWidget);
+      expect(settingsList.controller!.offset, 0);
       expect(
         FocusManager.instance.primaryFocus?.debugLabel,
         'accounts.area.appearance',
       );
+      expect(
+        find.byKey(const ValueKey('settings-search-field')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('settings-toggle-all-sections')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('top-level-fixed-profile')),
+        findsOneWidget,
+      );
 
-      // The keyboard path should have the same behavior as a click: focus can
-      // leave the content for the rail and immediately return with RIGHT.
-      settingsList.controller!.jumpTo(0);
-      await tester.pump();
-      await tester.pump();
-      await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
-      await tester.pump();
-      await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
-      await tester.pump();
+      // UP from the selected area focuses Search after the active Settings
+      // action has restored the list and its fixed tools.
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+      await tester.pumpAndSettle();
+      expect(settingsList.controller!.offset, 0);
+      expect(
+        find.byKey(const ValueKey('settings-search-field')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('settings-toggle-all-sections')),
+        findsOneWidget,
+      );
       expect(FocusManager.instance.primaryFocus?.debugLabel, 'accounts.search');
       expect(tester.takeException(), isNull);
     },
@@ -1603,9 +1668,11 @@ void main() {
     ]) {
       expect(find.text(label), findsOneWidget);
     }
-    expect(FocusManager.instance.primaryFocus?.debugLabel, 'accounts.search');
-    for (final expected in const [
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
       'accounts.area.appearance',
+    );
+    for (final expected in const [
       'accounts.settings-section.theme-display',
       'accounts.customization.first',
       'accounts.title-language',
@@ -1719,7 +1786,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
-      anyOf('accounts.search', 'accounts.area.appearance'),
+      'accounts.area.appearance',
     );
     expect(tester.takeException(), isNull);
   });

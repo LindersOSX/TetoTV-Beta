@@ -2,14 +2,113 @@ import 'package:anime_tv/features/player/application/audio_track_selector.dart';
 import 'package:anime_tv/core/preferences/playback_audio_preference.dart';
 import 'package:anime_tv/features/player/presentation/player_control_overlay.dart';
 import 'package:anime_tv/features/player/presentation/tv_player_screen.dart';
+import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:anime_tv/features/streaming/domain/debrid_service.dart';
 import 'package:anime_tv/features/streaming/domain/release_audio_preference.dart';
 import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
 import 'package:flutter/services.dart';
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:media_kit/media_kit.dart';
 
 void main() {
+  test('superseded media open cannot publish success', () async {
+    final firstStream = Object();
+    final secondStream = Object();
+    var activeRevision = 1;
+    Object activeStream = firstStream;
+    final finishFirst = Completer<void>();
+
+    final firstResult = () async {
+      await finishFirst.future;
+      return playerMediaOpenCanCommit(
+        expectedRevision: 1,
+        activeRevision: activeRevision,
+        expectedStream: firstStream,
+        activeStream: activeStream,
+      );
+    }();
+
+    activeRevision = 2;
+    activeStream = secondStream;
+    finishFirst.complete();
+
+    expect(await firstResult, isFalse);
+    expect(
+      playerMediaOpenCanCommit(
+        expectedRevision: 2,
+        activeRevision: activeRevision,
+        expectedStream: secondStream,
+        activeStream: activeStream,
+      ),
+      isTrue,
+    );
+  });
+
+  group('registered external caption selection', () {
+    test('Automatic may keep a provider sidecar with unknown language', () {
+      expect(
+        shouldKeepRegisteredExternalCaption(
+          subtitlesEnabled: true,
+          hasPerSeriesPreference: false,
+          globalMode: PreferredCaptionMode.automatic,
+          externalLanguage: null,
+          requestedLanguage: 'eng',
+        ),
+        isTrue,
+      );
+    });
+
+    test('global On only keeps a sidecar matching the remembered language', () {
+      for (final externalLanguage in <String?>[null, 'jpn']) {
+        expect(
+          shouldKeepRegisteredExternalCaption(
+            subtitlesEnabled: true,
+            hasPerSeriesPreference: false,
+            globalMode: PreferredCaptionMode.enabled,
+            externalLanguage: externalLanguage,
+            requestedLanguage: 'spa',
+          ),
+          isFalse,
+        );
+      }
+      expect(
+        shouldKeepRegisteredExternalCaption(
+          subtitlesEnabled: true,
+          hasPerSeriesPreference: false,
+          globalMode: PreferredCaptionMode.enabled,
+          externalLanguage: 'spa',
+          requestedLanguage: 'spa',
+        ),
+        isTrue,
+      );
+    });
+
+    test('Off and explicit language choices remain authoritative', () {
+      expect(
+        shouldKeepRegisteredExternalCaption(
+          subtitlesEnabled: false,
+          hasPerSeriesPreference: false,
+          globalMode: PreferredCaptionMode.disabled,
+          externalLanguage: 'eng',
+          requestedLanguage: 'eng',
+        ),
+        isFalse,
+      );
+      expect(
+        shouldKeepRegisteredExternalCaption(
+          subtitlesEnabled: true,
+          hasPerSeriesPreference: true,
+          globalMode: PreferredCaptionMode.automatic,
+          externalLanguage: 'jpn',
+          requestedLanguage: 'eng',
+        ),
+        isFalse,
+      );
+    });
+  });
+
   test('opens every supported stream class with MPV', () {
     final web = StreamReady(
       uri: Uri.parse('https://cdn.example.test/episode.m3u8'),

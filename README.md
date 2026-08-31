@@ -17,7 +17,7 @@
 
 <p align="center">
   <a href="https://github.com/LindersOSX/TetoTV-Beta/releases/latest"><strong>Download Beta</strong></a>
-  · <a href="docs/RELEASE_NOTES_2.0.52.md">What's new</a>
+  · <a href="docs/RELEASE_NOTES_2.0.53.md">What's new</a>
   · <a href="https://github.com/LindersOSX/TetoTV-Beta/issues/new">Report an issue</a>
   · <a href="https://discord.gg/juC6k7d4WY">Discord</a>
   · <a href="https://www.youtube.com/@TetoTVApp">YouTube</a>
@@ -73,7 +73,7 @@ TetoTV runs directly on the Android device with no companion server required for
 | Standalone use | Supported | No PC app or companion server is required for normal browsing and playback. |
 | User-supplied extensions | Optional | No extension or catalog is bundled, recommended, or endorsed. Compatibility depends on the service the user configures. |
 | AniList / MyAnimeList | Optional | Sync lists and progress, or use a local-only profile. |
-| MPV playback | Supported | Used for TetoTV's integrated playback experience. |
+| MPV playback | Supported | Integrated audio/caption selection remembers explicit choices between episodes; Playback settings include Preferred CC Automatic, On, and Off. |
 | Offline downloads | Beta | Individual episodes, whole-season queues, and offline playback. |
 | Debrid services | Optional | Users may connect a supported account for media they are authorized to access. |
 | Direct peer-to-peer playback | Optional beta | Off by default and requires an explicit privacy warning and opt-in. |
@@ -85,10 +85,10 @@ TetoTV runs directly on the Android device with no companion server required for
 | Channel | Version | Best for |
 | --- | --- | --- |
 | Public | Not published | Source and release-readiness documents are available, but no Public APK is currently offered |
-| Beta | [2.0.52](docs/RELEASE_NOTES_2.0.52.md) | Testing searchable, collapsible TV Settings with exact remote navigation while preserving the existing phone and tablet layouts before a separately reviewed Public release |
+| Beta | [2.0.53](docs/RELEASE_NOTES_2.0.53.md) | Testing persistent caption choices and a Preferred CC playback setting across episode changes, source fallback, and private-library playback |
 
 > [!WARNING]
-> Beta 2.0.52 uses the repository's explicit unreviewed-Beta exception. Its native-library and corresponding-source material did not receive independent license review, and automated integrity checks are not a legal compliance determination. Read the [complete Beta disclosure](docs/RELEASE_NOTES_2.0.52.md). This exception does not apply to a future Public release.
+> Beta 2.0.53 uses the repository's explicit unreviewed-Beta exception. Its native-library and corresponding-source material did not receive independent license review, and automated integrity checks are not a legal compliance determination. Read the [complete Beta disclosure](docs/RELEASE_NOTES_2.0.53.md). This exception does not apply to a future Public release.
 
 The Public updater repository intentionally has no release while the Public build is held for review. Existing Beta installations continue to update from the Beta repository. Android never permits an in-place install of an APK with a lower build code; Developer Mode does not bypass that platform rule.
 

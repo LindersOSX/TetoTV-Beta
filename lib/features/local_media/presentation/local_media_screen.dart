@@ -486,10 +486,17 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
   Future<void> _playJellyfin(JellyfinMediaItem item) async {
     final controller = ref.read(localMediaControllerProvider.notifier);
     final playSessionId = controller.createPlaybackSessionId();
-    final requestedAudio = ref.read(settingsPreferencesProvider).preferredAudio;
+    final settings = ref.read(settingsPreferencesProvider);
+    final requestedAudio = settings.preferredAudio;
     final plan = controller.playbackPlan(
       item,
       playSessionId: playSessionId,
+      preferredSubtitleLanguage: preferredCaptionLanguageForPreparation(
+        seriesLanguage: 'eng',
+        seriesPreferenceSet: false,
+        globalMode: settings.preferredCaptionMode,
+        globalLanguage: settings.preferredCaptionLanguage,
+      ),
       requestedAudio: requestedAudio,
     );
     await _openPlayer(

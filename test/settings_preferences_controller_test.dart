@@ -260,6 +260,167 @@ void main() {
     },
   );
 
+  test('preferred captions default to Automatic with clear labels', () async {
+    FlutterSecureStorage.setMockInitialValues({});
+    final controller = SettingsPreferencesController(
+      const FlutterSecureStorage(),
+    );
+
+    await controller.load();
+
+    expect(
+      controller.state.preferredCaptionMode,
+      PreferredCaptionMode.automatic,
+    );
+    expect(controller.state.preferredCaptionLanguage, 'eng');
+    expect(PreferredCaptionMode.automatic.displayName, 'Automatic');
+    expect(PreferredCaptionMode.enabled.displayName, 'On');
+    expect(PreferredCaptionMode.disabled.displayName, 'Off');
+    for (final mode in PreferredCaptionMode.values) {
+      expect(mode.description, isNotEmpty);
+    }
+  });
+
+  test(
+    'private caption preparation respects series intent and global On only',
+    () {
+      expect(
+        preferredCaptionLanguageForPreparation(
+          seriesLanguage: 'jpn',
+          seriesPreferenceSet: true,
+          globalMode: PreferredCaptionMode.enabled,
+          globalLanguage: 'spa',
+        ),
+        'jpn',
+      );
+      expect(
+        preferredCaptionLanguageForPreparation(
+          seriesLanguage: 'eng',
+          seriesPreferenceSet: false,
+          globalMode: PreferredCaptionMode.enabled,
+          globalLanguage: 'spa',
+        ),
+        'spa',
+      );
+      for (final mode in [
+        PreferredCaptionMode.automatic,
+        PreferredCaptionMode.disabled,
+      ]) {
+        expect(
+          preferredCaptionLanguageForPreparation(
+            seriesLanguage: 'eng',
+            seriesPreferenceSet: false,
+            globalMode: mode,
+            globalLanguage: 'spa',
+          ),
+          'eng',
+          reason: '${mode.name} must preserve the prior preparation default',
+        );
+      }
+    },
+  );
+
+  test('preferred caption mode persists explicit on and off choices', () async {
+    FlutterSecureStorage.setMockInitialValues({});
+    const storage = FlutterSecureStorage();
+    final controller = SettingsPreferencesController(storage);
+
+    await controller.setPreferredCaptionMode(PreferredCaptionMode.enabled);
+    final enabled = SettingsPreferencesController(storage);
+    await enabled.load();
+    expect(enabled.state.preferredCaptionMode, PreferredCaptionMode.enabled);
+
+    await enabled.setPreferredCaptionMode(PreferredCaptionMode.disabled);
+    final disabled = SettingsPreferencesController(storage);
+    await disabled.load();
+    expect(disabled.state.preferredCaptionMode, PreferredCaptionMode.disabled);
+  });
+
+  test(
+    'manual caption selection atomically persists mode and safe language',
+    () async {
+      FlutterSecureStorage.setMockInitialValues({});
+      const storage = FlutterSecureStorage();
+      final controller = SettingsPreferencesController(storage);
+
+      await controller.setPreferredCaptionSelection(
+        mode: PreferredCaptionMode.enabled,
+        language: ' JA ',
+      );
+
+      expect(
+        controller.state.preferredCaptionMode,
+        PreferredCaptionMode.enabled,
+      );
+      expect(controller.state.preferredCaptionLanguage, 'ja');
+      final restored = SettingsPreferencesController(storage);
+      await restored.load();
+      expect(restored.state.preferredCaptionMode, PreferredCaptionMode.enabled);
+      expect(restored.state.preferredCaptionLanguage, 'ja');
+    },
+  );
+
+  test(
+    'preferred caption language normalizes storage and unsafe values',
+    () async {
+      for (final testCase in const [
+        (' PT ', 'pt'),
+        ('FRA', 'fra'),
+        ('en-US', 'eng'),
+        ('english', 'eng'),
+        ('e1', 'eng'),
+        ('', 'eng'),
+      ]) {
+        FlutterSecureStorage.setMockInitialValues({
+          'player_preferred_caption_language': testCase.$1,
+        });
+        final controller = SettingsPreferencesController(
+          const FlutterSecureStorage(),
+        );
+
+        await controller.load();
+
+        expect(
+          controller.state.preferredCaptionLanguage,
+          testCase.$2,
+          reason: 'stored ${testCase.$1}',
+        );
+      }
+
+      FlutterSecureStorage.setMockInitialValues({});
+      final controller = SettingsPreferencesController(
+        const FlutterSecureStorage(),
+      );
+      await controller.setPreferredCaptionSelection(
+        mode: PreferredCaptionMode.disabled,
+        language: '../eng',
+      );
+      expect(controller.state.preferredCaptionLanguage, 'eng');
+      expect(
+        const SettingsPreferences()
+            .copyWith(preferredCaptionLanguage: ' DE ')
+            .preferredCaptionLanguage,
+        'de',
+      );
+    },
+  );
+
+  test('invalid preferred caption storage falls back to Automatic', () async {
+    FlutterSecureStorage.setMockInitialValues({
+      'player_preferred_captions': 'not-a-caption-mode',
+    });
+    final controller = SettingsPreferencesController(
+      const FlutterSecureStorage(),
+    );
+
+    await controller.load();
+
+    expect(
+      controller.state.preferredCaptionMode,
+      PreferredCaptionMode.automatic,
+    );
+  });
+
   test('Direct torrent is opt-in and persists explicit changes', () async {
     FlutterSecureStorage.setMockInitialValues({});
     const storage = FlutterSecureStorage();
@@ -666,6 +827,10 @@ void main() {
       await controller.setCaptionTextColor(0xFF00FF00);
       await controller.setSeekBackSeconds(30);
       await controller.setPreferredAudio(PlaybackAudioPreference.sub);
+      await controller.setPreferredCaptionSelection(
+        mode: PreferredCaptionMode.enabled,
+        language: 'jpn',
+      );
 
       await controller.resetAppearanceAndNavigation();
 
@@ -676,6 +841,11 @@ void main() {
       expect(controller.state.captionTextColor, 0xFF00FF00);
       expect(controller.state.seekBackSeconds, 30);
       expect(controller.state.preferredAudio, PlaybackAudioPreference.sub);
+      expect(
+        controller.state.preferredCaptionMode,
+        PreferredCaptionMode.enabled,
+      );
+      expect(controller.state.preferredCaptionLanguage, 'jpn');
 
       final restored = SettingsPreferencesController(storage);
       await restored.load();
@@ -684,8 +854,59 @@ void main() {
       expect(restored.state.captionTextColor, 0xFF00FF00);
       expect(restored.state.seekBackSeconds, 30);
       expect(restored.state.preferredAudio, PlaybackAudioPreference.sub);
+      expect(restored.state.preferredCaptionMode, PreferredCaptionMode.enabled);
+      expect(restored.state.preferredCaptionLanguage, 'jpn');
     },
   );
+
+  test('reset appearance restores preferred captions to Automatic', () async {
+    FlutterSecureStorage.setMockInitialValues({});
+    const storage = FlutterSecureStorage();
+    final controller = SettingsPreferencesController(storage);
+
+    await controller.setPreferredCaptionSelection(
+      mode: PreferredCaptionMode.disabled,
+      language: 'spa',
+    );
+    await controller.resetAppearance();
+
+    expect(
+      controller.state.preferredCaptionMode,
+      PreferredCaptionMode.automatic,
+    );
+    expect(controller.state.preferredCaptionLanguage, 'eng');
+    final restored = SettingsPreferencesController(storage);
+    await restored.load();
+    expect(restored.state.preferredCaptionMode, PreferredCaptionMode.automatic);
+    expect(restored.state.preferredCaptionLanguage, 'eng');
+  });
+
+  test('import snapshot restores preferred caption mode', () async {
+    FlutterSecureStorage.setMockInitialValues({});
+    const storage = FlutterSecureStorage();
+    final controller = SettingsPreferencesController(storage);
+
+    await controller.setPreferredCaptionSelection(
+      mode: PreferredCaptionMode.disabled,
+      language: 'jpn',
+    );
+    final snapshot = await controller.snapshotForImport();
+    await controller.setPreferredCaptionSelection(
+      mode: PreferredCaptionMode.enabled,
+      language: 'spa',
+    );
+    await controller.restoreImportSnapshot(snapshot);
+
+    expect(
+      controller.state.preferredCaptionMode,
+      PreferredCaptionMode.disabled,
+    );
+    expect(controller.state.preferredCaptionLanguage, 'jpn');
+    final restored = SettingsPreferencesController(storage);
+    await restored.load();
+    expect(restored.state.preferredCaptionMode, PreferredCaptionMode.disabled);
+    expect(restored.state.preferredCaptionLanguage, 'jpn');
+  });
 
   test('explicit built-in keyboard choice is preserved', () async {
     FlutterSecureStorage.setMockInitialValues({
@@ -958,11 +1179,44 @@ void main() {
       gate.complete();
       await Future.wait([firstLoad, duplicateLoad]);
 
-      expect(reads, 58, reason: 'duplicate startup loads must be coalesced');
+      expect(reads, 60, reason: 'duplicate startup loads must be coalesced');
       expect(controller.state.webStreamsEnabled, isTrue);
       expect(controller.state.navigationSounds, isFalse);
     },
   );
+
+  test('startup load preserves an early preferred caption mutation', () async {
+    FlutterSecureStorage.setMockInitialValues({});
+    final gate = Completer<void>();
+    final values = <String, String>{
+      'player_preferred_captions': PreferredCaptionMode.disabled.name,
+      'player_preferred_caption_language': 'jpn',
+    };
+    final controller = SettingsPreferencesController(
+      const FlutterSecureStorage(),
+      readValue: (key) async {
+        await gate.future;
+        return values[key];
+      },
+      writeValue: (key, value) async => values[key] = value,
+    );
+
+    final load = controller.load();
+    await controller.setPreferredCaptionSelection(
+      mode: PreferredCaptionMode.enabled,
+      language: 'spa',
+    );
+    gate.complete();
+    await load;
+
+    expect(controller.state.preferredCaptionMode, PreferredCaptionMode.enabled);
+    expect(controller.state.preferredCaptionLanguage, 'spa');
+    expect(
+      values['player_preferred_captions'],
+      PreferredCaptionMode.enabled.name,
+    );
+    expect(values['player_preferred_caption_language'], 'spa');
+  });
 
   test(
     'serializes rapid writes so the newest preference persists last',

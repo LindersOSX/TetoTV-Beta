@@ -506,6 +506,25 @@ void main() {
         FocusManager.instance.primaryFocus?.debugLabel,
         'accounts.system.diagnostics',
       );
+
+      await tester.tap(editable);
+      await tester.pumpAndSettle();
+      await tester.enterText(editable, 'Preferred CC');
+      await tester.pumpAndSettle();
+      final captionResult = find.byKey(
+        const ValueKey('settings-search-result-closed-captions-preferred-cc'),
+      );
+      expect(captionResult, findsOneWidget);
+      await tester.tap(captionResult);
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('settings-section-content-closed-captions')),
+        findsOneWidget,
+      );
+      expect(
+        FocusManager.instance.primaryFocus?.debugLabel,
+        'accounts.captions.preference',
+      );
       expect(tester.takeException(), isNull);
     },
   );
@@ -825,6 +844,78 @@ void main() {
     expect(find.text('Theme Studio'), findsOneWidget);
     expect(find.text('Title language'), findsOneWidget);
     expect(find.text('Show title style'), findsOneWidget);
+    await tester.tap(find.text('Playback'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('settings-preferred-cc')), findsOneWidget);
+    expect(find.text('Preferred CC'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Preferred CC selector updates and restores the saved setting', (
+    tester,
+  ) async {
+    FlutterSecureStorage.setMockInitialValues({});
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    Widget buildSettings() => ProviderScope(
+      overrides: [isTelevisionProvider.overrideWithValue(false)],
+      child: const MaterialApp(home: AccountsScreen()),
+    );
+
+    await tester.pumpWidget(buildSettings());
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Playback'));
+    await tester.pumpAndSettle();
+
+    final preferredCc = find.byKey(const ValueKey('settings-preferred-cc'));
+    expect(
+      find.descendant(of: preferredCc, matching: find.text('Automatic')),
+      findsOneWidget,
+    );
+    await tester.tap(preferredCc);
+    await tester.pumpAndSettle();
+
+    final dialog = find.byType(Dialog);
+    expect(dialog, findsOneWidget);
+    await tester.tap(find.descendant(of: dialog, matching: find.text('On')));
+    await tester.pumpAndSettle();
+
+    var container = ProviderScope.containerOf(
+      tester.element(find.byType(AccountsScreen)),
+    );
+    expect(
+      container.read(settingsPreferencesProvider).preferredCaptionMode,
+      PreferredCaptionMode.enabled,
+    );
+    expect(
+      find.descendant(of: preferredCc, matching: find.text('On')),
+      findsOneWidget,
+    );
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pumpAndSettle();
+    await tester.pumpWidget(buildSettings());
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Playback'));
+    await tester.pumpAndSettle();
+
+    container = ProviderScope.containerOf(
+      tester.element(find.byType(AccountsScreen)),
+    );
+    expect(
+      container.read(settingsPreferencesProvider).preferredCaptionMode,
+      PreferredCaptionMode.enabled,
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('settings-preferred-cc')),
+        matching: find.text('On'),
+      ),
+      findsOneWidget,
+    );
     expect(tester.takeException(), isNull);
   });
 
@@ -1607,6 +1698,7 @@ void main() {
       findsOneWidget,
     );
     expect(find.text('Text color'), findsOneWidget);
+    expect(find.text('Preferred CC'), findsOneWidget);
     expect(find.text('Default player'), findsOneWidget);
 
     final playbackTab = tester.widget<TvFocusable>(
@@ -1625,9 +1717,21 @@ void main() {
     await tester.pumpAndSettle();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.captions.text-color',
+      'accounts.captions.preference',
     );
 
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.captions.text-color',
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+    await tester.pumpAndSettle();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.captions.preference',
+    );
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
     await tester.pumpAndSettle();
     expect(

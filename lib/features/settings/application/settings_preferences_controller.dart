@@ -45,6 +45,8 @@ const _clickSoundsKey = 'audio_click_sounds';
 const _defaultLandingPageKey = 'navigation_default_landing_page';
 const _preferredPlayerKey = 'player_preferred_engine';
 const _preferredAudioKey = 'player_preferred_audio';
+const _preferredCaptionsKey = 'player_preferred_captions';
+const _preferredCaptionLanguageKey = 'player_preferred_caption_language';
 const _anonymousCrashReportingKey = 'privacy_anonymous_crash_reporting';
 const _anonymousUsageCountKey = 'privacy_anonymous_usage_count';
 const _debridStreamSortKey = 'streaming_debrid_sort';
@@ -273,6 +275,42 @@ extension PreferredPlayerLabel on PreferredPlayer {
   };
 }
 
+/// Controls how captions are initialized when playback starts.
+///
+/// [automatic] leaves caption selection to the series preference and the
+/// player. [enabled] and [disabled] are explicit global defaults that apply
+/// when a series has no user-selected caption preference yet.
+enum PreferredCaptionMode { automatic, enabled, disabled }
+
+/// Selects the language used while a private media server prepares caption
+/// capabilities. A viewer's explicit per-series choice remains authoritative;
+/// otherwise only the global On mode carries its remembered language into
+/// preparation. Automatic and Off preserve the existing series/default value.
+String preferredCaptionLanguageForPreparation({
+  required String seriesLanguage,
+  required bool seriesPreferenceSet,
+  required PreferredCaptionMode globalMode,
+  required String globalLanguage,
+}) => !seriesPreferenceSet && globalMode == PreferredCaptionMode.enabled
+    ? globalLanguage
+    : seriesLanguage;
+
+extension PreferredCaptionModeLabel on PreferredCaptionMode {
+  String get displayName => switch (this) {
+    PreferredCaptionMode.automatic => 'Automatic',
+    PreferredCaptionMode.enabled => 'On',
+    PreferredCaptionMode.disabled => 'Off',
+  };
+
+  String get description => switch (this) {
+    PreferredCaptionMode.automatic =>
+      'Remember each show\'s caption choice when available.',
+    PreferredCaptionMode.enabled =>
+      'Start captions on when a matching track is available.',
+    PreferredCaptionMode.disabled => 'Start playback with captions off.',
+  };
+}
+
 /// Legacy single-value Auto Pick source constraint.
 ///
 /// New code should use [AutoPickSourcePriority] and
@@ -424,6 +462,8 @@ class SettingsPreferences {
     this.defaultLandingPage = LandingPage.home,
     this.preferredPlayer = PreferredPlayer.mpv,
     this.preferredAudio = PlaybackAudioPreference.dub,
+    this.preferredCaptionMode = PreferredCaptionMode.automatic,
+    this.preferredCaptionLanguage = 'eng',
     this.debridStreamSort = DebridStreamSort.bestQuality,
     this.streamSourcePriority = StreamSourcePriority.debridFirst,
     this.webStreamQuality = WebStreamQualityPreference.bestAvailable,
@@ -495,6 +535,8 @@ class SettingsPreferences {
   final LandingPage defaultLandingPage;
   final PreferredPlayer preferredPlayer;
   final PlaybackAudioPreference preferredAudio;
+  final PreferredCaptionMode preferredCaptionMode;
+  final String preferredCaptionLanguage;
   final DebridStreamSort debridStreamSort;
   final StreamSourcePriority streamSourcePriority;
   final WebStreamQualityPreference webStreamQuality;
@@ -576,6 +618,8 @@ class SettingsPreferences {
     LandingPage? defaultLandingPage,
     PreferredPlayer? preferredPlayer,
     PlaybackAudioPreference? preferredAudio,
+    PreferredCaptionMode? preferredCaptionMode,
+    String? preferredCaptionLanguage,
     DebridStreamSort? debridStreamSort,
     StreamSourcePriority? streamSourcePriority,
     WebStreamQualityPreference? webStreamQuality,
@@ -641,6 +685,10 @@ class SettingsPreferences {
     defaultLandingPage: defaultLandingPage ?? this.defaultLandingPage,
     preferredPlayer: preferredPlayer ?? this.preferredPlayer,
     preferredAudio: preferredAudio ?? this.preferredAudio,
+    preferredCaptionMode: preferredCaptionMode ?? this.preferredCaptionMode,
+    preferredCaptionLanguage: preferredCaptionLanguage == null
+        ? this.preferredCaptionLanguage
+        : _normalizePreferredCaptionLanguage(preferredCaptionLanguage),
     debridStreamSort: debridStreamSort ?? this.debridStreamSort,
     streamSourcePriority: streamSourcePriority ?? this.streamSourcePriority,
     webStreamQuality: webStreamQuality ?? this.webStreamQuality,
@@ -723,6 +771,8 @@ final _strictPreferencePersistenceZoneKey = Object();
 
 const _phoneSetupPreferenceKeys = [
   _preferredAudioKey,
+  _preferredCaptionsKey,
+  _preferredCaptionLanguageKey,
   _builtInKeyboardKey,
   _autoSkipIntrosKey,
   _autoSkipOutrosKey,
@@ -910,6 +960,12 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
       // The feature-wide offline-download switch is append-only. Missing
       // values intentionally migrate existing installs to enabled.
       _safeRead(_offlineDownloadsEnabledKey),
+      // Preferred captions is append-only so every earlier storage index
+      // remains migration-safe.
+      _safeRead(_preferredCaptionsKey),
+      // The hidden preferred caption language follows the caption mode and is
+      // append-only so older storage positions never shift.
+      _safeRead(_preferredCaptionLanguageKey),
     ]);
 
     bool canRestore(String key, int index) {
@@ -1264,6 +1320,22 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
     if (canRestore(_offlineDownloadsEnabledKey, 57)) {
       restored = restored.copyWith(
         offlineDownloadsEnabled: valueAt(57) != 'false',
+      );
+    }
+    if (canRestore(_preferredCaptionsKey, 58)) {
+      restored = restored.copyWith(
+        preferredCaptionMode: _enumByName(
+          PreferredCaptionMode.values,
+          valueAt(58),
+          PreferredCaptionMode.automatic,
+        ),
+      );
+    }
+    if (canRestore(_preferredCaptionLanguageKey, 59)) {
+      restored = restored.copyWith(
+        preferredCaptionLanguage: _normalizePreferredCaptionLanguage(
+          valueAt(59),
+        ),
       );
     }
     if (restored.preferredPlayer == PreferredPlayer.external &&
@@ -1626,6 +1698,33 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
     {_preferredAudioKey: value.name},
   );
 
+  Future<void> setPreferredCaptionMode(PreferredCaptionMode value) => _update(
+    state.copyWith(preferredCaptionMode: value),
+    {_preferredCaptionsKey: value.name},
+  );
+
+  /// Persists a manual player caption choice as one ordered state mutation.
+  ///
+  /// The language is intentionally hidden from Settings UI. It lets private
+  /// and non-catalog playback retain the viewer's most recent safe language
+  /// code while the visible Preferred CC control remains Automatic/On/Off.
+  Future<void> setPreferredCaptionSelection({
+    required PreferredCaptionMode mode,
+    required String language,
+  }) {
+    final normalizedLanguage = _normalizePreferredCaptionLanguage(language);
+    return _update(
+      state.copyWith(
+        preferredCaptionMode: mode,
+        preferredCaptionLanguage: normalizedLanguage,
+      ),
+      {
+        _preferredCaptionsKey: mode.name,
+        _preferredCaptionLanguageKey: normalizedLanguage,
+      },
+    );
+  }
+
   Future<void> setDebridStreamSort(DebridStreamSort value) => _update(
     state.copyWith(debridStreamSort: value),
     {_debridStreamSortKey: value.name},
@@ -1922,6 +2021,8 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
       _seekForwardSecondsKey,
       _preferredPlayerKey,
       _preferredAudioKey,
+      _preferredCaptionsKey,
+      _preferredCaptionLanguageKey,
       _showFillerIndicatorsKey,
       _externalPlayerEnabledKey,
       _externalPlayerPackageKey,
@@ -1941,6 +2042,8 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
       seekForwardSeconds: defaults.seekForwardSeconds,
       preferredPlayer: defaults.preferredPlayer,
       preferredAudio: defaults.preferredAudio,
+      preferredCaptionMode: defaults.preferredCaptionMode,
+      preferredCaptionLanguage: defaults.preferredCaptionLanguage,
       showFillerIndicators: defaults.showFillerIndicators,
       showTitleStyle: defaults.showTitleStyle,
       externalPlayerEnabled: defaults.externalPlayerEnabled,
@@ -2007,6 +2110,11 @@ int _seekValue(String? value) {
 
 T _enumByName<T extends Enum>(List<T> values, String? name, T fallback) =>
     values.where((value) => value.name == name).firstOrNull ?? fallback;
+
+String _normalizePreferredCaptionLanguage(String? value) {
+  final normalized = value?.trim().toLowerCase() ?? '';
+  return RegExp(r'^[a-z]{2,3}$').hasMatch(normalized) ? normalized : 'eng';
+}
 
 String _encodeEnumPriority<T extends Enum>(Iterable<T> values) =>
     values.map((value) => value.name).join(',');

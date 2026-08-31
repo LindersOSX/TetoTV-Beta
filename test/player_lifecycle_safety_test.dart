@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:anime_tv/features/player/presentation/player_failover_coordinator.dart';
 
 void main() {
   final source = File(
@@ -374,7 +375,7 @@ void main() {
 
       final tracking = method(
         'Future<void> _syncProgress',
-        'Future<void> _openMedia',
+        'Future<bool> _openMedia',
       );
       expect(tracking, contains('if (!_animeFeaturesEnabled'));
 
@@ -472,17 +473,352 @@ void main() {
     expect(privateSafePrefix, isNot(contains('preferredReleaseGroup:')));
   });
 
-  test(
-    'automatic subtitle selection becomes final only after MPV accepts it',
-    () {
-      final selection = method(
-        'Future<void> _selectPreferredTracks',
-        'void _applyAutomaticSubtitleDefaultForRelease',
+  test('generic preference saves preserve explicit caption intent', () {
+    final savePreferences = method(
+      'Future<void> _saveSeriesPreferences()',
+      'Future<void> _saveDecoderPreference()',
+    );
+
+    expect(savePreferences, isNot(contains('_player.state.track.subtitle')));
+    expect(savePreferences, isNot(contains('subtitleLanguage:')));
+    expect(savePreferences, isNot(contains('subtitleEnabled:')));
+    expect(savePreferences, isNot(contains('subtitlePreferenceSet:')));
+    expect(savePreferences, contains('subtitleSize: _subtitleSize'));
+    expect(savePreferences, contains('subtitlePosition: _subtitlePosition'));
+    expect(savePreferences, contains('subtitleDelayMs: _subtitleDelayMs'));
+    expect(
+      savePreferences,
+      contains('_database.saveSeriesPreferences(mediaId, _seriesPreferences)'),
+    );
+  });
+
+  test('every settled media open safely reapplies the caption preference', () {
+    final openCurrentMedia = method(
+      'Future<int?> _openCurrentMedia',
+      'Future<bool> _openMedia',
+    );
+    expectInOrder(openCurrentMedia, [
+      '_preferredAudioSelected = false',
+      '_preferredSubtitleSelected = false',
+      'await _tracksSubscription?.cancel()',
+      'await _player.open(',
+      '_mediaOpenInProgress = false',
+      '_player.stream.tracks.listen(',
+      'await _selectPreferredTracks(_player.state.tracks)',
+    ]);
+
+    final changedTracks = method(
+      'void _onTracksChanged',
+      'Future<void> _applyPreferredAudio',
+    );
+    expect(changedTracks, contains('_player.state.tracks'));
+    expect(changedTracks, isNot(contains('Tracks tracks')));
+    expect(
+      changedTracks,
+      contains('mediaRevision != _mediaOpenRevision'),
+      reason: 'queued events from an old episode cannot select its track IDs',
+    );
+
+    final subtitleSelection = method(
+      'Future<void> _applyPreferredSubtitle',
+      'Future<void> _selectPreferredTracks',
+    );
+    expect(subtitleSelection, contains('_mediaOpenInProgress'));
+    expect(
+      subtitleSelection,
+      contains(
+        'final mediaRevision = expectedMediaRevision ?? _mediaOpenRevision',
+      ),
+    );
+    expect(
+      subtitleSelection,
+      contains('if (!_seriesPreferences.subtitleEnabled)'),
+    );
+    expect(subtitleSelection, contains('SubtitleTrack.no()'));
+    expect(
+      subtitleSelection,
+      contains("_player.state.track.subtitle.id == 'no'"),
+      reason:
+          'a wrong-language default is disabled without locking out a late matching track',
+    );
+    expectInOrder(subtitleSelection, [
+      'if (mediaRevision != _mediaOpenRevision || _mediaOpenInProgress)',
+      'await _player.setSubtitleTrack(',
+      'if (mediaRevision != _mediaOpenRevision',
+      '_preferredSubtitleSelected = true',
+    ]);
+
+    final externalSubtitleRegistration = method(
+      'Future<void> _applySubtitle({',
+      'Future<void> _persistPlayback',
+    );
+    expect(
+      externalSubtitleRegistration,
+      contains('expectedMediaRevision: expectedMediaRevision'),
+      reason:
+          'external captions are published after Player.open, so preference '
+          'selection must be retried after registration',
+    );
+    expect(
+      externalSubtitleRegistration,
+      contains('bool revisionIsActive()'),
+      reason: 'a superseded media open cannot attach its sidecar to the next',
+    );
+    expect(
+      externalSubtitleRegistration,
+      contains('expectedStream.externalSubtitleLanguage'),
+    );
+    expect(
+      externalSubtitleRegistration,
+      isNot(contains('language: _seriesPreferences.subtitleLanguage')),
+      reason:
+          'unknown sidecars must not be relabeled as the requested language',
+    );
+    expect(
+      externalSubtitleRegistration,
+      isNot(contains('widget.subtitle')),
+      reason:
+          'a failover stream without a sidecar must not inherit the initial '
+          'route subtitle',
+    );
+    expect(
+      externalSubtitleRegistration,
+      contains('shouldKeepRegisteredExternalCaption('),
+      reason:
+          'explicit and globally remembered languages cannot be replaced by '
+          'a mismatched sidecar',
+    );
+    expect(
+      externalSubtitleRegistration,
+      contains('.preferredCaptionMode'),
+      reason: 'only Automatic may retain an unknown provider sidecar',
+    );
+  });
+
+  test('superseded opens cannot adopt or publish an obsolete source', () {
+    final openMedia = method(
+      'Future<bool> _openMedia',
+      'Future<void> _trackPlayerMutation',
+    );
+    expect(openMedia, contains('_serializeMediaOpen('));
+    expect(openMedia, contains('final expectedStream = _currentStream'));
+    expect(openMedia, contains('final expectedSource = _source'));
+    expect(openMedia, contains('playerMediaOpenCanCommit('));
+    expectInOrder(openMedia, [
+      'if (!attemptIsActive()) return',
+      '_recordDiagnosticStreamOpenResult(',
+      'opened = true',
+      'return opened',
+    ]);
+
+    for (final adoption in <String>[
+      'await widget.onStreamAdopted(ready, candidate)',
+      'await widget.onStreamAdopted(option.stream, option.release)',
+    ]) {
+      final adoptionOffset = source.indexOf(adoption);
+      expect(adoptionOffset, greaterThanOrEqualTo(0));
+      final beforeAdoption = source.substring(0, adoptionOffset);
+      final gateOffset = beforeAdoption.lastIndexOf('if (!opened ||');
+      expect(
+        gateOffset,
+        greaterThanOrEqualTo(0),
+        reason: '$adoption must be guarded by the active open result',
       );
-      expectInOrder(selection, [
-        'await _player.setSubtitleTrack(preferred)',
-        '_preferredSubtitleSelected = true',
-      ]);
+      final gate = source.substring(gateOffset, adoptionOffset);
+      expect(gate, contains('!failoverIsActive()'));
+      expect(gate, contains('identical(_currentStream,'));
+      expect(adoptionOffset - gateOffset, lessThan(1500));
+    }
+  });
+
+  test('manual source selection cancels an in-flight automatic failover', () {
+    expect(source, contains('int _sourceSelectionGeneration = 0'));
+    expect(source, contains('bool _manualSourceSelectionInProgress = false'));
+    final automatic = method(
+      'Future<void> _tryNextStream',
+      'Future<bool> _switchToNextDirectStream',
+    );
+    expectInOrder(automatic, [
+      'final failoverGeneration = ++_sourceSelectionGeneration',
+      'bool failoverIsActive()',
+      'playerFailoverGenerationIsActive(',
+      'expectedSourceGeneration: failoverGeneration',
+    ]);
+    expect(automatic, contains('_manualSourceSelectionInProgress'));
+
+    final directFailover = method(
+      'Future<bool> _switchToNextDirectStream',
+      'Future<void> _waitForInFlightDirectDiscovery',
+    );
+    expectInOrder(directFailover, [
+      'required int expectedSourceGeneration',
+      'activeGeneration: _sourceSelectionGeneration',
+      'isActive: failoverIsActive',
+    ]);
+
+    final manual = method(
+      'Future<void> _openStreamSourcePicker()',
+      'Future<void> _openPlaybackMenu()',
+    );
+    expectInOrder(manual, [
+      'final manualSelectionStartGeneration = _sourceSelectionGeneration',
+      'await _preflightDirectStream(selected)',
+      'manualSelectionStartGeneration != _sourceSelectionGeneration',
+      '_failingOver',
+      '_manualSourceSelectionInProgress = true',
+      'final manualSourceGeneration = ++_sourceSelectionGeneration',
+      '_currentStream = option.stream',
+      '_manualSourceSelectionInProgress = false',
+    ]);
+
+    expect(
+      playerFailoverGenerationIsActive(
+        expectedGeneration: 3,
+        activeGeneration: 3,
+        manualSourceSelectionInProgress: false,
+      ),
+      isTrue,
+    );
+    expect(
+      playerFailoverGenerationIsActive(
+        expectedGeneration: 3,
+        activeGeneration: 3,
+        manualSourceSelectionInProgress: true,
+      ),
+      isFalse,
+    );
+    expect(
+      playerFailoverGenerationIsActive(
+        expectedGeneration: 3,
+        activeGeneration: 4,
+        manualSourceSelectionInProgress: false,
+      ),
+      isFalse,
+    );
+  });
+
+  test('every unadopted source candidate closes its playback lease', () {
+    final automatic = method(
+      'Future<void> _tryNextStream',
+      'Future<bool> _switchToNextDirectStream',
+    );
+    expectInOrder(automatic, [
+      'if (!opened ||',
+      'await ready.playbackLease?.close()',
+      'resolvedStream = null',
+    ]);
+
+    final directFailover = method(
+      'Future<bool> _switchToNextDirectStream',
+      'Future<void> _waitForInFlightDirectDiscovery',
+    );
+    expectInOrder(directFailover, [
+      'if (!opened ||',
+      'await option.stream.playbackLease?.close()',
+      'preparedOption = null',
+    ]);
+
+    final manual = method(
+      'Future<void> _openStreamSourcePicker()',
+      'Future<void> _openPlaybackMenu()',
+    );
+    expectInOrder(manual, [
+      'if (!opened || !identical(_currentStream, option.stream))',
+      'await option.stream.playbackLease?.close()',
+    ]);
+  });
+
+  test('manual caption choices persist only after MPV accepts them', () {
+    final picker = method(
+      'Future<void> _openSubtitleTrackPicker()',
+      'void _showTrackMessage',
+    );
+    expectInOrder(picker, [
+      'await _trackPlayerMutation(',
+      '_serializeMediaOpen(',
+      'await _player.setSubtitleTrack(selected)',
+      'if (!mounted || _engineHandoffInProgress)',
+      '_preferredSubtitleSelected = true',
+      'final selectedLanguage = canonicalPlayerTrackLanguage(',
+      '_seriesPreferences = _seriesPreferences.copyWith(',
+      'subtitleEnabled: selected.id != \'no\'',
+      'subtitlePreferenceSet: true',
+      'if (_catalogAnilistMediaId == null || !_seriesPreferencesReady)',
+      '.setPreferredCaptionSelection(',
+      'await _saveSeriesPreferences()',
+      '_invalidateNextEpisodePreparation()',
+    ]);
+  });
+
+  test('all automatic and manual track changes share the media-open queue', () {
+    final automatic = method(
+      'Future<void> _runTrackedTrackSelection',
+      'Future<void> _applyPreferredAudio',
+    );
+    expect(automatic, contains('_serializeMediaOpen('));
+    expect(automatic, contains('mediaRevision != _mediaOpenRevision'));
+
+    final audioPicker = method(
+      'Future<void> _openAudioTrackPicker()',
+      'Future<void> _skipCurrentSegment()',
+    );
+    expectInOrder(audioPicker, [
+      'final mediaRevision = _mediaOpenRevision',
+      '_serializeMediaOpen(',
+      'mediaRevision != _mediaOpenRevision',
+      'await _player.setAudioTrack(selected)',
+      'mediaRevision != _mediaOpenRevision',
+      '_preferredAudioSelected = true',
+    ]);
+
+    final captionPicker = method(
+      'Future<void> _openSubtitleTrackPicker()',
+      'void _showTrackMessage',
+    );
+    expectInOrder(captionPicker, [
+      'final mediaRevision = _mediaOpenRevision',
+      '_serializeMediaOpen(',
+      'mediaRevision != _mediaOpenRevision',
+      'await _player.setSubtitleTrack(selected)',
+      'mediaRevision != _mediaOpenRevision',
+      '_preferredSubtitleSelected = true',
+    ]);
+  });
+
+  test('global Preferred CC applies only without a per-series choice', () {
+    final defaults = method(
+      'void _applyCaptionDefaultForRelease',
+      'void _onPosition',
+    );
+    expectInOrder(defaults, [
+      'if (_seriesPreferences.subtitlePreferenceSet) return',
+      'final preferences = ref.read(settingsPreferencesProvider)',
+      'switch (preferences.preferredCaptionMode)',
+      'case PreferredCaptionMode.automatic:',
+      '_applyAutomaticSubtitleDefaultForRelease(release)',
+      'case PreferredCaptionMode.enabled:',
+      'subtitleLanguage: preferences.preferredCaptionLanguage',
+      'subtitleEnabled: true',
+      'case PreferredCaptionMode.disabled:',
+      'subtitleEnabled: false',
+    ]);
+    expect(
+      defaults,
+      isNot(contains('subtitlePreferenceSet: true')),
+      reason: 'a global default must never masquerade as a per-series choice',
+    );
+    expect(
+      RegExp(r'_applyCaptionDefaultForRelease\(').allMatches(source).length,
+      greaterThanOrEqualTo(5),
+      reason:
+          'bootstrap, fallback resolution, direct fallback, and manual source '
+          'selection must all preserve Preferred CC On/Off',
+    );
+  });
+
+  test(
+    'automatic subtitle defaults cannot replace an explicit caption choice',
+    () {
       final defaults = method(
         'void _applyAutomaticSubtitleDefaultForRelease',
         'void _onPosition',

@@ -221,6 +221,10 @@ extension _SettingsSectionMetadata on _SettingsSection {
     _SettingsSection.closedCaptions => const [
       'Closed captions',
       'Subtitles',
+      'Preferred CC',
+      'Caption default',
+      'Captions on',
+      'Captions off',
       'Text color',
       'Caption background',
       'Text size',
@@ -533,6 +537,9 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
   );
   final _closedCaptionsSectionFocus = FocusNode(
     debugLabel: 'accounts.section.closed-captions',
+  );
+  final _preferredCaptionsFocus = FocusNode(
+    debugLabel: 'accounts.captions.preference',
   );
   final _captionTextColorFocus = FocusNode(
     debugLabel: 'accounts.captions.text-color',
@@ -847,7 +854,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
         _SettingsSection.inputFeedback => _inputFeedbackSectionFocus,
         _SettingsSection.homeShelves => _firstHomeShelfFocusNode,
         _SettingsSection.navigation => _navigationSizeFocus,
-        _SettingsSection.closedCaptions => _captionTextColorFocus,
+        _SettingsSection.closedCaptions => _preferredCaptionsFocus,
         _SettingsSection.playerControls => _playerControlsSectionFocus,
         _SettingsSection.debridStreaming => _debridProviderFocus,
         _SettingsSection.sourcesStreamOrder => _debridStreamsFocus,
@@ -1011,6 +1018,10 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       'navigation size' => _navigationSizeFocus,
       'menu order' || 'settings placement' => _menuOrderFocus,
       'reset appearance and navigation' => _customizationResetFocus,
+      'preferred cc' ||
+      'caption default' ||
+      'captions on' ||
+      'captions off' => _preferredCaptionsFocus,
       'text color' => _captionTextColorFocus,
       'text size' => _captionTextSizeFocus,
       'default player' => _playerControlsSectionFocus,
@@ -1225,6 +1236,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     _inputFeedbackSectionFocus.dispose();
     _clickSoundsFocus.dispose();
     _closedCaptionsSectionFocus.dispose();
+    _preferredCaptionsFocus.dispose();
     _captionTextColorFocus.dispose();
     _captionTextSizeFocus.dispose();
     _playerControlsSectionFocus.dispose();
@@ -1404,6 +1416,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       _inputFeedbackSectionFocus,
       _clickSoundsFocus,
       _closedCaptionsSectionFocus,
+      _preferredCaptionsFocus,
       _captionTextColorFocus,
       _captionTextSizeFocus,
       _playerControlsSectionFocus,
@@ -1509,7 +1522,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
             ? activeSectionNodes.first
             : switch (_activeArea) {
                 _SettingsArea.appearance => _customizationFocus,
-                _SettingsArea.playback => _captionTextColorFocus,
+                _SettingsArea.playback => _preferredCaptionsFocus,
                 _SettingsArea.services => _debridProviderFocus,
                 _SettingsArea.accounts => _trackingProviderFocus,
                 _SettingsArea.system => _setupFocus,
@@ -1746,14 +1759,21 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
             _expandedCustomizationSections.contains(
               _CustomizationSection.closedCaptions,
             )
-            ? _captionTextColorFocus
+            ? _preferredCaptionsFocus
             : _playerControlsSectionFocus;
       }
-    } else if (current == _captionTextColorFocus) {
+    } else if (current == _preferredCaptionsFocus) {
       if (key == LogicalKeyboardKey.arrowUp) {
         target = _activeArea == _SettingsArea.playback
             ? _areaFocusNodes[_SettingsArea.playback]
             : _closedCaptionsSectionFocus;
+      }
+      if (key == LogicalKeyboardKey.arrowDown) {
+        target = _captionTextColorFocus;
+      }
+    } else if (current == _captionTextColorFocus) {
+      if (key == LogicalKeyboardKey.arrowUp) {
+        target = _preferredCaptionsFocus;
       }
     } else if (current == _captionTextSizeFocus) {
       if (key == LogicalKeyboardKey.arrowDown && tvListLayout) {
@@ -1767,7 +1787,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
           _CustomizationSection.closedCaptions,
         )) {
           target = _activeArea == _SettingsArea.playback
-              ? _captionTextColorFocus
+              ? _preferredCaptionsFocus
               : _closedCaptionsSectionFocus;
         }
       }
@@ -2463,6 +2483,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       topNavigationRowFocusNodes: _topNavigationRowFocusNodes,
       inputFeedbackSectionFocusNode: _inputFeedbackSectionFocus,
       closedCaptionsSectionFocusNode: _closedCaptionsSectionFocus,
+      preferredCaptionsFocusNode: _preferredCaptionsFocus,
       captionTextColorFocusNode: _captionTextColorFocus,
       captionTextSizeFocusNode: _captionTextSizeFocus,
       playerControlsSectionFocusNode: _playerControlsSectionFocus,
@@ -5496,6 +5517,7 @@ class _CustomizationPanel extends StatelessWidget {
     required this.topNavigationRowFocusNodes,
     required this.inputFeedbackSectionFocusNode,
     required this.closedCaptionsSectionFocusNode,
+    required this.preferredCaptionsFocusNode,
     required this.captionTextColorFocusNode,
     required this.captionTextSizeFocusNode,
     required this.playerControlsSectionFocusNode,
@@ -5528,6 +5550,7 @@ class _CustomizationPanel extends StatelessWidget {
   final Map<TopNavigationDestination, FocusNode> topNavigationRowFocusNodes;
   final FocusNode inputFeedbackSectionFocusNode;
   final FocusNode closedCaptionsSectionFocusNode;
+  final FocusNode preferredCaptionsFocusNode;
   final FocusNode captionTextColorFocusNode;
   final FocusNode captionTextSizeFocusNode;
   final FocusNode playerControlsSectionFocusNode;
@@ -5832,7 +5855,7 @@ class _CustomizationPanel extends StatelessWidget {
                 ? 'CAPTION OPTIONS'
                 : 'CLOSED CAPTIONS',
             focusNode: closedCaptionsSectionFocusNode,
-            firstChildFocusNode: captionTextColorFocusNode,
+            firstChildFocusNode: preferredCaptionsFocusNode,
             expanded: expandedSections.contains(
               _CustomizationSection.closedCaptions,
             ),
@@ -5844,6 +5867,24 @@ class _CustomizationPanel extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const SizedBox(height: 6),
+                _AppearanceSelectionRow<PreferredCaptionMode>(
+                  key: const ValueKey('settings-preferred-cc'),
+                  label: 'Preferred CC',
+                  icon: Icons.closed_caption_rounded,
+                  value: preferences.preferredCaptionMode,
+                  valueLabel: preferences.preferredCaptionMode.displayName,
+                  focusNode: preferredCaptionsFocusNode,
+                  options: [
+                    for (final mode in PreferredCaptionMode.values)
+                      _SettingsOption(
+                        value: mode,
+                        label: mode.displayName,
+                        detail: mode.description,
+                      ),
+                  ],
+                  showDivider: true,
+                  onSelected: controller.setPreferredCaptionMode,
+                ),
                 _AppearanceSelectionRow<int>(
                   label: 'Text color',
                   icon: Icons.format_color_text_rounded,

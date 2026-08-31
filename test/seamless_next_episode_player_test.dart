@@ -638,9 +638,9 @@ void main() {
     _expectInOrder(failover, const [
       'final tokenService = ref.read(debridTokenServiceProvider)',
       'await AndroidTvBridge.instance.getDeviceProfile()',
-      'if (!mounted || _engineHandoffInProgress) return',
+      'if (!failoverIsActive()) return',
       'await _recordStreamFailureBestEffort(',
-      'if (!mounted || _engineHandoffInProgress) return',
+      'if (!failoverIsActive()) return',
       'await _switchToNextDirectStream(',
     ]);
 
@@ -915,7 +915,8 @@ void main() {
       'await widget.onStreamAdopted(option.stream, option.release)',
       'preparedOption = null',
       '} catch (error)',
-      'await preparedOption?.stream.playbackLease?.close()',
+      'final attemptStream = preparedOption?.stream',
+      'await attemptStream?.playbackLease?.close()',
     ]);
   });
 
@@ -928,7 +929,8 @@ void main() {
       'await _openMedia(',
       'await widget.onStreamAdopted(ready, candidate)',
       '} catch (error)',
-      'await resolvedStream?.playbackLease?.close()',
+      'final attemptStream = resolvedStream',
+      'await attemptStream.playbackLease?.close()',
       '_currentStream = previousStream',
     ]);
     expect(
@@ -960,18 +962,21 @@ void main() {
       'if (_videoFrameSeen) _recordDiagnosticWorkingOutcome()',
     ]);
 
-    final openMedia = _member(source, 'Future<void> _openMedia(');
+    final openMedia = _member(source, 'Future<bool> _openMedia(');
     _expectInOrder(openMedia, const [
+      '_serializeMediaOpen(',
       '_videoWatchdog?.cancel()',
       '_performanceWatchdog?.cancel()',
       'if (requireDecodedVideo)',
       '_videoFrameSeen = false',
       'await _configureNativePlayback()',
+      'mediaRevision = await _openCurrentMedia(',
       'await waitForPlayerMediaReadiness(',
       'throw const PlayerMediaReadinessException()',
       '_recordDiagnosticStreamOpenResult(',
       'succeeded: true',
       '_startVideoWatchdog()',
+      'opened = true',
     ]);
 
     final bootstrap = _member(source, 'Future<void> _bootstrapPlayback()');

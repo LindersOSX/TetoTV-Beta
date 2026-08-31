@@ -78,6 +78,7 @@ TetoTV runs directly on the Android device with no companion server required for
 | --- | --- | --- |
 | Android TV and Google TV | Supported | Modern Layout is designed for D-pads and TV remotes. |
 | Amazon Fire TV / Fire OS | Supported | Fire OS 6 or newer; Fire OS 5 is not supported. |
+| Android phones and tablets | Supported | Portrait uses bottom navigation; landscape uses the TV-style left rail. |
 | Standalone use | Supported | No PC app or companion server is required for normal browsing and playback. |
 | User-supplied extensions | Optional | No extension or catalog is bundled, recommended, or endorsed. Compatibility depends on the service the user configures. |
 | AniList / MyAnimeList | Optional | Sync lists and progress, or use a local-only profile. |
@@ -100,9 +101,11 @@ TetoTV runs directly on the Android device with no companion server required for
 
 The Public updater repository intentionally has no release while the Public build is held for review. Existing Beta installations continue to update from the Beta repository. Android never permits an in-place install of an APK with a lower build code; Developer Mode does not bypass that platform rule.
 
-## Android TV / Fire TV
+## Android TV, Google TV, Fire TV, phones, and tablets
 
 TetoTV's Modern Layout is built around visible focus, predictable D-pad movement, large-screen spacing, and a reliable path back to navigation. Google TV devices use the Android TV build. Android phones use the same theme and features with a bottom navigation bar in portrait and a left rail in landscape.
+
+The phone and tablet layouts are part of the same Android app and use the same accounts, profiles, playback, tracking, downloads, and Watch Party features as the TV layout, adapted for touch and smaller screens.
 
 The current universal APK supports:
 

@@ -377,6 +377,21 @@ void main() {
       await tester.pump();
       expect(themeHeaderFocus.hasFocus, isTrue);
 
+      // Expanded section headers are part of the same linear TV list.  UP
+      // from Home screen must return to Theme & display's final row rather
+      // than skipping over it to the previous section header.
+      homeHeaderFocus.requestFocus();
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+      await tester.pump();
+      expect(
+        FocusManager.instance.primaryFocus?.debugLabel,
+        'accounts.show-title-style',
+      );
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pump();
+      expect(homeHeaderFocus.hasFocus, isTrue);
+
       toggleAllFocus.requestFocus();
       await tester.pump();
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
@@ -2003,8 +2018,9 @@ void main() {
     await tester.pumpAndSettle();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.settings-section.home-shelves',
-      reason: 'Up from a section header must select the previous header.',
+      'accounts.shelf.${HomeShelf.values.last.name}',
+      reason:
+          'UP from Navigation must select the final row of the expanded Home shelves section.',
     );
     expect(tester.takeException(), isNull);
   });
@@ -2272,9 +2288,14 @@ void main() {
     await tester.pumpAndSettle();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.settings-section.device-support',
+      'accounts.system.diagnostics',
+      reason:
+          'UP from App updates must select the final row of the expanded Device & support section.',
     );
-    for (var index = 0; index < 6; index++) {
+    // The new linear graph lands on the final Device & support row above;
+    // three DOWN presses return to the update check row (section header,
+    // automatic updates, then check for updates).
+    for (var index = 0; index < 3; index++) {
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
       await tester.pumpAndSettle();
     }
@@ -2878,10 +2899,12 @@ void main() {
     await tester.pumpAndSettle();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.settings-section.debrid-streaming',
+      'accounts.debrid.connect',
+      reason:
+          'UP from Sources & stream order must select the final row of the expanded Debrid section.',
     );
 
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
     await tester.pumpAndSettle();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
@@ -3261,12 +3284,12 @@ void main() {
       }
       expect(
         FocusManager.instance.primaryFocus?.debugLabel,
-        'accounts.settings-section.debrid-streaming',
+        'accounts.torbox.save',
+        reason:
+            'UP from Sources & stream order should enter the final visible Debrid row.',
       );
-      for (var index = 0; index < 3; index++) {
-        await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
-        await tester.pumpAndSettle();
-      }
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+      await tester.pumpAndSettle();
       expect(
         FocusManager.instance.primaryFocus?.debugLabel,
         'accounts.torbox.token',

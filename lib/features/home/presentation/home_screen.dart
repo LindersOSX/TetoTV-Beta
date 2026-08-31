@@ -72,6 +72,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   bool _homeRefreshInProgress = false;
   bool _headerVisibleAtTop = true;
   bool _suppressNextNavigationHeroRestore = false;
+  bool _sponsoredHeroRestoreInFlight = false;
   bool? _lastUseSideNavigation;
   bool _lastContentWasHero = true;
   HomeShelf? _lastFocusedShelf;
@@ -304,14 +305,24 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     if (!mounted ||
         !ref.read(settingsPreferencesProvider).showHero ||
         !_scrollController.hasClients ||
-        _scrollController.offset <= .5) {
+        _scrollController.offset <= .5 ||
+        _sponsoredHeroRestoreInFlight) {
       return;
     }
-    await _scrollController.animateTo(
-      0,
-      duration: const Duration(milliseconds: 170),
-      curve: Curves.easeOutCubic,
-    );
+    // Rail, search, and profile focus callbacks can fire several times while
+    // a held D-pad key is moving. Coalesce those callbacks so each visit to
+    // the rail drives one scroll animation instead of restarting it every
+    // frame.
+    _sponsoredHeroRestoreInFlight = true;
+    try {
+      await _scrollController.animateTo(
+        0,
+        duration: const Duration(milliseconds: 170),
+        curve: Curves.easeOutCubic,
+      );
+    } finally {
+      _sponsoredHeroRestoreInFlight = false;
+    }
   }
 
   void _rememberShelfFocus(HomeShelf shelf, int column) {

@@ -201,7 +201,11 @@ class _HomeSideNavigationState extends ConsumerState<HomeSideNavigation> {
       _focusRecoveryScheduled = false;
       if (!mounted || !widget.autofocusActive) return;
       final primary = FocusManager.instance.primaryFocus;
-      if (primary != null && primary.context != null) return;
+      if (primary != null &&
+          primary.context?.mounted == true &&
+          primary.canRequestFocus) {
+        return;
+      }
       final destination = _activeFocusDestination;
       if (destination == null) {
         widget.onExitRight();

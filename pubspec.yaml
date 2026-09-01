@@ -4,7 +4,7 @@ publish_to: 'none'
 # Public and Beta artifacts built from the same source use one monotonically
 # increasing Android versionCode. The project default carries the Beta display
 # version; the Public universal APK overrides the build name to the 1.x line.
-version: 2.0.59+410036
+version: 2.0.60+410037
 
 environment:
   sdk: ^3.12.2

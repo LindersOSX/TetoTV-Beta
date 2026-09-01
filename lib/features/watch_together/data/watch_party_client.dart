@@ -1,5 +1,6 @@
 import 'package:anime_tv/features/watch_together/domain/watch_party_models.dart';
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 
 class WatchPartyClientException implements Exception {
   const WatchPartyClientException(this.code, {this.retryAfter});
@@ -56,6 +57,9 @@ class WatchPartyClient {
   void setPublicIdentity(WatchPartyPublicIdentity? identity) {
     _publicIdentity = identity;
   }
+
+  @visibleForTesting
+  WatchPartyPublicIdentity? get publicIdentityForTesting => _publicIdentity;
 
   Future<bool> health() async {
     final response = await _request(

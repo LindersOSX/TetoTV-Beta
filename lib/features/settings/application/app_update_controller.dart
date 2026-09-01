@@ -322,7 +322,15 @@ class GitHubAppReleaseSource implements AppReleaseSource {
         continue;
       }
       final tag = _optionalString(item['tag_name']);
-      if (tag == null || appVersionMajor(tag) != releaseMajor) continue;
+      // A repository can also publish companion artifacts under tags such as
+      // `v2.0.54-compliance`. Those are valid GitHub releases, but they are not
+      // installable app versions. Filter them before strict release parsing so
+      // one companion entry cannot make the complete history picker disappear.
+      if (tag == null ||
+          !RegExp(r'^v\d+\.\d+\.\d+$').hasMatch(tag) ||
+          appVersionMajor(tag) != releaseMajor) {
+        continue;
+      }
       releases.add(_parseCompletedRelease(item, deviceAbis));
     }
     _validateReleaseHistoryOrder(releases);

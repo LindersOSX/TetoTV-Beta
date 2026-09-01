@@ -514,7 +514,7 @@ void main() {
     );
 
     test(
-      'Beta history is repository-scoped and accepts either release flag',
+      'Beta history skips companion tags and accepts either release flag',
       () async {
         RequestOptions? request;
         final dio = _listMetadataDio((options) {
@@ -524,6 +524,11 @@ void main() {
               '2.0.5',
               repository: tetoTvBetaReleaseRepository,
               prerelease: false,
+            ),
+            _githubRelease(
+              '2.0.4-compliance',
+              repository: tetoTvBetaReleaseRepository,
+              prerelease: true,
             ),
             _githubRelease(
               '2.0.4',

@@ -2,15 +2,30 @@ import 'dart:async';
 
 import 'package:anime_tv/core/config/app_config.dart';
 import 'package:anime_tv/core/storage/tetotv_database.dart';
+import 'package:anime_tv/features/watch_together/application/watch_party_public_identity_provider.dart';
 import 'package:anime_tv/features/watch_together/data/watch_party_client.dart';
 import 'package:anime_tv/features/watch_together/domain/watch_party_models.dart';
 import 'package:anime_tv/features/watch_together/domain/watch_party_source_descriptor.dart';
 import 'package:anime_tv/features/watch_together/domain/watch_party_timeline.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-final watchPartyClientProvider = Provider<WatchPartyClient>(
-  (_) => WatchPartyClient(baseUrl: AppConfig.watchTogetherBaseUrl),
-);
+final watchPartyClientProvider = Provider<WatchPartyClient>((ref) {
+  final client = WatchPartyClient(baseUrl: AppConfig.watchTogetherBaseUrl);
+
+  // Watch Parties can be opened directly from an episode or the player, so
+  // the identity cannot be initialized only by WatchTogetherScreen. Keep the
+  // long-lived client synchronized at provider scope without rebuilding the
+  // controller (and disconnecting an active room) when tracker data finishes
+  // loading or the selected profile changes.
+  client.setPublicIdentity(ref.read(watchPartyPublicIdentityProvider));
+  ref.listen<WatchPartyPublicIdentity?>(watchPartyPublicIdentityProvider, (
+    _,
+    identity,
+  ) {
+    client.setPublicIdentity(identity);
+  });
+  return client;
+});
 
 final watchPartyControllerProvider =
     StateNotifierProvider<WatchPartyController, WatchPartyState>((ref) {

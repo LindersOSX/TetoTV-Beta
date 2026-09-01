@@ -51,6 +51,9 @@ void main() {
             message: 'Host controls transferred to Dana.',
           ),
         ]);
+      final themedAppTypography = AppTheme.dark.copyWith(
+        textTheme: AppTheme.dark.textTheme.apply(fontFamily: 'TetoTestSans'),
+      );
 
       await tester.pumpWidget(
         ProviderScope(
@@ -58,7 +61,7 @@ void main() {
             watchPartyControllerProvider.overrideWith((_) => controller),
           ],
           child: MaterialApp(
-            theme: AppTheme.dark,
+            theme: themedAppTypography,
             home: const MediaQuery(
               data: MediaQueryData(
                 size: Size(1280, 720),
@@ -117,14 +120,30 @@ void main() {
         find.byKey(const ValueKey('watch-party-membership-name-1')),
       );
       expect(emphasizedName.style?.fontWeight, FontWeight.w900);
-      expect(emphasizedName.style?.color, Colors.white);
+      expect(emphasizedName.style?.color, AppColors.textPrimary);
       expect(emphasizedName.style?.decoration, TextDecoration.none);
+      expect(
+        emphasizedName.style?.letterSpacing,
+        themedAppTypography.textTheme.labelLarge?.letterSpacing,
+      );
+      expect(
+        emphasizedName.style?.fontFamily,
+        themedAppTypography.textTheme.labelLarge?.fontFamily,
+      );
       for (var sequence = 1; sequence <= 4; sequence++) {
         final action = tester.widget<Text>(
           find.byKey(ValueKey('watch-party-membership-action-$sequence')),
         );
-        expect(action.style?.color, Colors.white);
+        expect(action.style?.color, AppColors.textPrimary);
         expect(action.style?.decoration, TextDecoration.none);
+        expect(
+          action.style?.letterSpacing,
+          themedAppTypography.textTheme.labelLarge?.letterSpacing,
+        );
+        expect(
+          action.style?.fontFamily,
+          themedAppTypography.textTheme.labelLarge?.fontFamily,
+        );
       }
       final liveRegion = tester.widget<Semantics>(
         find.byKey(const ValueKey('watch-party-membership-notice-1')),
@@ -142,10 +161,19 @@ void main() {
       expect(
         find.descendant(
           of: find.byKey(const ValueKey('watch-party-membership-avatar-2')),
-          matching: find.byType(ClipOval),
+          matching: find.byType(ClipRRect),
         ),
         findsOneWidget,
       );
+      final avatar = tester.widget<Container>(
+        find.byKey(const ValueKey('watch-party-membership-avatar-1')),
+      );
+      final avatarDecoration = avatar.decoration! as BoxDecoration;
+      final avatarForeground = avatar.foregroundDecoration! as BoxDecoration;
+      expect(avatarDecoration.shape, BoxShape.rectangle);
+      expect(avatarDecoration.borderRadius, BorderRadius.circular(9));
+      expect(avatarForeground.borderRadius, BorderRadius.circular(9));
+      expect(avatarForeground.border, isNotNull);
 
       final decoration = tester.widget<DecoratedBox>(
         find

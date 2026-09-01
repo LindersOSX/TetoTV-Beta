@@ -2,13 +2,61 @@ import 'dart:convert';
 
 import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
 import 'package:anime_tv/features/settings/application/tracking_accounts_controller.dart';
+import 'package:anime_tv/features/watch_together/application/watch_party_controller.dart';
 import 'package:anime_tv/features/watch_together/application/watch_party_public_identity_provider.dart';
 import 'package:anime_tv/features/watch_together/data/watch_party_client.dart';
 import 'package:anime_tv/features/watch_together/domain/watch_party_models.dart';
 import 'package:dio/dio.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test(
+    'provider keeps the Watch Party client identity current outside the lobby',
+    () async {
+      final identityState = StateProvider<WatchPartyPublicIdentity?>((_) {
+        return WatchPartyPublicIdentity.tryCreate(
+          displayName: 'AniList Host',
+          avatarUrl: 'https://img.anili.st/user/123/avatar.png',
+        );
+      });
+      final container = ProviderContainer(
+        overrides: [
+          watchPartyPublicIdentityProvider.overrideWith(
+            (ref) => ref.watch(identityState),
+          ),
+        ],
+      );
+      addTearDown(container.dispose);
+
+      final client = container.read(watchPartyClientProvider);
+      expect(client.publicIdentityForTesting?.toJson(), {
+        'display_name': 'AniList Host',
+        'avatar_url': 'https://img.anili.st/user/123/avatar.png',
+      });
+
+      container
+          .read(identityState.notifier)
+          .state = WatchPartyPublicIdentity.tryCreate(
+        displayName: 'MAL Guest',
+        avatarUrl:
+            'https://api-cdn.myanimelist.net/images/userimages/456.jpg?t=1725123456',
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      expect(
+        identical(container.read(watchPartyClientProvider), client),
+        isTrue,
+        reason: 'an active room must not lose its long-lived client',
+      );
+      expect(client.publicIdentityForTesting?.toJson(), {
+        'display_name': 'MAL Guest',
+        'avatar_url':
+            'https://api-cdn.myanimelist.net/images/userimages/456.jpg',
+      });
+    },
+  );
+
   test('public identity keeps only a bounded name and allowlisted avatar', () {
     final identity = WatchPartyPublicIdentity.tryCreate(
       displayName: '  Teto   Fan  ',

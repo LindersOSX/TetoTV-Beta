@@ -6,12 +6,95 @@ import 'package:anime_tv/features/settings/application/settings_preferences_cont
 import 'package:anime_tv/features/settings/application/tracking_accounts_controller.dart';
 import 'package:anime_tv/features/settings/presentation/accounts_screen.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 
 void main() {
+  testWidgets('controller Back closes the profile menu without leaving Home', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1280, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final router = GoRouter(
+      routes: [
+        GoRoute(
+          path: '/',
+          builder: (context, state) => const Scaffold(
+            body: Stack(
+              children: [
+                Text('Home', key: ValueKey('home-page')),
+                MainNavigationBar(
+                  active: MainNavigationDestination.home,
+                  preferences: SettingsPreferences(),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+    addTearDown(router.dispose);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          trackingAccountsControllerProvider.overrideWith(
+            (_) => _StaticTrackingAccountsController(
+              const TrackingAccountsState(
+                profiles: {
+                  TrackingProvider.anilist: TrackingAccountProfile(
+                    provider: TrackingProvider.anilist,
+                    username: 'TetoFan',
+                  ),
+                },
+              ),
+            ),
+          ),
+        ],
+        child: MaterialApp.router(routerConfig: router),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final profile = find.byKey(const ValueKey('main-nav-profile-summary'));
+    final menu = find.byKey(const ValueKey('main-nav-profile-menu-surface'));
+    await tester.tap(profile);
+    await tester.pumpAndSettle();
+    expect(menu, findsOneWidget);
+
+    await tester.sendKeyDownEvent(
+      LogicalKeyboardKey.goBack,
+      physicalKey: PhysicalKeyboardKey.escape,
+    );
+    await tester.pump();
+    expect(menu, findsOneWidget);
+
+    await tester.sendKeyUpEvent(
+      LogicalKeyboardKey.goBack,
+      physicalKey: PhysicalKeyboardKey.escape,
+    );
+    await tester.pumpAndSettle();
+    expect(menu, findsNothing);
+    expect(find.byKey(const ValueKey('home-page')), findsOneWidget);
+    expect(router.routeInformationProvider.value.uri.path, '/');
+
+    await tester.tap(profile);
+    await tester.pumpAndSettle();
+    expect(menu, findsOneWidget);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(menu, findsNothing);
+    expect(find.byKey(const ValueKey('home-page')), findsOneWidget);
+    expect(router.routeInformationProvider.value.uri.path, '/');
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('profile menu opens the tracker profile settings entry point', (
     tester,
   ) async {

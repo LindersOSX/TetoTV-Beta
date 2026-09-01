@@ -1655,15 +1655,27 @@ class _ProfileMenuOverlay extends StatelessWidget {
     FocusNode _,
     KeyEvent event,
   ) {
-    if (event is! KeyDownEvent) return KeyEventResult.ignored;
     final key = event.logicalKey;
-    if (key != LogicalKeyboardKey.arrowLeft &&
-        key != LogicalKeyboardKey.escape &&
-        key != LogicalKeyboardKey.goBack &&
-        key != LogicalKeyboardKey.browserBack) {
+    final isLeft = key == LogicalKeyboardKey.arrowLeft;
+    final isBack =
+        key == LogicalKeyboardKey.escape ||
+        key == LogicalKeyboardKey.goBack ||
+        key == LogicalKeyboardKey.browserBack;
+    if (!isLeft && !isBack) {
       return KeyEventResult.ignored;
     }
-    Navigator.of(context).pop();
+
+    // A TV remote sends Back as a down/up pair. Removing this route on the
+    // down packet lets the matching up packet reach the page underneath and
+    // some Android devices reinterpret it as another app-level Back, closing
+    // TetoTV. Consume the complete pair and dismiss only while handling the
+    // key-up packet so Home remains open.
+    if (isBack) {
+      if (event is KeyUpEvent) Navigator.of(context).pop();
+      return KeyEventResult.handled;
+    }
+
+    if (event is KeyDownEvent) Navigator.of(context).pop();
     return KeyEventResult.handled;
   }
 

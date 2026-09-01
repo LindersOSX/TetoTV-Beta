@@ -11,6 +11,7 @@ class EpisodeReference {
     this.alternativeTitles = const [],
     this.titleEnglish,
     this.titleRomaji,
+    this.titleNative,
     this.status,
     this.format,
     this.episodeCount,
@@ -29,6 +30,7 @@ class EpisodeReference {
   final List<String> alternativeTitles;
   final String? titleEnglish;
   final String? titleRomaji;
+  final String? titleNative;
   final String? status;
   final String? format;
   final int? episodeCount;

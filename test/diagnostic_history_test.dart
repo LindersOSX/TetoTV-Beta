@@ -505,6 +505,63 @@ void main() {
     expect(failed.consecutiveFailures, 1);
   });
 
+  test(
+    'healthy discovery clears transient failures without changing last good',
+    () async {
+      final database = await databaseFactoryFfi.openDatabase(
+        inMemoryDatabasePath,
+      );
+      addTearDown(database.close);
+      await database.execute('''
+      CREATE TABLE provider_health (
+        provider_id TEXT PRIMARY KEY,
+        consecutive_failures INTEGER NOT NULL DEFAULT 0,
+        total_failures INTEGER NOT NULL DEFAULT 0,
+        last_success_at INTEGER,
+        last_failure_at INTEGER,
+        last_error TEXT,
+        last_failure_stage TEXT,
+        last_failure_reason TEXT,
+        quarantined_until INTEGER,
+        compatibility_tests INTEGER NOT NULL DEFAULT 0,
+        compatibility_passes INTEGER NOT NULL DEFAULT 0,
+        last_tested_at INTEGER,
+        last_test_stage TEXT,
+        last_test_reason TEXT
+      )
+    ''');
+      final store = TetoTvDatabase.forTesting(database);
+
+      await store.recordProviderFailure(
+        'discovery-only',
+        StateError('network failed'),
+        stage: 'search',
+        reason: 'network',
+      );
+      await store.recordProviderHealthyResponse('discovery-only');
+      final discoveryOnly = (await store.providerHealth())['discovery-only']!;
+      expect(discoveryOnly.consecutiveFailures, 0);
+      expect(discoveryOnly.totalFailures, 1);
+      expect(discoveryOnly.lastError, isNull);
+      expect(discoveryOnly.lastFailureStage, isNull);
+      expect(discoveryOnly.lastFailureReason, isNull);
+      expect(discoveryOnly.quarantinedUntil, isNull);
+      expect(
+        discoveryOnly.lastSuccessAt,
+        isNull,
+        reason: 'a search hit is not a selected/played provider',
+      );
+
+      await store.recordProviderSuccess('selected');
+      final selected = (await store.providerHealth())['selected']!;
+      expect(
+        selected.lastSuccessAt,
+        isNotNull,
+        reason: 'validated playback owns last-good affinity',
+      );
+    },
+  );
+
   test('inconclusive retests preserve the last conclusive score', () async {
     final database = await databaseFactoryFfi.openDatabase(
       inMemoryDatabasePath,

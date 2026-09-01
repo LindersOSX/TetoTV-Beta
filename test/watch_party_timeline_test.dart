@@ -133,12 +133,15 @@ void main() {
     final media = WatchPartyMedia(
       kind: 'anilist',
       title: 'Frieren',
+      titleNative: '葬送のフリーレン',
       anilistId: 154587,
       episode: 2,
       timelineProfile: timeline,
     );
 
-    expect(WatchPartyMedia.fromJson(media.toJson()).timelineProfile, timeline);
+    final restored = WatchPartyMedia.fromJson(media.toJson());
+    expect(restored.timelineProfile, timeline);
+    expect(restored.titleNative, '葬送のフリーレン');
   });
 
   test('malformed or capability-shaped profiles fail closed', () {

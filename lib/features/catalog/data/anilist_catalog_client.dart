@@ -77,7 +77,7 @@ class AniListCatalogClient {
           media(type: ANIME, sort: TRENDING_DESC, isAdult: false) {
             id
             idMal
-            title { userPreferred english romaji }
+            title { userPreferred english romaji native }
             description(asHtml: false)
             episodes
             averageScore
@@ -145,7 +145,7 @@ class AniListCatalogClient {
           ) {
             id
             idMal
-            title { userPreferred english romaji }
+            title { userPreferred english romaji native }
             description(asHtml: false)
             episodes
             averageScore
@@ -199,7 +199,7 @@ class AniListCatalogClient {
           ) {
             id
             idMal
-            title { userPreferred english romaji }
+            title { userPreferred english romaji native }
             description(asHtml: false)
             episodes
             averageScore
@@ -243,7 +243,7 @@ class AniListCatalogClient {
         Media(id: $id, type: ANIME) {
           id
           idMal
-          title { userPreferred english romaji }
+          title { userPreferred english romaji native }
           description(asHtml: false)
           episodes
           averageScore
@@ -279,7 +279,7 @@ class AniListCatalogClient {
                 id
                 idMal
                 type
-                title { userPreferred english romaji }
+                title { userPreferred english romaji native }
                 description(asHtml: false)
                 episodes
                 averageScore
@@ -353,7 +353,7 @@ class AniListCatalogClient {
             status: $status, season: $season, seasonYear: $year,
             averageScore_greater: $minimumScore, sort: $sort
           ) {
-            id idMal title { userPreferred english romaji }
+            id idMal title { userPreferred english romaji native }
             description(asHtml: false) episodes averageScore genres
             coverImage { extraLarge } bannerImage format status season
             seasonYear duration synonyms isAdult nextAiringEpisode { episode }
@@ -445,7 +445,7 @@ class AniListCatalogClient {
           ) {
             episode airingAt
             media {
-              id idMal title { userPreferred english romaji }
+              id idMal title { userPreferred english romaji native }
               description(asHtml: false) episodes averageScore genres
               coverImage { extraLarge } bannerImage format status season
               seasonYear duration synonyms isAdult nextAiringEpisode { episode }
@@ -506,7 +506,7 @@ class AniListCatalogClient {
         Studio(id: $id) {
           media(page: 1, perPage: 30, sort: POPULARITY_DESC, isMain: true) {
             nodes {
-              id idMal title { userPreferred english romaji }
+              id idMal title { userPreferred english romaji native }
               description(asHtml: false) episodes averageScore genres
               coverImage { extraLarge } bannerImage format status season
               seasonYear duration synonyms isAdult nextAiringEpisode { episode }
@@ -536,7 +536,7 @@ class AniListCatalogClient {
         Staff(id: $id) {
           staffMedia(page: 1, perPage: 30, type: ANIME, sort: POPULARITY_DESC) {
             nodes {
-              id idMal title { userPreferred english romaji }
+              id idMal title { userPreferred english romaji native }
               description(asHtml: false) episodes averageScore genres
               coverImage { extraLarge } bannerImage format status season
               seasonYear duration synonyms isAdult nextAiringEpisode { episode }
@@ -1032,6 +1032,7 @@ class AniListCatalogClient {
       title: title,
       titleEnglish: resource['title_english']?.toString().trim(),
       titleRomaji: resource['title']?.toString().trim(),
+      titleNative: resource['title_japanese']?.toString().trim(),
       description: '',
       episodes: null,
       score: null,
@@ -1148,6 +1149,10 @@ class AniListCatalogClient {
           ? mapped.titleEnglish
           : englishTitle,
       titleRomaji: mapped.titleRomaji,
+      titleNative:
+          resource['title_japanese']?.toString().trim().isNotEmpty == true
+          ? resource['title_japanese']!.toString().trim()
+          : mapped.titleNative,
       description: synopsis.isEmpty ? mapped.description : synopsis,
       episodes: _integer(resource['episodes']) ?? mapped.episodes,
       score: (resource['score'] as num?)?.toDouble() ?? mapped.score,
@@ -1680,6 +1685,7 @@ class AniListCatalogClient {
     final trailer = item['trailer'] as Map<String, dynamic>?;
     final titleEnglish = title?['english'] as String?;
     final titleRomaji = title?['romaji'] as String?;
+    final titleNative = title?['native'] as String?;
     final userPreferred = title?['userPreferred'] as String?;
     final studios = _mapStudios(item['studios']);
     final staff = _mapStaff(item['staff']);
@@ -1692,9 +1698,15 @@ class AniListCatalogClient {
     return AnimeSummary(
       id: item['id'] as int,
       idMal: item['idMal'] as int?,
-      title: _firstTitle([titleEnglish, titleRomaji, userPreferred]),
+      title: _firstTitle([
+        titleEnglish,
+        titleRomaji,
+        titleNative,
+        userPreferred,
+      ]),
       titleEnglish: titleEnglish,
       titleRomaji: titleRomaji,
+      titleNative: titleNative,
       description: _plainText(item['description'] as String? ?? ''),
       episodes: item['episodes'] as int?,
       score: score == null ? null : score.toDouble() / 10,

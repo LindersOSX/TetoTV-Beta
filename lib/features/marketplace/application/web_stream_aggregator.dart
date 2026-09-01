@@ -10,8 +10,11 @@ import 'package:anime_tv/features/streaming/domain/episode_identity_guard.dart';
 import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-const defaultWebProviderDeadline = Duration(seconds: 20);
-const defaultMaxConcurrentWebProviders = 2;
+const defaultWebProviderDeadline = Duration(seconds: 12);
+const defaultWebProviderInteractiveBudget = Duration(seconds: 8);
+const defaultWebProviderBackgroundBudget = Duration(seconds: 45);
+const defaultMaxConcurrentWebProviders = 3;
+const defaultWebProviderCleanupBudget = Duration(seconds: 9);
 
 var _webProviderSearchDiagnosticSequence = 0;
 final String _webProviderSearchDiagnosticBootNonce = (() {
@@ -58,6 +61,10 @@ class WebStreamSearchProgress {
     this.totalProviders = 0,
     this.pendingProviderNames = const [],
     this.diagnosticSessionId = '',
+    this.foregroundComplete = false,
+    this.activeProviders = 0,
+    this.queuedProviders = 0,
+    this.elapsed = Duration.zero,
   });
 
   final WebStreamAggregation aggregation;
@@ -65,8 +72,16 @@ class WebStreamSearchProgress {
   final int totalProviders;
   final List<String> pendingProviderNames;
   final String diagnosticSessionId;
+  final int activeProviders;
+  final int queuedProviders;
+  final Duration elapsed;
+
+  /// The interactive wait budget elapsed, so the picker may leave its
+  /// blocking shell while the pending providers continue in the background.
+  final bool foregroundComplete;
 
   bool get isComplete => completedProviders >= totalProviders;
+  bool get isForegroundComplete => foregroundComplete || isComplete;
 }
 
 class WebStreamAggregator {
@@ -74,12 +89,18 @@ class WebStreamAggregator {
     this._store, {
     this.providerDeadline = defaultWebProviderDeadline,
     this.maxConcurrentProviders = defaultMaxConcurrentWebProviders,
+    this.interactiveBudget = defaultWebProviderInteractiveBudget,
+    this.backgroundBudget = defaultWebProviderBackgroundBudget,
+    this.cleanupBudget = defaultWebProviderCleanupBudget,
     this.sharedSessionGrace = const Duration(seconds: 2),
   });
 
   final AddonStore _store;
   final Duration providerDeadline;
   final int maxConcurrentProviders;
+  final Duration interactiveBudget;
+  final Duration backgroundBudget;
+  final Duration cleanupBudget;
   final Duration sharedSessionGrace;
   final Map<String, _SharedWebSearchSession> _sharedSessions = {};
 
@@ -190,10 +211,104 @@ class WebStreamAggregator {
 
   Stream<WebStreamSearchProgress> searchIncrementally(
     EpisodeReference episode,
+  ) => _searchIncrementally(episode);
+
+  /// Explicitly retries only the requested installed providers. The retry
+  /// replaces the completed shared episode snapshot with a merged session, so
+  /// successful results already on screen stay usable and a later resolver or
+  /// player route cannot replay stale pre-retry failures.
+  ///
+  /// A user-requested retry may make one background attempt for a provider
+  /// that was temporarily deprioritized after repeated transient failures.
+  /// Permanent runtime and network-safety incompatibilities remain blocked.
+  Stream<WebStreamSearchProgress> retryProvidersIncrementally(
+    EpisodeReference episode,
+    Iterable<String> providerIds,
+  ) {
+    final selected = _normalizedWebProviderIds(providerIds);
+    final key = _episodeSearchKey(episode);
+    final existing = _sharedSessions[key];
+    if (selected.isEmpty || (existing != null && !existing.isComplete)) {
+      return existing?.stream ??
+          Stream.value(const WebStreamSearchProgress(foregroundComplete: true));
+    }
+    final base =
+        existing?.latest ??
+        const WebStreamSearchProgress(foregroundComplete: true);
+    final replacement = _SharedWebSearchSession(
+      zeroListenerGrace: sharedSessionGrace,
+    );
+    replacement.prepare();
+    _sharedSessions[key] = replacement;
+    final retry = _searchIncrementally(
+      episode,
+      onlyProviderIds: selected,
+      retryTemporarilyDeprioritized: true,
+    );
+    unawaited(
+      replacement
+          .run(_mergeRetryProgress(base, retry, selected))
+          .whenComplete(_pruneSessions),
+    );
+    return replacement.stream;
+  }
+
+  Stream<WebStreamSearchProgress> _mergeRetryProgress(
+    WebStreamSearchProgress base,
+    Stream<WebStreamSearchProgress> retry,
+    Set<String> selected,
   ) async* {
+    // Keep the last complete episode snapshot available while the selective
+    // retry initializes. If setup fails before the retry can emit progress, a
+    // later route attachment must still see the already-working providers.
+    yield base;
+    await for (final progress in retry) {
+      final totalProviders = base.totalProviders > 0
+          ? base.totalProviders
+          : progress.totalProviders;
+      final completedProviders = base.totalProviders > 0
+          ? (base.completedProviders -
+                    progress.totalProviders +
+                    progress.completedProviders)
+                .clamp(0, totalProviders)
+          : progress.completedProviders;
+      yield WebStreamSearchProgress(
+        aggregation: mergeRetriedWebProviderAggregation(
+          current: base.aggregation,
+          retry: progress.aggregation,
+          retriedProviderIds: selected,
+        ),
+        completedProviders: completedProviders,
+        totalProviders: totalProviders,
+        pendingProviderNames: progress.pendingProviderNames,
+        diagnosticSessionId: progress.diagnosticSessionId,
+        foregroundComplete:
+            base.isForegroundComplete || progress.foregroundComplete,
+        activeProviders: progress.activeProviders,
+        queuedProviders: progress.queuedProviders,
+        elapsed: progress.elapsed,
+      );
+    }
+  }
+
+  Stream<WebStreamSearchProgress> _searchIncrementally(
+    EpisodeReference episode, {
+    Set<String>? onlyProviderIds,
+    bool retryTemporarilyDeprioritized = false,
+  }) async* {
+    final searchStopwatch = Stopwatch()..start();
     final diagnosticSessionId = nextWebProviderSearchDiagnosticSessionId();
     final health = await _store.providerHealth();
-    final installedAddons = await _store.installedAddons();
+    final allInstalledAddons = await _store.installedAddons();
+    final installedAddons = onlyProviderIds == null
+        ? allInstalledAddons
+        : allInstalledAddons
+              .where(
+                (addon) => onlyProviderIds.contains(
+                  addon.manifest.id.trim().toLowerCase(),
+                ),
+              )
+              .toList(growable: false);
     final enabledAddons = installedAddons
         .where((addon) => addon.enabled)
         .toList(growable: false);
@@ -202,10 +317,15 @@ class WebStreamAggregator {
     var blockedProviders = 0;
     for (final addon in enabledAddons) {
       final provider = SeanimeJavascriptProvider(addon);
-      final failure = installedWebProviderAvailabilityFailure(
+      final availabilityFailure = installedWebProviderAvailabilityFailure(
         addon,
         health[addon.manifest.id],
       );
+      final failure =
+          retryTemporarilyDeprioritized &&
+              availabilityFailure?.status == WebProviderFailureStatus.paused
+          ? null
+          : availabilityFailure;
       if (failure == null) {
         searchable.add(addon);
         continue;
@@ -219,7 +339,7 @@ class WebStreamAggregator {
         stage: failure.stage ?? 'availability',
         reason: failure.reason ?? 'unavailable',
       );
-      if (failure.status == WebProviderFailureStatus.advisory) {
+      if (webProviderAvailabilityAllowsBackgroundSearch(failure)) {
         searchable.add(addon);
       } else {
         blockedProviders++;
@@ -238,6 +358,10 @@ class WebStreamAggregator {
         completedProviders: blockedProviders,
         returnedProviders: 0,
         returnedResults: 0,
+        elapsedMs: searchStopwatch.elapsedMilliseconds,
+        activeProviders: 0,
+        queuedProviders: providers.length,
+        pendingProviders: providers.length,
       ),
     );
     var recordedInitialProgress = false;
@@ -253,17 +377,13 @@ class WebStreamAggregator {
         episode,
         deadline: providerDeadline,
         maxConcurrentProviders: maxConcurrentProviders,
+        interactiveBudget: interactiveBudget,
+        backgroundBudget: backgroundBudget,
+        cleanupBudget: cleanupBudget,
         onSuccess: (provider, streams) async {
-          final hasStreams = streams.isNotEmpty;
-          if (hasStreams) await _store.recordProviderSuccess(provider.id);
-          _recordProviderSearchOutcome(
-            provider,
-            diagnosticSessionId: diagnosticSessionId,
-            status: hasStreams ? 'success' : 'no_match',
-            count: streams.length,
-            stage: 'complete',
-            reason: hasStreams ? 'streams_returned' : 'empty_result',
-          );
+          // Discovery proves the extension responded, but last-good affinity
+          // belongs to the source that passed preflight/started playback.
+          await _store.recordProviderHealthyResponse(provider.id);
         },
         onFailure: (provider, error, noMatch) async {
           final details = seanimeProviderFailureDetails(error);
@@ -275,7 +395,9 @@ class WebStreamAggregator {
               ? 'episode_identity_mismatch'
               : details?.reason ??
                     (error is TimeoutException ? 'timeout' : 'provider_error');
-          if (!noMatch) {
+          if (noMatch) {
+            await _store.recordProviderHealthyResponse(provider.id);
+          } else {
             final healthMessage = seanimeProviderFailureMessage(error);
             await _store.recordProviderFailure(
               provider.id,
@@ -284,30 +406,40 @@ class WebStreamAggregator {
               reason: reason,
             );
           }
+        },
+        onOutcome: (provider, outcome) {
           _recordProviderSearchOutcome(
             provider,
             diagnosticSessionId: diagnosticSessionId,
-            status: noMatch ? 'no_match' : 'failed',
-            count: 0,
-            stage: stage,
-            reason: reason,
+            status: outcome.status,
+            count: outcome.resultCount,
+            stage: outcome.stage,
+            reason: outcome.reason,
+            elapsedMs: outcome.elapsed.inMilliseconds,
+            queueMs: outcome.queuedFor.inMilliseconds,
           );
         },
       )) {
-        final providersWithRuntimeStatus = {
+        final providersWithRuntimeFailure = {
           for (final failure in progress.aggregation.failures)
             if (failure.providerId case final id?) id.trim().toLowerCase(),
         };
+        final providersWithRuntimeSuccess = progress.aggregation.streams
+            .map(webStreamProviderIdentity)
+            .toSet();
         final aggregation = mergeWebProviderOutcomes([
           (streams: progress.aggregation.streams, failure: null),
           for (final failure in [
-            ...availabilityFailures.where(
-              (failure) =>
-                  failure.status != WebProviderFailureStatus.advisory ||
-                  !providersWithRuntimeStatus.contains(
-                    failure.providerId?.trim().toLowerCase(),
-                  ),
-            ),
+            ...availabilityFailures.where((failure) {
+              final providerId = failure.providerId?.trim().toLowerCase();
+              if (providerId == null) return true;
+              if (failure.status == WebProviderFailureStatus.paused) {
+                return !providersWithRuntimeFailure.contains(providerId) &&
+                    !providersWithRuntimeSuccess.contains(providerId);
+              }
+              return failure.status != WebProviderFailureStatus.advisory ||
+                  !providersWithRuntimeFailure.contains(providerId);
+            }),
             ...progress.aggregation.failures,
           ])
             (streams: const <WebStreamResult>[], failure: failure),
@@ -339,6 +471,10 @@ class WebStreamAggregator {
               failureReasonCounts: webProviderFailureReasonCounts(
                 aggregation.failures,
               ),
+              elapsedMs: searchStopwatch.elapsedMilliseconds,
+              activeProviders: progress.activeProviders,
+              queuedProviders: progress.queuedProviders,
+              pendingProviders: progress.pendingProviderNames.length,
             ),
           );
           if (!isComplete) {
@@ -356,6 +492,10 @@ class WebStreamAggregator {
           totalProviders: enabledAddons.length,
           pendingProviderNames: progress.pendingProviderNames,
           diagnosticSessionId: diagnosticSessionId,
+          foregroundComplete: progress.foregroundComplete,
+          activeProviders: progress.activeProviders,
+          queuedProviders: progress.queuedProviders,
+          elapsed: searchStopwatch.elapsed,
         );
       }
     } catch (_) {
@@ -377,6 +517,9 @@ class WebStreamAggregator {
           failureReasonCounts: webProviderFailureReasonCounts(
             lastAggregation.failures,
           ),
+          elapsedMs: searchStopwatch.elapsedMilliseconds,
+          pendingProviders: (enabledAddons.length - lastCompletedProviders)
+              .clamp(0, enabledAddons.length),
         ),
       );
       rethrow;
@@ -399,6 +542,9 @@ class WebStreamAggregator {
             failureReasonCounts: webProviderFailureReasonCounts(
               lastAggregation.failures,
             ),
+            elapsedMs: searchStopwatch.elapsedMilliseconds,
+            pendingProviders: (enabledAddons.length - lastCompletedProviders)
+                .clamp(0, enabledAddons.length),
           ),
         );
       }
@@ -431,6 +577,8 @@ class WebStreamAggregator {
     required int count,
     required String stage,
     required String reason,
+    int? elapsedMs,
+    int? queueMs,
   }) {
     unawaited(
       _persistProviderSearchOutcome(
@@ -440,6 +588,8 @@ class WebStreamAggregator {
         count: count,
         stage: stage,
         reason: reason,
+        elapsedMs: elapsedMs,
+        queueMs: queueMs,
       ),
     );
   }
@@ -451,6 +601,8 @@ class WebStreamAggregator {
     required int count,
     required String stage,
     required String reason,
+    int? elapsedMs,
+    int? queueMs,
   }) async {
     try {
       await _store.database.recordDiagnosticEvent(
@@ -465,7 +617,11 @@ class WebStreamAggregator {
           stage: stage,
           reason: reason,
         ),
-        details: webProviderSearchOutcomeDiagnosticDetails(diagnosticSessionId),
+        details: webProviderSearchOutcomeDiagnosticDetails(
+          diagnosticSessionId,
+          elapsedMs: elapsedMs,
+          queueMs: queueMs,
+        ),
       );
     } catch (_) {
       // Diagnostics are best-effort and must never affect provider discovery.
@@ -503,6 +659,8 @@ class _SharedWebSearchSession {
   bool _prepared = false;
   bool isComplete = false;
   bool wasAbandoned = false;
+
+  WebStreamSearchProgress? get latest => _latest;
 
   void prepare() {
     if (_prepared || isComplete) return;
@@ -684,8 +842,9 @@ WebProviderFailure? installedWebProviderAvailabilityFailure(
       status: WebProviderFailureStatus.paused,
       reason: 'health_quarantine',
       message:
-          'Temporarily paused for about $minutes more minute(s) after '
-          'repeated $stage errors. Use Reset to retry now.',
+          'Deprioritized for about $minutes more minute(s) after repeated '
+          '$stage errors. TetoTV will still try it in the background; use '
+          'Reset to restore normal priority now.',
     );
   }
   if (addon.manifest.reportedBroken) {
@@ -705,6 +864,15 @@ WebProviderFailure? installedWebProviderAvailabilityFailure(
   return null;
 }
 
+/// Repository advisories and transient health pauses affect priority and
+/// visibility, but they do not permanently remove a provider from discovery.
+/// Runtime incompatibility and network-safety failures remain blocked.
+bool webProviderAvailabilityAllowsBackgroundSearch(
+  WebProviderFailure failure,
+) =>
+    failure.status == WebProviderFailureStatus.advisory ||
+    failure.status == WebProviderFailureStatus.paused;
+
 /// Bounded provider-only provenance for the explicit diagnostic report. This
 /// never receives a catalog title, episode/query, result URL, or exception
 /// message; manifest URLs are reduced to their public host by the provider.
@@ -719,6 +887,10 @@ Map<String, Object?> webProviderSearchSummaryDiagnosticDetails({
   required int returnedProviders,
   required int returnedResults,
   Map<String, int> failureReasonCounts = const {},
+  int? elapsedMs,
+  int? activeProviders,
+  int? queuedProviders,
+  int? pendingProviders,
 }) {
   final safeReasons = <String, int>{};
   for (final entry in failureReasonCounts.entries) {
@@ -749,7 +921,14 @@ Map<String, Object?> webProviderSearchSummaryDiagnosticDetails({
       },
       {'kind': 'returned_providers', 'count': returnedProviders.clamp(0, 9999)},
       {'kind': 'returned_results', 'count': returnedResults.clamp(0, 99999)},
+      if (activeProviders != null)
+        {'kind': 'active_providers', 'count': activeProviders.clamp(0, 9999)},
+      if (queuedProviders != null)
+        {'kind': 'queued_providers', 'count': queuedProviders.clamp(0, 9999)},
+      if (pendingProviders != null)
+        {'kind': 'pending_providers', 'count': pendingProviders.clamp(0, 9999)},
     ],
+    if (elapsedMs != null) 'elapsed_ms': elapsedMs.clamp(0, 3600000),
     if (safeReasons.isNotEmpty)
       'reason': <Map<String, Object>>[
         for (final entry in safeReasons.entries)
@@ -828,8 +1007,14 @@ Map<String, Object?> webProviderVisibilityDiagnosticDetails({
 };
 
 Map<String, Object?> webProviderSearchOutcomeDiagnosticDetails(
-  String diagnosticSessionId,
-) => {'session_id': _safeWebProviderDiagnosticSessionId(diagnosticSessionId)};
+  String diagnosticSessionId, {
+  int? elapsedMs,
+  int? queueMs,
+}) => {
+  'session_id': _safeWebProviderDiagnosticSessionId(diagnosticSessionId),
+  if (elapsedMs != null) 'elapsed_ms': elapsedMs.clamp(0, 3600000),
+  if (queueMs != null) 'queue_ms': queueMs.clamp(0, 3600000),
+};
 
 String _safeWebProviderDiagnosticSessionId(String value) =>
     RegExp(r'^provider-search-[0-9a-f]{12}-[0-9]+$').hasMatch(value)
@@ -842,6 +1027,7 @@ String _safeWebProviderDiagnosticPhase(String value) =>
       'progress',
       'final',
       'filter_changed',
+      'retry_final',
       'canceled',
       'error',
     }.contains(value)
@@ -859,6 +1045,7 @@ String _safeWebProviderFailureReason(String value) {
         'runtime_api',
         'provider_error',
         'empty_result',
+        'session_deadline',
         'episode_identity_mismatch',
         'health_quarantine',
         'incompatible_runtime',
@@ -910,6 +1097,32 @@ typedef WebProviderFailureCallback =
       bool noMatch,
     );
 
+/// Privacy-safe execution metadata for one provider. It deliberately contains
+/// no title, episode, URI, headers, exception text, or account information.
+class WebProviderExecutionOutcome {
+  const WebProviderExecutionOutcome({
+    required this.status,
+    required this.stage,
+    required this.reason,
+    required this.resultCount,
+    required this.queuedFor,
+    required this.elapsed,
+  });
+
+  final String status;
+  final String stage;
+  final String reason;
+  final int resultCount;
+  final Duration queuedFor;
+  final Duration elapsed;
+}
+
+typedef WebProviderOutcomeCallback =
+    FutureOr<void> Function(
+      WebStreamingProvider provider,
+      WebProviderExecutionOutcome outcome,
+    );
+
 /// Searches providers through a small worker pool and emits an accumulated
 /// result whenever one finishes. Each provider has its own deadline, so one
 /// abandoned or incompatible add-on cannot hold the entire stream picker open
@@ -919,67 +1132,51 @@ Stream<WebStreamSearchProgress> aggregateWebStreamingProvidersIncrementally(
   EpisodeReference episode, {
   Duration deadline = defaultWebProviderDeadline,
   int maxConcurrentProviders = defaultMaxConcurrentWebProviders,
+  Duration interactiveBudget = defaultWebProviderInteractiveBudget,
+  Duration backgroundBudget = defaultWebProviderBackgroundBudget,
+  Duration cleanupBudget = defaultWebProviderCleanupBudget,
   WebProviderSuccessCallback? onSuccess,
   WebProviderFailureCallback? onFailure,
+  WebProviderOutcomeCallback? onOutcome,
 }) {
   final available = List<WebStreamingProvider>.unmodifiable(providers);
   final cancellation = WebProviderCancellation();
   late final StreamController<WebStreamSearchProgress> controller;
+  final workersSettled = Completer<void>();
   var started = false;
+  var listenerCancelled = false;
 
   Future<void> run() async {
+    Timer? interactiveTimer;
+    Timer? backgroundTimer;
+    StreamController<_IndexedWebProviderTaskEvent>? taskEvents;
+    StreamIterator<_IndexedWebProviderTaskEvent>? taskEventIterator;
+    final searchClock = Stopwatch()..start();
+    var backgroundDeadlineReached = backgroundBudget <= Duration.zero;
     try {
       if (available.isEmpty) {
-        if (!cancellation.isCancelled) {
-          controller.add(const WebStreamSearchProgress());
+        if (!listenerCancelled) {
+          controller.add(
+            WebStreamSearchProgress(
+              foregroundComplete: true,
+              elapsed: searchClock.elapsed,
+            ),
+          );
         }
         return;
       }
 
       final concurrency = maxConcurrentProviders.clamp(1, available.length);
-      final active = <int, Future<_IndexedWebProviderOutcome>>{};
+      final active = <int, _WebProviderTask>{};
       final completedIndexes = <int>{};
-      var nextIndex = 0;
-
-      void fillWorkers() {
-        while (!cancellation.isCancelled &&
-            active.length < concurrency &&
-            nextIndex < available.length) {
-          final index = nextIndex++;
-          active[index] = _searchWebProvider(
-            available[index],
-            episode,
-            deadline,
-            cancellation: cancellation,
-            onSuccess: onSuccess,
-            onFailure: onFailure,
-          ).then((outcome) => (index: index, outcome: outcome));
-        }
-      }
-
-      fillWorkers();
       final outcomes = <_WebProviderOutcome>[];
-      if (!cancellation.isCancelled) {
-        controller.add(
-          WebStreamSearchProgress(
-            totalProviders: available.length,
-            pendingProviderNames: _pendingWebProviderNames(
-              completedIndexes,
-              available,
-            ),
-          ),
-        );
-      }
+      var nextIndex = 0;
+      var foregroundComplete = interactiveBudget <= Duration.zero;
+      taskEvents = StreamController<_IndexedWebProviderTaskEvent>();
+      taskEventIterator = StreamIterator(taskEvents.stream);
 
-      while (active.isNotEmpty && !cancellation.isCancelled) {
-        final completed = await Future.any(active.values);
-        if (cancellation.isCancelled) break;
-        active.remove(completed.index);
-        completedIndexes.add(completed.index);
-        final outcome = completed.outcome;
-        if (!outcome.cancelled) outcomes.add(outcome);
-        fillWorkers();
-        if (cancellation.isCancelled) break;
+      void emitProgress() {
+        if (listenerCancelled || controller.isClosed) return;
         controller.add(
           WebStreamSearchProgress(
             aggregation: mergeWebProviderOutcomes(
@@ -987,20 +1184,147 @@ Stream<WebStreamSearchProgress> aggregateWebStreamingProvidersIncrementally(
                   .map((item) => (streams: item.streams, failure: item.failure))
                   .toList(growable: false),
             ),
-            completedProviders: outcomes.length,
+            completedProviders: completedIndexes.length,
             totalProviders: available.length,
             pendingProviderNames: _pendingWebProviderNames(
               completedIndexes,
               available,
             ),
+            foregroundComplete: foregroundComplete,
+            activeProviders: active.keys
+                .where((index) => !completedIndexes.contains(index))
+                .length,
+            queuedProviders: (available.length - nextIndex).clamp(
+              0,
+              available.length,
+            ),
+            elapsed: searchClock.elapsed,
           ),
         );
       }
+
+      void dispatchTaskEvent(_IndexedWebProviderTaskEvent event) {
+        final events = taskEvents;
+        if (events == null || events.isClosed) return;
+        events.add(event);
+      }
+
+      void fillWorkers() {
+        while (!cancellation.isCancelled &&
+            !backgroundDeadlineReached &&
+            active.length < concurrency &&
+            nextIndex < available.length) {
+          final index = nextIndex++;
+          final task = _startWebProviderSearch(
+            available[index],
+            episode,
+            deadline,
+            cancellation: cancellation,
+            queuedFor: searchClock.elapsed,
+            cleanupBudget: cleanupBudget,
+            onSuccess: onSuccess,
+            onFailure: onFailure,
+            onOutcome: onOutcome,
+          );
+          active[index] = task;
+          unawaited(
+            task.outcome.then(
+              (outcome) => dispatchTaskEvent(
+                _IndexedWebProviderTaskEvent(index: index, outcome: outcome),
+              ),
+            ),
+          );
+          unawaited(
+            task.settled.then((_) async {
+              dispatchTaskEvent(
+                _IndexedWebProviderTaskEvent(
+                  index: index,
+                  outcome: await task.outcome,
+                  settled: true,
+                ),
+              );
+            }),
+          );
+        }
+      }
+
+      void completeAtBackgroundDeadline() {
+        if (!backgroundDeadlineReached || listenerCancelled) return;
+        for (var index = 0; index < available.length; index++) {
+          if (!completedIndexes.add(index)) continue;
+          outcomes.add(_webProviderBackgroundDeadlineOutcome(available[index]));
+        }
+        nextIndex = available.length;
+        foregroundComplete = true;
+        interactiveTimer?.cancel();
+        interactiveTimer = null;
+        emitProgress();
+      }
+
+      fillWorkers();
+      emitProgress();
+      if (!foregroundComplete) {
+        interactiveTimer = Timer(interactiveBudget, () {
+          if (listenerCancelled || controller.isClosed) return;
+          foregroundComplete = true;
+          emitProgress();
+        });
+      }
+      if (backgroundDeadlineReached) {
+        cancellation.cancel();
+        completeAtBackgroundDeadline();
+      } else {
+        backgroundTimer = Timer(backgroundBudget, () {
+          if (listenerCancelled || controller.isClosed) return;
+          backgroundDeadlineReached = true;
+          cancellation.cancel();
+          completeAtBackgroundDeadline();
+        });
+      }
+
+      while (active.isNotEmpty) {
+        if (!await taskEventIterator.moveNext()) break;
+        final event = taskEventIterator.current;
+        var shouldEmitProgress = false;
+        if (!listenerCancelled &&
+            !backgroundDeadlineReached &&
+            !event.outcome.cancelled &&
+            completedIndexes.add(event.index)) {
+          outcomes.add(event.outcome);
+          shouldEmitProgress = true;
+        }
+        if (event.settled) {
+          active.remove(event.index);
+          final queuedBeforeFill = nextIndex;
+          fillWorkers();
+          shouldEmitProgress =
+              shouldEmitProgress || nextIndex != queuedBeforeFill;
+        }
+        if (!listenerCancelled &&
+            !backgroundDeadlineReached &&
+            active.isEmpty &&
+            nextIndex >= available.length) {
+          shouldEmitProgress = shouldEmitProgress || !foregroundComplete;
+          foregroundComplete = true;
+          interactiveTimer?.cancel();
+          interactiveTimer = null;
+          backgroundTimer?.cancel();
+          backgroundTimer = null;
+        }
+        if (shouldEmitProgress) emitProgress();
+      }
+      completeAtBackgroundDeadline();
     } catch (error, stackTrace) {
-      if (!cancellation.isCancelled && !controller.isClosed) {
+      if (!listenerCancelled && !controller.isClosed) {
         controller.addError(error, stackTrace);
       }
     } finally {
+      interactiveTimer?.cancel();
+      backgroundTimer?.cancel();
+      cancellation.cancel();
+      await taskEventIterator?.cancel();
+      await taskEvents?.close();
+      if (!workersSettled.isCompleted) workersSettled.complete();
       if (!controller.isClosed) await controller.close();
     }
   }
@@ -1012,12 +1336,37 @@ Stream<WebStreamSearchProgress> aggregateWebStreamingProvidersIncrementally(
       started = true;
       unawaited(run());
     },
-    onCancel: cancellation.cancel,
+    onCancel: () async {
+      listenerCancelled = true;
+      cancellation.cancel();
+      await workersSettled.future;
+    },
   );
   return controller.stream;
 }
 
-typedef _IndexedWebProviderOutcome = ({int index, _WebProviderOutcome outcome});
+class _IndexedWebProviderTaskEvent {
+  const _IndexedWebProviderTaskEvent({
+    required this.index,
+    required this.outcome,
+    this.settled = false,
+  });
+
+  final int index;
+  final _WebProviderOutcome outcome;
+  final bool settled;
+}
+
+class _WebProviderTask {
+  const _WebProviderTask({required this.outcome, required this.settled});
+
+  /// Completes at the user-visible provider deadline or cancellation signal.
+  final Future<_WebProviderOutcome> outcome;
+
+  /// Completes only after the provider future has unwound its runtime, or the
+  /// bounded forced-cleanup window has elapsed for a non-conforming provider.
+  final Future<void> settled;
+}
 
 List<String> _pendingWebProviderNames(
   Set<int> completedIndexes,
@@ -1027,37 +1376,128 @@ List<String> _pendingWebProviderNames(
     if (!completedIndexes.contains(index)) providers[index].name,
 ];
 
-Future<_WebProviderOutcome> _searchWebProvider(
+_WebProviderOutcome _webProviderBackgroundDeadlineOutcome(
+  WebStreamingProvider provider,
+) {
+  final seanime = provider is SeanimeJavascriptProvider ? provider : null;
+  return _WebProviderOutcome(
+    providerId: provider.id,
+    failure: WebProviderFailure(
+      providerName: provider.name,
+      providerId: provider.id,
+      providerVersion: seanime?.version,
+      repositoryHost: seanime?.repositoryHost,
+      executableHost: seanime?.executableHost,
+      status: WebProviderFailureStatus.failed,
+      stage: 'scheduler',
+      reason: 'session_deadline',
+      message:
+          'Not reached before the background discovery deadline. Retry this '
+          'provider to search it again.',
+    ),
+  );
+}
+
+_WebProviderTask _startWebProviderSearch(
   WebStreamingProvider provider,
   EpisodeReference episode,
   Duration deadline, {
   required WebProviderCancellation cancellation,
+  required Duration queuedFor,
+  required Duration cleanupBudget,
   WebProviderSuccessCallback? onSuccess,
   WebProviderFailureCallback? onFailure,
-}) async {
+  WebProviderOutcomeCallback? onOutcome,
+}) {
   final providerCancellation = WebProviderCancellation();
+  final providerSearch = Future<List<WebStreamResult>>.sync(() {
+    cancellation.throwIfCancelled();
+    return provider.streams(episode, cancellation: providerCancellation);
+  });
+  final providerSettled = providerSearch.then<void>((_) {}, onError: (_, _) {});
+  final boundedCleanup = providerCancellation.whenCancelled.then(
+    (_) => Future<void>.delayed(
+      cleanupBudget > Duration.zero ? cleanupBudget : Duration.zero,
+    ),
+  );
+  return _WebProviderTask(
+    outcome: _resolveWebProviderOutcome(
+      provider,
+      episode,
+      deadline,
+      cancellation: cancellation,
+      providerCancellation: providerCancellation,
+      providerSearch: providerSearch,
+      queuedFor: queuedFor,
+      onSuccess: onSuccess,
+      onFailure: onFailure,
+      onOutcome: onOutcome,
+    ),
+    // Production providers settle this through their isolate/network finally
+    // blocks. The second branch prevents a broken third-party implementation
+    // from deadlocking every future provider wave after cancellation.
+    settled: Future.any<void>([providerSettled, boundedCleanup]),
+  );
+}
+
+Future<_WebProviderOutcome> _resolveWebProviderOutcome(
+  WebStreamingProvider provider,
+  EpisodeReference episode,
+  Duration deadline, {
+  required WebProviderCancellation cancellation,
+  required WebProviderCancellation providerCancellation,
+  required Future<List<WebStreamResult>> providerSearch,
+  required Duration queuedFor,
+  WebProviderSuccessCallback? onSuccess,
+  WebProviderFailureCallback? onFailure,
+  WebProviderOutcomeCallback? onOutcome,
+}) async {
+  final providerClock = Stopwatch()..start();
   final removeParentCancellationListener = cancellation.addListener(
     providerCancellation.cancel,
   );
+  final deadlineSignal = Completer<List<WebStreamResult>>();
+  Timer? deadlineTimer;
+  var providerDeadlineReached = false;
+  _WebProviderOutcome finish(_WebProviderOutcome outcome) {
+    if (!outcome.cancelled) {
+      _invokeWebProviderOutcome(
+        onOutcome,
+        provider,
+        outcome,
+        queuedFor: queuedFor,
+        elapsed: providerClock.elapsed,
+      );
+    }
+    return outcome;
+  }
+
   try {
     cancellation.throwIfCancelled();
-    final providerSearch = provider
-        .streams(episode, cancellation: providerCancellation)
-        .timeout(
-          deadline,
-          onTimeout: () {
-            // The worker-pool deadline must also stop this provider's isolate
-            // and network work. The parent token belongs to every provider,
-            // so cancelling it here would incorrectly discard valid peers.
-            providerCancellation.cancel();
-            throw TimeoutException(
-              'Provider exceeded its discovery deadline.',
-              deadline,
-            );
-          },
+    void expireProvider() {
+      // The worker-pool deadline must also stop this provider's isolate and
+      // network work. The parent token belongs to every provider, so
+      // cancelling it here would incorrectly discard valid peers.
+      providerDeadlineReached = true;
+      providerCancellation.cancel();
+      if (!deadlineSignal.isCompleted) {
+        deadlineSignal.completeError(
+          TimeoutException(
+            'Provider exceeded its discovery deadline.',
+            deadline,
+          ),
         );
+      }
+    }
+
+    if (deadline <= Duration.zero) {
+      expireProvider();
+    } else {
+      deadlineTimer = Timer(deadline, expireProvider);
+    }
     final streams = await Future.any<List<WebStreamResult>>([
       providerSearch,
+      deadlineSignal.future,
       cancellation.whenCancelled.then<List<WebStreamResult>>(
         (_) => throw const WebProviderSearchCancelled(),
       ),
@@ -1066,18 +1506,20 @@ Future<_WebProviderOutcome> _searchWebProvider(
     if (streams.isEmpty) {
       _invokeWebProviderSuccess(onSuccess, provider, const []);
       final seanime = provider is SeanimeJavascriptProvider ? provider : null;
-      return _WebProviderOutcome(
-        providerId: provider.id,
-        failure: WebProviderFailure(
-          providerName: provider.name,
+      return finish(
+        _WebProviderOutcome(
           providerId: provider.id,
-          providerVersion: seanime?.version,
-          repositoryHost: seanime?.repositoryHost,
-          executableHost: seanime?.executableHost,
-          status: WebProviderFailureStatus.noMatch,
-          stage: 'complete',
-          reason: 'empty_result',
-          message: 'No matching title or episode from this provider.',
+          failure: WebProviderFailure(
+            providerName: provider.name,
+            providerId: provider.id,
+            providerVersion: seanime?.version,
+            repositoryHost: seanime?.repositoryHost,
+            executableHost: seanime?.executableHost,
+            status: WebProviderFailureStatus.noMatch,
+            stage: 'complete',
+            reason: 'empty_result',
+            message: 'No matching title or episode from this provider.',
+          ),
         ),
       );
     }
@@ -1092,7 +1534,47 @@ Future<_WebProviderOutcome> _searchWebProvider(
         true,
       );
       final seanime = provider is SeanimeJavascriptProvider ? provider : null;
-      return _WebProviderOutcome(
+      return finish(
+        _WebProviderOutcome(
+          providerId: provider.id,
+          failure: WebProviderFailure(
+            providerName: provider.name,
+            providerId: provider.id,
+            providerVersion: seanime?.version,
+            repositoryHost: seanime?.repositoryHost,
+            executableHost: seanime?.executableHost,
+            status: WebProviderFailureStatus.noMatch,
+            stage: 'episode_lookup',
+            reason: 'episode_identity_mismatch',
+            message: 'Provider returned a different episode.',
+          ),
+        ),
+      );
+    }
+    _invokeWebProviderSuccess(onSuccess, provider, compatible);
+    return finish(
+      _WebProviderOutcome(providerId: provider.id, streams: compatible),
+    );
+  } catch (error) {
+    if (cancellation.isCancelled ||
+        (error is WebProviderSearchCancelled && !providerDeadlineReached)) {
+      return _WebProviderOutcome(providerId: provider.id, cancelled: true);
+    }
+    final failureError = error is WebProviderSearchCancelled
+        ? TimeoutException(
+            'Provider exceeded its discovery deadline.',
+            deadline,
+          )
+        : error;
+    final details = seanimeProviderFailureDetails(failureError);
+    // Only search/title/episode/server lookup empties are neutral no-matches.
+    // Extraction-stage empties mean a selected episode failed to produce a
+    // playable stream and must remain actionable provider failures.
+    final noMatch = isSeanimeProviderNoMatch(failureError);
+    final seanime = provider is SeanimeJavascriptProvider ? provider : null;
+    _invokeWebProviderFailure(onFailure, provider, failureError, noMatch);
+    return finish(
+      _WebProviderOutcome(
         providerId: provider.id,
         failure: WebProviderFailure(
           providerName: provider.name,
@@ -1100,44 +1582,21 @@ Future<_WebProviderOutcome> _searchWebProvider(
           providerVersion: seanime?.version,
           repositoryHost: seanime?.repositoryHost,
           executableHost: seanime?.executableHost,
-          status: WebProviderFailureStatus.noMatch,
-          stage: 'episode_lookup',
-          reason: 'episode_identity_mismatch',
-          message: 'Provider returned a different episode.',
+          status: noMatch
+              ? WebProviderFailureStatus.noMatch
+              : WebProviderFailureStatus.failed,
+          stage: details?.stage,
+          reason: details?.reason,
+          message: noMatch
+              ? 'No matching title or episode from this provider.'
+              : failureError is TimeoutException
+              ? 'Timed out after ${deadline.inSeconds} seconds.'
+              : _shortMessage(failureError),
         ),
-      );
-    }
-    _invokeWebProviderSuccess(onSuccess, provider, compatible);
-    return _WebProviderOutcome(providerId: provider.id, streams: compatible);
-  } catch (error) {
-    if (error is WebProviderSearchCancelled || cancellation.isCancelled) {
-      return _WebProviderOutcome(providerId: provider.id, cancelled: true);
-    }
-    final noMatch = isSeanimeProviderNoMatch(error);
-    final details = seanimeProviderFailureDetails(error);
-    final seanime = provider is SeanimeJavascriptProvider ? provider : null;
-    _invokeWebProviderFailure(onFailure, provider, error, noMatch);
-    return _WebProviderOutcome(
-      providerId: provider.id,
-      failure: WebProviderFailure(
-        providerName: provider.name,
-        providerId: provider.id,
-        providerVersion: seanime?.version,
-        repositoryHost: seanime?.repositoryHost,
-        executableHost: seanime?.executableHost,
-        status: noMatch
-            ? WebProviderFailureStatus.noMatch
-            : WebProviderFailureStatus.failed,
-        stage: details?.stage,
-        reason: details?.reason,
-        message: noMatch
-            ? 'No matching title or episode from this provider.'
-            : error is TimeoutException
-            ? 'Timed out after ${deadline.inSeconds} seconds.'
-            : _shortMessage(error),
       ),
     );
   } finally {
+    deadlineTimer?.cancel();
     removeParentCancellationListener();
   }
 }
@@ -1163,6 +1622,35 @@ void _invokeWebProviderFailure(
   unawaited(
     Future<void>.sync(
       () => callback(provider, error, noMatch),
+    ).catchError((_) {}),
+  );
+}
+
+void _invokeWebProviderOutcome(
+  WebProviderOutcomeCallback? callback,
+  WebStreamingProvider provider,
+  _WebProviderOutcome outcome, {
+  required Duration queuedFor,
+  required Duration elapsed,
+}) {
+  if (callback == null) return;
+  final failure = outcome.failure;
+  final status = outcome.streams.isNotEmpty
+      ? 'success'
+      : failure?.status.name ?? 'failed';
+  unawaited(
+    Future<void>.sync(
+      () => callback(
+        provider,
+        WebProviderExecutionOutcome(
+          status: status,
+          stage: failure?.stage ?? 'complete',
+          reason: failure?.reason ?? 'streams_returned',
+          resultCount: outcome.streams.length,
+          queuedFor: queuedFor,
+          elapsed: elapsed,
+        ),
+      ),
     ).catchError((_) {}),
   );
 }
@@ -1193,6 +1681,48 @@ bool _webStreamMatchesRequestedEpisode(
     requestedEpisode: episode.episode,
     requestedSeason: catalogSeasonNumber(episode),
   ).isMismatch;
+}
+
+Set<String> _normalizedWebProviderIds(Iterable<String> providerIds) =>
+    providerIds
+        .map((id) => id.trim().toLowerCase())
+        .where((id) => id.isNotEmpty)
+        .take(64)
+        .toSet();
+
+/// Replaces only the providers covered by an explicit retry, preserving every
+/// successful stream and provider status from the original episode search.
+/// This also prevents a later resolver/player route from replaying the stale
+/// pre-retry shared-session snapshot.
+WebStreamAggregation mergeRetriedWebProviderAggregation({
+  required WebStreamAggregation current,
+  required WebStreamAggregation retry,
+  required Iterable<String> retriedProviderIds,
+}) {
+  final selected = _normalizedWebProviderIds(retriedProviderIds);
+  if (selected.isEmpty) return current;
+  bool selectedStream(WebStreamResult stream) =>
+      selected.contains(webStreamProviderIdentity(stream));
+  bool selectedFailure(WebProviderFailure failure) {
+    final id = failure.providerId?.trim().toLowerCase();
+    return id != null && selected.contains(id);
+  }
+
+  return mergeWebProviderOutcomes([
+    (
+      streams: current.streams
+          .where((stream) => !selectedStream(stream))
+          .toList(growable: false),
+      failure: null,
+    ),
+    for (final failure in current.failures.where(
+      (failure) => !selectedFailure(failure),
+    ))
+      (streams: const <WebStreamResult>[], failure: failure),
+    (streams: retry.streams, failure: null),
+    for (final failure in retry.failures)
+      (streams: const <WebStreamResult>[], failure: failure),
+  ]);
 }
 
 WebStreamAggregation mergeWebProviderOutcomes(
@@ -1331,6 +1861,9 @@ Future<WebStreamAggregation> aggregateWebStreamingProviders(
   EpisodeReference episode, {
   Duration deadline = defaultWebProviderDeadline,
   int maxConcurrentProviders = defaultMaxConcurrentWebProviders,
+  Duration interactiveBudget = defaultWebProviderInteractiveBudget,
+  Duration backgroundBudget = defaultWebProviderBackgroundBudget,
+  Duration cleanupBudget = defaultWebProviderCleanupBudget,
 }) async {
   var result = const WebStreamAggregation();
   await for (final progress in aggregateWebStreamingProvidersIncrementally(
@@ -1338,6 +1871,9 @@ Future<WebStreamAggregation> aggregateWebStreamingProviders(
     episode,
     deadline: deadline,
     maxConcurrentProviders: maxConcurrentProviders,
+    interactiveBudget: interactiveBudget,
+    backgroundBudget: backgroundBudget,
+    cleanupBudget: cleanupBudget,
   )) {
     result = progress.aggregation;
   }

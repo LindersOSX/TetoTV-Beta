@@ -1822,6 +1822,236 @@ void main() {
   });
 
   testWidgets(
+    'Retry failed providers keeps good streams and retries only errors',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1280, 720));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final available = _providerWebStream(
+        providerId: 'working-provider',
+        providerName: 'Working Provider',
+        quality: '1080p',
+      );
+      final recovered = _providerWebStream(
+        providerId: 'failed-provider',
+        providerName: 'Recovered Provider',
+        quality: '720p',
+      );
+      final aggregator = _SelectiveRetryWebAggregator(
+        available: available,
+        recovered: recovered,
+      );
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            configuredReleaseSourceProvider.overrideWithValue(null),
+            webStreamAggregatorProvider.overrideWithValue(aggregator),
+          ],
+          child: const MaterialApp(
+            home: ResolveEpisodeScreen(
+              episode: EpisodeReference(
+                anilistMediaId: 42005,
+                title: 'Selective retry fixture',
+                episode: 1,
+              ),
+            ),
+          ),
+        ),
+      );
+      await _pumpUntilFound(tester, find.text(available.title));
+
+      final retry = find.byKey(
+        const ValueKey('stream-picker-retry-failed-providers'),
+      );
+      expect(retry, findsOneWidget);
+      expect(find.text('Retry failed (1)'), findsOneWidget);
+
+      await tester.tap(retry);
+      await _pumpUntilFound(tester, find.text(recovered.title));
+
+      expect(find.text(available.title), findsOneWidget);
+      expect(aggregator.retriedProviderIds, [
+        const {'failed-provider'},
+      ]);
+    },
+  );
+
+  testWidgets('refresh is disabled while a selective retry is active', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1280, 720));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final retryGate = Completer<void>();
+    addTearDown(() {
+      if (!retryGate.isCompleted) retryGate.complete();
+    });
+    final available = _providerWebStream(
+      providerId: 'working-provider',
+      providerName: 'Working Provider',
+      quality: '1080p',
+    );
+    final recovered = _providerWebStream(
+      providerId: 'failed-provider',
+      providerName: 'Recovered Provider',
+      quality: '720p',
+    );
+    final aggregator = _SelectiveRetryWebAggregator(
+      available: available,
+      recovered: recovered,
+      retryGate: retryGate.future,
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          configuredReleaseSourceProvider.overrideWithValue(null),
+          webStreamAggregatorProvider.overrideWithValue(aggregator),
+        ],
+        child: const MaterialApp(
+          home: ResolveEpisodeScreen(
+            episode: EpisodeReference(
+              anilistMediaId: 42008,
+              title: 'Selective retry refresh fixture',
+              episode: 1,
+            ),
+          ),
+        ),
+      ),
+    );
+    await _pumpUntilFound(tester, find.text(available.title));
+    await tester.tap(
+      find.byKey(const ValueKey('stream-picker-retry-failed-providers')),
+    );
+    await tester.pump();
+
+    final refresh = find.byKey(const ValueKey('stream-picker-refresh'));
+    final refreshFocusable = tester.widget<TvFocusable>(
+      find.descendant(of: refresh, matching: find.byType(TvFocusable)),
+    );
+    expect(refreshFocusable.enabled, isFalse);
+    expect(aggregator.searchCalls, 1);
+
+    retryGate.complete();
+    await _pumpUntilFound(tester, find.text(recovered.title));
+  });
+
+  testWidgets(
+    'foreground provider budget opens the picker while late providers continue',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1280, 720));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final gate = Completer<void>();
+      addTearDown(() {
+        if (!gate.isCompleted) gate.complete();
+      });
+      final late = _providerWebStream(
+        providerId: 'late-provider',
+        providerName: 'Late Provider',
+        quality: '1080p',
+      );
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            configuredReleaseSourceProvider.overrideWithValue(null),
+            webStreamAggregatorProvider.overrideWithValue(
+              _ForegroundBudgetWebAggregator(gate: gate.future, late: late),
+            ),
+          ],
+          child: const MaterialApp(
+            home: ResolveEpisodeScreen(
+              episode: EpisodeReference(
+                anilistMediaId: 42006,
+                title: 'Background provider fixture',
+                episode: 1,
+              ),
+            ),
+          ),
+        ),
+      );
+      await _pumpUntilFound(tester, find.text('Choose your stream'));
+
+      expect(find.byKey(const ValueKey('resolve-search-shell')), findsNothing);
+      expect(find.textContaining('Web 0/2 background'), findsOneWidget);
+      expect(find.text(late.title), findsNothing);
+
+      gate.complete();
+      await _pumpUntilFound(tester, find.text(late.title));
+    },
+  );
+
+  testWidgets(
+    'web-only foreground budget stays nonterminal until late results arrive',
+    (tester) async {
+      FlutterSecureStorage.setMockInitialValues({});
+      await tester.binding.setSurfaceSize(const Size(1280, 720));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final gate = Completer<void>();
+      addTearDown(() {
+        if (!gate.isCompleted) gate.complete();
+      });
+      final late = _providerWebStream(
+        providerId: 'web-only-late-provider',
+        providerName: 'Web-only Late Provider',
+        quality: '1080p',
+      );
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            settingsPreferencesProvider.overrideWith(
+              (_) => _ResolveSettingsController(
+                const SettingsPreferences(
+                  loaded: true,
+                  debridStreamsEnabled: false,
+                  directTorrentStreamingEnabled: false,
+                  webStreamsEnabled: true,
+                ),
+              ),
+            ),
+            configuredReleaseSourceProvider.overrideWithValue(null),
+            webStreamAggregatorProvider.overrideWithValue(
+              _ForegroundBudgetWebAggregator(gate: gate.future, late: late),
+            ),
+            libraryEpisodeSourceServiceProvider.overrideWithValue(
+              _FixedLibraryEpisodeSourceService(const [], connected: false),
+            ),
+            seriesPreferencesReaderProvider.overrideWithValue(
+              (_) async => const SeriesPlaybackPreferences(),
+            ),
+            seriesPreferencesWriterProvider.overrideWithValue((_, _) async {}),
+            resolveDeviceProfileReaderProvider.overrideWithValue(
+              () async => const TvDeviceProfile.unknown(),
+            ),
+            resolveFailureCountsReaderProvider.overrideWithValue(
+              (_) async => const {},
+            ),
+          ],
+          child: const MaterialApp(
+            home: ResolveEpisodeScreen(
+              episode: EpisodeReference(
+                anilistMediaId: 42007,
+                title: 'Web-only background provider fixture',
+                episode: 1,
+              ),
+            ),
+          ),
+        ),
+      );
+      await _pumpUntilFound(tester, find.text('Still searching providers…'));
+
+      expect(find.text('Choose your stream'), findsOneWidget);
+      expect(find.text('No stream source is ready'), findsNothing);
+      expect(find.text('Open marketplace'), findsNothing);
+      expect(find.text(late.title), findsNothing);
+
+      gate.complete();
+      await _pumpUntilFound(tester, find.text(late.title));
+      expect(find.text('No stream source is ready'), findsNothing);
+    },
+  );
+
+  testWidgets(
     'a clean provider no-match is not reported as a runtime failure',
     (tester) async {
       await tester.pumpWidget(
@@ -6889,6 +7119,106 @@ class _FailureAndStreamWebAggregator extends WebStreamAggregator {
       ),
       completedProviders: failures.length + (available == null ? 0 : 1),
       totalProviders: failures.length + (available == null ? 0 : 1),
+    );
+  }
+}
+
+class _SelectiveRetryWebAggregator extends WebStreamAggregator {
+  _SelectiveRetryWebAggregator({
+    required this.available,
+    required this.recovered,
+    this.retryGate,
+  }) : super(AddonStore(TetoTvDatabase.instance));
+
+  final WebStreamResult available;
+  final WebStreamResult recovered;
+  final Future<void>? retryGate;
+  final List<Set<String>> retriedProviderIds = [];
+  int searchCalls = 0;
+
+  @override
+  Stream<WebStreamSearchProgress> searchIncrementally(
+    EpisodeReference episode,
+  ) async* {
+    searchCalls++;
+    yield WebStreamSearchProgress(
+      aggregation: WebStreamAggregation(
+        streams: [available],
+        failures: const [
+          WebProviderFailure(
+            providerId: 'failed-provider',
+            providerName: 'Failed Provider',
+            status: WebProviderFailureStatus.failed,
+            message: 'Provider timed out.',
+            reason: 'timeout',
+          ),
+        ],
+      ),
+      completedProviders: 2,
+      totalProviders: 2,
+      foregroundComplete: true,
+    );
+  }
+
+  @override
+  Stream<WebStreamSearchProgress> retryProvidersIncrementally(
+    EpisodeReference episode,
+    Iterable<String> providerIds,
+  ) async* {
+    retriedProviderIds.add(providerIds.toSet());
+    if (retryGate case final gate?) {
+      yield WebStreamSearchProgress(
+        aggregation: WebStreamAggregation(
+          streams: [available],
+          failures: const [
+            WebProviderFailure(
+              providerId: 'failed-provider',
+              providerName: 'Failed Provider',
+              status: WebProviderFailureStatus.failed,
+              message: 'Provider timed out.',
+              reason: 'timeout',
+            ),
+          ],
+        ),
+        completedProviders: 1,
+        totalProviders: 2,
+        foregroundComplete: true,
+        diagnosticSessionId: 'provider-search-a1b2c3d4e5f6-2',
+      );
+      await gate;
+    }
+    yield WebStreamSearchProgress(
+      aggregation: WebStreamAggregation(streams: [available, recovered]),
+      completedProviders: 2,
+      totalProviders: 2,
+      foregroundComplete: true,
+      diagnosticSessionId: 'provider-search-a1b2c3d4e5f6-2',
+    );
+  }
+}
+
+class _ForegroundBudgetWebAggregator extends WebStreamAggregator {
+  _ForegroundBudgetWebAggregator({required this.gate, required this.late})
+    : super(AddonStore(TetoTvDatabase.instance));
+
+  final Future<void> gate;
+  final WebStreamResult late;
+
+  @override
+  Stream<WebStreamSearchProgress> searchIncrementally(
+    EpisodeReference episode,
+  ) async* {
+    yield const WebStreamSearchProgress(
+      totalProviders: 2,
+      pendingProviderNames: ['Slow provider', 'Late provider'],
+      foregroundComplete: true,
+    );
+    await gate;
+    yield WebStreamSearchProgress(
+      aggregation: WebStreamAggregation(streams: [late]),
+      completedProviders: 2,
+      totalProviders: 2,
+      foregroundComplete: true,
     );
   }
 }

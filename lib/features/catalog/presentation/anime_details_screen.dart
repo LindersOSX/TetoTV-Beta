@@ -962,6 +962,7 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
     final alternativeTitles = <String?>{
       anime.titleEnglish,
       anime.titleRomaji,
+      anime.titleNative,
       ...anime.synonyms,
     }.whereType<String>().toSet()..remove(anime.title);
     final reference = EpisodeReference(
@@ -972,6 +973,7 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
       alternativeTitles: alternativeTitles.toList(growable: false),
       titleEnglish: anime.titleEnglish,
       titleRomaji: anime.titleRomaji,
+      titleNative: anime.titleNative,
       status: anime.status,
       format: anime.format,
       episodeCount: anime.episodes,
@@ -2400,6 +2402,7 @@ void _openEpisode(
   final alternativeTitles = <String?>{
     anime.titleEnglish,
     anime.titleRomaji,
+    anime.titleNative,
     ...anime.synonyms,
   }.whereType<String>().toSet()..remove(anime.title);
   context.push(
@@ -2417,6 +2420,7 @@ void _openEpisode(
           'synonyms': alternativeTitles.join('|'),
         if (anime.titleEnglish != null) 'titleEnglish': anime.titleEnglish!,
         if (anime.titleRomaji != null) 'titleRomaji': anime.titleRomaji!,
+        if (anime.titleNative != null) 'titleNative': anime.titleNative!,
         if (anime.status != null) 'status': anime.status!,
         if (anime.format != null) 'format': anime.format!,
         if (anime.episodes != null) 'episodeCount': '${anime.episodes}',

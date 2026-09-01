@@ -26,6 +26,7 @@ class FillerSeriesIdentity {
           anime.title,
           ?anime.titleEnglish,
           ?anime.titleRomaji,
+          ?anime.titleNative,
           ...anime.synonyms,
         ],
         expectedEpisodes: anime.episodes,

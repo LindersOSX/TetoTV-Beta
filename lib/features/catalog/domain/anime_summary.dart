@@ -17,6 +17,7 @@ class AnimeSummary {
     this.idMal,
     this.titleEnglish,
     this.titleRomaji,
+    this.titleNative,
     this.coverImageUrl,
     this.bannerImageUrl,
     this.trailer,
@@ -41,6 +42,7 @@ class AnimeSummary {
   final String title;
   final String? titleEnglish;
   final String? titleRomaji;
+  final String? titleNative;
   final String description;
   final int? episodes;
   final double? score;

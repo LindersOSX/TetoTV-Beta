@@ -145,6 +145,35 @@ void main() {
       ),
       isFalse,
     );
+    expect(
+      isSeanimeProviderNoMatch(
+        StateError(
+          'NO_STREAM: Provider search could not complete. '
+          '[stage=search; reason=empty_result]',
+        ),
+      ),
+      isTrue,
+      reason: 'provider-declared empty search results are normal availability',
+    );
+    expect(
+      isSeanimeProviderNoMatch(
+        StateError(
+          'NO_STREAM: Provider episode lookup returned no sources. '
+          '[stage=episode_lookup; reason=empty_sources]',
+        ),
+      ),
+      isTrue,
+    );
+    expect(
+      isSeanimeProviderNoMatch(
+        StateError(
+          'NO_STREAM: Stream extraction returned no sources. '
+          '[stage=stream_extraction; reason=empty_sources]',
+        ),
+      ),
+      isFalse,
+      reason: 'a post-resolution extraction failure remains actionable',
+    );
   });
 
   test('searches dedicated English and Romaji titles for legacy providers', () {
@@ -161,6 +190,28 @@ void main() {
       ),
       ['English Display', 'Dedicated Romaji', 'Alternate'],
     );
+  });
+
+  test('preserves native-script titles as searchable provider aliases', () {
+    const episode = EpisodeReference(
+      anilistMediaId: 1,
+      title: 'Frieren: Beyond Journey’s End',
+      titleEnglish: 'Frieren: Beyond Journey’s End',
+      titleRomaji: 'Sousou no Frieren',
+      titleNative: '葬送のフリーレン',
+      episode: 1,
+    );
+
+    expect(
+      seanimeProviderSearchTitles(episode),
+      containsAllInOrder([
+        'Frieren: Beyond Journey’s End',
+        'Frieren Beyond Journey s End',
+        'Sousou no Frieren',
+        '葬送のフリーレン',
+      ]),
+    );
+    expect(seanimeProviderMediaSynonyms(episode), contains('葬送のフリーレン'));
   });
 
   test('adds punctuation-safe aliases without losing canonical titles', () {
@@ -234,6 +285,28 @@ void main() {
       expect(
         webStreamAudioCapabilityFromWire('not reported'),
         WebStreamAudioCapability.unknown,
+      );
+      expect(
+        webStreamAudioCapabilityFromWire({
+          'availableAudioTracks': [
+            {'language': 'ja'},
+            {'language': 'en'},
+          ],
+        }),
+        WebStreamAudioCapability.subAndDub,
+      );
+      expect(
+        webStreamAudioCapabilityFromWire({'dub': true}),
+        WebStreamAudioCapability.dub,
+      );
+      expect(
+        webStreamAudioCapabilityFromWire({
+          'tracks': [
+            {'kind': 'subtitles', 'language': 'en'},
+          ],
+        }),
+        WebStreamAudioCapability.unknown,
+        reason: 'English subtitle tracks must never imply dubbed audio',
       );
     },
   );
@@ -342,6 +415,58 @@ video-720.m3u8
       ], maximum: 0),
       isEmpty,
     );
+  });
+
+  test(
+    'optional HLS enrichment times out fail-open with raw streams',
+    () async {
+      final cancellationObserved = Completer<void>();
+      final raw = [
+        {
+          'url': 'https://cdn.example/master.m3u8',
+          'quality': 'Auto',
+          'audioCapability': 'sub',
+        },
+      ];
+
+      final result = await expandHlsVariantsWithinBudget(
+        raw,
+        null,
+        budget: const Duration(milliseconds: 10),
+        inspectItem: (_, cancellation) {
+          cancellation!.addListener(() {
+            if (!cancellationObserved.isCompleted) {
+              cancellationObserved.complete();
+            }
+          });
+          return Completer<List<Map<String, dynamic>>>().future;
+        },
+      );
+
+      expect(result, raw);
+      await expectLater(
+        cancellationObserved.future.timeout(const Duration(seconds: 1)),
+        completes,
+      );
+    },
+  );
+
+  test('parent cancellation still stops optional HLS enrichment', () async {
+    final parent = WebProviderCancellation();
+    final pending = expandHlsVariantsWithinBudget(
+      [
+        {'url': 'https://cdn.example/master.m3u8'},
+      ],
+      parent,
+      budget: const Duration(seconds: 1),
+      inspectItem: (_, cancellation) => cancellation!.whenCancelled.then(
+        (_) => throw const WebProviderSearchCancelled(),
+      ),
+    );
+
+    await Future<void>.delayed(Duration.zero);
+    parent.cancel();
+    await expectLater(pending, throwsA(isA<WebProviderSearchCancelled>()));
   });
 
   test('HLS inspection retries one transient response and timeout', () async {
@@ -843,6 +968,258 @@ video-720.m3u8
   );
 
   test(
+    'explicit supportsDubAudio setting runs both provider search modes',
+    () async {
+      final provider = SeanimeJavascriptProvider(
+        _javascriptAddon(
+          id: 'explicit-dub-audio-provider',
+          payload: r'''
+            class Provider {
+              getSettings() {
+                return {episodeServers: ['Fixture'], supportsDubAudio: true};
+              }
+              async search(input) {
+                return [{
+                  id: input.dub ? 'show-dub' : 'show-sub',
+                  title: input.query,
+                  subOrDub: input.dub ? 'dub' : 'sub'
+                }];
+              }
+              async findEpisodes(id) {
+                return [{id, number: 1, url: id}];
+              }
+              async findEpisodeServer(episode, server) {
+                return {server, videoSources: [{
+                  url: 'https://cdn.example.com/' + episode.url + '.mp4',
+                  quality: '1080p'
+                }]};
+              }
+            }
+          ''',
+        ),
+        validateResultTarget: (_) async {},
+      );
+
+      final results = await provider.streams(
+        const EpisodeReference(
+          anilistMediaId: 31,
+          title: 'Explicit Dub Audio Fixture',
+          episode: 1,
+        ),
+      );
+
+      expect(results.map((item) => item.effectiveAudioCapability).toSet(), {
+        WebStreamAudioCapability.sub,
+        WebStreamAudioCapability.dub,
+      });
+    },
+    timeout: const Timeout(Duration(seconds: 15)),
+    skip: Platform.isWindows
+        ? 'flutter_js loads its bridge from the packaged Windows app.'
+        : false,
+  );
+
+  test(
+    'undeclared Dub support gets one evidence-gated best-alias probe',
+    () async {
+      final provider = SeanimeJavascriptProvider(
+        _javascriptAddon(
+          id: 'undeclared-dub-provider',
+          payload: r'''
+            class Provider {
+              getSettings() { return {episodeServers: ['Fixture']}; }
+              async search(input) {
+                if (input.dub && input.query !== 'Undeclared Dub Fixture') {
+                  throw new Error('Dub probe used more than the best alias');
+                }
+                return [{
+                  id: input.dub ? 'show-dub' : 'show-sub',
+                  title: input.query,
+                  subOrDub: input.dub ? 'dub' : 'sub'
+                }];
+              }
+              async findEpisodes(id) {
+                return [{id, number: 1, url: id}];
+              }
+              async findEpisodeServer(episode, server) {
+                return {server, videoSources: [{
+                  url: 'https://cdn.example.com/' + episode.url + '.mp4'
+                }]};
+              }
+            }
+          ''',
+        ),
+        validateResultTarget: (_) async {},
+      );
+
+      final results = await provider.streams(
+        const EpisodeReference(
+          anilistMediaId: 32,
+          title: 'Undeclared Dub Fixture',
+          titleRomaji: 'Unused second alias',
+          episode: 1,
+        ),
+      );
+
+      expect(results, hasLength(2));
+      expect(results.map((item) => item.effectiveAudioCapability).toSet(), {
+        WebStreamAudioCapability.sub,
+        WebStreamAudioCapability.dub,
+      });
+    },
+    timeout: const Timeout(Duration(seconds: 15)),
+    skip: Platform.isWindows
+        ? 'flutter_js loads its bridge from the packaged Windows app.'
+        : false,
+  );
+
+  test(
+    'undeclared probe never labels a provider that ignores the Dub flag',
+    () async {
+      final provider = SeanimeJavascriptProvider(
+        _javascriptAddon(
+          id: 'ignored-dub-flag-provider',
+          payload: r'''
+            class Provider {
+              getSettings() { return {episodeServers: ['Fixture']}; }
+              async search(input) {
+                return [{id: 'show', title: input.query}];
+              }
+              async findEpisodes(id) {
+                return [{id: 'episode', number: 1}];
+              }
+              async findEpisodeServer(episode, server) {
+                return {server, videoSources: [{
+                  url: 'https://cdn.example.com/same-sub-feed.mp4'
+                }]};
+              }
+            }
+          ''',
+        ),
+        validateResultTarget: (_) async {},
+      );
+
+      final results = await provider.streams(
+        const EpisodeReference(
+          anilistMediaId: 34,
+          title: 'Ignored Dub Flag Fixture',
+          episode: 1,
+        ),
+      );
+
+      expect(results, hasLength(1));
+      expect(
+        results.single.effectiveAudioCapability,
+        WebStreamAudioCapability.sub,
+      );
+    },
+    timeout: const Timeout(Duration(seconds: 15)),
+    skip: Platform.isWindows
+        ? 'flutter_js loads its bridge from the packaged Windows app.'
+        : false,
+  );
+
+  test(
+    'an explicit supportsDub false declaration disables compatibility probing',
+    () async {
+      final provider = SeanimeJavascriptProvider(
+        _javascriptAddon(
+          id: 'explicit-no-dub-provider',
+          payload: r'''
+            class Provider {
+              getSettings() {
+                return {episodeServers: ['Fixture'], supportsDub: false};
+              }
+              async search(input) {
+                return [{
+                  id: input.dub ? 'unexpected-dub' : 'show-sub',
+                  title: input.query,
+                  subOrDub: input.dub ? 'dub' : 'sub'
+                }];
+              }
+              async findEpisodes(id) {
+                return [{id, number: 1, url: id}];
+              }
+              async findEpisodeServer(episode, server) {
+                return {server, videoSources: [{
+                  url: 'https://cdn.example.com/' + episode.url + '.mp4'
+                }]};
+              }
+            }
+          ''',
+        ),
+        validateResultTarget: (_) async {},
+      );
+
+      final results = await provider.streams(
+        const EpisodeReference(
+          anilistMediaId: 35,
+          title: 'Explicit No Dub Fixture',
+          episode: 1,
+        ),
+      );
+
+      expect(results, hasLength(1));
+      expect(results.single.uri.path, endsWith('/show-sub.mp4'));
+      expect(
+        results.single.effectiveAudioCapability,
+        WebStreamAudioCapability.sub,
+      );
+    },
+    timeout: const Timeout(Duration(seconds: 15)),
+    skip: Platform.isWindows
+        ? 'flutter_js loads its bridge from the packaged Windows app.'
+        : false,
+  );
+
+  test(
+    'native-only provider result matches the catalog native title',
+    () async {
+      final provider = SeanimeJavascriptProvider(
+        _javascriptAddon(
+          id: 'native-title-provider',
+          payload: r'''
+            class Provider {
+              getSettings() { return {episodeServers: ['Fixture']}; }
+              async search(input) {
+                if (input.query !== '葬送のフリーレン') return [];
+                return [{id: 'native-show', title: '葬送のフリーレン'}];
+              }
+              async findEpisodes(id) {
+                return [{id: 'episode-1', number: 1, title: 'Episode 1'}];
+              }
+              async findEpisodeServer(episode, server) {
+                return {server, videoSources: [{
+                  url: 'https://cdn.example.com/native-title.mp4'
+                }]};
+              }
+            }
+          ''',
+        ),
+        validateResultTarget: (_) async {},
+      );
+
+      final results = await provider.streams(
+        const EpisodeReference(
+          anilistMediaId: 154587,
+          title: 'Frieren: Beyond Journey’s End',
+          titleEnglish: 'Frieren: Beyond Journey’s End',
+          titleRomaji: 'Sousou no Frieren',
+          titleNative: '葬送のフリーレン',
+          episode: 1,
+        ),
+      );
+
+      expect(results, hasLength(1));
+      expect(results.single.matchedSeriesTitle, '葬送のフリーレン');
+    },
+    timeout: const Timeout(Duration(seconds: 15)),
+    skip: Platform.isWindows
+        ? 'flutter_js loads its bridge from the packaged Windows app.'
+        : false,
+  );
+
+  test(
     'explicit Dub server overrides a stale Sub search label',
     () async {
       final provider = SeanimeJavascriptProvider(
@@ -948,8 +1325,13 @@ video-720.m3u8
           id: 'failed-search-provider',
           payload: r'''
             class Provider {
-              getSettings() { return {}; }
-              async search(input) { throw new Error('network connection failed'); }
+              getSettings() { return {supportsDub: false}; }
+              async search(input) {
+                if (typeof input === 'string') {
+                  return [{id: 'must-not-run', title: input}];
+                }
+                throw new Error('network connection failed');
+              }
               async findEpisodes(id) { return []; }
               async findEpisodeServer(episode, server) { return null; }
             }
@@ -1078,6 +1460,212 @@ video-720.m3u8
   );
 
   test(
+    'exact title alone cannot cross a one-year catalog boundary',
+    () async {
+      final provider = SeanimeJavascriptProvider(
+        _javascriptAddon(
+          id: 'one-year-remake-provider',
+          payload: r'''
+            class Provider {
+              getSettings() { return {}; }
+              async search(input) {
+                return [{id: 'wrong-year', title: input.query, year: 2023}];
+              }
+              async findEpisodes(id) {
+                return [{id: 'episode-1', number: 1}];
+              }
+              async findEpisodeServer(episode, server) {
+                return {sources: [{
+                  url: 'https://cdn.example.com/wrong-year.mp4'
+                }]};
+              }
+            }
+          ''',
+        ),
+        validateResultTarget: (_) async {},
+      );
+
+      await expectLater(
+        provider.streams(
+          const EpisodeReference(
+            anilistMediaId: 89,
+            title: 'One Year Remake Fixture',
+            year: 2024,
+            episode: 1,
+          ),
+        ),
+        throwsA(
+          predicate<Object>(
+            (error) =>
+                isSeanimeProviderNoMatch(error) &&
+                seanimeProviderFailureDetails(error)?.stage == 'title_matching',
+          ),
+        ),
+      );
+    },
+    timeout: const Timeout(Duration(seconds: 15)),
+    skip: Platform.isWindows
+        ? 'flutter_js loads its bridge from the packaged Windows app.'
+        : false,
+  );
+
+  test(
+    'explicit Dub metadata can corroborate a one-year release difference',
+    () async {
+      final provider = SeanimeJavascriptProvider(
+        _javascriptAddon(
+          id: 'dub-release-year-provider',
+          payload: r'''
+            class Provider {
+              getSettings() { return {}; }
+              async search(input) {
+                return [{
+                  id: 'dub-release',
+                  title: input.query,
+                  year: 2025,
+                  subOrDub: 'dub'
+                }];
+              }
+              async findEpisodes(id) {
+                return [{id: 'episode-1', number: 1}];
+              }
+              async findEpisodeServer(episode, server) {
+                return {sources: [{
+                  url: 'https://cdn.example.com/dub-release-year.mp4'
+                }]};
+              }
+            }
+          ''',
+        ),
+        validateResultTarget: (_) async {},
+      );
+
+      final results = await provider.streams(
+        const EpisodeReference(
+          anilistMediaId: 90,
+          title: 'Dub Release Year Fixture',
+          year: 2024,
+          episode: 1,
+        ),
+      );
+
+      expect(results, hasLength(1));
+      expect(
+        results.single.effectiveAudioCapability,
+        WebStreamAudioCapability.dub,
+      );
+    },
+    timeout: const Timeout(Duration(seconds: 15)),
+    skip: Platform.isWindows
+        ? 'flutter_js loads its bridge from the packaged Windows app.'
+        : false,
+  );
+
+  test(
+    'numbered season survives a provider franchise-year mismatch',
+    () async {
+      final provider = SeanimeJavascriptProvider(
+        _javascriptAddon(
+          id: 'franchise-year-provider',
+          payload: r'''
+            class Provider {
+              getSettings() { return {episodeServers: ['Fixture']}; }
+              async search(input) {
+                return [{
+                  id: 'season-four',
+                  title: 'My Hero Academia Season 4',
+                  year: 2016
+                }];
+              }
+              async findEpisodes(id) {
+                return [{id: 'episode-1', number: 1, title: 'Episode 1'}];
+              }
+              async findEpisodeServer(episode, server) {
+                return {server, videoSources: [{
+                  url: 'https://cdn.example.com/season-four-episode-one.mp4'
+                }]};
+              }
+            }
+          ''',
+        ),
+        validateResultTarget: (_) async {},
+      );
+
+      final results = await provider.streams(
+        const EpisodeReference(
+          anilistMediaId: 38408,
+          title: 'My Hero Academia Season 4',
+          titleEnglish: 'My Hero Academia Season 4',
+          titleRomaji: 'Boku no Hero Academia 4th Season',
+          year: 2019,
+          episode: 1,
+        ),
+      );
+
+      expect(results, hasLength(1));
+      expect(results.single.matchedSeriesTitle, 'My Hero Academia Season 4');
+      expect(results.single.matchedEpisodeNumber, 1);
+    },
+    timeout: const Timeout(Duration(seconds: 15)),
+    skip: Platform.isWindows
+        ? 'flutter_js loads its bridge from the packaged Windows app.'
+        : false,
+  );
+
+  test(
+    'bare aliases cannot bypass a numbered catalog season',
+    () async {
+      final provider = SeanimeJavascriptProvider(
+        _javascriptAddon(
+          id: 'bare-season-alias-provider',
+          payload: r'''
+            class Provider {
+              getSettings() { return {supportsDub: false}; }
+              async search(input) {
+                return [{id: 'bare-show', title: 'Show'}];
+              }
+              async findEpisodes(id) {
+                return [{id: 'episode-1', number: 1}];
+              }
+              async findEpisodeServer(episode, server) {
+                return {sources: [{
+                  url: 'https://cdn.example.com/wrong-season.mp4'
+                }]};
+              }
+            }
+          ''',
+        ),
+        validateResultTarget: (_) async {},
+      );
+
+      await expectLater(
+        provider.streams(
+          const EpisodeReference(
+            anilistMediaId: 4004,
+            title: 'Show Season 4',
+            titleEnglish: 'Show Season 4',
+            titleRomaji: 'Show 4th Season',
+            titleNative: 'ショー',
+            alternativeTitles: ['Show'],
+            episode: 1,
+          ),
+        ),
+        throwsA(
+          predicate<Object>(
+            (error) =>
+                isSeanimeProviderNoMatch(error) &&
+                seanimeProviderFailureDetails(error)?.stage == 'title_matching',
+          ),
+        ),
+      );
+    },
+    timeout: const Timeout(Duration(seconds: 15)),
+    skip: Platform.isWindows
+        ? 'flutter_js loads its bridge from the packaged Windows app.'
+        : false,
+  );
+
+  test(
     'successful legacy empty search remains a genuine no-match',
     () async {
       final provider = SeanimeJavascriptProvider(
@@ -1116,6 +1704,101 @@ video-720.m3u8
       expect(
         seanimeProviderFailureMessage(failure),
         contains('no matching title'),
+      );
+    },
+    timeout: const Timeout(Duration(seconds: 15)),
+    skip: Platform.isWindows
+        ? 'flutter_js loads its bridge from the packaged Windows app.'
+        : false,
+  );
+
+  test(
+    'canonical clean-empty aliases get one bounded legacy string probe',
+    () async {
+      final provider = SeanimeJavascriptProvider(
+        _javascriptAddon(
+          id: 'canonical-empty-provider',
+          payload: r'''
+            class Provider {
+              getSettings() { return {supportsDub: false}; }
+              async search(input) {
+                if (typeof input === 'object') return [];
+                return [{id: 'legacy-only', title: input}];
+              }
+              async findEpisodes(id) {
+                return [{id: 'episode-1', number: 1}];
+              }
+              async findEpisodeServer(episode, server) {
+                return {sources: [{
+                  url: 'https://cdn.example.com/should-not-be-returned.mp4'
+                }]};
+              }
+            }
+          ''',
+        ),
+      );
+
+      final results = await provider.streams(
+        const EpisodeReference(
+          anilistMediaId: 33,
+          title: 'Canonical empty fixture',
+          episode: 1,
+        ),
+      );
+
+      expect(results, hasLength(1));
+      expect(results.single.matchedSeriesTitle, 'Canonical empty fixture');
+    },
+    timeout: const Timeout(Duration(seconds: 15)),
+    skip: Platform.isWindows
+        ? 'flutter_js loads its bridge from the packaged Windows app.'
+        : false,
+  );
+
+  test(
+    'legacy clean-empty Sub does not consume the bounded Dub probe',
+    () async {
+      final provider = SeanimeJavascriptProvider(
+        _javascriptAddon(
+          id: 'legacy-dub-only-provider',
+          payload: r'''
+            class Provider {
+              getSettings() { return {supportsDub: true}; }
+              async search(input, options) {
+                if (typeof input === 'object') return [];
+                if (!options || !options.dub) return [];
+                return [{
+                  id: 'legacy-dub',
+                  title: input,
+                  subOrDub: 'dub'
+                }];
+              }
+              async findEpisodes(id) {
+                return [{id: 'episode-1', number: 1}];
+              }
+              async findEpisodeServer(episode, server) {
+                return {sources: [{
+                  url: 'https://cdn.example.com/legacy-dub-only.mp4'
+                }]};
+              }
+            }
+          ''',
+        ),
+        validateResultTarget: (_) async {},
+      );
+
+      final results = await provider.streams(
+        const EpisodeReference(
+          anilistMediaId: 36,
+          title: 'Legacy Dub Only Fixture',
+          episode: 1,
+        ),
+      );
+
+      expect(results, hasLength(1));
+      expect(
+        results.single.effectiveAudioCapability,
+        WebStreamAudioCapability.dub,
       );
     },
     timeout: const Timeout(Duration(seconds: 15)),

@@ -1536,6 +1536,7 @@ EpisodeReference _episodeReference(AnimeSummary details, int episode) {
   final alternatives = <String?>{
     details.titleEnglish,
     details.titleRomaji,
+    details.titleNative,
     ...details.synonyms,
   }.whereType<String>().toSet()..remove(details.title);
   return EpisodeReference(
@@ -1547,6 +1548,7 @@ EpisodeReference _episodeReference(AnimeSummary details, int episode) {
     alternativeTitles: alternatives.toList(growable: false),
     titleEnglish: details.titleEnglish,
     titleRomaji: details.titleRomaji,
+    titleNative: details.titleNative,
     status: details.status,
     format: details.format,
     episodeCount: details.episodes,

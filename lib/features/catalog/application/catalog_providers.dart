@@ -128,6 +128,7 @@ List<AnimeSummary> searchOfflineAnime(
           anime.title,
           anime.titleEnglish,
           anime.titleRomaji,
+          anime.titleNative,
           ...anime.synonyms,
         ].whereType<String>().join(' ').toLowerCase();
         return terms.every(searchable.contains);

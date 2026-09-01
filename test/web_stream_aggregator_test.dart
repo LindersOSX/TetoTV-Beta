@@ -72,6 +72,47 @@ void main() {
     expect(result.streams.map((item) => item.providerId), ['one', 'two']);
   });
 
+  test('selective retry replaces only the requested provider outcome', () {
+    final retained = WebStreamResult(
+      providerId: 'working',
+      providerName: 'Working',
+      title: 'Working 1080p',
+      uri: Uri.parse('https://working.example/stream.m3u8'),
+    );
+    final recovered = WebStreamResult(
+      providerId: 'failed',
+      providerName: 'Recovered',
+      title: 'Recovered 720p',
+      uri: Uri.parse('https://recovered.example/stream.m3u8'),
+    );
+    final merged = mergeRetriedWebProviderAggregation(
+      current: WebStreamAggregation(
+        streams: [retained],
+        failures: const [
+          WebProviderFailure(
+            providerName: 'Failed',
+            providerId: 'failed',
+            message: 'Timed out.',
+          ),
+          WebProviderFailure(
+            providerName: 'No match',
+            providerId: 'no-match',
+            status: WebProviderFailureStatus.noMatch,
+            message: 'No match.',
+          ),
+        ],
+      ),
+      retry: WebStreamAggregation(streams: [recovered]),
+      retriedProviderIds: const {'FAILED'},
+    );
+
+    expect(merged.streams.map((stream) => stream.providerId), [
+      'failed',
+      'working',
+    ]);
+    expect(merged.failures.single.providerId, 'no-match');
+  });
+
   test('provider name isolates shared URLs when provider ids are empty', () {
     final sharedUri = Uri.parse('https://cdn.example.com/shared.m3u8');
     final result = mergeWebProviderOutcomes([
@@ -191,6 +232,65 @@ void main() {
       );
     },
   );
+
+  test('empty source responses are neutral no-matches', () async {
+    var noMatch = false;
+    final progress = await aggregateWebStreamingProvidersIncrementally(
+      [
+        _FakeProvider(
+          'empty-sources',
+          'Empty Sources',
+          () => throw StateError(
+            'NO_STREAM: no server sources '
+            '[stage=server_lookup; reason=empty_sources]',
+          ),
+        ),
+      ],
+      const EpisodeReference(
+        anilistMediaId: 2,
+        title: 'Classification fixture',
+        episode: 1,
+      ),
+      onFailure: (_, _, value) => noMatch = value,
+    ).last;
+
+    expect(noMatch, isTrue);
+    expect(
+      progress.aggregation.failures.single.status,
+      WebProviderFailureStatus.noMatch,
+    );
+    expect(progress.aggregation.failures.single.reason, 'empty_sources');
+  });
+
+  test('stream extraction empties remain actionable failures', () async {
+    var noMatch = true;
+    final progress = await aggregateWebStreamingProvidersIncrementally(
+      [
+        _FakeProvider(
+          'broken-extraction',
+          'Broken Extraction',
+          () => throw StateError(
+            'NO_STREAM: selected episode produced no playable stream '
+            '[stage=stream_extraction; reason=empty_sources]',
+          ),
+        ),
+      ],
+      const EpisodeReference(
+        anilistMediaId: 2,
+        title: 'Classification fixture',
+        episode: 1,
+      ),
+      onFailure: (_, _, value) => noMatch = value,
+    ).last;
+
+    expect(noMatch, isFalse);
+    expect(
+      progress.aggregation.failures.single.status,
+      WebProviderFailureStatus.failed,
+    );
+    expect(progress.aggregation.failures.single.stage, 'stream_extraction');
+    expect(progress.aggregation.failures.single.reason, 'empty_sources');
+  });
 
   test(
     'episode mismatches are a no-match and never record provider success',
@@ -467,6 +567,51 @@ void main() {
     await iterator.cancel();
   });
 
+  test(
+    'foreground budget completes without cancelling background providers',
+    () async {
+      final slow = Completer<List<WebStreamResult>>();
+      final progress = aggregateWebStreamingProvidersIncrementally(
+        [
+          _FakeProvider(
+            'fast',
+            'Fast',
+            () async => [
+              WebStreamResult(
+                providerId: 'fast',
+                providerName: 'Fast',
+                title: '1080p',
+                uri: Uri.parse('https://cdn.example.com/fast.m3u8'),
+              ),
+            ],
+          ),
+          _FakeProvider('slow', 'Slow', () => slow.future),
+        ],
+        const EpisodeReference(anilistMediaId: 1, title: 'Test', episode: 1),
+        deadline: const Duration(seconds: 1),
+        interactiveBudget: const Duration(milliseconds: 20),
+      );
+      final iterator = StreamIterator(progress);
+
+      expect(await iterator.moveNext(), isTrue);
+      expect(iterator.current.isForegroundComplete, isFalse);
+      expect(await iterator.moveNext(), isTrue);
+      expect(iterator.current.aggregation.streams.single.providerId, 'fast');
+      expect(iterator.current.isForegroundComplete, isFalse);
+      expect(await iterator.moveNext(), isTrue);
+      expect(iterator.current.isComplete, isFalse);
+      expect(iterator.current.isForegroundComplete, isTrue);
+      expect(iterator.current.pendingProviderNames, ['Slow']);
+      expect(iterator.current.aggregation.streams.single.providerId, 'fast');
+
+      slow.complete(const []);
+      expect(await iterator.moveNext(), isTrue);
+      expect(iterator.current.isComplete, isTrue);
+      expect(iterator.current.isForegroundComplete, isTrue);
+      await iterator.cancel();
+    },
+  );
+
   test('times out a stalled provider without losing a valid result', () async {
     final result = await aggregateWebStreamingProviders(
       [
@@ -490,6 +635,7 @@ void main() {
       ],
       const EpisodeReference(anilistMediaId: 1, title: 'Test', episode: 1),
       deadline: const Duration(milliseconds: 10),
+      cleanupBudget: const Duration(milliseconds: 10),
     );
 
     expect(result.streams.single.providerName, 'Working');
@@ -596,6 +742,140 @@ void main() {
     expect(maximumActive, 2);
   });
 
+  test('listener cancellation waits for active provider cleanup', () async {
+    final started = Completer<void>();
+    final cancellationObserved = Completer<void>();
+    final cleanupRelease = Completer<void>();
+    final settled = Completer<void>();
+    final progress = aggregateWebStreamingProvidersIncrementally(
+      [
+        _DelayedCleanupProvider(
+          'cleanup',
+          'Cleanup',
+          cleanupRelease.future,
+          onStarted: started.complete,
+          onCancelled: cancellationObserved.complete,
+          onSettled: settled.complete,
+        ),
+      ],
+      const EpisodeReference(anilistMediaId: 1, title: 'Test', episode: 1),
+      deadline: const Duration(minutes: 1),
+    );
+    final subscription = progress.listen((_) {});
+
+    await started.future.timeout(const Duration(seconds: 1));
+    var cancellationCompleted = false;
+    final cancellation = subscription.cancel().whenComplete(
+      () => cancellationCompleted = true,
+    );
+    await cancellationObserved.future.timeout(const Duration(seconds: 1));
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+
+    expect(cancellationCompleted, isFalse);
+    expect(settled.isCompleted, isFalse);
+
+    cleanupRelease.complete();
+    await cancellation.timeout(const Duration(seconds: 1));
+    expect(settled.isCompleted, isTrue);
+  });
+
+  test(
+    'broken provider cleanup cannot deadlock cancellation forever',
+    () async {
+      final started = Completer<void>();
+      final progress = aggregateWebStreamingProvidersIncrementally(
+        [
+          _FakeProvider('never-settles', 'Never settles', () {
+            started.complete();
+            return Completer<List<WebStreamResult>>().future;
+          }),
+        ],
+        const EpisodeReference(anilistMediaId: 1, title: 'Test', episode: 1),
+        deadline: const Duration(minutes: 1),
+        cleanupBudget: const Duration(milliseconds: 20),
+      );
+      final subscription = progress.listen((_) {});
+
+      await started.future.timeout(const Duration(seconds: 1));
+      await subscription.cancel().timeout(const Duration(seconds: 1));
+    },
+  );
+
+  test('provider timeout does not reuse its slot before cleanup', () async {
+    final cancellationObserved = Completer<void>();
+    final cleanupRelease = Completer<void>();
+    var queuedStarted = false;
+    final resultFuture = aggregateWebStreamingProviders(
+      [
+        _DelayedCleanupProvider(
+          'slow-cleanup',
+          'Slow cleanup',
+          cleanupRelease.future,
+          onStarted: () {},
+          onCancelled: cancellationObserved.complete,
+          onSettled: () {},
+        ),
+        _FakeProvider('queued', 'Queued', () async {
+          queuedStarted = true;
+          return const [];
+        }),
+      ],
+      const EpisodeReference(anilistMediaId: 1, title: 'Test', episode: 1),
+      deadline: const Duration(milliseconds: 10),
+      maxConcurrentProviders: 1,
+    );
+
+    await cancellationObserved.future.timeout(const Duration(seconds: 1));
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(queuedStarted, isFalse);
+
+    cleanupRelease.complete();
+    final result = await resultFuture.timeout(const Duration(seconds: 1));
+    expect(queuedStarted, isTrue);
+    expect(result.failures.first.providerId, 'slow-cleanup');
+    expect(result.failures.first.message, contains('Timed out'));
+  });
+
+  test(
+    'background deadline reports promptly but closes after cleanup',
+    () async {
+      final cancellationObserved = Completer<void>();
+      final cleanupRelease = Completer<void>();
+      final terminalProgress = Completer<WebStreamSearchProgress>();
+      final streamDone = Completer<void>();
+      final progress = aggregateWebStreamingProvidersIncrementally(
+        [
+          _DelayedCleanupProvider(
+            'background-cleanup',
+            'Background cleanup',
+            cleanupRelease.future,
+            onStarted: () {},
+            onCancelled: cancellationObserved.complete,
+            onSettled: () {},
+          ),
+        ],
+        const EpisodeReference(anilistMediaId: 1, title: 'Test', episode: 1),
+        deadline: const Duration(minutes: 1),
+        backgroundBudget: const Duration(milliseconds: 10),
+      );
+      progress.listen((event) {
+        if (event.isComplete && !terminalProgress.isCompleted) {
+          terminalProgress.complete(event);
+        }
+      }, onDone: streamDone.complete);
+
+      await cancellationObserved.future.timeout(const Duration(seconds: 1));
+      final terminal = await terminalProgress.future.timeout(
+        const Duration(seconds: 1),
+      );
+      expect(terminal.aggregation.failures.single.reason, 'session_deadline');
+      expect(streamDone.isCompleted, isFalse);
+
+      cleanupRelease.complete();
+      await streamDone.future.timeout(const Duration(seconds: 1));
+    },
+  );
+
   test(
     'cancelling discovery stops active work and never starts queued jobs',
     () async {
@@ -641,6 +921,79 @@ void main() {
     },
   );
 
+  test(
+    'background deadline cancels active work and leaves retryable states',
+    () async {
+      final activeStarted = Completer<void>();
+      final activeCancelled = Completer<void>();
+      var queuedStarts = 0;
+      var recordedFailures = 0;
+
+      final finalProgress = await aggregateWebStreamingProvidersIncrementally(
+        [
+          _CancellableProvider(
+            'active',
+            'Active',
+            onStarted: activeStarted.complete,
+            onCancelled: activeCancelled.complete,
+          ),
+          _FakeProvider('queued', 'Queued', () async {
+            queuedStarts++;
+            return const [];
+          }),
+        ],
+        const EpisodeReference(anilistMediaId: 1, title: 'Test', episode: 1),
+        deadline: const Duration(minutes: 1),
+        backgroundBudget: const Duration(milliseconds: 20),
+        maxConcurrentProviders: 1,
+        onFailure: (_, _, _) => recordedFailures++,
+      ).last;
+
+      await activeStarted.future.timeout(const Duration(seconds: 1));
+      await activeCancelled.future.timeout(const Duration(seconds: 1));
+      expect(queuedStarts, 0);
+      expect(
+        recordedFailures,
+        0,
+        reason: 'the scheduler deadline is not provider-health failure',
+      );
+      expect(finalProgress.isComplete, isTrue);
+      expect(finalProgress.isForegroundComplete, isTrue);
+      expect(finalProgress.activeProviders, 0);
+      expect(finalProgress.queuedProviders, 0);
+      expect(finalProgress.pendingProviderNames, isEmpty);
+      expect(finalProgress.aggregation.failures, hasLength(2));
+      expect(
+        finalProgress.aggregation.failures.map((failure) => failure.reason),
+        everyElement('session_deadline'),
+      );
+      expect(
+        finalProgress.aggregation.failures.first.message,
+        contains('Retry this provider'),
+      );
+    },
+  );
+
+  test(
+    'provider outcome timing contains only bounded execution metadata',
+    () async {
+      WebProviderExecutionOutcome? recorded;
+      await aggregateWebStreamingProvidersIncrementally(
+        [_FakeProvider('timed', 'Timed', () async => const [])],
+        const EpisodeReference(anilistMediaId: 1, title: 'Test', episode: 1),
+        onOutcome: (_, outcome) => recorded = outcome,
+      ).last;
+
+      expect(recorded, isNotNull);
+      expect(recorded!.status, WebProviderFailureStatus.noMatch.name);
+      expect(recorded!.stage, 'complete');
+      expect(recorded!.reason, 'empty_result');
+      expect(recorded!.resultCount, 0);
+      expect(recorded!.queuedFor, isA<Duration>());
+      expect(recorded!.elapsed, isA<Duration>());
+    },
+  );
+
   test('healthy providers are queued ahead of repeatedly failing ones', () {
     final addons = [
       _installedAddon('never-used'),
@@ -665,6 +1018,30 @@ void main() {
     ]);
   });
 
+  test('the most recently successful provider is queued first', () {
+    final addons = [
+      _installedAddon('older-success'),
+      _installedAddon('latest-success'),
+      _installedAddon('never-used'),
+    ];
+    final ordered = orderInstalledProvidersByHealth(addons, {
+      'older-success': ProviderHealth(
+        providerId: 'older-success',
+        lastSuccessAt: DateTime.utc(2026, 8, 1),
+      ),
+      'latest-success': ProviderHealth(
+        providerId: 'latest-success',
+        lastSuccessAt: DateTime.utc(2026, 8, 31),
+      ),
+    });
+
+    expect(ordered.map((addon) => addon.manifest.id), [
+      'latest-success',
+      'older-success',
+      'never-used',
+    ]);
+  });
+
   test('installed provider availability distinguishes advisory and paused', () {
     final broken = installedWebProviderAvailabilityFailure(
       _installedAddon('reported-broken', reportedBroken: true),
@@ -683,7 +1060,8 @@ void main() {
     expect(broken?.reason, 'reported_broken');
     expect(paused?.status, WebProviderFailureStatus.paused);
     expect(paused?.reason, 'health_quarantine');
-    expect(paused?.message, contains('Reset to retry now'));
+    expect(paused?.message, contains('still try it in the background'));
+    expect(webProviderAvailabilityAllowsBackgroundSearch(paused!), isTrue);
     final brokenAndPaused = installedWebProviderAvailabilityFailure(
       _installedAddon('broken-paused', reportedBroken: true),
       ProviderHealth(
@@ -692,6 +1070,10 @@ void main() {
       ),
     );
     expect(brokenAndPaused?.status, WebProviderFailureStatus.paused);
+    expect(
+      webProviderAvailabilityAllowsBackgroundSearch(brokenAndPaused!),
+      isTrue,
+    );
     expect(
       installedWebProviderAvailabilityFailure(_installedAddon('ready'), null),
       isNull,
@@ -716,6 +1098,7 @@ void main() {
       expect(failure?.status, WebProviderFailureStatus.unavailable);
       expect(failure?.reason, reason);
       expect(failure?.message, contains(message));
+      expect(webProviderAvailabilityAllowsBackgroundSearch(failure!), isFalse);
     }
   });
 
@@ -897,6 +1280,34 @@ void main() {
     expect(unsafe.toString(), isNot(contains('episode-title')));
   });
 
+  test('provider summaries expose bounded scheduler timing and counts', () {
+    final details = webProviderSearchSummaryDiagnosticDetails(
+      phase: 'progress',
+      diagnosticSessionId: 'provider-search-a1b2c3d4e5f6-42',
+      installedProviders: 200,
+      enabledProviders: 180,
+      searchableProviders: 170,
+      blockedProviders: 10,
+      completedProviders: 20,
+      returnedProviders: 2,
+      returnedResults: 5,
+      elapsedMs: 5000000,
+      activeProviders: 3,
+      queuedProviders: 147,
+      pendingProviders: 150,
+    );
+    final states = (details['state']! as List<Object?>)
+        .cast<Map<String, Object>>();
+    int countFor(String kind) =>
+        states.singleWhere((entry) => entry['kind'] == kind)['count']! as int;
+
+    expect(details['elapsed_ms'], 3600000);
+    expect(countFor('active_providers'), 3);
+    expect(countFor('queued_providers'), 147);
+    expect(countFor('pending_providers'), 150);
+    expect(sanitizeDiagnosticContext(details), isNotNull);
+  });
+
   test(
     'provider outcome diagnostics retain only their safe correlation id',
     () {
@@ -906,6 +1317,18 @@ void main() {
         ),
         {'session_id': 'provider-search-a1b2c3d4e5f6-42'},
       );
+      expect(
+        webProviderSearchOutcomeDiagnosticDetails(
+          'provider-search-a1b2c3d4e5f6-42',
+          elapsedMs: 1234,
+          queueMs: 567,
+        ),
+        {
+          'session_id': 'provider-search-a1b2c3d4e5f6-42',
+          'elapsed_ms': 1234,
+          'queue_ms': 567,
+        },
+      );
       final unsafe = webProviderSearchOutcomeDiagnosticDetails(
         'https://private.example/episode/7?token=do-not-record',
       );
@@ -913,7 +1336,7 @@ void main() {
       expect(unsafe.toString(), isNot(contains('private.example')));
       expect(unsafe.toString(), isNot(contains('do-not-record')));
 
-      for (final phase in const ['canceled', 'error']) {
+      for (final phase in const ['retry_final', 'canceled', 'error']) {
         expect(
           webProviderSearchSummaryDiagnosticDetails(
             phase: phase,
@@ -959,6 +1382,48 @@ void main() {
     await resolver.cancel();
     await player.cancel();
   });
+
+  test(
+    'retry initialization failure preserves the replayable base snapshot',
+    () async {
+      final working = WebStreamResult(
+        providerId: 'working',
+        providerName: 'Working',
+        title: 'Working 1080p',
+        uri: Uri.parse('https://working.example/stream.m3u8'),
+      );
+      final aggregator = _RetryInitializationFailureAggregator(working);
+      const episode = EpisodeReference(
+        anilistMediaId: 76,
+        title: 'Retry snapshot fixture',
+        episode: 1,
+      );
+
+      final initial = await aggregator
+          .watchSearchIncrementally(episode)
+          .toList();
+      expect(initial.last.aggregation.streams.single, working);
+
+      final retryEvents = <WebStreamSearchProgress>[];
+      final retryDone = Completer<void>();
+      aggregator
+          .retryProvidersIncrementally(episode, const {'failed'})
+          .listen(
+            retryEvents.add,
+            onError: (_, _) {},
+            onDone: retryDone.complete,
+          );
+      await retryDone.future.timeout(const Duration(seconds: 1));
+
+      expect(retryEvents, isNotEmpty);
+      expect(retryEvents.first.aggregation.streams.single, working);
+      final reattached = await aggregator
+          .watchSearchIncrementally(episode)
+          .first;
+      expect(reattached.aggregation.streams.single, working);
+      expect(reattached.aggregation.failures.single.providerId, 'failed');
+    },
+  );
 
   test(
     'same catalog episode shares discovery despite metadata differences',
@@ -1072,6 +1537,47 @@ void main() {
       await second.cancel();
     },
   );
+
+  test(
+    'replacement episode waits for stale provider runtime cleanup',
+    () async {
+      final aggregator = _CleanupAwareSupersedingAggregator();
+      final first = StreamIterator(
+        aggregator.watchSearchIncrementally(
+          const EpisodeReference(
+            anilistMediaId: 91,
+            title: 'Series',
+            episode: 1,
+          ),
+        ),
+      );
+      expect(await first.moveNext(), isTrue);
+      await aggregator.firstStarted.future.timeout(const Duration(seconds: 1));
+
+      final second = StreamIterator(
+        aggregator.watchSearchIncrementally(
+          const EpisodeReference(
+            anilistMediaId: 91,
+            title: 'Series',
+            episode: 2,
+          ),
+        ),
+      );
+      final secondProgress = second.moveNext();
+      await aggregator.firstCancelled.future.timeout(
+        const Duration(seconds: 1),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(aggregator.secondStarted, isFalse);
+
+      aggregator.cleanupRelease.complete();
+      expect(await secondProgress.timeout(const Duration(seconds: 1)), isTrue);
+      expect(aggregator.secondStarted, isTrue);
+
+      await first.cancel();
+      await second.cancel();
+    },
+  );
 }
 
 class _CountingSharedAggregator extends WebStreamAggregator {
@@ -1096,6 +1602,45 @@ class _CountingSharedAggregator extends WebStreamAggregator {
       totalProviders: 1,
     );
   }
+}
+
+class _RetryInitializationFailureAggregator extends WebStreamAggregator {
+  _RetryInitializationFailureAggregator(this.working)
+    : super(_ThrowingRetryAddonStore());
+
+  final WebStreamResult working;
+
+  @override
+  Stream<WebStreamSearchProgress> searchIncrementally(
+    EpisodeReference episode,
+  ) async* {
+    yield WebStreamSearchProgress(
+      aggregation: WebStreamAggregation(
+        streams: [working],
+        failures: const [
+          WebProviderFailure(
+            providerId: 'failed',
+            providerName: 'Failed',
+            status: WebProviderFailureStatus.failed,
+            message: 'Provider failed.',
+            reason: 'provider_error',
+          ),
+        ],
+      ),
+      completedProviders: 2,
+      totalProviders: 2,
+      foregroundComplete: true,
+      diagnosticSessionId: 'provider-search-a1b2c3d4e5f6-1',
+    );
+  }
+}
+
+class _ThrowingRetryAddonStore extends AddonStore {
+  _ThrowingRetryAddonStore() : super(TetoTvDatabase.instance);
+
+  @override
+  Future<Map<String, ProviderHealth>> providerHealth() =>
+      Future.error(StateError('retry setup failed'));
 }
 
 class _CancellableSharedAggregator extends WebStreamAggregator {
@@ -1147,6 +1692,47 @@ class _SupersedingSharedAggregator extends WebStreamAggregator {
       await Future<void>.delayed(const Duration(milliseconds: 20));
       activeSearches--;
     }
+  }
+}
+
+class _CleanupAwareSupersedingAggregator extends WebStreamAggregator {
+  _CleanupAwareSupersedingAggregator()
+    : super(
+        AddonStore(TetoTvDatabase.instance),
+        sharedSessionGrace: const Duration(seconds: 1),
+      );
+
+  final firstStarted = Completer<void>();
+  final firstCancelled = Completer<void>();
+  final cleanupRelease = Completer<void>();
+  bool secondStarted = false;
+
+  @override
+  Stream<WebStreamSearchProgress> searchIncrementally(
+    EpisodeReference episode,
+  ) {
+    if (episode.episode == 1) {
+      return aggregateWebStreamingProvidersIncrementally(
+        [
+          _DelayedCleanupProvider(
+            'first',
+            'First',
+            cleanupRelease.future,
+            onStarted: firstStarted.complete,
+            onCancelled: firstCancelled.complete,
+            onSettled: () {},
+          ),
+        ],
+        episode,
+        deadline: const Duration(minutes: 1),
+      );
+    }
+    return aggregateWebStreamingProvidersIncrementally([
+      _FakeProvider('second', 'Second', () async {
+        secondStarted = true;
+        return const [];
+      }),
+    ], episode);
   }
 }
 
@@ -1211,9 +1797,43 @@ class _CancellableProvider implements WebStreamingProvider {
   Future<List<WebStreamResult>> streams(
     EpisodeReference episode, {
     WebProviderCancellation? cancellation,
-  }) {
+  }) async {
     onStarted();
-    cancellation!.addListener(onCancelled);
-    return Completer<List<WebStreamResult>>().future;
+    await cancellation!.whenCancelled;
+    onCancelled();
+    throw const WebProviderSearchCancelled();
+  }
+}
+
+class _DelayedCleanupProvider implements WebStreamingProvider {
+  const _DelayedCleanupProvider(
+    this.id,
+    this.name,
+    this.cleanupRelease, {
+    required this.onStarted,
+    required this.onCancelled,
+    required this.onSettled,
+  });
+
+  @override
+  final String id;
+  @override
+  final String name;
+  final Future<void> cleanupRelease;
+  final void Function() onStarted;
+  final void Function() onCancelled;
+  final void Function() onSettled;
+
+  @override
+  Future<List<WebStreamResult>> streams(
+    EpisodeReference episode, {
+    WebProviderCancellation? cancellation,
+  }) async {
+    onStarted();
+    await cancellation!.whenCancelled;
+    onCancelled();
+    await cleanupRelease;
+    onSettled();
+    throw const WebProviderSearchCancelled();
   }
 }

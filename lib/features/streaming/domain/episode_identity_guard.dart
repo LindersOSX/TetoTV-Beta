@@ -41,6 +41,7 @@ int? catalogSeasonNumber(EpisodeReference episode) {
     episode.title,
     episode.titleEnglish,
     episode.titleRomaji,
+    episode.titleNative,
     ...episode.alternativeTitles,
   ]) {
     final season = _explicitSeasonNumber(value ?? '');
@@ -157,6 +158,7 @@ EpisodeIdentityAssessment assessExplicitProviderEpisodeIdentity({
               episode.title,
               episode.titleEnglish,
               episode.titleRomaji,
+              episode.titleNative,
               ...episode.alternativeTitles,
             ]
             .map((value) => _comparableSeriesTitleKey(value ?? ''))

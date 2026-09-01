@@ -29,8 +29,9 @@ final watchPartyClientProvider = Provider<WatchPartyClient>((ref) {
 
 final watchPartyControllerProvider =
     StateNotifierProvider<WatchPartyController, WatchPartyState>((ref) {
-      return WatchPartyController(
-        ref.watch(watchPartyClientProvider),
+      final client = ref.watch(watchPartyClientProvider);
+      final controller = WatchPartyController(
+        client,
         diagnostics: (message, details) =>
             TetoTvDatabase.instance.recordDiagnosticEvent(
               category: 'watch-party',
@@ -38,10 +39,34 @@ final watchPartyControllerProvider =
               details: details,
             ),
       );
+      ref.listen<WatchPartyPublicIdentity?>(watchPartyPublicIdentityProvider, (
+        previous,
+        identity,
+      ) {
+        if (_samePublicIdentity(previous, identity)) return;
+        unawaited(controller.refreshPublicIdentity(identity));
+      });
+      return controller;
     });
+
+bool _samePublicIdentity(
+  WatchPartyPublicIdentity? left,
+  WatchPartyPublicIdentity? right,
+) =>
+    left?.displayName == right?.displayName &&
+    left?.avatarUrl == right?.avatarUrl;
 
 typedef WatchPartyDiagnosticsSink =
     Future<void> Function(String message, Map<String, Object?> details);
+typedef WatchPartyIdentityRetryDelay = Future<void> Function(Duration delay);
+
+const _watchPartyIdentityRetryDelays = <Duration>[
+  Duration(milliseconds: 250),
+  Duration(milliseconds: 750),
+];
+
+Future<void> _defaultWatchPartyIdentityRetryDelay(Duration delay) =>
+    Future<void>.delayed(delay);
 
 enum WatchPartyConnection { disconnected, connecting, connected, reconnecting }
 
@@ -145,11 +170,17 @@ class WatchPartyState {
 const _unset = Object();
 
 class WatchPartyController extends StateNotifier<WatchPartyState> {
-  WatchPartyController(this._client, {this.diagnostics})
-    : super(const WatchPartyState());
+  WatchPartyController(
+    this._client, {
+    this.diagnostics,
+    WatchPartyIdentityRetryDelay? identityRetryDelay,
+  }) : _identityRetryDelay =
+           identityRetryDelay ?? _defaultWatchPartyIdentityRetryDelay,
+       super(const WatchPartyState());
 
   final WatchPartyClient _client;
   final WatchPartyDiagnosticsSink? diagnostics;
+  final WatchPartyIdentityRetryDelay _identityRetryDelay;
   Timer? _pollTimer;
   StreamSubscription<WatchPartyPlaybackSample>? _playbackSubscription;
   WatchPartyPlaybackPort? _playbackPort;
@@ -176,6 +207,8 @@ class WatchPartyController extends StateNotifier<WatchPartyState> {
   int _lastEventSequence = 0;
   int _localNoticeSequence = 1 << 30;
   bool _membershipActionInFlight = false;
+  bool _identityRefreshInFlight = false;
+  ({WatchPartyPublicIdentity? identity})? _pendingPublicIdentityUpdate;
   String? _pendingGuestSourceKey;
   int _pendingGuestSourceAfterAttachmentGeneration = -1;
   bool _pendingGuestAllowsDifferentSource = false;
@@ -193,6 +226,7 @@ class WatchPartyController extends StateNotifier<WatchPartyState> {
     await _sendLeaveBestEffort(previousSession);
     if (_disposed || generation != _generation) return false;
     try {
+      final requestedIdentity = _client.publicIdentity;
       final created = await _client.create();
       if (generation != _generation) return false;
       final snapshot = await _client.snapshot(created.session);
@@ -209,6 +243,10 @@ class WatchPartyController extends StateNotifier<WatchPartyState> {
         'role': 'host',
         'participant_count': snapshot.participantCount,
       });
+      final currentIdentity = _client.publicIdentity;
+      if (!_samePublicIdentity(requestedIdentity, currentIdentity)) {
+        unawaited(refreshPublicIdentity(currentIdentity));
+      }
       _schedulePoll(generation, immediate: false);
       if (_lastSample != null) unawaited(_publishHostSample(force: true));
       return true;
@@ -241,6 +279,7 @@ class WatchPartyController extends StateNotifier<WatchPartyState> {
     await _sendLeaveBestEffort(previousSession);
     if (_disposed || generation != _generation) return false;
     try {
+      final requestedIdentity = _client.publicIdentity;
       final joined = await _client.join(normalizedCode);
       if (generation != _generation) return false;
       state = state.copyWith(
@@ -258,6 +297,10 @@ class WatchPartyController extends StateNotifier<WatchPartyState> {
         'participant_count': joined.snapshot.participantCount,
         'host_media_available': joined.snapshot.media != null,
       });
+      final currentIdentity = _client.publicIdentity;
+      if (!_samePublicIdentity(requestedIdentity, currentIdentity)) {
+        unawaited(refreshPublicIdentity(currentIdentity));
+      }
       _schedulePoll(generation, immediate: false);
       if (_playbackPort case final port?) {
         final sample = _lastSample;
@@ -302,6 +345,89 @@ class WatchPartyController extends StateNotifier<WatchPartyState> {
     await _sendLeaveBestEffort(previousSession);
     if (_disposed || departureGeneration != _generation) return;
   }
+
+  /// Refreshes the room roster when a tracker profile finishes loading after
+  /// room entry, or clears it when that profile is removed. Failures are
+  /// deliberately non-fatal: playback and polling remain connected, and a
+  /// later identity change can retry the refresh.
+  Future<void> refreshPublicIdentity(WatchPartyPublicIdentity? identity) async {
+    if (_disposed) return;
+    _pendingPublicIdentityUpdate = (identity: identity);
+    if (_identityRefreshInFlight) return;
+    _identityRefreshInFlight = true;
+    try {
+      while (!_disposed) {
+        final pendingUpdate = _pendingPublicIdentityUpdate;
+        if (pendingUpdate == null) break;
+        _pendingPublicIdentityUpdate = null;
+        final pending = pendingUpdate.identity;
+        final session = state.session;
+        final generation = _generation;
+        if (session == null) continue;
+        var attempts = 0;
+        while (_identityRefreshContextIsCurrent(session, generation)) {
+          attempts += 1;
+          try {
+            final snapshot = await _client.updatePublicIdentity(
+              session: session,
+              identity: pending,
+            );
+            if (!_identityRefreshContextIsCurrent(session, generation)) break;
+            await _acceptPolledSnapshot(session, snapshot);
+            _recordDiagnostics('Watch Party public identity refreshed', {
+              'event': 'public_identity_refreshed',
+              'role': session.role.name,
+              'avatar_shared': pending?.avatarUrl != null,
+              'attempt_count': attempts,
+            });
+            break;
+          } on WatchPartyClientException catch (error) {
+            if (!_identityRefreshContextIsCurrent(session, generation)) break;
+            final replacementQueued = _pendingPublicIdentityUpdate != null;
+            final retryIndex = attempts - 1;
+            final canRetry =
+                !replacementQueued &&
+                _publicIdentityRefreshIsTransient(error) &&
+                retryIndex < _watchPartyIdentityRetryDelays.length;
+            if (!canRetry) {
+              // Old brokers return a permanent 404/405 for this append-only
+              // operation. Do not disconnect the room or retry those errors.
+              if (!replacementQueued) {
+                _recordDiagnostics(
+                  'Watch Party public identity refresh failed',
+                  {
+                    'event': 'public_identity_refresh_failed',
+                    'role': session.role.name,
+                    'avatar_shared': pending?.avatarUrl != null,
+                    'error_code': error.code,
+                    'attempt_count': attempts,
+                  },
+                );
+              }
+              break;
+            }
+            await _identityRetryDelay(
+              _watchPartyIdentityRetryDelays[retryIndex],
+            );
+            if (!_identityRefreshContextIsCurrent(session, generation) ||
+                _pendingPublicIdentityUpdate != null) {
+              break;
+            }
+          }
+        }
+      }
+    } finally {
+      _identityRefreshInFlight = false;
+    }
+  }
+
+  bool _identityRefreshContextIsCurrent(
+    WatchPartySession session,
+    int generation,
+  ) =>
+      !_disposed &&
+      generation == _generation &&
+      state.session?.token == session.token;
 
   Future<bool> transferHost(WatchPartyParticipant participant) =>
       _runMembershipAction(participant, transfer: true);
@@ -1359,6 +1485,7 @@ class WatchPartyController extends StateNotifier<WatchPartyState> {
   WatchPartySession? _disconnectLocally() {
     _pollTimer?.cancel();
     _pollTimer = null;
+    _pendingPublicIdentityUpdate = null;
     final session = state.session;
     _guestReady = false;
     _guestReadySession = null;
@@ -1451,6 +1578,14 @@ String watchPartyFriendlyError(WatchPartyClientException error) =>
       'timeout' || 'network_unavailable' =>
         'Watch Party cannot reach the room service right now.',
       _ => 'Watch Party could not complete that request.',
+    };
+
+bool _publicIdentityRefreshIsTransient(WatchPartyClientException error) =>
+    error.code == 'timeout' ||
+    error.code == 'network_unavailable' ||
+    switch (error.statusCode) {
+      final status? => status >= 500 && status <= 599,
+      null => false,
     };
 
 bool _watchPartySnapshotIsOlder(

@@ -26,16 +26,54 @@ WatchPartyPublicIdentity? watchPartyPublicIdentityForProfiles({
   required Map<TrackingProvider, TrackingAccountProfile> trackerProfiles,
   required TrackingProvider preferredTracker,
 }) {
+  final preferredProfile = _preferredOrDeterministicTrackerProfile(
+    trackerProfiles,
+    preferredTracker,
+  );
   if (activeLocalProfile case final local?) {
-    return WatchPartyPublicIdentity.tryCreate(displayName: local.displayName);
+    final localNameKey = _publicIdentityNameKey(local.displayName);
+    TrackingAccountProfile? matchingProfile;
+    final selected = trackerProfiles[preferredTracker];
+    if (selected != null &&
+        _publicIdentityNameKey(selected.username) == localNameKey) {
+      matchingProfile = selected;
+    } else {
+      for (final provider in TrackingProvider.values) {
+        final candidate = trackerProfiles[provider];
+        if (candidate != null &&
+            _publicIdentityNameKey(candidate.username) == localNameKey) {
+          matchingProfile = candidate;
+          break;
+        }
+      }
+    }
+    return WatchPartyPublicIdentity.tryCreate(
+      displayName: local.displayName,
+      // Do not associate an unrelated shared-device persona with a tracker
+      // picture. A case-insensitive normalized name match establishes that
+      // the local selection represents the same public tracker persona.
+      avatarUrl: matchingProfile?.avatarUrl,
+    );
   }
-  var profile = trackerProfiles[preferredTracker];
-  if (profile == null && trackerProfiles.isNotEmpty) {
-    profile = trackerProfiles.values.first;
-  }
-  if (profile == null) return null;
+  if (preferredProfile == null) return null;
   return WatchPartyPublicIdentity.tryCreate(
-    displayName: profile.username,
-    avatarUrl: profile.avatarUrl,
+    displayName: preferredProfile.username,
+    avatarUrl: preferredProfile.avatarUrl,
   );
 }
+
+TrackingAccountProfile? _preferredOrDeterministicTrackerProfile(
+  Map<TrackingProvider, TrackingAccountProfile> profiles,
+  TrackingProvider preferredTracker,
+) {
+  final preferred = profiles[preferredTracker];
+  if (preferred != null) return preferred;
+  for (final provider in TrackingProvider.values) {
+    final candidate = profiles[provider];
+    if (candidate != null) return candidate;
+  }
+  return null;
+}
+
+String _publicIdentityNameKey(String value) =>
+    value.trim().replaceAll(RegExp(r'\s+'), ' ').toLowerCase();

@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/features/settings/application/app_update_controller.dart';
 import 'package:anime_tv/features/settings/presentation/accounts_screen.dart';
 import 'package:flutter/material.dart';
@@ -182,6 +183,76 @@ void main() {
     );
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets(
+    'release history D-pad focus scrolls through blocked older releases',
+    (tester) async {
+      final releases = List.generate(
+        15,
+        (index) =>
+            _release('2.0.${20 - index}', androidVersionCode: 410020 - index),
+      );
+      await _pumpSystemUpdates(
+        tester,
+        AppUpdateState(
+          phase: AppUpdatePhase.upToDate,
+          currentVersion: '2.0.20+410020',
+          latestVersion: releases.first.version,
+          release: releases.first,
+          updateChannel: AppUpdateChannel.beta,
+          developerMode: true,
+          releaseHistory: releases,
+        ),
+      );
+
+      final installedRelease = find.text('2.0.20 Beta');
+      await tester.ensureVisible(installedRelease);
+      await tester.pumpAndSettle();
+      await tester.tap(installedRelease);
+      await tester.pumpAndSettle();
+
+      expect(
+        FocusManager.instance.primaryFocus?.debugLabel,
+        'settings.selection.Choose a compatible signed release.0',
+      );
+      for (var index = 1; index < releases.length; index++) {
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+        await tester.pumpAndSettle();
+      }
+
+      expect(
+        FocusManager.instance.primaryFocus?.debugLabel,
+        'settings.selection.Choose a compatible signed release.14',
+      );
+      final dialogScrollable = find.descendant(
+        of: find.byType(Dialog),
+        matching: find.byType(Scrollable),
+      );
+      expect(dialogScrollable, findsOneWidget);
+      final scrollState = tester.state<ScrollableState>(dialogScrollable);
+      expect(scrollState.position.pixels, greaterThan(0));
+
+      final lastRelease = find.text('2.0.6 Beta');
+      expect(lastRelease, findsOneWidget);
+      final blockedReleaseControl = tester.widget<TvFocusable>(
+        find.ancestor(of: lastRelease, matching: find.byType(TvFocusable)),
+      );
+      expect(blockedReleaseControl.enabled, isFalse);
+      final releaseRect = tester.getRect(lastRelease);
+      final scrollRect = tester.getRect(dialogScrollable);
+      expect(releaseRect.top, greaterThanOrEqualTo(scrollRect.top));
+      expect(releaseRect.bottom, lessThanOrEqualTo(scrollRect.bottom));
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+      expect(
+        find.text('Choose a compatible signed release'),
+        findsWidgets,
+        reason: 'A focused blocked downgrade must remain non-selectable.',
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
 }
 
 Future<void> _pumpSystemUpdates(

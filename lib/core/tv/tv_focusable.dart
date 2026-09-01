@@ -16,6 +16,8 @@ class TvFocusable extends StatefulWidget {
     this.autofocus = false,
     this.borderRadius = const BorderRadius.all(Radius.circular(14)),
     this.focusScale = 1.045,
+    this.showFocusContrastKeyline = true,
+    this.enabled = true,
     this.focusNode,
     this.onFocusChanged,
     this.onLongPress,
@@ -28,6 +30,19 @@ class TvFocusable extends StatefulWidget {
   final bool autofocus;
   final BorderRadius borderRadius;
   final double focusScale;
+
+  /// Keeps the dark contrast keyline used around ordinary TV controls.
+  ///
+  /// Artwork-led controls such as the profile avatar can disable it so their
+  /// theme-colored ring flows directly into the focus glow.
+  final bool showFocusContrastKeyline;
+
+  /// Whether activation, pointer feedback, and actionable semantics are on.
+  ///
+  /// Disabled controls can remain focusable when their parent needs D-pad
+  /// traversal for reading or scrolling, but they never click or invoke an
+  /// empty action.
+  final bool enabled;
   final FocusNode? focusNode;
   final ValueChanged<bool>? onFocusChanged;
   final VoidCallback? onLongPress;
@@ -56,7 +71,7 @@ class _TvFocusableState extends State<TvFocusable> {
   FocusNode get _focusNode => widget.focusNode ?? _fallbackFocusNode;
 
   void _activate(VoidCallback? action) {
-    if (action == null) return;
+    if (!widget.enabled || action == null) return;
     if (_clickSoundsEnabled) {
       unawaited(SystemSound.play(SystemSoundType.click));
     }
@@ -197,6 +212,7 @@ class _TvFocusableState extends State<TvFocusable> {
     final highlighted = _focused || _hovered || _pressed;
     return Semantics(
       button: true,
+      enabled: widget.enabled,
       child: Focus(
         canRequestFocus: false,
         onKeyEvent: _handleRemoteActivation,
@@ -226,17 +242,21 @@ class _TvFocusableState extends State<TvFocusable> {
                   ),
             },
             child: MouseRegion(
-              cursor: SystemMouseCursors.click,
+              cursor: widget.enabled
+                  ? SystemMouseCursors.click
+                  : MouseCursor.defer,
               child: GestureDetector(
                 behavior: HitTestBehavior.opaque,
-                onTapDown: (_) => _handlePress(true),
-                onTapCancel: () => _handlePress(false),
-                onTapUp: (_) => _handlePress(false),
-                onTap: () {
-                  _focusNode.requestFocus();
-                  _activate(widget.onPressed);
-                },
-                onLongPress: widget.onLongPress == null
+                onTapDown: widget.enabled ? (_) => _handlePress(true) : null,
+                onTapCancel: widget.enabled ? () => _handlePress(false) : null,
+                onTapUp: widget.enabled ? (_) => _handlePress(false) : null,
+                onTap: widget.enabled
+                    ? () {
+                        _focusNode.requestFocus();
+                        _activate(widget.onPressed);
+                      }
+                    : null,
+                onLongPress: !widget.enabled || widget.onLongPress == null
                     ? null
                     : () => _activate(widget.onLongPress),
                 child: AnimatedScale(
@@ -249,14 +269,14 @@ class _TvFocusableState extends State<TvFocusable> {
                       borderRadius: widget.borderRadius,
                       boxShadow: highlighted
                           ? [
-                              // The dark outer keyline keeps the Teto-red ring
-                              // distinct from primary red buttons; the red glow
-                              // remains visible on black and pale artwork.
-                              BoxShadow(
-                                color: palette.focusInnerKeyline,
-                                blurRadius: 0,
-                                spreadRadius: 2,
-                              ),
+                              if (widget.showFocusContrastKeyline)
+                                // The dark outer keyline keeps the focus ring
+                                // distinct from ordinary filled controls.
+                                BoxShadow(
+                                  color: palette.focusInnerKeyline,
+                                  blurRadius: 0,
+                                  spreadRadius: 2,
+                                ),
                               BoxShadow(
                                 color: palette.focusGlow,
                                 blurRadius: 11,
@@ -280,26 +300,27 @@ class _TvFocusableState extends State<TvFocusable> {
                         fit: StackFit.passthrough,
                         children: [
                           widget.child,
-                          Positioned.fill(
-                            child: IgnorePointer(
-                              child: AnimatedOpacity(
-                                opacity: highlighted ? 1 : 0,
-                                duration: const Duration(milliseconds: 80),
-                                child: Padding(
-                                  padding: const EdgeInsets.all(3),
-                                  child: DecoratedBox(
-                                    decoration: BoxDecoration(
-                                      borderRadius: widget.borderRadius,
-                                      border: Border.all(
-                                        color: palette.focusInnerKeyline,
-                                        width: 1,
+                          if (widget.showFocusContrastKeyline)
+                            Positioned.fill(
+                              child: IgnorePointer(
+                                child: AnimatedOpacity(
+                                  opacity: highlighted ? 1 : 0,
+                                  duration: const Duration(milliseconds: 80),
+                                  child: Padding(
+                                    padding: const EdgeInsets.all(3),
+                                    child: DecoratedBox(
+                                      decoration: BoxDecoration(
+                                        borderRadius: widget.borderRadius,
+                                        border: Border.all(
+                                          color: palette.focusInnerKeyline,
+                                          width: 1,
+                                        ),
                                       ),
                                     ),
                                   ),
                                 ),
                               ),
                             ),
-                          ),
                         ],
                       ),
                     ),

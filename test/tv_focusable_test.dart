@@ -40,6 +40,104 @@ void main() {
     );
   });
 
+  testWidgets('artwork focus can glow without a dark contrast keyline', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.dark,
+        home: Scaffold(
+          body: TvFocusable(
+            autofocus: true,
+            showFocusContrastKeyline: false,
+            onPressed: () {},
+            child: const SizedBox(width: 52, height: 52),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final animated = tester.widget<AnimatedContainer>(
+      find.byType(AnimatedContainer),
+    );
+    final decoration = animated.decoration! as BoxDecoration;
+    final foreground = animated.foregroundDecoration! as BoxDecoration;
+    expect(decoration.boxShadow, hasLength(1));
+    expect(decoration.boxShadow!.single.color, AppColors.focusGlow);
+    expect(foreground.border!.top.color, AppColors.focusRing);
+    final darkKeylines = tester
+        .widgetList<DecoratedBox>(
+          find.descendant(
+            of: find.byType(TvFocusable),
+            matching: find.byType(DecoratedBox),
+          ),
+        )
+        .where((box) {
+          final boxDecoration = box.decoration;
+          return boxDecoration is BoxDecoration &&
+              boxDecoration.border?.top.color == AppColors.focusInnerKeyline;
+        });
+    expect(darkKeylines, isEmpty);
+  });
+
+  testWidgets(
+    'disabled TV control stays focusable without actions or click feedback',
+    (tester) async {
+      final platformCalls = <MethodCall>[];
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+            platformCalls.add(call);
+            return null;
+          });
+      addTearDown(
+        () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(SystemChannels.platform, null),
+      );
+      var calls = 0;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: TvFocusable(
+              autofocus: true,
+              enabled: false,
+              onPressed: () => calls++,
+              child: const SizedBox(width: 100, height: 60),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      platformCalls.clear();
+
+      final semantics = tester.widget<Semantics>(
+        find
+            .descendant(
+              of: find.byType(TvFocusable),
+              matching: find.byType(Semantics),
+            )
+            .first,
+      );
+      final gesture = tester.widget<GestureDetector>(
+        find.descendant(
+          of: find.byType(TvFocusable),
+          matching: find.byType(GestureDetector),
+        ),
+      );
+      expect(semantics.properties.enabled, isFalse);
+      expect(gesture.onTap, isNull);
+      expect(FocusManager.instance.primaryFocus?.hasFocus, isTrue);
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.select);
+      await tester.pump();
+      expect(calls, 0);
+      expect(
+        platformCalls.where((call) => call.method == 'SystemSound.play'),
+        isEmpty,
+      );
+    },
+  );
+
   testWidgets('mouse hover receives the same Teto-red focus treatment', (
     tester,
   ) async {

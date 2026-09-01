@@ -478,6 +478,7 @@ class _DetailsWatchPartyClient extends WatchPartyClient {
   var createCalls = 0;
   var leaveCalls = 0;
   Completer<void>? createGate;
+  @override
   WatchPartyPublicIdentity? publicIdentity;
   List<WatchPartyParticipant> participants = const [
     WatchPartyParticipant(

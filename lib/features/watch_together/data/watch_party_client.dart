@@ -3,10 +3,15 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 
 class WatchPartyClientException implements Exception {
-  const WatchPartyClientException(this.code, {this.retryAfter});
+  const WatchPartyClientException(
+    this.code, {
+    this.retryAfter,
+    this.statusCode,
+  });
 
   final String code;
   final Duration? retryAfter;
+  final int? statusCode;
 
   @override
   String toString() => code;
@@ -61,6 +66,11 @@ class WatchPartyClient {
   @visibleForTesting
   WatchPartyPublicIdentity? get publicIdentityForTesting => _publicIdentity;
 
+  /// The current public room identity, if tracker/local profile loading has
+  /// completed. This is intentionally the already-sanitized public model and
+  /// never exposes account credentials or tracker identifiers.
+  WatchPartyPublicIdentity? get publicIdentity => _publicIdentity;
+
   Future<bool> health() async {
     final response = await _request(
       'GET',
@@ -68,7 +78,7 @@ class WatchPartyClient {
       authenticated: false,
     );
     final protocol = (response['protocol'] as num?)?.toInt() ?? 0;
-    return response['status'] == 'ok' && protocol >= 1 && protocol <= 4;
+    return response['status'] == 'ok' && protocol >= 1 && protocol <= 5;
   }
 
   Future<WatchPartyCreated> create() async {
@@ -170,6 +180,26 @@ class WatchPartyClient {
         session.roomCode,
       );
 
+  /// Publishes an identity that became available after room entry.
+  ///
+  /// Tracker profiles load asynchronously during app startup. A room can be
+  /// created or joined before that work finishes, so create/join alone cannot
+  /// be the only time an avatar is sent to the broker.
+  Future<WatchPartySnapshot> updatePublicIdentity({
+    required WatchPartySession session,
+    required WatchPartyPublicIdentity? identity,
+  }) async => _snapshotForRoom(
+    await _request(
+      'POST',
+      '/v1/watch-parties/${session.roomCode}/identity',
+      token: session.token,
+      // A null identity explicitly clears public tracker data when a user
+      // signs out or removes the selected profile while the room is active.
+      data: <String, Object?>{'identity': identity?.toJson()},
+    ),
+    session.roomCode,
+  );
+
   Future<WatchPartySnapshot> updateState({
     required WatchPartySession session,
     required int baseRevision,
@@ -233,34 +263,17 @@ class WatchPartyClient {
   Future<WatchPartySnapshot> setReady({
     required WatchPartySession session,
     required bool ready,
-  }) async {
-    final identity = _publicIdentity;
-    Map<String, Object?> value;
-    try {
-      value = await _request(
-        'POST',
-        '/v1/watch-parties/${session.roomCode}/ready',
-        token: session.token,
-        data: <String, Object>{
-          'ready': ready,
-          if (identity != null) 'identity': identity.toJson(),
-        },
-      );
-    } on WatchPartyClientException catch (error) {
-      if (identity == null ||
-          error.code != 'invalid_ready_state' &&
-              error.code != 'invalid_payload') {
-        rethrow;
-      }
-      value = await _request(
-        'POST',
-        '/v1/watch-parties/${session.roomCode}/ready',
-        token: session.token,
-        data: <String, Object>{'ready': ready},
-      );
-    }
-    return _snapshotForRoom(value, session.roomCode);
-  }
+  }) async => _snapshotForRoom(
+    await _request(
+      'POST',
+      '/v1/watch-parties/${session.roomCode}/ready',
+      token: session.token,
+      // Identity has its own serialized endpoint. Keeping readiness free of
+      // identity prevents a slow Ready(A) request from overwriting a newer B.
+      data: <String, Object>{'ready': ready},
+    ),
+    session.roomCode,
+  );
 
   Future<void> leave(WatchPartySession session) async {
     await _request(
@@ -349,6 +362,7 @@ class WatchPartyClient {
         retryAfter: retrySeconds == null
             ? null
             : Duration(seconds: retrySeconds),
+        statusCode: status,
       );
     }
     if (value == null) {

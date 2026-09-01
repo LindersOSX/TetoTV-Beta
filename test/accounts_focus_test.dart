@@ -245,9 +245,7 @@ void main() {
         matching: find.byType(TvFocusable),
       );
       final titleLanguageFocusable = find.descendant(
-        of: find.byKey(
-          const ValueKey('settings-appearance-title-language'),
-        ),
+        of: find.byKey(const ValueKey('settings-appearance-title-language')),
         matching: find.byType(TvFocusable),
       );
       final themeStudioRect = tester.getRect(themeStudioFocusable);
@@ -3299,76 +3297,75 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets(
-    'device keyboard stays closed while D-pad reaches Debrid results',
-    (tester) async {
-      FlutterSecureStorage.setMockInitialValues({
-        'input_use_built_in_keyboard': 'false',
-      });
-      tester.view.physicalSize = const Size(1280, 720);
-      tester.view.devicePixelRatio = 1;
-      addTearDown(tester.view.resetPhysicalSize);
-      addTearDown(tester.view.resetDevicePixelRatio);
+  testWidgets('device keyboard stays closed while D-pad reaches Debrid results', (
+    tester,
+  ) async {
+    FlutterSecureStorage.setMockInitialValues({
+      'input_use_built_in_keyboard': 'false',
+    });
+    tester.view.physicalSize = const Size(1280, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
 
-      await tester.pumpWidget(
-        const ProviderScope(child: MaterialApp(home: AccountsScreen())),
-      );
+    await tester.pumpWidget(
+      const ProviderScope(child: MaterialApp(home: AccountsScreen())),
+    );
+    await tester.pumpAndSettle();
+
+    await selectSettingsArea(tester, 'services');
+    for (final key in [
+      LogicalKeyboardKey.arrowDown,
+      LogicalKeyboardKey.arrowDown,
+      LogicalKeyboardKey.enter,
+      LogicalKeyboardKey.arrowDown,
+      LogicalKeyboardKey.enter,
+      LogicalKeyboardKey.arrowDown,
+      LogicalKeyboardKey.arrowDown,
+    ]) {
+      await tester.sendKeyEvent(key);
       await tester.pumpAndSettle();
+    }
 
-      await selectSettingsArea(tester, 'services');
-      for (final key in [
-        LogicalKeyboardKey.arrowDown,
-        LogicalKeyboardKey.arrowDown,
-        LogicalKeyboardKey.enter,
-        LogicalKeyboardKey.arrowDown,
-        LogicalKeyboardKey.enter,
-        LogicalKeyboardKey.arrowDown,
-        LogicalKeyboardKey.arrowDown,
-      ]) {
-        await tester.sendKeyEvent(key);
-        await tester.pumpAndSettle();
-      }
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.torbox.token',
+    );
+    expect(tester.testTextInput.isVisible, isFalse);
 
-      expect(
-        FocusManager.instance.primaryFocus?.debugLabel,
-        'accounts.torbox.token',
-      );
-      expect(tester.testTextInput.isVisible, isFalse);
+    for (var index = 0; index < 7; index++) {
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pumpAndSettle();
+    }
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.streaming.debrid-sort',
+    );
+    expect(tester.testTextInput.isVisible, isFalse);
 
-      for (var index = 0; index < 7; index++) {
-        await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
-        await tester.pumpAndSettle();
-      }
-      expect(
-        FocusManager.instance.primaryFocus?.debugLabel,
-        'accounts.streaming.debrid-sort',
-      );
-      expect(tester.testTextInput.isVisible, isFalse);
-
-      for (var index = 0; index < 6; index++) {
-        await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
-        await tester.pumpAndSettle();
-      }
-      expect(
-        FocusManager.instance.primaryFocus?.debugLabel,
-        'accounts.torbox.save',
-        reason:
-            'UP from Sources & stream order should enter the final visible Debrid row.',
-      );
+    for (var index = 0; index < 6; index++) {
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
       await tester.pumpAndSettle();
-      expect(
-        FocusManager.instance.primaryFocus?.debugLabel,
-        'accounts.torbox.token',
-      );
-      expect(tester.testTextInput.isVisible, isFalse);
+    }
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.torbox.save',
+      reason:
+          'UP from Sources & stream order should enter the final visible Debrid row.',
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+    await tester.pumpAndSettle();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.torbox.token',
+    );
+    expect(tester.testTextInput.isVisible, isFalse);
 
-      await tester.sendKeyEvent(LogicalKeyboardKey.select);
-      await tester.pump();
-      expect(tester.testTextInput.isVisible, isTrue);
-      expect(tester.takeException(), isNull);
-    },
-  );
+    await tester.sendKeyEvent(LogicalKeyboardKey.select);
+    await tester.pump();
+    expect(tester.testTextInput.isVisible, isTrue);
+    expect(tester.takeException(), isNull);
+  });
 }
 
 class _ConnectedRealDebridController extends RealDebridSettingsController {

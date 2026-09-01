@@ -5537,12 +5537,14 @@ class _SettingsOption<T> {
     required this.label,
     this.detail,
     this.enabled = true,
+    this.focusableWhenDisabled = false,
   });
 
   final T value;
   final String label;
   final String? detail;
   final bool enabled;
+  final bool focusableWhenDisabled;
 }
 
 Future<T?> _showSettingsSelectionDialog<T>({
@@ -5553,8 +5555,99 @@ Future<T?> _showSettingsSelectionDialog<T>({
 }) => showDialog<T>(
   context: context,
   barrierDismissible: true,
-  builder: (context) {
+  builder: (context) =>
+      _SettingsSelectionDialog<T>(label: label, value: value, options: options),
+);
+
+class _SettingsSelectionDialog<T> extends StatefulWidget {
+  const _SettingsSelectionDialog({
+    required this.label,
+    required this.value,
+    required this.options,
+  });
+
+  final String label;
+  final T value;
+  final List<_SettingsOption<T>> options;
+
+  @override
+  State<_SettingsSelectionDialog<T>> createState() =>
+      _SettingsSelectionDialogState<T>();
+}
+
+class _SettingsSelectionDialogState<T>
+    extends State<_SettingsSelectionDialog<T>> {
+  late final List<FocusNode> _optionFocusNodes;
+
+  bool _canFocus(int index) {
+    final option = widget.options[index];
+    return option.enabled || option.focusableWhenDisabled;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _optionFocusNodes = List.generate(
+      widget.options.length,
+      (index) =>
+          FocusNode(debugLabel: 'settings.selection.${widget.label}.$index'),
+    );
+  }
+
+  @override
+  void dispose() {
+    for (final node in _optionFocusNodes) {
+      node.dispose();
+    }
+    super.dispose();
+  }
+
+  int? _nextFocusableIndex(int index, int offset) {
+    for (
+      var candidate = index + offset;
+      candidate >= 0 && candidate < widget.options.length;
+      candidate += offset
+    ) {
+      if (_canFocus(candidate)) return candidate;
+    }
+    return null;
+  }
+
+  KeyEventResult _handleOptionKey(int index, KeyEvent event) {
+    final offset = switch (event.logicalKey) {
+      LogicalKeyboardKey.arrowUp => -1,
+      LogicalKeyboardKey.arrowDown => 1,
+      _ => 0,
+    };
+    if (offset == 0) return KeyEventResult.ignored;
+    if (event is KeyDownEvent || event is KeyRepeatEvent) {
+      final targetIndex = _nextFocusableIndex(index, offset);
+      if (targetIndex != null) {
+        requestTvFocusAndReveal(
+          _optionFocusNodes[targetIndex],
+          towardEnd: offset > 0,
+          duration: const Duration(milliseconds: 90),
+        );
+      }
+    }
+    // Keep vertical traversal inside the modal. Consuming key-up as well
+    // avoids a remote packet leaking into the settings screen underneath.
+    return KeyEventResult.handled;
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final tvScale = _usesTvSettingsScale(context);
+    final selectedIndex = widget.options.indexWhere(
+      (option) =>
+          option.value == widget.value &&
+          (option.enabled || option.focusableWhenDisabled),
+    );
+    final firstFocusableIndex = selectedIndex >= 0
+        ? selectedIndex
+        : widget.options.indexWhere(
+            (option) => option.enabled || option.focusableWhenDisabled,
+          );
     return Dialog(
       backgroundColor: Colors.transparent,
       child: Container(
@@ -5576,7 +5669,7 @@ Future<T?> _showSettingsSelectionDialog<T>({
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                label,
+                widget.label,
                 style: Theme.of(context).textTheme.titleLarge?.copyWith(
                   fontSize: tvScale ? 18 : null,
                   fontWeight: FontWeight.w800,
@@ -5584,75 +5677,25 @@ Future<T?> _showSettingsSelectionDialog<T>({
               ),
               SizedBox(height: tvScale ? 7 : 14),
               Flexible(
-                child: ListView.separated(
-                  shrinkWrap: true,
-                  itemCount: options.length,
-                  separatorBuilder: (_, _) => SizedBox(height: tvScale ? 4 : 8),
-                  itemBuilder: (context, index) {
-                    final option = options[index];
-                    final optionControl = TvFocusable(
-                      autofocus: option.enabled && option.value == value,
-                      onPressed: () => Navigator.of(context).pop(option.value),
-                      borderRadius: BorderRadius.circular(9),
-                      child: Container(
-                        width: double.infinity,
-                        padding: EdgeInsets.symmetric(
-                          horizontal: tvScale ? 9 : 16,
-                          vertical: tvScale ? 6 : 13,
+                child: SingleChildScrollView(
+                  child: Column(
+                    children: [
+                      for (
+                        var index = 0;
+                        index < widget.options.length;
+                        index++
+                      ) ...[
+                        _buildOption(
+                          context,
+                          index,
+                          autofocus: index == firstFocusableIndex,
+                          tvScale: tvScale,
                         ),
-                        decoration: BoxDecoration(
-                          color: option.value == value
-                              ? context.appPalette.accent.withValues(alpha: .28)
-                              : context.appPalette.surfaceRaised,
-                          borderRadius: BorderRadius.circular(9),
-                        ),
-                        child: Row(
-                          children: [
-                            Icon(
-                              option.value == value
-                                  ? Icons.radio_button_checked_rounded
-                                  : Icons.radio_button_off_rounded,
-                              color: option.value == value
-                                  ? context.appPalette.accentBright
-                                  : context.appPalette.mutedText,
-                            ),
-                            SizedBox(width: tvScale ? 7 : 12),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    option.label,
-                                    style: TextStyle(
-                                      color: _settingsPrimaryText(context),
-                                      fontWeight: FontWeight.w900,
-                                    ),
-                                  ),
-                                  if (option.detail case final detail?) ...[
-                                    const SizedBox(height: 2),
-                                    Text(
-                                      detail,
-                                      style: TextStyle(
-                                        color: context.appPalette.mutedText,
-                                        fontSize: tvScale ? 12 : 11,
-                                      ),
-                                    ),
-                                  ],
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    );
-                    if (option.enabled) return optionControl;
-                    return ExcludeFocus(
-                      excluding: true,
-                      child: IgnorePointer(
-                        child: Opacity(opacity: .45, child: optionControl),
-                      ),
-                    );
-                  },
+                        if (index != widget.options.length - 1)
+                          SizedBox(height: tvScale ? 4 : 8),
+                      ],
+                    ],
+                  ),
                 ),
               ),
             ],
@@ -5660,8 +5703,87 @@ Future<T?> _showSettingsSelectionDialog<T>({
         ),
       ),
     );
-  },
-);
+  }
+
+  Widget _buildOption(
+    BuildContext context,
+    int index, {
+    required bool autofocus,
+    required bool tvScale,
+  }) {
+    final option = widget.options[index];
+    final canFocus = _canFocus(index);
+    final optionContent = Opacity(
+      opacity: option.enabled ? 1 : .45,
+      child: Container(
+        width: double.infinity,
+        padding: EdgeInsets.symmetric(
+          horizontal: tvScale ? 9 : 16,
+          vertical: tvScale ? 6 : 13,
+        ),
+        decoration: BoxDecoration(
+          color: option.value == widget.value
+              ? context.appPalette.accent.withValues(alpha: .28)
+              : context.appPalette.surfaceRaised,
+          borderRadius: BorderRadius.circular(9),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              option.value == widget.value
+                  ? Icons.radio_button_checked_rounded
+                  : Icons.radio_button_off_rounded,
+              color: option.value == widget.value
+                  ? context.appPalette.accentBright
+                  : context.appPalette.mutedText,
+            ),
+            SizedBox(width: tvScale ? 7 : 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    option.label,
+                    style: TextStyle(
+                      color: _settingsPrimaryText(context),
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  if (option.detail case final detail?) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      detail,
+                      style: TextStyle(
+                        color: context.appPalette.mutedText,
+                        fontSize: tvScale ? 12 : 11,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+    final optionControl = TvFocusable(
+      focusNode: _optionFocusNodes[index],
+      autofocus: autofocus,
+      enabled: option.enabled,
+      onKeyEvent: (_, event) => _handleOptionKey(index, event),
+      onPressed: option.enabled
+          ? () => Navigator.of(context).pop(option.value)
+          : () {},
+      borderRadius: BorderRadius.circular(9),
+      child: optionContent,
+    );
+    if (canFocus) return optionControl;
+    return ExcludeFocus(
+      excluding: true,
+      child: IgnorePointer(child: optionControl),
+    );
+  }
+}
 
 class _SettingsSelection<T> extends StatelessWidget {
   const _SettingsSelection({
@@ -7321,6 +7443,7 @@ class _DeveloperUpdatePanel extends StatelessWidget {
               currentVersion: state.currentVersion,
               releaseVersionCode: release.androidVersionCode,
             ),
+            focusableWhenDisabled: true,
           ),
       ],
     );
@@ -7387,6 +7510,7 @@ class _DeveloperUpdatePanel extends StatelessWidget {
                       currentVersion: state.currentVersion,
                       releaseVersionCode: release.androidVersionCode,
                     ),
+                    focusableWhenDisabled: true,
                   ),
               ],
               onSelected: onReleaseSelected,

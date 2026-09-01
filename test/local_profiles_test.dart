@@ -134,7 +134,7 @@ void main() {
     );
   });
 
-  test('Watch Party uses active local name without a tracker or avatar', () {
+  test('Watch Party shares an avatar only for the same local persona', () {
     final localIdentity = watchPartyPublicIdentityForProfiles(
       activeLocalProfile: const LocalProfile(
         id: 'localprofile000001',
@@ -151,6 +151,27 @@ void main() {
       preferredTracker: TrackingProvider.anilist,
     );
     expect(localIdentity?.toJson(), {'display_name': 'Living Room'});
+
+    final matchingLocalIdentity = watchPartyPublicIdentityForProfiles(
+      activeLocalProfile: const LocalProfile(
+        id: 'localprofile000002',
+        displayName: '  tracker   USER ',
+      ),
+      trackerProfiles: const {
+        TrackingProvider.anilist: TrackingAccountProfile(
+          provider: TrackingProvider.anilist,
+          username: 'Tracker User',
+          avatarUrl:
+              'https://s4.anilist.co/file/anilistcdn/user/avatar/large/b1.jpg',
+        ),
+      },
+      preferredTracker: TrackingProvider.anilist,
+    );
+    expect(matchingLocalIdentity?.toJson(), {
+      'display_name': 'tracker USER',
+      'avatar_url':
+          'https://s4.anilist.co/file/anilistcdn/user/avatar/large/b1.jpg',
+    });
 
     final trackerIdentity = watchPartyPublicIdentityForProfiles(
       activeLocalProfile: null,

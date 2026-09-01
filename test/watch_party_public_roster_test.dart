@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
+import 'package:anime_tv/features/settings/application/local_profiles_controller.dart';
 import 'package:anime_tv/features/settings/application/tracking_accounts_controller.dart';
 import 'package:anime_tv/features/watch_together/application/watch_party_controller.dart';
 import 'package:anime_tv/features/watch_together/application/watch_party_public_identity_provider.dart';
@@ -98,6 +100,60 @@ void main() {
         displayName: List<String>.filled(49, 'x').join(),
       ),
       isNull,
+    );
+  });
+
+  test('matching local persona keeps the preferred tracker public avatar', () {
+    final identity = watchPartyPublicIdentityForProfiles(
+      activeLocalProfile: const LocalProfile(
+        id: 'local-profile-1',
+        displayName: '  shared   VIEWER  ',
+      ),
+      trackerProfiles: const <TrackingProvider, TrackingAccountProfile>{
+        TrackingProvider.anilist: TrackingAccountProfile(
+          provider: TrackingProvider.anilist,
+          username: 'Shared Viewer',
+          avatarUrl: 'https://img.anili.st/user/123/avatar.png',
+        ),
+        TrackingProvider.myAnimeList: TrackingAccountProfile(
+          provider: TrackingProvider.myAnimeList,
+          username: 'shared viewer',
+          avatarUrl:
+              'https://api-cdn.myanimelist.net/images/userimages/456/avatar.jpg',
+        ),
+      },
+      preferredTracker: TrackingProvider.myAnimeList,
+    );
+
+    expect(identity?.toJson(), {
+      'display_name': 'shared VIEWER',
+      'avatar_url':
+          'https://api-cdn.myanimelist.net/images/userimages/456/avatar.jpg',
+    });
+
+    final deterministicFallback = watchPartyPublicIdentityForProfiles(
+      activeLocalProfile: const LocalProfile(
+        id: 'local-profile-2',
+        displayName: 'Shared Viewer',
+      ),
+      trackerProfiles: const <TrackingProvider, TrackingAccountProfile>{
+        TrackingProvider.anilist: TrackingAccountProfile(
+          provider: TrackingProvider.anilist,
+          username: 'Different AniList User',
+          avatarUrl: 'https://img.anili.st/user/999/avatar.png',
+        ),
+        TrackingProvider.myAnimeList: TrackingAccountProfile(
+          provider: TrackingProvider.myAnimeList,
+          username: 'shared viewer',
+          avatarUrl:
+              'https://cdn.myanimelist.net/images/userimages/456/avatar.jpg',
+        ),
+      },
+      preferredTracker: TrackingProvider.anilist,
+    );
+    expect(
+      deterministicFallback?.avatarUrl,
+      'https://cdn.myanimelist.net/images/userimages/456/avatar.jpg',
     );
   });
 
@@ -272,16 +328,12 @@ void main() {
               requests.add(options);
               final attempt = (attempts[options.path] ?? 0) + 1;
               attempts[options.path] = attempt;
-              if (attempt == 1) {
+              if (attempt == 1 && !options.path.endsWith('/ready')) {
                 handler.resolve(
                   Response<Object?>(
                     requestOptions: options,
                     statusCode: 400,
-                    data: {
-                      'error': options.path.endsWith('/ready')
-                          ? 'invalid_ready_state'
-                          : 'invalid_payload',
-                    },
+                    data: const {'error': 'invalid_payload'},
                   ),
                 );
                 return;
@@ -323,8 +375,8 @@ void main() {
       final joined = await client.join('23456789');
       await client.setReady(session: joined.session, ready: true);
 
-      expect(requests, hasLength(6));
-      for (var index = 0; index < requests.length; index += 2) {
+      expect(requests, hasLength(5));
+      for (var index = 0; index < 4; index += 2) {
         final first = requests[index].data as Map;
         final fallback = requests[index + 1].data as Map;
         expect(first['identity'], {
@@ -340,6 +392,188 @@ void main() {
         expect(serialized, isNot(contains('oauth')));
         expect(serialized, isNot(contains('token')));
       }
+      expect(requests.last.path, endsWith('/ready'));
+      expect(requests.last.data, {'ready': true});
+    },
+  );
+
+  test('in-flight Ready cannot carry an identity older than refresh', () async {
+    final readyStarted = Completer<void>();
+    RequestInterceptorHandler? heldReadyHandler;
+    RequestOptions? readyRequest;
+    RequestOptions? identityRequest;
+    final dio = Dio(BaseOptions(baseUrl: 'https://tetotv.example'))
+      ..interceptors.add(
+        InterceptorsWrapper(
+          onRequest: (options, handler) {
+            if (options.path.endsWith('/ready')) {
+              readyRequest = options;
+              heldReadyHandler = handler;
+              readyStarted.complete();
+              return;
+            }
+            identityRequest = options;
+            handler.resolve(
+              Response<Object?>(
+                requestOptions: options,
+                statusCode: 200,
+                data: _snapshotJson(),
+              ),
+            );
+          },
+        ),
+      );
+    final client = WatchPartyClient(
+      baseUrl: 'https://tetotv.example',
+      dio: dio,
+    );
+    final session = WatchPartySession(
+      roomCode: '23456789',
+      token: List<String>.filled(48, 'b').join(),
+      role: WatchPartyRole.guest,
+      expiresAt: DateTime.utc(2030),
+      watchUrl: Uri.parse('https://tetotv.example/watch?room=23456789'),
+    );
+    client.setPublicIdentity(
+      WatchPartyPublicIdentity.tryCreate(displayName: 'Identity A'),
+    );
+
+    final ready = client.setReady(session: session, ready: true);
+    await readyStarted.future;
+    final identityB = WatchPartyPublicIdentity.tryCreate(
+      displayName: 'Identity B',
+      avatarUrl: 'https://img.anili.st/user/123/avatar.png',
+    )!;
+    client.setPublicIdentity(identityB);
+    await client.updatePublicIdentity(session: session, identity: identityB);
+
+    expect(readyRequest?.data, {'ready': true});
+    expect(identityRequest?.data, {
+      'identity': {
+        'display_name': 'Identity B',
+        'avatar_url': 'https://img.anili.st/user/123/avatar.png',
+      },
+    });
+    final handler = heldReadyHandler;
+    expect(handler, isNotNull);
+    handler!.resolve(
+      Response<Object?>(
+        requestOptions: readyRequest!,
+        statusCode: 200,
+        data: _snapshotJson(),
+      ),
+    );
+    await ready;
+  });
+
+  test('client refreshes a late cross-tracker public avatar in the room', () async {
+    RequestOptions? recorded;
+    final dio = Dio(BaseOptions(baseUrl: 'https://tetotv.example'))
+      ..interceptors.add(
+        InterceptorsWrapper(
+          onRequest: (options, handler) {
+            recorded = options;
+            handler.resolve(
+              Response<Object?>(
+                requestOptions: options,
+                statusCode: 200,
+                data: {
+                  ..._snapshotJson(),
+                  'participants': [
+                    {
+                      'display_name': 'AniList Host',
+                      'participant_id': 'abcdefghijklmnop',
+                      'avatar_url': 'https://img.anili.st/user/123/avatar.png',
+                      'role': 'host',
+                      'ready': true,
+                    },
+                    {
+                      'display_name': 'MAL Guest',
+                      'participant_id': 'qrstuvwxyzABCDEF',
+                      'avatar_url':
+                          'https://api-cdn.myanimelist.net/images/userimages/456/avatar.jpg',
+                      'role': 'guest',
+                      'ready': false,
+                    },
+                  ],
+                },
+              ),
+            );
+          },
+        ),
+      );
+    final client = WatchPartyClient(
+      baseUrl: 'https://tetotv.example',
+      dio: dio,
+    );
+    final identity = WatchPartyPublicIdentity.tryCreate(
+      displayName: 'MAL Guest',
+      avatarUrl:
+          'https://api-cdn.myanimelist.net/images/userimages/456/avatar.jpg?t=1725123456',
+    )!;
+    final snapshot = await client.updatePublicIdentity(
+      session: WatchPartySession(
+        roomCode: '23456789',
+        token: List<String>.filled(48, 'b').join(),
+        role: WatchPartyRole.guest,
+        expiresAt: DateTime.utc(2030),
+        watchUrl: Uri.parse('https://tetotv.example/watch?room=23456789'),
+      ),
+      identity: identity,
+    );
+
+    expect(recorded?.method, 'POST');
+    expect(recorded?.path, '/v1/watch-parties/23456789/identity');
+    expect(recorded?.headers['Authorization'], startsWith('Bearer '));
+    expect(recorded?.data, {
+      'identity': {
+        'display_name': 'MAL Guest',
+        'avatar_url':
+            'https://api-cdn.myanimelist.net/images/userimages/456/avatar.jpg',
+      },
+    });
+    expect(snapshot.participants.map((item) => item.avatarUrl), [
+      'https://img.anili.st/user/123/avatar.png',
+      'https://api-cdn.myanimelist.net/images/userimages/456/avatar.jpg',
+    ]);
+  });
+
+  test(
+    'client sends an explicit null identity when tracker data is removed',
+    () async {
+      RequestOptions? recorded;
+      final dio = Dio(BaseOptions(baseUrl: 'https://tetotv.example'))
+        ..interceptors.add(
+          InterceptorsWrapper(
+            onRequest: (options, handler) {
+              recorded = options;
+              handler.resolve(
+                Response<Object?>(
+                  requestOptions: options,
+                  statusCode: 200,
+                  data: _snapshotJson(),
+                ),
+              );
+            },
+          ),
+        );
+      final client = WatchPartyClient(
+        baseUrl: 'https://tetotv.example',
+        dio: dio,
+      );
+
+      await client.updatePublicIdentity(
+        session: WatchPartySession(
+          roomCode: '23456789',
+          token: List<String>.filled(48, 'b').join(),
+          role: WatchPartyRole.guest,
+          expiresAt: DateTime.utc(2030),
+          watchUrl: Uri.parse('https://tetotv.example/watch?room=23456789'),
+        ),
+        identity: null,
+      );
+
+      expect(recorded?.data, {'identity': null});
     },
   );
 }

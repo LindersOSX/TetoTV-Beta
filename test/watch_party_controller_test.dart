@@ -38,6 +38,205 @@ void main() {
     expect(controller.state.message, contains('eight-digit'));
   });
 
+  test(
+    'late tracker identity refresh keeps only the newest queued avatar',
+    () async {
+      final firstStarted = Completer<void>();
+      final firstGate = Completer<void>();
+      final client = _FakeWatchPartyClient()
+        ..identityRefreshStarted = firstStarted
+        ..identityRefreshGate = firstGate;
+      final controller = WatchPartyController(client);
+      addTearDown(controller.dispose);
+      expect(await controller.create(), isTrue);
+
+      final first = WatchPartyPublicIdentity.tryCreate(
+        displayName: 'AniList Viewer',
+        avatarUrl: 'https://img.anili.st/user/123/avatar.png',
+      )!;
+      final newest = WatchPartyPublicIdentity.tryCreate(
+        displayName: 'MAL Viewer',
+        avatarUrl:
+            'https://api-cdn.myanimelist.net/images/userimages/456/avatar.jpg?t=1725123456',
+      )!;
+      final refresh = controller.refreshPublicIdentity(first);
+      await firstStarted.future;
+      await controller.refreshPublicIdentity(newest);
+      firstGate.complete();
+      await refresh;
+
+      expect(client.refreshedIdentities.map((item) => item!.toJson()), [
+        {
+          'display_name': 'AniList Viewer',
+          'avatar_url': 'https://img.anili.st/user/123/avatar.png',
+        },
+        {
+          'display_name': 'MAL Viewer',
+          'avatar_url':
+              'https://api-cdn.myanimelist.net/images/userimages/456/avatar.jpg',
+        },
+      ]);
+    },
+  );
+
+  test('queued tracker logout clears a late avatar refresh', () async {
+    final firstStarted = Completer<void>();
+    final firstGate = Completer<void>();
+    final client = _FakeWatchPartyClient()
+      ..identityRefreshStarted = firstStarted
+      ..identityRefreshGate = firstGate;
+    final controller = WatchPartyController(client);
+    addTearDown(controller.dispose);
+    expect(await controller.create(), isTrue);
+
+    final identity = WatchPartyPublicIdentity.tryCreate(
+      displayName: 'AniList Viewer',
+      avatarUrl: 'https://img.anili.st/user/123/avatar.png',
+    )!;
+    final refresh = controller.refreshPublicIdentity(identity);
+    await firstStarted.future;
+    await controller.refreshPublicIdentity(null);
+    firstGate.complete();
+    await refresh;
+
+    expect(client.refreshedIdentities, [identity, null]);
+  });
+
+  test('late identity refresh retries timeout and server failures', () async {
+    final delays = <Duration>[];
+    final client = _FakeWatchPartyClient()
+      ..identityRefreshErrors.addAll(const [
+        WatchPartyClientException('timeout'),
+        WatchPartyClientException('server_error', statusCode: 503),
+      ]);
+    final controller = WatchPartyController(
+      client,
+      identityRetryDelay: (delay) async => delays.add(delay),
+    );
+    addTearDown(controller.dispose);
+    expect(await controller.create(), isTrue);
+    final identity = WatchPartyPublicIdentity.tryCreate(
+      displayName: 'Retry Viewer',
+      avatarUrl: 'https://img.anili.st/user/123/avatar.png',
+    )!;
+
+    await controller.refreshPublicIdentity(identity);
+
+    expect(client.refreshedIdentities, [identity, identity, identity]);
+    expect(delays, const [
+      Duration(milliseconds: 250),
+      Duration(milliseconds: 750),
+    ]);
+  });
+
+  test('unsupported old broker identity route is not retried', () async {
+    final delays = <Duration>[];
+    final client = _FakeWatchPartyClient()
+      ..identityRefreshErrors.add(
+        const WatchPartyClientException('not_found', statusCode: 404),
+      );
+    final controller = WatchPartyController(
+      client,
+      identityRetryDelay: (delay) async => delays.add(delay),
+    );
+    addTearDown(controller.dispose);
+    expect(await controller.create(), isTrue);
+    final identity = WatchPartyPublicIdentity.tryCreate(
+      displayName: 'Old Broker Viewer',
+    )!;
+
+    await controller.refreshPublicIdentity(identity);
+
+    expect(client.refreshedIdentities, [identity]);
+    expect(delays, isEmpty);
+    expect(controller.state.isActive, isTrue);
+  });
+
+  test(
+    'newest identity replaces a stale refresh during retry backoff',
+    () async {
+      final delayStarted = Completer<void>();
+      final delayGate = Completer<void>();
+      final client = _FakeWatchPartyClient()
+        ..identityRefreshErrors.add(
+          const WatchPartyClientException('network_unavailable'),
+        );
+      final controller = WatchPartyController(
+        client,
+        identityRetryDelay: (_) {
+          delayStarted.complete();
+          return delayGate.future;
+        },
+      );
+      addTearDown(controller.dispose);
+      expect(await controller.create(), isTrue);
+      final stale = WatchPartyPublicIdentity.tryCreate(displayName: 'Stale')!;
+      final newest = WatchPartyPublicIdentity.tryCreate(displayName: 'Newest')!;
+
+      final refresh = controller.refreshPublicIdentity(stale);
+      await delayStarted.future;
+      await controller.refreshPublicIdentity(newest);
+      delayGate.complete();
+      await refresh;
+
+      expect(client.refreshedIdentities, [stale, newest]);
+    },
+  );
+
+  test('leaving the room cancels a pending identity retry', () async {
+    final delayStarted = Completer<void>();
+    final delayGate = Completer<void>();
+    final client = _FakeWatchPartyClient()
+      ..identityRefreshErrors.add(const WatchPartyClientException('timeout'));
+    final controller = WatchPartyController(
+      client,
+      identityRetryDelay: (_) {
+        delayStarted.complete();
+        return delayGate.future;
+      },
+    );
+    addTearDown(controller.dispose);
+    expect(await controller.create(), isTrue);
+    final identity = WatchPartyPublicIdentity.tryCreate(
+      displayName: 'Leaving Viewer',
+    )!;
+
+    final refresh = controller.refreshPublicIdentity(identity);
+    await delayStarted.future;
+    await controller.leave();
+    delayGate.complete();
+    await refresh;
+
+    expect(client.refreshedIdentities, [identity]);
+    expect(controller.state.session, isNull);
+  });
+
+  test('disposing the controller cancels a pending identity retry', () async {
+    final delayStarted = Completer<void>();
+    final delayGate = Completer<void>();
+    final client = _FakeWatchPartyClient()
+      ..identityRefreshErrors.add(const WatchPartyClientException('timeout'));
+    final controller = WatchPartyController(
+      client,
+      identityRetryDelay: (_) {
+        delayStarted.complete();
+        return delayGate.future;
+      },
+    );
+    expect(await controller.create(), isTrue);
+    final identity = WatchPartyPublicIdentity.tryCreate(
+      displayName: 'Disposed Viewer',
+    )!;
+
+    final refresh = controller.refreshPublicIdentity(identity);
+    await delayStarted.future;
+    controller.dispose();
+    delayGate.complete();
+    await refresh;
+
+    expect(client.refreshedIdentities, [identity]);
+  });
+
   test('client requires one root HTTPS origin', () {
     for (final value in const [
       'http://tetotv.example',
@@ -52,6 +251,32 @@ void main() {
       );
     }
   });
+
+  test(
+    'client accepts the append-only protocol-v5 broker health response',
+    () async {
+      final dio = Dio(BaseOptions(baseUrl: 'https://tetotv.example'))
+        ..interceptors.add(
+          InterceptorsWrapper(
+            onRequest: (options, handler) => handler.resolve(
+              Response<Object?>(
+                requestOptions: options,
+                statusCode: 200,
+                data: const {'status': 'ok', 'protocol': 5},
+              ),
+            ),
+          ),
+        );
+
+      expect(
+        await WatchPartyClient(
+          baseUrl: 'https://tetotv.example',
+          dio: dio,
+        ).health(),
+        isTrue,
+      );
+    },
+  );
 
   test('only an attached guest yields playback authority to the host', () {
     final guestLobby = WatchPartyState(
@@ -2125,6 +2350,10 @@ class _FakeWatchPartyClient extends WatchPartyClient {
   Completer<void>? leaveStarted;
   Completer<void>? leaveGate;
   int leaveCalls = 0;
+  final refreshedIdentities = <WatchPartyPublicIdentity?>[];
+  final identityRefreshErrors = <WatchPartyClientException>[];
+  Completer<void>? identityRefreshStarted;
+  Completer<void>? identityRefreshGate;
 
   @override
   Future<WatchPartyCreated> create() async =>
@@ -2147,6 +2376,23 @@ class _FakeWatchPartyClient extends WatchPartyClient {
     if (started != null && !started.isCompleted) started.complete();
     await snapshotGate?.future;
     return value;
+  }
+
+  @override
+  Future<WatchPartySnapshot> updatePublicIdentity({
+    required WatchPartySession session,
+    required WatchPartyPublicIdentity? identity,
+  }) async {
+    refreshedIdentities.add(identity);
+    final started = identityRefreshStarted;
+    if (started != null && !started.isCompleted) started.complete();
+    if (identityRefreshErrors.isNotEmpty) {
+      throw identityRefreshErrors.removeAt(0);
+    }
+    final gate = identityRefreshGate;
+    identityRefreshGate = null;
+    await gate?.future;
+    return session.role == WatchPartyRole.host ? hostSnapshot : joinSnapshot;
   }
 
   @override

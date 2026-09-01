@@ -1566,6 +1566,10 @@ class _ProfileMenuButton extends StatelessWidget {
               ? _profileTriggerBorderRadius
               : _profileAvatarBorderRadius,
           focusScale: compactAvatar ? 1.01 : 1.02,
+          // The avatar already has the theme-colored outline. Let its focus
+          // glow meet that outline directly instead of inserting the generic
+          // black TV-control keyline around it.
+          showFocusContrastKeyline: !compactAvatar,
           child: Container(
             key: ValueKey('main-nav-profile-$slug'),
             padding: EdgeInsets.symmetric(

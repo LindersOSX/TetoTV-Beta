@@ -1,4 +1,5 @@
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/tv/tv_navigation.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
@@ -226,6 +227,7 @@ class _TvTextInputState extends ConsumerState<TvTextInput>
           inputFormatters: widget.inputFormatters,
           maxLength: widget.maxLength,
           numericOnly: widget.numericOnly,
+          reduceWidthForTelevision: ref.read(isTelevisionProvider),
           autofillSuggestions: widget.autofillSuggestions,
         ),
       );
@@ -573,6 +575,7 @@ class TvKeyboardDialog extends StatefulWidget {
     this.inputFormatters = const <TextInputFormatter>[],
     this.maxLength,
     this.numericOnly = false,
+    this.reduceWidthForTelevision = true,
     this.autofillSuggestions = const [],
     super.key,
   });
@@ -583,6 +586,7 @@ class TvKeyboardDialog extends StatefulWidget {
   final List<TextInputFormatter> inputFormatters;
   final int? maxLength;
   final bool numericOnly;
+  final bool reduceWidthForTelevision;
   final List<String> autofillSuggestions;
 
   @override
@@ -712,17 +716,26 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
   }
 
   KeyEventResult _handlePhysicalKeyboard(FocusNode _, KeyEvent event) {
+    final isBackEvent =
+        event.logicalKey == LogicalKeyboardKey.escape ||
+        event.logicalKey == LogicalKeyboardKey.goBack ||
+        event.logicalKey == LogicalKeyboardKey.browserBack;
+    if (isBackEvent) {
+      // A TV remote sends Back as a down/up pair. Popping the dialog on key
+      // down used to expose the underlying route before key up arrived, so
+      // that second event could immediately back out of (or close) the app.
+      // Keep the dialog alive through key down/repeat, then dismiss it while
+      // consuming key up as part of the same remote press.
+      if (event is KeyUpEvent) {
+        Navigator.of(context).pop();
+      }
+      return KeyEventResult.handled;
+    }
     if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
       return KeyEventResult.ignored;
     }
     if (event.logicalKey == LogicalKeyboardKey.backspace) {
       _backspace();
-      return KeyEventResult.handled;
-    }
-    if (event.logicalKey == LogicalKeyboardKey.escape ||
-        event.logicalKey == LogicalKeyboardKey.goBack ||
-        event.logicalKey == LogicalKeyboardKey.browserBack) {
-      Navigator.of(context).pop();
       return KeyEventResult.handled;
     }
     if (event.logicalKey == LogicalKeyboardKey.enter ||
@@ -770,9 +783,21 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
       0.0,
       double.infinity,
     );
-    final desiredWidth = widget.numericOnly ? 820.0 : 1160.0;
-    final panelWidth = desiredWidth.clamp(0.0, maximumPanelWidth).toDouble();
-    final widthScale = (panelWidth / desiredWidth).clamp(.64, 1.0);
+    final fullWidth = widget.numericOnly ? 820.0 : 1160.0;
+    final formerPanelWidth = fullWidth.clamp(0.0, maximumPanelWidth).toDouble();
+    // Preserve the existing phone layout, but keep TV keyboards centered and
+    // purposefully narrower than the panel that would previously have fit in
+    // this exact viewport. This keeps the requested reduction consistent on
+    // 720p/960dp TV layouts instead of applying it only to very wide screens.
+    final tvWidthFactor = widget.numericOnly ? .50 : .70;
+    final reduceTvWidth = widget.reduceWidthForTelevision && !narrow;
+    final reducedNominalWidth = reduceTvWidth
+        ? fullWidth * tvWidthFactor
+        : fullWidth;
+    final panelWidth = reduceTvWidth
+        ? formerPanelWidth * tvWidthFactor
+        : formerPanelWidth;
+    final widthScale = (panelWidth / reducedNominalWidth).clamp(.64, 1.0);
     final heightTarget = availableHeight < 500
         ? (widget.numericOnly ? 720.0 : 620.0)
         : (widget.numericOnly ? 640.0 : 525.0);

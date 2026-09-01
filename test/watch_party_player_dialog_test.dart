@@ -225,6 +225,7 @@ class _HudWatchPartyClient extends WatchPartyClient {
   var includeGuest = true;
   var snapshotRole = WatchPartyRole.host;
   var revision = 0;
+  @override
   WatchPartyPublicIdentity? publicIdentity;
 
   @override

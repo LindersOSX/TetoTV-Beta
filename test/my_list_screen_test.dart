@@ -365,6 +365,7 @@ void main() {
       find.descendant(of: profileSwitcher, matching: find.byType(TvFocusable)),
     );
     expect(profileFocusable.borderRadius, BorderRadius.circular(13));
+    expect(profileFocusable.showFocusContrastKeyline, isFalse);
     expect(find.byKey(const ValueKey('main-nav-settings')), findsOneWidget);
     expect(find.text('TetoFan'), findsNothing);
     expect(find.text('MALFan'), findsNothing);

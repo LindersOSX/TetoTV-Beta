@@ -1,4 +1,5 @@
 import 'package:anime_tv/core/widgets/tv_text_input.dart';
+import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -112,6 +113,16 @@ void main() {
 
     final keyboardPanel = find.byKey(const ValueKey('tv-keyboard-panel'));
     final keyboardRect = tester.getRect(keyboardPanel);
+    expect(
+      keyboardRect.width,
+      inInclusiveRange(790, 825),
+      reason: 'the wide TV QWERTY keyboard is about thirty percent narrower',
+    );
+    expect(
+      keyboardRect.center.dx,
+      closeTo(640, .5),
+      reason: 'the TV QWERTY keyboard stays horizontally centered',
+    );
     expect(
       keyboardRect.height,
       lessThanOrEqualTo(210),
@@ -254,6 +265,16 @@ void main() {
       find.byKey(const ValueKey('tv-keyboard-panel')),
     );
     expect(
+      numericPanelRect.width,
+      inInclusiveRange(400, 420),
+      reason: 'the wide TV number pad is about half its former width',
+    );
+    expect(
+      numericPanelRect.center.dx,
+      closeTo(640, .5),
+      reason: 'the TV number pad stays horizontally centered',
+    );
+    expect(
       numericPanelRect.height,
       lessThanOrEqualTo(225),
       reason: 'the room-code keyboard must keep the compact TV footprint',
@@ -317,5 +338,176 @@ void main() {
     await tester.tap(find.byType(EditableText));
     await tester.pumpAndSettle();
     expect(find.byType(TvKeyboardDialog), findsNothing);
+  });
+
+  testWidgets('remote Back dismisses only the TV keyboard dialog', (
+    tester,
+  ) async {
+    FlutterSecureStorage.setMockInitialValues({
+      'input_use_built_in_keyboard': 'true',
+    });
+    final controller = TextEditingController();
+    addTearDown(controller.dispose);
+    var underlyingBackEvents = 0;
+
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(
+          home: Focus(
+            autofocus: true,
+            onKeyEvent: (_, event) {
+              if (event.logicalKey == LogicalKeyboardKey.goBack) {
+                underlyingBackEvents += 1;
+              }
+              return KeyEventResult.ignored;
+            },
+            child: Scaffold(
+              body: TvTextInput(controller: controller, labelText: 'Search'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Search'));
+    await tester.pumpAndSettle();
+    expect(find.byType(TvKeyboardDialog), findsOneWidget);
+
+    await tester.sendKeyDownEvent(
+      LogicalKeyboardKey.goBack,
+      physicalKey: PhysicalKeyboardKey.escape,
+    );
+    await tester.pump();
+    expect(
+      find.byType(TvKeyboardDialog),
+      findsOneWidget,
+      reason: 'the route underneath must not be exposed before key up',
+    );
+    expect(underlyingBackEvents, 0);
+
+    await tester.sendKeyUpEvent(
+      LogicalKeyboardKey.goBack,
+      physicalKey: PhysicalKeyboardKey.escape,
+    );
+    await tester.pumpAndSettle();
+    expect(find.byType(TvKeyboardDialog), findsNothing);
+    expect(
+      underlyingBackEvents,
+      0,
+      reason: 'the complete remote Back press belongs to the keyboard',
+    );
+  });
+
+  testWidgets('QWERTY reduction follows the former width on a 960dp TV', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(960, 540);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    FlutterSecureStorage.setMockInitialValues({
+      'input_use_built_in_keyboard': 'true',
+    });
+    final controller = TextEditingController();
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(
+          home: Scaffold(
+            body: TvTextInput(controller: controller, labelText: 'Search'),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Search'));
+    await tester.pumpAndSettle();
+
+    final panel = tester.getRect(
+      find.byKey(const ValueKey('tv-keyboard-panel')),
+    );
+    // The former panel filled 920dp after 20dp side insets; 70% is 644dp.
+    expect(panel.width, closeTo(644, .5));
+    expect(panel.center.dx, closeTo(480, .5));
+  });
+
+  testWidgets('landscape phone keeps the former keyboard width', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(960, 540);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    FlutterSecureStorage.setMockInitialValues({
+      'input_use_built_in_keyboard': 'true',
+    });
+    final controller = TextEditingController();
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [isTelevisionProvider.overrideWith((_) => false)],
+        child: MaterialApp(
+          home: Scaffold(
+            body: TvTextInput(controller: controller, labelText: 'Search'),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Search'));
+    await tester.pumpAndSettle();
+
+    final panel = tester.getRect(
+      find.byKey(const ValueKey('tv-keyboard-panel')),
+    );
+    expect(panel.width, closeTo(920, .5));
+    expect(panel.center.dx, closeTo(480, .5));
+  });
+
+  testWidgets('number-pad reduction follows the former width on a 720dp TV', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(720, 540);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    FlutterSecureStorage.setMockInitialValues({
+      'input_use_built_in_keyboard': 'true',
+    });
+    final controller = TextEditingController();
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(
+          home: Scaffold(
+            body: TvTextInput(
+              controller: controller,
+              labelText: 'Room code',
+              numericOnly: true,
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Room code'));
+    await tester.pumpAndSettle();
+
+    final panel = tester.getRect(
+      find.byKey(const ValueKey('tv-keyboard-panel')),
+    );
+    // The former panel filled 680dp after 20dp side insets; half is 340dp.
+    expect(panel.width, closeTo(340, .5));
+    expect(panel.center.dx, closeTo(360, .5));
   });
 }

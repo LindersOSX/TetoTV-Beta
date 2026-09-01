@@ -44,9 +44,7 @@ const _bundledNotices = <_BundledNotice>[
   _BundledNotice([
     'gas-preprocessor ac18363 (build tool only)',
   ], 'assets/legal/native/GAS_PREPROCESSOR_NOTICE.txt'),
-  _BundledNotice([
-    'mpv 78d4374',
-  ], 'assets/legal/native/MPV_COPYRIGHT.txt'),
+  _BundledNotice(['mpv 78d4374'], 'assets/legal/native/MPV_COPYRIGHT.txt'),
   _BundledNotice([
     'mpv 78d4374 (LGPL terms)',
   ], 'assets/legal/native/MPV_LICENSE_LGPL.txt'),
@@ -56,19 +54,13 @@ const _bundledNotices = <_BundledNotice>[
   _BundledNotice([
     'FFmpeg 6.0 (LGPL-3.0-or-later terms)',
   ], 'assets/legal/native/LGPL-3.0.txt'),
-  _BundledNotice([
-    'Mbed TLS 3.4.0',
-  ], 'assets/legal/native/MBEDTLS_LICENSE.txt'),
+  _BundledNotice(['Mbed TLS 3.4.0'], 'assets/legal/native/MBEDTLS_LICENSE.txt'),
   _BundledNotice(['dav1d 1.2.0'], 'assets/legal/native/DAV1D_COPYING.txt'),
   _BundledNotice([
     'libxml2 2.10.3',
   ], 'assets/legal/native/LIBXML2_COPYRIGHT.txt'),
-  _BundledNotice([
-    'FreeType 2.13.0',
-  ], 'assets/legal/native/FREETYPE_FTL.txt'),
-  _BundledNotice([
-    'FriBidi 1.0.12',
-  ], 'assets/legal/native/FRIBIDI_COPYING.txt'),
+  _BundledNotice(['FreeType 2.13.0'], 'assets/legal/native/FREETYPE_FTL.txt'),
+  _BundledNotice(['FriBidi 1.0.12'], 'assets/legal/native/FRIBIDI_COPYING.txt'),
   _BundledNotice([
     'HarfBuzz 7.2.0',
   ], 'assets/legal/native/HARFBUZZ_COPYING.txt'),

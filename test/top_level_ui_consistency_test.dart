@@ -497,9 +497,12 @@ void main() {
         ),
       );
       final avatarDecoration = avatar.decoration! as BoxDecoration;
+      final avatarForeground = avatar.foregroundDecoration! as BoxDecoration;
       expect(avatarDecoration.shape, BoxShape.rectangle);
       expect(avatarDecoration.borderRadius, BorderRadius.circular(10));
-      expect(avatarDecoration.border, isNotNull);
+      expect(avatarDecoration.border, isNull);
+      expect(avatarForeground.borderRadius, BorderRadius.circular(10));
+      expect(avatarForeground.border, isNotNull);
       final profileDetector = tester.widget<FocusableActionDetector>(
         find
             .descendant(

@@ -355,13 +355,16 @@ void main() {
       find.byKey(const ValueKey('main-nav-profile-avatar-anilist')),
     );
     final avatarDecoration = avatar.decoration! as BoxDecoration;
+    final avatarForeground = avatar.foregroundDecoration! as BoxDecoration;
     expect(avatarDecoration.shape, BoxShape.rectangle);
     expect(avatarDecoration.borderRadius, BorderRadius.circular(10));
-    expect(avatarDecoration.border, isNotNull);
+    expect(avatarDecoration.border, isNull);
+    expect(avatarForeground.borderRadius, BorderRadius.circular(10));
+    expect(avatarForeground.border, isNotNull);
     final profileFocusable = tester.widget<TvFocusable>(
       find.descendant(of: profileSwitcher, matching: find.byType(TvFocusable)),
     );
-    expect(profileFocusable.borderRadius, BorderRadius.circular(10));
+    expect(profileFocusable.borderRadius, BorderRadius.circular(13));
     expect(find.byKey(const ValueKey('main-nav-settings')), findsOneWidget);
     expect(find.text('TetoFan'), findsNothing);
     expect(find.text('MALFan'), findsNothing);
@@ -404,10 +407,14 @@ void main() {
       find.byKey(const ValueKey('main-nav-profile-menu-avatar-anilist')),
     );
     final menuAvatarDecoration = menuAvatar.decoration! as BoxDecoration;
+    final menuAvatarForeground =
+        menuAvatar.foregroundDecoration! as BoxDecoration;
     expect(menuAvatarDecoration.shape, BoxShape.rectangle);
     expect(menuAvatarDecoration.borderRadius, BorderRadius.circular(10));
-    expect(menuAvatarDecoration.border, isNotNull);
-    expect(menuAvatarDecoration.border!.top.width, 2);
+    expect(menuAvatarDecoration.border, isNull);
+    expect(menuAvatarForeground.borderRadius, BorderRadius.circular(10));
+    expect(menuAvatarForeground.border, isNotNull);
+    expect(menuAvatarForeground.border!.top.width, 2);
 
     final activeProfileRow = find.byKey(
       const ValueKey('main-nav-switch-profile-anilist-anilist-tetofan'),
@@ -877,7 +884,15 @@ void main() {
                 )
                 .decoration!
             as BoxDecoration;
-    expect(avatarDecoration.border, isNotNull);
+    final avatarForeground =
+        tester
+                .widget<Container>(
+                  find.byKey(const ValueKey('main-nav-profile-avatar-anilist')),
+                )
+                .foregroundDecoration!
+            as BoxDecoration;
+    expect(avatarDecoration.border, isNull);
+    expect(avatarForeground.border, isNotNull);
     expect(avatarDecoration.shape, BoxShape.rectangle);
     expect(avatarDecoration.borderRadius, BorderRadius.circular(10));
     expect(

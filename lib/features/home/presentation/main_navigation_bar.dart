@@ -1558,10 +1558,13 @@ class _ProfileMenuButton extends StatelessWidget {
           onKeyEvent: onKeyEvent,
           onFocusChanged: onFocusChanged,
           onPressed: isLoading ? () {} : () => _openMenu(buttonContext),
-          // Keep the focus outline and clipped avatar on the same rounded-
-          // square geometry. A different outer radius made the border look
-          // circular even after the profile image itself became square.
-          borderRadius: _profileAvatarBorderRadius,
+          // The trigger is 52px while the compact avatar is 40px. Scale the
+          // outer corner to the same 25% radius instead of reusing the inner
+          // 10px value; equal pixel radii on differently sized squares do not
+          // form concentric corners and made the focus ring look mismatched.
+          borderRadius: compactAvatar
+              ? _profileTriggerBorderRadius
+              : _profileAvatarBorderRadius,
           focusScale: compactAvatar ? 1.01 : 1.02,
           child: Container(
             key: ValueKey('main-nav-profile-$slug'),
@@ -2216,6 +2219,12 @@ class _ProfileAvatar extends StatelessWidget {
         shape: BoxShape.rectangle,
         borderRadius: _profileAvatarBorderRadius,
         color: context.appPalette.surfaceRaised,
+      ),
+      // Paint the outline above the artwork. A background decoration border
+      // can be covered by the child image and leave a visibly different
+      // corner at runtime even though both values use the same radius.
+      foregroundDecoration: BoxDecoration(
+        borderRadius: _profileAvatarBorderRadius,
         border: outlined
             ? Border.all(color: context.appPalette.accentBright, width: 2)
             : null,
@@ -2251,6 +2260,9 @@ class _LocalProfileAvatar extends StatelessWidget {
       shape: BoxShape.rectangle,
       borderRadius: _profileAvatarBorderRadius,
       color: context.appPalette.secondaryAccent.withValues(alpha: .18),
+    ),
+    foregroundDecoration: BoxDecoration(
+      borderRadius: _profileAvatarBorderRadius,
       border: outlined
           ? Border.all(color: context.appPalette.accentBright, width: 2)
           : null,
@@ -2264,6 +2276,7 @@ class _LocalProfileAvatar extends StatelessWidget {
 }
 
 const _profileAvatarBorderRadius = BorderRadius.all(Radius.circular(10));
+const _profileTriggerBorderRadius = BorderRadius.all(Radius.circular(13));
 
 class _NavigationAction extends StatelessWidget {
   const _NavigationAction({

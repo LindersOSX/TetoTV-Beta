@@ -129,10 +129,21 @@ class _NoticeAvatar extends StatelessWidget {
     final palette = context.appPalette;
     final displayName = notice.displayName;
     final avatarUrl = notice.avatarUrl;
-    return SizedBox.square(
+    return Container(
       key: ValueKey('watch-party-membership-avatar-${notice.sequence}'),
-      dimension: 36,
-      child: ClipOval(
+      width: 36,
+      height: 36,
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        color: palette.accent.withValues(alpha: .3),
+        borderRadius: _noticeAvatarBorderRadius,
+      ),
+      foregroundDecoration: BoxDecoration(
+        borderRadius: _noticeAvatarBorderRadius,
+        border: Border.all(color: palette.accentBright.withValues(alpha: .72)),
+      ),
+      child: ClipRRect(
+        borderRadius: _noticeAvatarBorderRadius,
         child: avatarUrl != null
             ? NetworkArtwork(
                 url: avatarUrl,
@@ -170,6 +181,12 @@ class _NoticeCopy extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final palette = context.appPalette;
+    final notificationStyle = theme.textTheme.labelLarge!.copyWith(
+      color: palette.primaryText,
+      decoration: TextDecoration.none,
+    );
     final displayName = notice.displayName;
     final actionText = notice.actionText;
     if (!notice.isParticipantEvent ||
@@ -180,9 +197,7 @@ class _NoticeCopy extends StatelessWidget {
         key: ValueKey('watch-party-membership-message-${notice.sequence}'),
         maxLines: 2,
         overflow: TextOverflow.ellipsis,
-        style: const TextStyle(
-          color: Colors.white,
-          decoration: TextDecoration.none,
+        style: notificationStyle.copyWith(
           fontSize: 13,
           fontWeight: FontWeight.w700,
           height: 1.18,
@@ -198,9 +213,7 @@ class _NoticeCopy extends StatelessWidget {
           key: ValueKey('watch-party-membership-name-${notice.sequence}'),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: const TextStyle(
-            color: Colors.white,
-            decoration: TextDecoration.none,
+          style: notificationStyle.copyWith(
             fontSize: 14,
             fontWeight: FontWeight.w900,
             height: 1.05,
@@ -212,9 +225,7 @@ class _NoticeCopy extends StatelessWidget {
           key: ValueKey('watch-party-membership-action-${notice.sequence}'),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: const TextStyle(
-            color: Colors.white,
-            decoration: TextDecoration.none,
+          style: notificationStyle.copyWith(
             fontSize: 12,
             fontWeight: FontWeight.w600,
             height: 1.05,
@@ -224,6 +235,8 @@ class _NoticeCopy extends StatelessWidget {
     );
   }
 }
+
+const _noticeAvatarBorderRadius = BorderRadius.all(Radius.circular(9));
 
 String _initial(String value) {
   final normalized = value.trim();

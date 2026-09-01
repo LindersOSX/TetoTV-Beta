@@ -14,6 +14,12 @@ void main() {
   testWidgets('search keyboard exposes the TV QWERTY and number-pad layout', (
     tester,
   ) async {
+    tester.view.physicalSize = const Size(1280, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
     FlutterSecureStorage.setMockInitialValues({
       'input_use_built_in_keyboard': 'true',
     });
@@ -104,6 +110,19 @@ void main() {
     expect(find.bySemanticsLabel('Space'), findsOneWidget);
     expect(find.bySemanticsLabel('Backspace'), findsOneWidget);
 
+    final keyboardPanel = find.byKey(const ValueKey('tv-keyboard-panel'));
+    final keyboardRect = tester.getRect(keyboardPanel);
+    expect(
+      keyboardRect.height,
+      lessThanOrEqualTo(210),
+      reason: 'the TV keyboard must retain the original compact height',
+    );
+    expect(
+      keyboardRect.bottom,
+      greaterThan(700),
+      reason: 'the compact keyboard stays anchored to the lower screen edge',
+    );
+
     // The right-side number pad keeps conventional ascending rows and stays
     // to the right of the QWERTY keys without pinning the test to pixels.
     expect(
@@ -168,6 +187,12 @@ void main() {
   testWidgets('numeric TV input opens explicitly and applies room-code rules', (
     tester,
   ) async {
+    tester.view.physicalSize = const Size(1280, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
     FlutterSecureStorage.setMockInitialValues({
       'input_use_built_in_keyboard': 'true',
     });
@@ -224,6 +249,20 @@ void main() {
       );
     }
     expect(find.bySemanticsLabel('Backspace'), findsOneWidget);
+
+    final numericPanelRect = tester.getRect(
+      find.byKey(const ValueKey('tv-keyboard-panel')),
+    );
+    expect(
+      numericPanelRect.height,
+      lessThanOrEqualTo(225),
+      reason: 'the room-code keyboard must keep the compact TV footprint',
+    );
+    expect(
+      numericPanelRect.bottom,
+      greaterThan(700),
+      reason: 'the room-code keyboard stays in the lower screen area',
+    );
 
     // The room-code pad reads naturally from 1 through 9.
     expect(

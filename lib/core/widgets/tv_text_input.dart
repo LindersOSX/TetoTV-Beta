@@ -777,9 +777,16 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
         ? (widget.numericOnly ? 720.0 : 620.0)
         : (widget.numericOnly ? 640.0 : 525.0);
     final heightScale = (availableHeight / heightTarget).clamp(.48, 1.0);
-    final scale = narrow
-        ? (widthScale < heightScale ? widthScale : heightScale)
-        : heightScale;
+    final responsiveScale = widthScale < heightScale ? widthScale : heightScale;
+    // Keep the controller keyboard in the same compact lower-screen footprint
+    // as TetoTV's original keyboard. The refreshed layout has larger nominal
+    // key metrics, so allowing a wide TV to use a 1:1 scale makes the dialog
+    // consume most of a 1080p viewport. Phones still use the fully responsive
+    // scale because they need the extra touch target size.
+    final wideTvScaleCap = widget.numericOnly ? .36 : .40;
+    final scale = !narrow && responsiveScale > wideTvScaleCap
+        ? wideTvScaleCap
+        : responsiveScale;
     final keyHeight = (widget.numericOnly ? 64.0 : 58.0) * scale;
     final actionHeight = (widget.numericOnly ? 68.0 : 58.0) * scale;
     final keyGap = (widget.numericOnly ? 10.0 : 8.0) * scale;
@@ -1117,7 +1124,7 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
     }
 
     return Dialog(
-      alignment: widget.numericOnly ? Alignment.center : Alignment.bottomCenter,
+      alignment: Alignment.bottomCenter,
       insetPadding: EdgeInsets.symmetric(
         horizontal: horizontalInset,
         vertical: narrow ? 10 : 12,

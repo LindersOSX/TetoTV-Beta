@@ -17,7 +17,8 @@ the following third-party components:
 | CryptoJS 4.2.0 | Compatibility APIs in the bundled add-on runtime | MIT License |
 | LinkeDOM 0.18.12 and its bundled dependencies | Isolated HTML parsing for installed add-ons | ISC License for LinkeDOM; bundled dependencies retain their MIT, ISC, BSD-2-Clause, and other notices |
 | Sucrase 3.35.0 and its bundled dependencies | Offline TypeScript transformation for installed add-ons | MIT License for Sucrase; bundled dependencies retain their MIT, Apache-2.0, and other notices |
-| Dart `xml` 6.6.1 | Bounded parsing of Plex Media Server XML responses | MIT License |
+| Dart `xml` 6.6.1 | Bounded parsing of Plex Media Server XML responses and user-added OPDS 1.x feeds in the Developer Mode Manga Preview | MIT License |
+| Dart `archive` 4.2.0 | Bounded CBZ/ZIP decoding for the Developer Mode Manga Preview | MIT License; copyright 2013-2021 Brendan Duncan. Compression implementations bundled by the package retain their separate notices. |
 | Noto Sans Regular | Bundled subtitle font used by the MPV/libass compatibility player | SIL Open Font License 1.1; copyright 2018 The Noto Project Authors |
 
 TetoTV's optional filler labels and per-series filler skipping read episode
@@ -53,6 +54,7 @@ Upstream projects and license sources:
 - LinkeDOM: <https://github.com/WebReflection/linkedom>
 - Sucrase: <https://github.com/alangpierce/sucrase>
 - Dart xml: <https://github.com/renggli/dart-xml>
+- Dart archive: <https://github.com/brendan-duncan/archive/tree/4.2.0>
 - Noto Sans: <https://github.com/notofonts/noto-fonts>
 - Jikan REST API: <https://github.com/jikan-me/jikan-rest>
 

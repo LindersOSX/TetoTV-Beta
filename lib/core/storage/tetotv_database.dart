@@ -9,6 +9,7 @@ import 'package:sqflite/sqflite.dart';
 /// The SQLite table survives process death; it is never uploaded unless the
 /// user presses the diagnostic-report share button.
 const diagnosticHistoryWindow = Duration(hours: 48);
+const tetoTvDatabaseSchemaVersion = 10;
 // Provider searches and playback startup can each emit a burst of events.
 // Retain enough history for a complete search plus the playback which follows
 // it; 240 entries allowed title-artwork noise to evict the evidence needed to
@@ -480,7 +481,7 @@ class TetoTvDatabase {
     final root = await getDatabasesPath();
     return openDatabase(
       path.join(root, 'tetotv.db'),
-      version: 9,
+      version: tetoTvDatabaseSchemaVersion,
       onConfigure: configureTetoTvDatabase,
       onCreate: (db, _) async {
         await db.execute('''
@@ -538,6 +539,7 @@ class TetoTvDatabase {
         await _createAddonTables(db);
         await _createReliabilityTables(db);
         await createOfflineDownloadTables(db);
+        await createMangaTables(db);
       },
       onUpgrade: upgradeTetoTvDatabaseSchema,
     );
@@ -1194,6 +1196,190 @@ Future<void> upgradeTetoTvDatabaseSchema(
   if (oldVersion < 9 && newVersion >= 9) {
     await createPendingSeasonDownloadTable(db);
   }
+  if (oldVersion < 10 && newVersion >= 10) {
+    await createMangaTables(db);
+  }
+}
+
+/// Creates the developer-only manga catalog, reading-progress, and offline
+/// download tables.
+///
+/// Page URLs and request credentials are deliberately absent. A queued manga
+/// chapter must rediscover its current page list through its source before a
+/// transfer starts or resumes, so expiring URLs, cookies, and tokens never
+/// become durable database capabilities.
+Future<void> createMangaTables(DatabaseExecutor db) async {
+  await db.execute('''
+    CREATE TABLE IF NOT EXISTS manga_sources (
+      id TEXT PRIMARY KEY,
+      url TEXT NOT NULL,
+      name TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      updated_at INTEGER NOT NULL,
+      CHECK(length(id) BETWEEN 1 AND 128),
+      CHECK(length(url) BETWEEN 9 AND 2048),
+      CHECK(lower(url) LIKE 'https://%'),
+      CHECK(length(name) BETWEEN 1 AND 256),
+      CHECK(length(kind) BETWEEN 1 AND 64),
+      CHECK(enabled IN (0, 1)),
+      CHECK(updated_at >= 0)
+    )
+  ''');
+  await db.execute('''
+    CREATE TABLE IF NOT EXISTS manga_source_cache (
+      source_id TEXT PRIMARY KEY,
+      payload_json TEXT NOT NULL,
+      fetched_at INTEGER NOT NULL,
+      FOREIGN KEY(source_id) REFERENCES manga_sources(id) ON DELETE CASCADE,
+      CHECK(length(payload_json) BETWEEN 1 AND 2097152),
+      CHECK(fetched_at >= 0)
+    )
+  ''');
+  await db.execute('''
+    CREATE TABLE IF NOT EXISTS manga_library_entries (
+      owner_key TEXT NOT NULL,
+      source_id TEXT NOT NULL,
+      entry_id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      metadata_json TEXT NOT NULL,
+      cover_url TEXT,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY(owner_key, source_id, entry_id),
+      CHECK(length(owner_key) BETWEEN 1 AND 128),
+      CHECK(length(source_id) BETWEEN 1 AND 128),
+      CHECK(length(entry_id) BETWEEN 1 AND 512),
+      CHECK(length(title) BETWEEN 1 AND 1024),
+      CHECK(length(metadata_json) BETWEEN 1 AND 1048576),
+      CHECK(
+        cover_url IS NULL OR (
+          length(cover_url) BETWEEN 9 AND 2048 AND
+          lower(cover_url) LIKE 'https://%'
+        )
+      ),
+      CHECK(updated_at >= 0)
+    )
+  ''');
+  await db.execute('''
+    CREATE INDEX IF NOT EXISTS manga_library_entries_updated
+    ON manga_library_entries(owner_key, updated_at DESC)
+  ''');
+  await db.execute('''
+    CREATE TABLE IF NOT EXISTS manga_reading_progress (
+      owner_key TEXT NOT NULL,
+      source_id TEXT NOT NULL,
+      entry_id TEXT NOT NULL,
+      chapter_id TEXT NOT NULL,
+      chapter_number REAL,
+      page_index INTEGER NOT NULL DEFAULT 0,
+      page_offset REAL NOT NULL DEFAULT 0,
+      page_count INTEGER,
+      completed INTEGER NOT NULL DEFAULT 0,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY(owner_key, source_id, entry_id),
+      CHECK(length(owner_key) BETWEEN 1 AND 128),
+      CHECK(length(source_id) BETWEEN 1 AND 128),
+      CHECK(length(entry_id) BETWEEN 1 AND 512),
+      CHECK(length(chapter_id) BETWEEN 1 AND 512),
+      CHECK(chapter_number IS NULL OR chapter_number >= 0),
+      CHECK(page_index >= 0),
+      CHECK(page_offset >= 0 AND page_offset <= 1),
+      CHECK(page_count IS NULL OR (page_count > 0 AND page_count <= 1000)),
+      CHECK(page_count IS NULL OR page_index < page_count),
+      CHECK(completed IN (0, 1)),
+      CHECK(updated_at >= 0)
+    )
+  ''');
+  await db.execute('''
+    CREATE INDEX IF NOT EXISTS manga_reading_progress_updated
+    ON manga_reading_progress(owner_key, updated_at DESC)
+  ''');
+  await db.execute('''
+    CREATE TABLE IF NOT EXISTS manga_reader_preferences (
+      owner_key TEXT NOT NULL,
+      scope_key TEXT NOT NULL,
+      preferences_json TEXT NOT NULL,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY(owner_key, scope_key),
+      CHECK(length(owner_key) BETWEEN 1 AND 128),
+      CHECK(length(scope_key) BETWEEN 1 AND 128),
+      CHECK(length(preferences_json) BETWEEN 1 AND 65536),
+      CHECK(updated_at >= 0)
+    )
+  ''');
+  await db.execute('''
+    CREATE TABLE IF NOT EXISTS manga_download_jobs (
+      id TEXT PRIMARY KEY,
+      source_id TEXT NOT NULL,
+      entry_id TEXT NOT NULL,
+      chapter_id TEXT NOT NULL,
+      series_title TEXT NOT NULL,
+      chapter_label TEXT NOT NULL,
+      status TEXT NOT NULL,
+      relative_dir TEXT NOT NULL UNIQUE,
+      page_count INTEGER,
+      completed_pages INTEGER NOT NULL DEFAULT 0,
+      received_bytes INTEGER NOT NULL DEFAULT 0,
+      manifest_fingerprint TEXT,
+      queue_position INTEGER NOT NULL,
+      retry_count INTEGER NOT NULL DEFAULT 0,
+      error_code TEXT,
+      error_message TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      CHECK(length(id) BETWEEN 1 AND 128),
+      CHECK(length(source_id) BETWEEN 1 AND 128),
+      CHECK(length(entry_id) BETWEEN 1 AND 512),
+      CHECK(length(chapter_id) BETWEEN 1 AND 512),
+      CHECK(length(series_title) BETWEEN 1 AND 1024),
+      CHECK(length(chapter_label) BETWEEN 1 AND 512),
+      CHECK(length(relative_dir) BETWEEN 1 AND 1024),
+      CHECK(page_count IS NULL OR (page_count > 0 AND page_count <= 1000)),
+      CHECK(completed_pages >= 0),
+      CHECK(page_count IS NULL OR completed_pages <= page_count),
+      CHECK(received_bytes >= 0),
+      CHECK(
+        manifest_fingerprint IS NULL OR length(manifest_fingerprint) = 64
+      ),
+      CHECK(queue_position >= 0),
+      CHECK(retry_count >= 0),
+      CHECK(error_code IS NULL OR length(error_code) <= 128),
+      CHECK(error_message IS NULL OR length(error_message) <= 1024),
+      CHECK(created_at >= 0),
+      CHECK(updated_at >= 0),
+      CHECK(status IN (
+        'queued', 'resolving', 'downloading', 'paused', 'completed',
+        'failed', 'cancelled', 'needs_reauthorization'
+      ))
+    )
+  ''');
+  await db.execute('''
+    CREATE INDEX IF NOT EXISTS manga_download_jobs_queue
+    ON manga_download_jobs(status, queue_position, created_at)
+  ''');
+  await db.execute('''
+    CREATE INDEX IF NOT EXISTS manga_download_jobs_entry
+    ON manga_download_jobs(source_id, entry_id, chapter_id, updated_at DESC)
+  ''');
+  await db.execute('''
+    CREATE TABLE IF NOT EXISTS manga_download_pages (
+      job_id TEXT NOT NULL,
+      page_index INTEGER NOT NULL,
+      stable_key_hash TEXT,
+      relative_path TEXT NOT NULL UNIQUE,
+      mime_type TEXT NOT NULL,
+      byte_length INTEGER NOT NULL,
+      sha256 TEXT NOT NULL,
+      PRIMARY KEY(job_id, page_index),
+      FOREIGN KEY(job_id) REFERENCES manga_download_jobs(id) ON DELETE CASCADE,
+      CHECK(page_index >= 0 AND page_index < 1000),
+      CHECK(stable_key_hash IS NULL OR length(stable_key_hash) = 64),
+      CHECK(length(relative_path) BETWEEN 1 AND 1024),
+      CHECK(length(mime_type) BETWEEN 1 AND 128),
+      CHECK(byte_length > 0),
+      CHECK(length(sha256) = 64)
+    )
+  ''');
 }
 
 /// Creates the durable offline-download queue and catalog snapshot tables.

@@ -91,7 +91,7 @@ the same as legal, store, or codec certification.
   conservative engineering inventory, not as a completed Google Play form.
   Record the reviewer, APK digest, companion deployment revision, policy
   effective date, and date of this comparison in the release evidence.
-- Verify the deployed `/privacy` page is the August 28, 2026 disclosure, is
+- Verify the deployed `/privacy` page is the September 1, 2026 disclosure, is
   readable without an account, matches the in-app summary, and provides a
   working contact route for access/deletion questions. Do not claim a shorter
   retention period than the Wispbyte host, reverse proxy, Discord channels, or

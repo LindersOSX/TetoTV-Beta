@@ -28,6 +28,7 @@ import android.provider.Settings
 import android.speech.RecognizerIntent
 import android.speech.RecognitionListener
 import android.speech.SpeechRecognizer
+import android.view.WindowManager
 import androidx.core.content.edit
 import androidx.core.content.FileProvider
 import androidx.core.net.toUri
@@ -143,6 +144,15 @@ class MainActivity : FlutterActivity() {
                             applicationContext,
                             call.argument<String>("leaseId"),
                         )
+                        result.success(null)
+                    }
+                    "setMangaKeepScreenAwake" -> {
+                        val enabled = call.argument<Boolean>("enabled") ?: false
+                        if (enabled) {
+                            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                        } else {
+                            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                        }
                         result.success(null)
                     }
                     "clearAppCache" -> clearAppCacheAsync(result)

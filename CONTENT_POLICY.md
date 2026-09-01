@@ -15,6 +15,18 @@ preconfigured media sources.
 - User-supplied extensions are untrusted third-party code. Technical
   compatibility is not a safety review, legality determination, endorsement,
   or promise of availability.
+- The Developer Mode Manga Preview accepts only user-added public HTTPS OPDS
+  1.x/2.0 catalogs or a declarative TetoTV repository that points to OPDS
+  catalogs. TetoTV does not bundle, recommend, rank, mirror, or maintain manga
+  catalogs, repository URLs, chapter archives, page images, or title indexes.
+- A TetoTV manga repository is metadata, not executable code. It cannot embed
+  credentials or install Tachiyomi/Mihon APK extensions. Compatibility with a
+  repository or OPDS server is not a content review or endorsement.
+- Manga catalog requests go directly to the public HTTPS source selected by
+  the viewer; page and chapter-archive requests go to public HTTPS resource
+  hosts declared by that source. No TetoTV-operated service proxies, caches,
+  or receives that manga media. Completed compatible downloads remain only in
+  the app's private device storage.
 - Users and downstream distributors are responsible for using only services
   and media they are authorized to access, play, copy, or download.
 - TetoTV does not operate a media proxy or receive video/audio bytes through

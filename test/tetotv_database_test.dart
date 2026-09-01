@@ -1,8 +1,12 @@
+import 'dart:io';
+
 import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:sqflite/sqflite.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 void main() {
+  setUpAll(sqfliteFfiInit);
+
   test('configures WAL with a query before enabling foreign keys', () async {
     final database = _RecordingDatabase();
 
@@ -200,6 +204,225 @@ void main() {
   });
 
   test(
+    'v9 to v10 migration preserves existing rows and creates manga tables',
+    () async {
+      final temporary = await Directory.systemTemp.createTemp(
+        'tetotv-manga-v10-',
+      );
+      final databasePath =
+          '${temporary.path}${Platform.pathSeparator}tetotv.db';
+      addTearDown(() async {
+        await databaseFactoryFfi.deleteDatabase(databasePath);
+        if (temporary.existsSync()) temporary.deleteSync(recursive: true);
+      });
+
+      var database = await databaseFactoryFfi.openDatabase(
+        databasePath,
+        options: OpenDatabaseOptions(
+          version: 9,
+          onConfigure: configureTetoTvDatabase,
+          onCreate: (db, _) async {
+            await db.execute('''
+              CREATE TABLE playback_history (
+                anilist_media_id INTEGER NOT NULL,
+                episode INTEGER NOT NULL,
+                title TEXT NOT NULL,
+                PRIMARY KEY(anilist_media_id, episode)
+              )
+            ''');
+            await db.insert('playback_history', {
+              'anilist_media_id': 42,
+              'episode': 7,
+              'title': 'Preserved fixture',
+            });
+          },
+        ),
+      );
+      await database.close();
+
+      database = await databaseFactoryFfi.openDatabase(
+        databasePath,
+        options: OpenDatabaseOptions(
+          version: tetoTvDatabaseSchemaVersion,
+          onConfigure: configureTetoTvDatabase,
+          onUpgrade: upgradeTetoTvDatabaseSchema,
+        ),
+      );
+      addTearDown(database.close);
+
+      expect(
+        (await database.query('playback_history')).single,
+        containsPair('title', 'Preserved fixture'),
+      );
+      expect(await database.getVersion(), tetoTvDatabaseSchemaVersion);
+
+      const expectedTables = {
+        'manga_sources',
+        'manga_source_cache',
+        'manga_library_entries',
+        'manga_reading_progress',
+        'manga_reader_preferences',
+        'manga_download_jobs',
+        'manga_download_pages',
+      };
+      final tables = await database.rawQuery(
+        "SELECT name FROM sqlite_master WHERE type = 'table'",
+      );
+      expect(
+        tables.map((row) => row['name']).toSet(),
+        containsAll(expectedTables),
+      );
+    },
+  );
+
+  test('manga schema is idempotent and enforces safe durable data', () async {
+    final database = await databaseFactoryFfi.openDatabase(
+      inMemoryDatabasePath,
+      options: OpenDatabaseOptions(
+        version: 1,
+        onConfigure: configureTetoTvDatabase,
+        onCreate: (db, _) async {
+          await createMangaTables(db);
+          await createMangaTables(db);
+        },
+      ),
+    );
+    addTearDown(database.close);
+
+    await expectLater(
+      database.insert('manga_sources', {
+        'id': 'unsafe',
+        'url': 'http://private.example/repository.json',
+        'name': 'Unsafe',
+        'kind': 'repository',
+        'enabled': 1,
+        'updated_at': 1,
+      }),
+      throwsA(isA<DatabaseException>()),
+    );
+    await database.insert('manga_sources', {
+      'id': 'source-1',
+      'url': 'https://public.example/repository.json',
+      'name': 'Example',
+      'kind': 'repository',
+      'enabled': 1,
+      'updated_at': 1,
+    });
+
+    await expectLater(
+      database.insert('manga_reading_progress', {
+        'owner_key': 'default',
+        'source_id': 'source-1',
+        'entry_id': 'series-1',
+        'chapter_id': 'chapter-1',
+        'page_index': 0,
+        'page_offset': 1.25,
+        'page_count': 10,
+        'completed': 0,
+        'updated_at': 1,
+      }),
+      throwsA(isA<DatabaseException>()),
+    );
+    await expectLater(
+      database.insert('manga_download_jobs', {
+        ..._mangaDownloadJobRow(),
+        'status': 'executing_arbitrary_code',
+      }),
+      throwsA(isA<DatabaseException>()),
+    );
+    await expectLater(
+      database.insert('manga_download_pages', {
+        'job_id': 'missing-job',
+        'page_index': 0,
+        'relative_path': 'source/series/chapter/0000.webp',
+        'mime_type': 'image/webp',
+        'byte_length': 100,
+        'sha256': 'a' * 64,
+      }),
+      throwsA(isA<DatabaseException>()),
+    );
+
+    final jobColumns = await database.rawQuery(
+      'PRAGMA table_info(manga_download_jobs)',
+    );
+    final pageColumns = await database.rawQuery(
+      'PRAGMA table_info(manga_download_pages)',
+    );
+    final durableDownloadColumns = {
+      ...jobColumns.map((row) => row['name']),
+      ...pageColumns.map((row) => row['name']),
+    };
+    for (final sensitiveColumn in [
+      'url',
+      'page_url',
+      'source_uri',
+      'headers',
+      'cookies',
+      'token',
+    ]) {
+      expect(durableDownloadColumns, isNot(contains(sensitiveColumn)));
+    }
+  });
+
+  test('manga cache and page rows cascade with their owning records', () async {
+    final database = await databaseFactoryFfi.openDatabase(
+      inMemoryDatabasePath,
+      options: OpenDatabaseOptions(
+        version: 1,
+        onConfigure: configureTetoTvDatabase,
+        onCreate: (db, _) => createMangaTables(db),
+      ),
+    );
+    addTearDown(database.close);
+
+    await database.insert('manga_sources', {
+      'id': 'source-1',
+      'url': 'https://public.example/repository.json',
+      'name': 'Example',
+      'kind': 'repository',
+      'enabled': 1,
+      'updated_at': 1,
+    });
+    await database.insert('manga_source_cache', {
+      'source_id': 'source-1',
+      'payload_json': '{}',
+      'fetched_at': 1,
+    });
+    await database.delete(
+      'manga_sources',
+      where: 'id = ?',
+      whereArgs: const ['source-1'],
+    );
+    expect(await database.query('manga_source_cache'), isEmpty);
+
+    await database.insert('manga_download_jobs', _mangaDownloadJobRow());
+    await database.insert('manga_download_pages', {
+      'job_id': 'job-1',
+      'page_index': 0,
+      'stable_key_hash': 'b' * 64,
+      'relative_path': 'source/series/chapter/0000.webp',
+      'mime_type': 'image/webp',
+      'byte_length': 100,
+      'sha256': 'a' * 64,
+    });
+    await database.delete(
+      'manga_download_jobs',
+      where: 'id = ?',
+      whereArgs: const ['job-1'],
+    );
+    expect(await database.query('manga_download_pages'), isEmpty);
+
+    final cacheForeignKeys = await database.rawQuery(
+      'PRAGMA foreign_key_list(manga_source_cache)',
+    );
+    final pageForeignKeys = await database.rawQuery(
+      'PRAGMA foreign_key_list(manga_download_pages)',
+    );
+    expect(cacheForeignKeys.single, containsPair('on_delete', 'CASCADE'));
+    expect(pageForeignKeys.single, containsPair('on_delete', 'CASCADE'));
+  });
+
+  test(
     'checkpoint transaction restores a dismissed title atomically',
     () async {
       final database = _CheckpointExecutor();
@@ -382,6 +605,25 @@ void main() {
     expect(redacted, contains('12:34:56'));
   });
 }
+
+Map<String, Object?> _mangaDownloadJobRow() => {
+  'id': 'job-1',
+  'source_id': 'source-1',
+  'entry_id': 'series-1',
+  'chapter_id': 'chapter-1',
+  'series_title': 'Example series',
+  'chapter_label': 'Chapter 1',
+  'status': 'queued',
+  'relative_dir': 'source/series/chapter',
+  'page_count': 1,
+  'completed_pages': 0,
+  'received_bytes': 0,
+  'manifest_fingerprint': 'c' * 64,
+  'queue_position': 0,
+  'retry_count': 0,
+  'created_at': 1,
+  'updated_at': 1,
+};
 
 class _RecordingDatabase implements Database {
   final calls = <String>[];

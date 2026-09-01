@@ -17,7 +17,7 @@
 
 <p align="center">
   <a href="https://github.com/LindersOSX/TetoTV-Beta/releases/latest"><strong>Download Beta</strong></a>
-  · <a href="docs/RELEASE_NOTES_2.0.62.md">What's new</a>
+  · <a href="docs/RELEASE_NOTES_2.0.63.md">What's new</a>
   · <a href="https://github.com/LindersOSX/TetoTV-Beta/issues/new">Report an issue</a>
   · <a href="https://discord.gg/juC6k7d4WY">Discord</a>
   · <a href="https://www.youtube.com/@TetoTVApp">YouTube</a>
@@ -84,6 +84,7 @@ TetoTV runs directly on the Android device with no companion server required for
 | AniList / MyAnimeList | Optional | Sync lists and progress, or use a local-only profile. |
 | MPV playback | Supported | Integrated audio/caption selection remembers explicit choices between episodes; Playback settings include Preferred CC Automatic, On, and Off. |
 | Offline downloads | Beta | Individual episodes, whole-season queues, and offline playback. |
+| Manga reader | Developer preview | Hidden unless Developer Mode is enabled. Reads only user-added OPDS 1/2 catalogs or declarative TetoTV manga repositories; no manga catalog is bundled or recommended. |
 | Debrid services | Optional | Users may connect a supported account for media they are authorized to access. |
 | Direct peer-to-peer playback | Optional beta | Off by default and requires an explicit privacy warning and opt-in. |
 | Plex / Jellyfin | Optional | Requires the viewer's own configured media server. |
@@ -94,10 +95,10 @@ TetoTV runs directly on the Android device with no companion server required for
 | Channel | Version | Best for |
 | --- | --- | --- |
 | Public | Not published | Source and release-readiness documents are available, but no Public APK is currently offered |
-| Beta | [2.0.62](docs/RELEASE_NOTES_2.0.62.md) | Faster provider search, better Dub discovery, and selective retries |
+| Beta | [2.0.63](docs/RELEASE_NOTES_2.0.63.md) | Developer Manga Preview with secure user-added sources, offline reading, foldable spreads, and Discord activity |
 
 > [!WARNING]
-> Beta 2.0.62 uses the repository's explicit unreviewed-Beta exception. Its native-library and corresponding-source material did not receive independent license review, and automated integrity checks are not a legal compliance determination. Read the [complete Beta disclosure](docs/RELEASE_NOTES_2.0.62.md). This exception does not apply to a future Public release.
+> Beta 2.0.63 uses the repository's explicit unreviewed-Beta exception. Its native-library and corresponding-source material did not receive independent license review, and automated integrity checks are not a legal compliance determination. Read the [complete Beta disclosure](docs/RELEASE_NOTES_2.0.63.md). This exception does not apply to a future Public release.
 
 The Public updater repository intentionally has no release while the Public build is held for review. Existing Beta installations continue to update from the Beta repository. Android never permits an in-place install of an APK with a lower build code; Developer Mode does not bypass that platform rule.
 
@@ -128,6 +129,42 @@ TetoTV includes a generic compatibility layer for user-supplied HTTPS extensions
 TetoTV ships without a catalog, suggested repository, provider, media index, or automatic installation path. Users must add extensions themselves and should connect only services and media they are authorized to use. Provider cards can display recent compatibility results and the last test date to help diagnose user-configured integrations.
 
 Third-party services and extensions can change independently of TetoTV. TetoTV does not host or relay their media and does not guarantee their availability, legality, security, or fitness for use.
+
+## Developer Manga Preview
+
+Developer Mode exposes a book destination for TetoTV's experimental manga
+reader. This preview is isolated from anime provider extensions and accepts
+only sources that the viewer adds: OPDS 1.x, OPDS 2.0, or a declarative
+TetoTV repository document that points to OPDS catalogs. TetoTV does not ship,
+suggest, rank, or remotely install a manga catalog, repository URL, or title.
+
+The preview includes paged, vertical, and webtoon reading; right-to-left and
+left-to-right navigation; single, double, and automatic spreads; page-fit,
+spacing, background, preload, and book-animation controls; app-private reading
+progress; and compatible reading-order or ZIP/CBZ chapter downloads. Active
+manga downloads use a best-effort Android foreground-service lease so they can
+normally continue after Home/minimize. They are not scheduled server jobs:
+force-stop or process death ends the transfer, and a retry requires the viewer
+to reconnect or reselect the source because remote URLs and request headers
+are not persisted. Automatic spreads can use a separating vertical fold or
+hinge so an opened foldable displays two physical pages without losing the
+current reading position.
+
+Manga sources are data-only. TetoTV does not load Tachiyomi/Mihon APK
+extensions or execute code from a manga repository. Optional Basic, Bearer,
+or API-key credentials are entered by the viewer and kept in Android
+Keystore-backed secure storage rather than in the repository document,
+catalog/download database, or diagnostics. Credentials are forwarded only to
+the exact source origin; reader redirects to another origin continue without
+them. If Discord Rich Presence is linked and enabled, the open reader can
+share the title, chapter, and page/total. TetoTV never forwards a user-added
+manga source, catalog, cover, or page URL to Discord because such a URL may be
+a private or signed capability. A reader privacy control replaces the title
+with **Reading manga** while retaining chapter/page activity.
+
+Only connect catalogs and download material that you are authorized to use.
+The [manga repository format](docs/MANGA_REPOSITORIES.md) documents the
+supported schema and security boundary.
 
 ## Downloads
 
@@ -222,6 +259,7 @@ TetoTV uses third-party services and open-source components but is not affiliate
 | [Privacy documentation](docs/PRIVACY.md) | Optional network features, diagnostics, redaction, and data handling |
 | [Security policy](SECURITY.md) | Private vulnerability reporting and supported releases |
 | [Architecture](docs/ARCHITECTURE.md) | Application layers, storage, playback, and hosted coordination |
+| [Manga repository format](docs/MANGA_REPOSITORIES.md) | Developer-preview OPDS support, declarative repository schema, and source security boundary |
 | [Windows build guide](docs/BUILD_WINDOWS.md) | Reproducing the Flutter and Android build locally |
 | [Update channels](docs/UPDATE_CHANNELS.md) | Beta/Public identity, signatures, versioning, and updater behavior |
 | [Third-party notices](docs/THIRD_PARTY_NOTICES.md) | Component licenses, service terms, and attribution |

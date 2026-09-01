@@ -1099,6 +1099,37 @@ void main() {
     );
   });
 
+  test('manga is an append-only fixed runtime destination', () async {
+    FlutterSecureStorage.setMockInitialValues({});
+    const preferences = SettingsPreferences();
+    final controller = SettingsPreferencesController(
+      const FlutterSecureStorage(),
+    );
+
+    expect(
+      TopNavigationDestination.values.last,
+      TopNavigationDestination.manga,
+    );
+    expect(
+      preferences.isTopNavigationDestinationVisible(
+        TopNavigationDestination.manga,
+      ),
+      isTrue,
+    );
+    expect(
+      preferences.canHideTopNavigationDestination(
+        TopNavigationDestination.manga,
+      ),
+      isFalse,
+    );
+
+    await controller.setTopNavigationDestinationVisible(
+      TopNavigationDestination.manga,
+      false,
+    );
+    expect(controller.state.topNavigationOrder, defaultTopNavigationOrder);
+  });
+
   test('configured landing page is consumed only once per launch', () async {
     FlutterSecureStorage.setMockInitialValues({});
     final controller = SettingsPreferencesController(

@@ -647,6 +647,55 @@ class AndroidTvBridge {
     await _channel.invokeMethod<void>('discordDisconnect');
   }
 
+  /// Publishes a privacy-bounded manga reading activity to Discord.
+  ///
+  /// Source names, source URLs, account identifiers, request headers, and
+  /// local paths are deliberately not accepted by this API. Callers may also
+  /// replace [title] with the generic value `Reading manga` when the reader's
+  /// title-sharing preference is disabled.
+  Future<void> updateDiscordReadingPresence({
+    required String title,
+    required String chapterLabel,
+    required int page,
+    required int pageCount,
+  }) async {
+    final safeTitle = title.trim();
+    final safeChapter = chapterLabel.trim();
+    if (safeTitle.isEmpty || safeTitle.length > 120) {
+      throw ArgumentError.value(title, 'title');
+    }
+    if (safeChapter.length > 80) {
+      throw ArgumentError.value(chapterLabel, 'chapterLabel');
+    }
+    if (page < 0 || pageCount < 0 || (pageCount > 0 && page > pageCount)) {
+      throw ArgumentError('Discord reading page values are invalid.');
+    }
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
+    try {
+      await _channel.invokeMethod<void>('discordUpdateReadingPresence', {
+        'title': safeTitle,
+        'chapterLabel': safeChapter,
+        'page': page,
+        'pageCount': pageCount,
+      });
+    } on PlatformException {
+      // Rich Presence is optional and must never interrupt reading.
+    } on MissingPluginException {
+      // Desktop/widget hosts intentionally do not install the Android bridge.
+    }
+  }
+
+  Future<void> clearDiscordPresence() async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
+    try {
+      await _channel.invokeMethod<void>('discordClearPresence');
+    } on PlatformException {
+      // Best effort: the linked Discord session may already be unavailable.
+    } on MissingPluginException {
+      // Desktop/widget hosts intentionally do not install the Android bridge.
+    }
+  }
+
   Future<TvDeviceProfile> getDeviceProfile({bool refresh = false}) async {
     if (!refresh && _cachedProfile != null) return _cachedProfile!;
     if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
@@ -676,6 +725,11 @@ class AndroidTvBridge {
           ? const AppVersionInfo.unknown()
           : AppVersionInfo.fromMap(result);
     } on PlatformException {
+      return const AppVersionInfo.unknown();
+    } on MissingPluginException {
+      // Widget tests and non-Android embedders do not install TetoTV's
+      // platform channel. Runtime navigation still needs a loaded, fail-closed
+      // Developer Mode state on those hosts.
       return const AppVersionInfo.unknown();
     }
   }
@@ -935,6 +989,21 @@ class AndroidTvBridge {
       });
     } on PlatformException {
       // Best effort: the non-sticky service also ends with the app process.
+    } on MissingPluginException {
+      // Desktop/widget hosts intentionally do not install the Android bridge.
+    }
+  }
+
+  /// Applies Android's window-scoped keep-awake flag while the manga reader
+  /// is visible. The reader always clears the flag during disposal.
+  Future<void> setMangaKeepScreenAwake(bool enabled) async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
+    try {
+      await _channel.invokeMethod<void>('setMangaKeepScreenAwake', {
+        'enabled': enabled,
+      });
+    } on PlatformException {
+      // A missing keep-awake flag is non-fatal; reading must remain usable.
     } on MissingPluginException {
       // Desktop/widget hosts intentionally do not install the Android bridge.
     }

@@ -1,6 +1,6 @@
 # TetoTV privacy disclosure
 
-Effective date: August 28, 2026
+Effective date: September 1, 2026
 
 The stable public copy is available without an account or authentication at
 <https://tetotv-bot.wisp.uno/privacy>.
@@ -8,8 +8,9 @@ The stable public copy is available without an account or authentication at
 TetoTV is an independent Android application. It has no advertising SDK or
 third-party analytics SDK. It has no TetoTV account system and does not sell personal data.
 This disclosure describes the data handled by the app, user-installed source
-extensions, the optional TetoTV pairing and Watch Party services, optional
-Beta aggregate presence, and the optional crash and diagnostic receivers.
+extensions and manga catalogs, the optional TetoTV pairing and Watch Party
+services, optional Beta aggregate presence, and the optional crash and
+diagnostic receivers.
 
 ## Public and Beta builds
 
@@ -34,6 +35,20 @@ TetoTV stores the following data locally:
   in Keystore-backed secure storage;
 - playback history, resume positions, per-series preferences, tracker-sync
   outbox entries, installed source definitions, and app preferences;
+- when the Developer Mode Manga Preview is used, user-added OPDS or declarative
+  repository definitions, bounded catalog cache data, local library entries,
+  reading progress, chapter/page counts, reader preferences, and download-job
+  metadata. Optional Basic, Bearer, and API-key credentials are stored
+  separately in Android Keystore-backed secure storage. They are not stored in
+  the catalog cache or diagnostics;
+- saved manga pages downloaded from a compatible OPDS reading order or
+  extracted from a compatible ZIP/CBZ chapter archive in app-private storage,
+  plus app-private relative paths and verification metadata needed to verify
+  and display a completed download. A bounded cached OPDS document can retain
+  the remote links declared by that server until the source/cache is removed.
+  Resolved reader headers, page/archive acquisition URLs, and download request
+  headers are runtime-only capabilities and are not written to manga progress
+  or download-job records;
 - saved offline episode files in app-private storage; downloaded public catalog
   and episode metadata; pinned cover and banner artwork; and durable download
   job state such as public media identifiers, episode and title labels, source
@@ -66,6 +81,14 @@ System > Reset TetoTV** action and Android's **Settings > Apps > TetoTV >
 Storage > Clear storage** both remove all TetoTV local data. The separate
 **Clear cache** action removes only temporary files and retains accounts,
 preferences, sources, history, and saved offline downloads.
+
+Removing an individual manga source or manga download through the preview's
+own controls removes its associated local source credential/cache or saved
+page files. Library state, reading progress, and reader preferences can remain
+for other entries. To remove all manga data and credentials together, use
+**Settings > System > Reset TetoTV**, Android **Clear storage**, or uninstall
+TetoTV. Android **Clear cache** removes temporary extracted pages but retains
+persistent manga settings, source definitions, progress, and downloads.
 
 ## Data sent to services selected by the user
 
@@ -133,6 +156,21 @@ TetoTV makes network requests only for app features the user uses:
   the results of requests it makes within TetoTV's bounded runtime. Users
   should install only extensions and catalogs they trust and are authorized to
   use;
+- Manga Preview repository and OPDS URLs are supplied by the user; TetoTV
+  ships no default or recommended manga catalog. Adding, browsing, refreshing,
+  reading, or downloading from a source contacts that source's public HTTPS
+  server and any public HTTPS image or acquisition hosts declared by its OPDS
+  documents. Those hosts receive ordinary connection information such as the
+  device's public IP address, request time, user agent, and the requested
+  catalog, cover, chapter, or page path. These requests do not pass through a
+  TetoTV server. If the viewer supplies Basic, Bearer, or API-key credentials,
+  TetoTV uses request headers rather than placing the credential in a URL. An
+  authenticated catalog or archive request cannot redirect to a different
+  origin. A reader-page redirect may change origin, but TetoTV removes the
+  source credential before following it.
+  Credentials, headers, repository URLs, page URLs, and local page paths are
+  excluded from diagnostics. Users should add only manga servers they trust
+  and material they are authorized to read or download;
 - every installed, enabled Web-stream extension is subject to an automatic
   compatibility probe when TetoTV starts if its last conclusive probe is
   missing or at least 24 hours old. While TetoTV remains open, a timer runs the
@@ -214,6 +252,15 @@ and the service does not send data to a TetoTV server. A force-stop or process
 death ends the foreground work; persisted queue and season state can be
 restored when TetoTV is opened again.
 
+The Developer Mode Manga Preview uses the same best-effort foreground-service
+lease for an active compatible chapter download. Completed manga pages and
+verification rows are durable, but the remote reading-order/archive URL and
+request headers are deliberately not. A force-stop or process death therefore
+ends the active transfer; on the next launch it is marked as needing
+reauthorization, and the viewer must reconnect or reselect the source before a
+fresh retry. TetoTV does not schedule or continue a manga transfer on a
+TetoTV-operated server.
+
 External-player support is optional. If the user chooses a default installed
 video player, TetoTV stores that app's Android package name and display label
 in local preferences until the choice is changed, cleared, or TetoTV data is
@@ -237,6 +284,18 @@ revokes the connection when possible and deletes the saved tokens from TetoTV.
 TetoTV never asks for or stores the user's Discord password. Playback opened
 from USB, internal storage, Jellyfin, or Plex is excluded from Rich Presence so
 private filenames and media-library titles are not shared.
+
+While the Developer Mode Manga Preview is open, the same optional Discord Rich
+Presence connection can instead send a reading activity containing a title,
+chapter label, current page, and total page count. Page updates are
+rate-limited. Turning off the manga **Share title on Discord** preference
+replaces the title with **Reading manga** while retaining the chapter/page
+activity. Disabling Rich Presence or unlinking Discord stops manga activity
+entirely. TetoTV does not send Discord the manga source, repository or catalog
+URL, cover or page URL, request header, credential, download path, or local
+library identifier. This no-artwork boundary applies to Manga Preview because
+a user-added image URL may itself be a private or signed capability; ordinary
+anime Rich Presence artwork behavior is unchanged.
 
 Before TetoTV starts a new Discord authorization, the user must confirm that
 they meet Discord's minimum age of at least 13, or the older minimum required
@@ -429,6 +488,11 @@ correlation value and a strict reason-code vocabulary. They never contain a
 show or episode name, provider/server ID, media URL, request header, filename,
 local path, account value, or room identity. The report also compares the most
 recent working and failed sessions using only those technical fields.
+
+Manga Preview diagnostics are limited to bounded technical status and counts;
+they do not include a manga title, chapter, page identity, source or repository
+URL, page/acquisition URL, request header, credential, archive filename, or
+local page path.
 
 These local crash summaries are kept even when anonymous crash reporting is disabled
 so a later user-requested report can explain a restart; they are never queued

@@ -4,7 +4,7 @@ publish_to: 'none'
 # Public and Beta artifacts built from the same source use one monotonically
 # increasing Android versionCode. The project default carries the Beta display
 # version; the Public universal APK overrides the build name to the 1.x line.
-version: 2.0.62+410039
+version: 2.0.63+410040
 
 environment:
   sdk: ^3.12.2
@@ -29,6 +29,10 @@ dependencies:
   crypto: ^3.0.6
   cryptography: ^2.7.0
   xml: ^6.6.1
+  # Streamed CBZ/ZIP support for the developer Manga Preview. Archives are
+  # extracted with TetoTV's own traversal, symlink, entry-count, and size
+  # guards rather than the package convenience extractors.
+  archive: ^4.2.0
   path: ^1.9.1
   path_provider: ^2.1.5
   sqflite: ^2.4.2

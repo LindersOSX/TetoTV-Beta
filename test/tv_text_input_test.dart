@@ -5,14 +5,20 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
+Finder _keyboardText(String value) => find.descendant(
+  of: find.byType(TvKeyboardDialog),
+  matching: find.text(value),
+);
+
 void main() {
-  testWidgets('opens an app-owned keyboard without an EditableText', (
+  testWidgets('search keyboard exposes the TV QWERTY and number-pad layout', (
     tester,
   ) async {
     FlutterSecureStorage.setMockInitialValues({
       'input_use_built_in_keyboard': 'true',
     });
     final controller = TextEditingController();
+    String? submitted;
     addTearDown(controller.dispose);
 
     await tester.pumpWidget(
@@ -22,7 +28,12 @@ void main() {
             body: Center(
               child: SizedBox(
                 width: 500,
-                child: TvTextInput(controller: controller, labelText: 'Search'),
+                child: TvTextInput(
+                  controller: controller,
+                  labelText: 'Search',
+                  keyboardTitle: 'Search anime',
+                  onSubmitted: (value) => submitted = value,
+                ),
               ),
             ),
           ),
@@ -36,15 +47,89 @@ void main() {
 
     expect(find.byType(TvKeyboardDialog), findsOneWidget);
     expect(find.byType(EditableText), findsNothing);
-    expect(find.text('PASTE'), findsOneWidget);
-    expect(find.text('DONE'), findsOneWidget);
-    final keyboardSize = tester.getSize(
-      find.byKey(const ValueKey('tv-keyboard-panel')),
+    expect(_keyboardText('Search anime'), findsOneWidget);
+    expect(_keyboardText('REMOTE  /  CONTROLLER  /  KEYBOARD'), findsOneWidget);
+    expect(_keyboardText('Start typing…'), findsOneWidget);
+
+    for (final key in const [
+      'q',
+      'w',
+      'e',
+      'r',
+      't',
+      'y',
+      'u',
+      'i',
+      'o',
+      'p',
+      'a',
+      's',
+      'd',
+      'f',
+      'g',
+      'h',
+      'j',
+      'k',
+      'l',
+      'z',
+      'x',
+      'c',
+      'v',
+      'b',
+      'n',
+      'm',
+      '1',
+      '2',
+      '3',
+      '4',
+      '5',
+      '6',
+      '7',
+      '8',
+      '9',
+      '123?',
+      '-',
+      '_',
+      '0',
+      'Search',
+    ]) {
+      expect(
+        _keyboardText(key),
+        findsOneWidget,
+        reason: 'missing keyboard key $key',
+      );
+    }
+    expect(find.bySemanticsLabel('Cursor left'), findsOneWidget);
+    expect(find.bySemanticsLabel('Cursor right'), findsOneWidget);
+    expect(find.bySemanticsLabel('Space'), findsOneWidget);
+    expect(find.bySemanticsLabel('Backspace'), findsOneWidget);
+
+    // The right-side number pad keeps conventional ascending rows and stays
+    // to the right of the QWERTY keys without pinning the test to pixels.
+    expect(
+      tester.getCenter(_keyboardText('1')).dx,
+      greaterThan(tester.getCenter(_keyboardText('p')).dx),
     );
-    expect(keyboardSize.width, inInclusiveRange(540, 560));
-    expect(keyboardSize.height, lessThan(250));
-    expect(find.text('7'), findsOneWidget);
-    expect(find.text('#?&'), findsOneWidget);
+    expect(
+      tester.getCenter(_keyboardText('1')).dy,
+      lessThan(tester.getCenter(_keyboardText('4')).dy),
+    );
+    expect(
+      tester.getCenter(_keyboardText('4')).dy,
+      lessThan(tester.getCenter(_keyboardText('7')).dy),
+    );
+
+    await tester.tap(_keyboardText('q'));
+    await tester.tap(_keyboardText('1'));
+    await tester.tap(_keyboardText('-'));
+    await tester.tap(_keyboardText('_'));
+    await tester.tap(_keyboardText('0'));
+    await tester.tap(find.bySemanticsLabel('Backspace'));
+    await tester.tap(_keyboardText('Search'));
+    await tester.pumpAndSettle();
+
+    expect(controller.text, 'q1-_');
+    expect(submitted, 'q1-_');
   });
 
   testWidgets('physical Enter commits the TV keyboard value', (tester) async {
@@ -112,22 +197,61 @@ void main() {
     await tester.tap(find.text('Room code'));
     await tester.pumpAndSettle();
     expect(find.byType(TvKeyboardDialog), findsOneWidget);
-    expect(find.text('q'), findsNothing);
-    expect(find.text('#?&'), findsNothing);
-    final keyboardSize = tester.getSize(
-      find.byKey(const ValueKey('tv-keyboard-panel')),
+    expect(_keyboardText('Room code'), findsOneWidget);
+    expect(_keyboardText('REMOTE  /  CONTROLLER  /  KEYBOARD'), findsOneWidget);
+    expect(_keyboardText('Start typing…'), findsOneWidget);
+    expect(_keyboardText('q'), findsNothing);
+    expect(_keyboardText('123?'), findsNothing);
+    for (final key in const [
+      '1',
+      '2',
+      '3',
+      '4',
+      '5',
+      '6',
+      '7',
+      '8',
+      '9',
+      '0',
+      'CLEAR',
+      'CANCEL',
+      'DONE',
+    ]) {
+      expect(
+        _keyboardText(key),
+        findsOneWidget,
+        reason: 'missing numeric key $key',
+      );
+    }
+    expect(find.bySemanticsLabel('Backspace'), findsOneWidget);
+
+    // The room-code pad reads naturally from 1 through 9.
+    expect(
+      tester.getCenter(_keyboardText('1')).dx,
+      lessThan(tester.getCenter(_keyboardText('2')).dx),
     );
-    expect(keyboardSize.width, lessThanOrEqualTo(320));
+    expect(
+      tester.getCenter(_keyboardText('2')).dx,
+      lessThan(tester.getCenter(_keyboardText('3')).dx),
+    );
+    expect(
+      tester.getCenter(_keyboardText('1')).dy,
+      lessThan(tester.getCenter(_keyboardText('4')).dy),
+    );
+    expect(
+      tester.getCenter(_keyboardText('4')).dy,
+      lessThan(tester.getCenter(_keyboardText('7')).dy),
+    );
 
     for (final key in const ['2', '0', '9', '1', '8']) {
-      await tester.tap(find.text(key));
+      await tester.tap(_keyboardText(key));
       await tester.pump();
     }
-    await tester.tap(find.text('BACKSPACE'));
+    await tester.tap(find.bySemanticsLabel('Backspace'));
     await tester.pump();
-    await tester.tap(find.text('8'));
+    await tester.tap(_keyboardText('8'));
     await tester.pump();
-    await tester.tap(find.text('DONE'));
+    await tester.tap(_keyboardText('DONE'));
     await tester.pumpAndSettle();
     expect(controller.text, '298');
   });

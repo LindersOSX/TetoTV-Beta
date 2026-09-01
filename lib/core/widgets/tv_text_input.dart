@@ -593,20 +593,15 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
   static const _letterRows = <List<String>>[
     ['q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p'],
     ['a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l'],
-    ['z', 'x', 'c', 'v', 'b', 'n', 'm', ',', '.'],
+    ['z', 'x', 'c', 'v', 'b', 'n', 'm', '.', ','],
   ];
   static const _symbolRows = <List<String>>[
-    ['!', '@', '#', r'$', '%', '^', '&', '*', '(', ')'],
+    ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'],
     ['-', '_', '=', '+', '[', ']', '{', '}', r'\', '|'],
     ['.', ',', ':', ';', '/', '?', '"', "'", '<', '>'],
   ];
-  static const _numberRows = <List<String>>[
-    ['7', '8', '9'],
-    ['4', '5', '6'],
-    ['1', '2', '3'],
-  ];
-
   late String _value;
+  late int _cursorOffset;
   bool _shift = false;
   bool _symbols = false;
   late bool _reveal;
@@ -615,45 +610,90 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
   void initState() {
     super.initState();
     _value = widget.initialValue;
+    _cursorOffset = _value.length;
     _reveal = !widget.obscureText;
   }
 
   void _append(String value) {
     final appended = _shift && !_symbols ? value.toUpperCase() : value;
     setState(() {
-      _value = _formatValue('$_value$appended');
+      final candidate =
+          '${_value.substring(0, _cursorOffset)}$appended${_value.substring(_cursorOffset)}';
+      final formatted = _formatValue(
+        candidate,
+        selectionOffset: _cursorOffset + appended.length,
+      );
+      _value = formatted.text;
+      _cursorOffset = formatted.selection.baseOffset.clamp(0, _value.length);
       if (_shift) _shift = false;
     });
   }
 
   void _backspace() {
-    if (_value.isEmpty) return;
-    setState(() => _value = _value.substring(0, _value.length - 1));
+    if (_value.isEmpty || _cursorOffset == 0) return;
+    setState(() {
+      final candidate =
+          '${_value.substring(0, _cursorOffset - 1)}${_value.substring(_cursorOffset)}';
+      final formatted = _formatValue(
+        candidate,
+        selectionOffset: _cursorOffset - 1,
+      );
+      _value = formatted.text;
+      _cursorOffset = formatted.selection.baseOffset.clamp(0, _value.length);
+    });
+  }
+
+  void _moveCursor(int delta) {
+    setState(() {
+      _cursorOffset = (_cursorOffset + delta).clamp(0, _value.length);
+    });
+  }
+
+  void _clear() {
+    setState(() {
+      _value = '';
+      _cursorOffset = 0;
+    });
   }
 
   Future<void> _paste() async {
     final data = await Clipboard.getData(Clipboard.kTextPlain);
     final value = data?.text;
     if (value == null || value.isEmpty || !mounted) return;
-    setState(
-      () => _value = _formatValue(
-        '$_value${value.replaceAll(RegExp(r'[\r\n]+'), '')}',
-      ),
-    );
+    final pasted = value.replaceAll(RegExp(r'[\r\n]+'), '');
+    setState(() {
+      final candidate =
+          '${_value.substring(0, _cursorOffset)}$pasted${_value.substring(_cursorOffset)}';
+      final formatted = _formatValue(
+        candidate,
+        selectionOffset: _cursorOffset + pasted.length,
+      );
+      _value = formatted.text;
+      _cursorOffset = formatted.selection.baseOffset.clamp(0, _value.length);
+    });
   }
 
   void _autofill(String value) {
-    setState(() => _value = _formatValue(value));
+    setState(() {
+      final formatted = _formatValue(value, selectionOffset: value.length);
+      _value = formatted.text;
+      _cursorOffset = formatted.selection.baseOffset.clamp(0, _value.length);
+    });
   }
 
-  String _formatValue(String candidate) {
+  TextEditingValue _formatValue(
+    String candidate, {
+    required int selectionOffset,
+  }) {
     var value = TextEditingValue(
       text: candidate,
-      selection: TextSelection.collapsed(offset: candidate.length),
+      selection: TextSelection.collapsed(
+        offset: selectionOffset.clamp(0, candidate.length),
+      ),
     );
     final oldValue = TextEditingValue(
       text: _value,
-      selection: TextSelection.collapsed(offset: _value.length),
+      selection: TextSelection.collapsed(offset: _cursorOffset),
     );
     for (final formatter in widget.inputFormatters) {
       value = formatter.formatEditUpdate(oldValue, value);
@@ -663,10 +703,12 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
       final clipped = value.text.characters.take(maximum).toString();
       value = TextEditingValue(
         text: clipped,
-        selection: TextSelection.collapsed(offset: clipped.length),
+        selection: TextSelection.collapsed(
+          offset: value.selection.baseOffset.clamp(0, clipped.length),
+        ),
       );
     }
-    return value.text;
+    return value;
   }
 
   KeyEventResult _handlePhysicalKeyboard(FocusNode _, KeyEvent event) {
@@ -677,7 +719,9 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
       _backspace();
       return KeyEventResult.handled;
     }
-    if (event.logicalKey == LogicalKeyboardKey.escape) {
+    if (event.logicalKey == LogicalKeyboardKey.escape ||
+        event.logicalKey == LogicalKeyboardKey.goBack ||
+        event.logicalKey == LogicalKeyboardKey.browserBack) {
       Navigator.of(context).pop();
       return KeyEventResult.handled;
     }
@@ -686,11 +730,25 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
       Navigator.of(context).pop(_value);
       return KeyEventResult.handled;
     }
+    final pressed = HardwareKeyboard.instance.logicalKeysPressed;
+    final pasteShortcut =
+        event.logicalKey == LogicalKeyboardKey.keyV &&
+        (pressed.contains(LogicalKeyboardKey.controlLeft) ||
+            pressed.contains(LogicalKeyboardKey.controlRight) ||
+            pressed.contains(LogicalKeyboardKey.metaLeft) ||
+            pressed.contains(LogicalKeyboardKey.metaRight));
+    if (pasteShortcut ||
+        (event.logicalKey == LogicalKeyboardKey.insert &&
+            (pressed.contains(LogicalKeyboardKey.shiftLeft) ||
+                pressed.contains(LogicalKeyboardKey.shiftRight)))) {
+      _paste();
+      return KeyEventResult.handled;
+    }
     final character = event.character;
     if (character != null &&
         character.length == 1 &&
         character.codeUnitAt(0) >= 32) {
-      setState(() => _value = _formatValue('$_value$character'));
+      _append(character);
       return KeyEventResult.handled;
     }
     return KeyEventResult.ignored;
@@ -703,328 +761,547 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
         ? List.filled(_value.length, '\u2022').join()
         : _value;
     final rows = _symbols ? _symbolRows : _letterRows;
-    final availableWidth = MediaQuery.sizeOf(context).width;
-    final panelWidth = widget.numericOnly
-        ? (availableWidth < 340 ? availableWidth - 20 : 320.0)
-        : (availableWidth < 600 ? availableWidth - 20 : 560.0);
+    final availableSize = MediaQuery.sizeOf(context);
+    final availableWidth = availableSize.width;
+    final availableHeight = availableSize.height;
+    final narrow = availableWidth < 720;
+    final horizontalInset = narrow ? 10.0 : 20.0;
+    final maximumPanelWidth = (availableWidth - (horizontalInset * 2)).clamp(
+      0.0,
+      double.infinity,
+    );
+    final desiredWidth = widget.numericOnly ? 820.0 : 1160.0;
+    final panelWidth = desiredWidth.clamp(0.0, maximumPanelWidth).toDouble();
+    final widthScale = (panelWidth / desiredWidth).clamp(.64, 1.0);
+    final heightTarget = availableHeight < 500
+        ? (widget.numericOnly ? 720.0 : 620.0)
+        : (widget.numericOnly ? 640.0 : 525.0);
+    final heightScale = (availableHeight / heightTarget).clamp(.48, 1.0);
+    final scale = narrow
+        ? (widthScale < heightScale ? widthScale : heightScale)
+        : heightScale;
+    final keyHeight = (widget.numericOnly ? 64.0 : 58.0) * scale;
+    final actionHeight = (widget.numericOnly ? 68.0 : 58.0) * scale;
+    final keyGap = (widget.numericOnly ? 10.0 : 8.0) * scale;
+    final panelPadding = (widget.numericOnly ? 26.0 : 28.0) * scale;
+    final titleSize = (widget.numericOnly ? 30.0 : 28.0) * scale;
+    final inputHeight = (widget.numericOnly ? 70.0 : 62.0) * scale;
+    final inputFontSize = (widget.numericOnly ? 25.0 : 23.0) * scale;
+    final submitLabel = widget.title.toLowerCase().contains('search')
+        ? 'Search'
+        : 'Done';
+
+    Widget keyboardKey({
+      required String id,
+      String? label,
+      IconData? icon,
+      String? semanticLabel,
+      required VoidCallback onPressed,
+      bool autofocus = false,
+      bool primary = false,
+      bool selected = false,
+      double? height,
+      double? fontSize,
+    }) {
+      return _KeyboardKey(
+        key: ValueKey('tv-keyboard-key-$id'),
+        label: label,
+        icon: icon,
+        semanticLabel: semanticLabel ?? label ?? id,
+        autofocus: autofocus,
+        primary: primary,
+        selected: selected,
+        height: height ?? keyHeight,
+        fontSize: fontSize ?? (21 * scale).clamp(12, 21),
+        onPressed: onPressed,
+      );
+    }
+
+    Widget flexKey({
+      required String id,
+      String? label,
+      IconData? icon,
+      String? semanticLabel,
+      required VoidCallback onPressed,
+      int flex = 10,
+      bool autofocus = false,
+      bool primary = false,
+      bool selected = false,
+      double? height,
+      double? fontSize,
+    }) {
+      return Expanded(
+        flex: flex,
+        child: keyboardKey(
+          id: id,
+          label: label,
+          icon: icon,
+          semanticLabel: semanticLabel,
+          onPressed: onPressed,
+          autofocus: autofocus,
+          primary: primary,
+          selected: selected,
+          height: height,
+          fontSize: fontSize,
+        ),
+      );
+    }
+
+    Widget textRow(
+      List<String> labels, {
+      double leftInset = 0,
+      bool autofocusFirst = false,
+    }) {
+      return Padding(
+        padding: EdgeInsets.only(left: leftInset),
+        child: Row(
+          children: [
+            for (var index = 0; index < labels.length; index++) ...[
+              flexKey(
+                id: 'text-${labels[index]}-$index',
+                label: _shift && !_symbols
+                    ? labels[index].toUpperCase()
+                    : labels[index],
+                autofocus: autofocusFirst && index == 0,
+                onPressed: () => _append(labels[index]),
+              ),
+              if (index != labels.length - 1) SizedBox(width: keyGap),
+            ],
+          ],
+        ),
+      );
+    }
+
+    Widget numericRow(List<String> labels, {String? autofocusLabel}) {
+      return Row(
+        children: [
+          for (var index = 0; index < labels.length; index++) ...[
+            flexKey(
+              id: 'number-${labels[index]}',
+              label: labels[index],
+              autofocus: labels[index] == autofocusLabel,
+              onPressed: () => _append(labels[index]),
+              height: keyHeight,
+            ),
+            if (index != labels.length - 1) SizedBox(width: keyGap),
+          ],
+        ],
+      );
+    }
+
+    Widget qwertyKeyboard() {
+      final numberPadWidth = narrow ? 0.0 : panelWidth * .225;
+      final thirdRow = rows[2];
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: Column(
+              children: [
+                textRow(rows[0], autofocusFirst: true),
+                SizedBox(height: keyGap),
+                textRow(rows[1], leftInset: 28 * scale),
+                SizedBox(height: keyGap),
+                Row(
+                  children: [
+                    flexKey(
+                      id: 'shift',
+                      icon: Icons.arrow_upward_rounded,
+                      semanticLabel: 'Shift',
+                      flex: 14,
+                      selected: _shift,
+                      onPressed: () => setState(() {
+                        if (_symbols) {
+                          _symbols = false;
+                          _shift = true;
+                        } else {
+                          _shift = !_shift;
+                        }
+                      }),
+                    ),
+                    SizedBox(width: keyGap),
+                    for (var index = 0; index < thirdRow.length; index++) ...[
+                      flexKey(
+                        id: 'text-${thirdRow[index]}-third-$index',
+                        label: _shift && !_symbols
+                            ? thirdRow[index].toUpperCase()
+                            : thirdRow[index],
+                        onPressed: () => _append(thirdRow[index]),
+                      ),
+                      if (index != thirdRow.length - 1) SizedBox(width: keyGap),
+                    ],
+                  ],
+                ),
+                SizedBox(height: keyGap),
+                Row(
+                  children: [
+                    flexKey(
+                      id: 'symbols',
+                      label: _symbols ? 'ABC' : '123?',
+                      semanticLabel: _symbols
+                          ? 'Letters keyboard'
+                          : 'Symbols keyboard',
+                      flex: 14,
+                      fontSize: (17 * scale).clamp(10, 17),
+                      selected: _symbols,
+                      onPressed: () => setState(() {
+                        _symbols = !_symbols;
+                        _shift = false;
+                      }),
+                    ),
+                    SizedBox(width: keyGap),
+                    flexKey(
+                      id: 'cursor-left',
+                      icon: Icons.arrow_left_rounded,
+                      semanticLabel: 'Cursor left',
+                      flex: 9,
+                      onPressed: () => _moveCursor(-1),
+                    ),
+                    SizedBox(width: keyGap),
+                    flexKey(
+                      id: 'cursor-right',
+                      icon: Icons.arrow_right_rounded,
+                      semanticLabel: 'Cursor right',
+                      flex: 9,
+                      onPressed: () => _moveCursor(1),
+                    ),
+                    SizedBox(width: keyGap),
+                    flexKey(
+                      id: 'space',
+                      icon: Icons.space_bar_rounded,
+                      semanticLabel: 'Space',
+                      flex: 44,
+                      onPressed: () => _append(' '),
+                    ),
+                    SizedBox(width: keyGap),
+                    flexKey(
+                      id: 'minus',
+                      label: '-',
+                      flex: 9,
+                      onPressed: () => _append('-'),
+                    ),
+                    SizedBox(width: keyGap),
+                    flexKey(
+                      id: 'underscore',
+                      label: '_',
+                      flex: 9,
+                      onPressed: () => _append('_'),
+                    ),
+                    SizedBox(width: keyGap),
+                    flexKey(
+                      id: 'number-0',
+                      label: '0',
+                      flex: 9,
+                      onPressed: () => _append('0'),
+                    ),
+                  ],
+                ),
+                if (narrow) ...[
+                  SizedBox(height: keyGap),
+                  Row(
+                    children: [
+                      flexKey(
+                        id: 'backspace',
+                        icon: Icons.backspace_outlined,
+                        semanticLabel: 'Backspace',
+                        onPressed: _backspace,
+                      ),
+                      SizedBox(width: keyGap),
+                      flexKey(
+                        id: 'submit',
+                        label: submitLabel,
+                        semanticLabel: submitLabel,
+                        primary: true,
+                        onPressed: () => Navigator.of(context).pop(_value),
+                      ),
+                    ],
+                  ),
+                ],
+              ],
+            ),
+          ),
+          if (!narrow) ...[
+            SizedBox(width: keyGap * 1.5),
+            SizedBox(
+              width: numberPadWidth,
+              child: Column(
+                children: [
+                  numericRow(const ['1', '2', '3']),
+                  SizedBox(height: keyGap),
+                  numericRow(const ['4', '5', '6']),
+                  SizedBox(height: keyGap),
+                  numericRow(const ['7', '8', '9']),
+                  SizedBox(height: keyGap),
+                  Row(
+                    children: [
+                      flexKey(
+                        id: 'backspace',
+                        icon: Icons.backspace_outlined,
+                        semanticLabel: 'Backspace',
+                        onPressed: _backspace,
+                      ),
+                      SizedBox(width: keyGap),
+                      flexKey(
+                        id: 'submit',
+                        label: submitLabel,
+                        semanticLabel: submitLabel,
+                        primary: true,
+                        fontSize: (18 * scale).clamp(11, 18),
+                        onPressed: () => Navigator.of(context).pop(_value),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ],
+      );
+    }
+
+    Widget numericKeyboard() {
+      return Column(
+        children: [
+          numericRow(const ['1', '2', '3']),
+          SizedBox(height: keyGap),
+          numericRow(const ['4', '5', '6']),
+          SizedBox(height: keyGap),
+          numericRow(const ['7', '8', '9'], autofocusLabel: '7'),
+          SizedBox(height: keyGap),
+          Row(
+            children: [
+              flexKey(
+                id: 'backspace',
+                icon: Icons.backspace_outlined,
+                semanticLabel: 'Backspace',
+                onPressed: _backspace,
+              ),
+              SizedBox(width: keyGap),
+              flexKey(
+                id: 'number-0',
+                label: '0',
+                onPressed: () => _append('0'),
+              ),
+              SizedBox(width: keyGap),
+              flexKey(
+                id: 'clear',
+                label: 'CLEAR',
+                fontSize: (18 * scale).clamp(11, 18),
+                onPressed: _clear,
+              ),
+            ],
+          ),
+          SizedBox(height: keyGap * 1.35),
+          Row(
+            children: [
+              flexKey(
+                id: 'cancel',
+                label: 'CANCEL',
+                height: actionHeight,
+                fontSize: (19 * scale).clamp(12, 19),
+                onPressed: () => Navigator.of(context).pop(),
+              ),
+              SizedBox(width: keyGap * 1.5),
+              flexKey(
+                id: 'submit',
+                label: 'DONE',
+                height: actionHeight,
+                fontSize: (19 * scale).clamp(12, 19),
+                primary: true,
+                onPressed: () => Navigator.of(context).pop(_value),
+              ),
+            ],
+          ),
+        ],
+      );
+    }
+
     return Dialog(
-      alignment: Alignment.bottomCenter,
-      insetPadding: EdgeInsets.fromLTRB(
-        availableWidth < 600 ? 10 : 24,
-        availableWidth < 600 ? 48 : 160,
-        availableWidth < 600 ? 10 : 24,
-        18,
+      alignment: widget.numericOnly ? Alignment.center : Alignment.bottomCenter,
+      insetPadding: EdgeInsets.symmetric(
+        horizontal: horizontalInset,
+        vertical: narrow ? 10 : 12,
       ),
       backgroundColor: Colors.transparent,
       child: Focus(
         canRequestFocus: false,
         onKeyEvent: _handlePhysicalKeyboard,
-        child: Container(
-          key: const ValueKey('tv-keyboard-panel'),
-          width: panelWidth,
-          padding: const EdgeInsets.fromLTRB(9, 7, 9, 8),
-          decoration: BoxDecoration(
-            color: Color.alphaBlend(
-              palette.surface.withValues(alpha: .40),
-              palette.background,
-            ).withValues(alpha: 247 / 255),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: palette.accent.withValues(alpha: .32)),
-            boxShadow: const [
-              BoxShadow(
-                color: Color(0x88000000),
-                blurRadius: 22,
-                offset: Offset(0, -4),
+        child: SingleChildScrollView(
+          child: Container(
+            key: const ValueKey('tv-keyboard-panel'),
+            width: panelWidth,
+            padding: EdgeInsets.all(panelPadding),
+            decoration: BoxDecoration(
+              color: Color.alphaBlend(
+                palette.surface.withValues(alpha: .58),
+                palette.background,
+              ).withValues(alpha: .97),
+              borderRadius: BorderRadius.circular(20 * scale),
+              border: Border.all(
+                color: palette.accentBright.withValues(alpha: .82),
+                width: 1.5,
               ),
-            ],
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      widget.title,
-                      style: TextStyle(
-                        color: palette.primaryText,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                  ),
-                  Text(
-                    'REMOTE  /  CONTROLLER  /  KEYBOARD',
-                    style: TextStyle(
-                      color: palette.mutedText,
-                      fontSize: 7,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: .6,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 4),
-              Container(
-                width: double.infinity,
-                height: 30,
-                padding: const EdgeInsets.symmetric(horizontal: 9),
-                alignment: Alignment.centerLeft,
-                decoration: BoxDecoration(
-                  color: palette.background,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(
-                    color: palette.accentBright.withValues(alpha: .62),
-                  ),
-                ),
-                child: Text(
-                  displayValue.isEmpty ? 'Start typing…' : displayValue,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: displayValue.isEmpty
-                        ? palette.mutedText
-                        : palette.primaryText,
-                    fontSize: 12,
-                    letterSpacing: widget.obscureText ? 1.4 : 0,
-                  ),
-                ),
-              ),
-              if (widget.autofillSuggestions.isNotEmpty) ...[
-                const SizedBox(height: 4),
-                Row(
-                  children: [
-                    Text(
-                      'AUTOFILL',
-                      style: TextStyle(
-                        color: palette.accentBright,
-                        fontSize: 8,
-                        fontWeight: FontWeight.w900,
-                        letterSpacing: 1.2,
-                      ),
-                    ),
-                    const SizedBox(width: 7),
-                    for (final suggestion in widget.autofillSuggestions.take(
-                      3,
-                    )) ...[
-                      _AutofillChip(
-                        label: suggestion,
-                        icon: Icons.auto_awesome_rounded,
-                        onPressed: () => _autofill(suggestion),
-                      ),
-                    ],
-                  ],
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: .72),
+                  blurRadius: 28,
+                  offset: const Offset(0, -6),
                 ),
               ],
-              const SizedBox(height: 5),
-              FocusTraversalGroup(
-                policy: ReadingOrderTraversalPolicy(),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    if (!widget.numericOnly)
-                      Expanded(
-                        child: Column(
-                          children: [
-                            for (
-                              var rowIndex = 0;
-                              rowIndex < rows.length;
-                              rowIndex++
-                            )
-                              Padding(
-                                padding: EdgeInsets.only(
-                                  left: rowIndex == 1 ? 12 : 0,
-                                  right: rowIndex == 1 ? 12 : 0,
-                                  bottom: 3,
-                                ),
-                                child: Row(
-                                  children: [
-                                    for (
-                                      var keyIndex = 0;
-                                      keyIndex < rows[rowIndex].length;
-                                      keyIndex++
-                                    ) ...[
-                                      Expanded(
-                                        child: _KeyboardKey(
-                                          label: _shift && !_symbols
-                                              ? rows[rowIndex][keyIndex]
-                                                    .toUpperCase()
-                                              : rows[rowIndex][keyIndex],
-                                          autofocus:
-                                              rowIndex == 0 && keyIndex == 0,
-                                          onPressed: () =>
-                                              _append(rows[rowIndex][keyIndex]),
-                                        ),
-                                      ),
-                                      if (keyIndex != rows[rowIndex].length - 1)
-                                        const SizedBox(width: 3),
-                                    ],
-                                  ],
-                                ),
-                              ),
-                            Row(
-                              children: [
-                                _KeyboardAction(
-                                  label: _shift ? 'Aa ON' : 'Aa',
-                                  icon: Icons.arrow_upward_rounded,
-                                  selected: _shift,
-                                  onPressed: () => setState(() {
-                                    if (_symbols) {
-                                      _symbols = false;
-                                      _shift = true;
-                                    } else {
-                                      _shift = !_shift;
-                                    }
-                                  }),
-                                ),
-                                const SizedBox(width: 3),
-                                _KeyboardAction(
-                                  label: _symbols ? 'ABC' : '#?&',
-                                  icon: Icons.alternate_email_rounded,
-                                  flex: 2,
-                                  selected: _symbols,
-                                  onPressed: () => setState(() {
-                                    _symbols = !_symbols;
-                                    _shift = false;
-                                  }),
-                                ),
-                                const SizedBox(width: 3),
-                                _KeyboardAction(
-                                  label: 'SPACE',
-                                  icon: Icons.space_bar_rounded,
-                                  flex: 3,
-                                  onPressed: () => _append(' '),
-                                ),
-                                const SizedBox(width: 3),
-                                _KeyboardAction(
-                                  label: 'DEL',
-                                  icon: Icons.backspace_outlined,
-                                  flex: 2,
-                                  onPressed: _backspace,
-                                ),
-                                const SizedBox(width: 3),
-                                _KeyboardAction(
-                                  label: 'PASTE',
-                                  icon: Icons.content_paste_rounded,
-                                  flex: 2,
-                                  onPressed: _paste,
-                                ),
-                                if (widget.obscureText) ...[
-                                  const SizedBox(width: 3),
-                                  _KeyboardAction(
-                                    label: _reveal ? 'HIDE' : 'SHOW',
-                                    icon: _reveal
-                                        ? Icons.visibility_off_rounded
-                                        : Icons.visibility_rounded,
-                                    flex: 2,
-                                    onPressed: () =>
-                                        setState(() => _reveal = !_reveal),
-                                  ),
-                                ],
-                                const SizedBox(width: 3),
-                                _KeyboardAction(
-                                  label: 'DONE',
-                                  icon: Icons.search_rounded,
-                                  flex: 2,
-                                  primary: true,
-                                  onPressed: () =>
-                                      Navigator.of(context).pop(_value),
-                                ),
-                              ],
-                            ),
-                          ],
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (narrow)
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        widget.title,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: palette.primaryText,
+                          fontSize: titleSize,
+                          fontWeight: FontWeight.w800,
+                          height: 1.08,
                         ),
                       ),
-                    if (!widget.numericOnly) const SizedBox(width: 8),
-                    SizedBox(
-                      width: widget.numericOnly ? panelWidth - 20 : 110,
-                      child: Column(
-                        children: [
-                          for (final numberRow in _numberRows)
-                            Padding(
-                              padding: const EdgeInsets.only(bottom: 3),
-                              child: Row(
-                                children: [
-                                  for (
-                                    var index = 0;
-                                    index < numberRow.length;
-                                    index++
-                                  ) ...[
-                                    Expanded(
-                                      child: _KeyboardKey(
-                                        label: numberRow[index],
-                                        autofocus:
-                                            widget.numericOnly &&
-                                            numberRow.first == '7' &&
-                                            index == 0,
-                                        onPressed: () =>
-                                            _append(numberRow[index]),
-                                      ),
-                                    ),
-                                    if (index != numberRow.length - 1)
-                                      const SizedBox(width: 3),
-                                  ],
-                                ],
-                              ),
+                      SizedBox(height: 7 * scale),
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: Text(
+                            'REMOTE  /  CONTROLLER  /  KEYBOARD',
+                            key: const ValueKey('tv-keyboard-input-modes'),
+                            style: TextStyle(
+                              color: palette.primaryText.withValues(alpha: .90),
+                              fontSize: (16 * scale).clamp(8, 16),
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: .35,
                             ),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: _KeyboardKey(
-                                  label: '0',
-                                  onPressed: () => _append('0'),
-                                ),
-                              ),
-                              const SizedBox(width: 3),
-                              Expanded(
-                                child: _KeyboardKey(
-                                  label: 'BACKSPACE',
-                                  compactLabel: true,
-                                  onPressed: _backspace,
-                                ),
-                              ),
-                              const SizedBox(width: 3),
-                              Expanded(
-                                child: _KeyboardKey(
-                                  label: 'CLEAR',
-                                  compactLabel: true,
-                                  onPressed: () => setState(() => _value = ''),
-                                ),
-                              ),
-                            ],
                           ),
-                          if (widget.numericOnly) ...[
-                            const SizedBox(height: 3),
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: _KeyboardKey(
-                                    label: 'CANCEL',
-                                    compactLabel: true,
-                                    onPressed: () =>
-                                        Navigator.of(context).pop(),
-                                  ),
-                                ),
-                                const SizedBox(width: 3),
-                                Expanded(
-                                  child: _KeyboardKey(
-                                    label: 'DONE',
-                                    compactLabel: true,
-                                    onPressed: () =>
-                                        Navigator.of(context).pop(_value),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ],
+                        ),
                       ),
+                    ],
+                  )
+                else
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          widget.title,
+                          maxLines: widget.numericOnly ? 2 : 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: palette.primaryText,
+                            fontSize: titleSize,
+                            fontWeight: FontWeight.w800,
+                            height: 1.08,
+                          ),
+                        ),
+                      ),
+                      SizedBox(width: 18 * scale),
+                      Text(
+                        'REMOTE  /  CONTROLLER  /  KEYBOARD',
+                        key: const ValueKey('tv-keyboard-input-modes'),
+                        style: TextStyle(
+                          color: palette.primaryText.withValues(alpha: .90),
+                          fontSize: (16 * scale).clamp(8, 16),
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: .35,
+                        ),
+                      ),
+                    ],
+                  ),
+                SizedBox(height: 14 * scale),
+                Container(
+                  key: const ValueKey('tv-keyboard-input'),
+                  width: double.infinity,
+                  height: inputHeight,
+                  padding: EdgeInsets.symmetric(horizontal: 18 * scale),
+                  alignment: Alignment.centerLeft,
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: .58),
+                    borderRadius: BorderRadius.circular(18 * scale),
+                    border: Border.all(
+                      color: palette.accentBright.withValues(alpha: .88),
+                      width: 1.8,
                     ),
-                  ],
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          displayValue.isEmpty ? 'Start typing…' : displayValue,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: displayValue.isEmpty
+                                ? palette.mutedText
+                                : palette.primaryText,
+                            fontSize: inputFontSize,
+                            letterSpacing: widget.obscureText ? 1.4 : 0,
+                          ),
+                        ),
+                      ),
+                      if (widget.obscureText) ...[
+                        SizedBox(width: 8 * scale),
+                        SizedBox(
+                          width: inputHeight * .72,
+                          child: keyboardKey(
+                            id: 'reveal',
+                            icon: _reveal
+                                ? Icons.visibility_off_rounded
+                                : Icons.visibility_rounded,
+                            semanticLabel: _reveal
+                                ? 'Hide entered text'
+                                : 'Show entered text',
+                            height: inputHeight * .68,
+                            onPressed: () => setState(() => _reveal = !_reveal),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
                 ),
-              ),
-            ],
+                if (widget.autofillSuggestions.isNotEmpty) ...[
+                  SizedBox(height: 8 * scale),
+                  Row(
+                    children: [
+                      Text(
+                        'AUTOFILL',
+                        style: TextStyle(
+                          color: palette.accentBright,
+                          fontSize: (12 * scale).clamp(8, 12),
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: 1.2,
+                        ),
+                      ),
+                      const SizedBox(width: 7),
+                      for (final suggestion in widget.autofillSuggestions.take(
+                        3,
+                      )) ...[
+                        _AutofillChip(
+                          label: suggestion,
+                          icon: Icons.auto_awesome_rounded,
+                          onPressed: () => _autofill(suggestion),
+                        ),
+                      ],
+                    ],
+                  ),
+                ],
+                SizedBox(height: 16 * scale),
+                FocusTraversalGroup(
+                  policy: ReadingOrderTraversalPolicy(),
+                  child: widget.numericOnly
+                      ? numericKeyboard()
+                      : qwertyKeyboard(),
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -1034,105 +1311,80 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
 
 class _KeyboardKey extends StatelessWidget {
   const _KeyboardKey({
-    required this.label,
     required this.onPressed,
+    required this.height,
+    required this.fontSize,
+    required this.semanticLabel,
+    this.label,
+    this.icon,
     this.autofocus = false,
-    this.compactLabel = false,
-  });
-
-  final String label;
-  final VoidCallback onPressed;
-  final bool autofocus;
-  final bool compactLabel;
-
-  @override
-  Widget build(BuildContext context) {
-    return TvFocusable(
-      autofocus: autofocus,
-      focusScale: 1.04,
-      borderRadius: BorderRadius.circular(8),
-      onPressed: onPressed,
-      child: Container(
-        height: 26,
-        alignment: Alignment.center,
-        color: context.appPalette.selectableSurface,
-        child: Text(
-          label,
-          style: TextStyle(
-            fontSize: compactLabel ? 6 : 11,
-            fontWeight: FontWeight.w800,
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _KeyboardAction extends StatelessWidget {
-  const _KeyboardAction({
-    required this.label,
-    required this.icon,
-    required this.onPressed,
-    this.flex = 1,
     this.primary = false,
     this.selected = false,
+    super.key,
   });
 
-  final String label;
-  final IconData icon;
+  final String? label;
+  final IconData? icon;
+  final String semanticLabel;
   final VoidCallback onPressed;
-  final int flex;
+  final double height;
+  final double fontSize;
+  final bool autofocus;
   final bool primary;
   final bool selected;
 
   @override
   Widget build(BuildContext context) {
-    return Flexible(
-      flex: flex,
+    final palette = context.appPalette;
+    final radius = BorderRadius.circular((height * .18).clamp(7, 12));
+    final keyColor = primary
+        ? palette.accent
+        : selected
+        ? Color.alphaBlend(
+            palette.accent.withValues(alpha: .42),
+            palette.surfaceRaised,
+          )
+        : Color.alphaBlend(
+            Colors.white.withValues(alpha: .075),
+            palette.surface,
+          );
+    return Semantics(
+      label: semanticLabel,
+      button: true,
+      excludeSemantics: true,
       child: TvFocusable(
+        autofocus: autofocus,
         focusScale: 1.025,
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: radius,
         onPressed: onPressed,
         child: Container(
-          height: 26,
-          padding: const EdgeInsets.symmetric(horizontal: 5),
-          color: primary
-              ? context.appPalette.accent
-              : selected
-              ? context.appPalette.accent.withValues(alpha: .45)
-              : context.appPalette.selectableSurface,
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              if (constraints.maxWidth < 28) {
-                return Center(
-                  child: Icon(
-                    icon,
-                    size: constraints.maxWidth.clamp(7, 11).toDouble(),
-                  ),
-                );
-              }
-              return Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const SizedBox(width: 1),
-                  Icon(icon, size: 11),
-                  const SizedBox(width: 3),
-                  Flexible(
-                    child: Text(
-                      label,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 7,
-                        fontWeight: FontWeight.w900,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 1),
-                ],
-              );
-            },
+          height: height,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: keyColor,
+            borderRadius: radius,
+            border: Border.all(
+              color: primary
+                  ? palette.accentBright.withValues(alpha: .34)
+                  : palette.primaryText.withValues(alpha: .07),
+            ),
           ),
+          child: icon != null
+              ? Icon(
+                  icon,
+                  size: (fontSize * 1.35).clamp(16, 30),
+                  color: palette.primaryText,
+                )
+              : Text(
+                  label ?? '',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: palette.primaryText,
+                    fontSize: fontSize,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
         ),
       ),
     );

@@ -45,11 +45,13 @@ void main() {
 
     await tester.tap(find.byType(TvTextInput));
     await tester.pump(const Duration(milliseconds: 300));
-    await tester.tap(find.text('CLEAR'));
+    for (var index = 0; index < 'old'.length; index++) {
+      await tester.tap(find.byKey(const ValueKey('tv-keyboard-key-backspace')));
+    }
     await tester.tap(find.text('n'));
     await tester.tap(find.text('e'));
     await tester.tap(find.text('w'));
-    await tester.tap(find.text('DONE'));
+    await tester.tap(find.byKey(const ValueKey('tv-keyboard-key-submit')));
     await tester.pump();
     expect(client.requests, contains('new'));
 
@@ -129,7 +131,7 @@ void main() {
     await tester.tap(find.text('c'));
     await tester.tap(find.text('o'));
     await tester.tap(find.text('w'));
-    await tester.tap(find.text('DONE'));
+    await tester.tap(find.byKey(const ValueKey('tv-keyboard-key-submit')));
     await tester.pump();
     client.complete('cow', [_anime(11, 'Cowboy Bebop')]);
     await tester.pump();
@@ -209,7 +211,7 @@ void main() {
       await tester.tap(find.text('c'));
       await tester.tap(find.text('o'));
       await tester.tap(find.text('w'));
-      await tester.tap(find.text('DONE'));
+      await tester.tap(find.byKey(const ValueKey('tv-keyboard-key-submit')));
       await tester.pump();
       client.complete('cow', [
         _anime(11, 'Cowboy Bebop'),

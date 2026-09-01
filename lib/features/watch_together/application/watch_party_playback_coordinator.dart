@@ -294,6 +294,7 @@ class WatchPartyPlaybackCoordinator implements WatchPartyPlaybackPort {
       episode: episode.episode,
       titleEnglish: _boundedWatchPartyTitle(episode.titleEnglish),
       titleRomaji: _boundedWatchPartyTitle(episode.titleRomaji),
+      titleNative: _boundedWatchPartyTitle(episode.titleNative),
       year: episode.year,
       coverUrl: episode.coverImageUrl,
       timelineFingerprint: release == null

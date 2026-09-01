@@ -536,6 +536,7 @@ void main() {
       const media = WatchPartyMedia(
         kind: 'anilist',
         title: 'Safe Show',
+        titleNative: '安全な番組',
         anilistId: 444,
         episode: 9,
         coverUrl: 'https://images.example/cover.jpg',
@@ -553,6 +554,10 @@ void main() {
       expect(
         Uri.parse(request.location).queryParameters['cover'],
         media.coverUrl,
+      );
+      expect(
+        Uri.parse(request.location).queryParameters['titleNative'],
+        media.titleNative,
       );
     },
   );

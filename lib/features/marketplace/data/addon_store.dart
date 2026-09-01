@@ -175,6 +175,12 @@ class AddonStore {
   Future<void> recordProviderSuccess(String id) =>
       database.recordProviderSuccess(id);
 
+  /// Clears transient discovery failures after a normal provider response.
+  /// Unlike validated playback success, discovery alone must not make this
+  /// extension the user's new last-good provider.
+  Future<void> recordProviderHealthyResponse(String id) =>
+      database.recordProviderHealthyResponse(id);
+
   Future<ProviderHealth> recordProviderFailure(
     String id,
     Object error, {

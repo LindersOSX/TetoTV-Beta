@@ -517,6 +517,7 @@ EpisodeReference seasonEpisodeReference(SeasonDownloadPlan plan, int episode) {
   final alternatives = <String>{
     if (anime.titleEnglish?.trim().isNotEmpty == true) anime.titleEnglish!,
     if (anime.titleRomaji?.trim().isNotEmpty == true) anime.titleRomaji!,
+    if (anime.titleNative?.trim().isNotEmpty == true) anime.titleNative!,
     ...anime.synonyms.where((title) => title.trim().isNotEmpty),
   }..remove(anime.title);
   return EpisodeReference(
@@ -527,6 +528,7 @@ EpisodeReference seasonEpisodeReference(SeasonDownloadPlan plan, int episode) {
     alternativeTitles: alternatives.toList(growable: false),
     titleEnglish: anime.titleEnglish,
     titleRomaji: anime.titleRomaji,
+    titleNative: anime.titleNative,
     status: anime.status,
     format: anime.format,
     episodeCount: plan.episodeCount,

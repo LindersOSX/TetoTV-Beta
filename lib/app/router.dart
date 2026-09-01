@@ -291,6 +291,7 @@ EpisodeReference? resolveEpisodeReferenceFromQuery(Map<String, String> query) {
         const [],
     titleEnglish: query['titleEnglish'],
     titleRomaji: query['titleRomaji'],
+    titleNative: query['titleNative'],
     status: query['status'],
     format: query['format'],
     episodeCount: positiveRouteInt(query['episodeCount']),

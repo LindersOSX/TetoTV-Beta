@@ -246,6 +246,7 @@ class KitsuCatalogFallback {
     final titles = _map(attributes['titles']);
     final english = _firstText([titles?['en'], attributes['canonicalTitle']]);
     final romaji = _firstText([titles?['en_jp'], attributes['canonicalTitle']]);
+    final native = _firstText([titles?['ja_jp'], titles?['ja']]);
     final title = _firstText([english, romaji, attributes['canonicalTitle']]);
     if (title == null) return null;
 
@@ -266,6 +267,7 @@ class KitsuCatalogFallback {
       for (final value in _stringList(attributes['abbreviatedTitles'])) value,
       ?english,
       ?romaji,
+      ?native,
     }..remove(title);
 
     return AnimeSummary(
@@ -274,6 +276,7 @@ class KitsuCatalogFallback {
       title: title,
       titleEnglish: english,
       titleRomaji: romaji,
+      titleNative: native,
       description: _plainText(
         attributes['synopsis']?.toString() ??
             attributes['description']?.toString() ??

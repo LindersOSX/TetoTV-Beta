@@ -517,7 +517,7 @@ class MarketplaceController extends StateNotifier<MarketplaceState> {
     try {
       final outcome = await _compatibilityRunner(addon);
       if (!outcome.passed) throw _ProviderCompatibilityFailure(outcome);
-      await _store.recordProviderSuccess(id);
+      await _store.recordProviderHealthyResponse(id);
       final health = await _store.recordProviderCompatibilityResult(
         id,
         passed: true,

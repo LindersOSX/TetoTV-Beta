@@ -22,6 +22,7 @@ void main() {
         title: 'Main title',
         titleEnglish: 'English title',
         titleRomaji: 'Romaji title',
+        titleNative: '日本語タイトル',
         description: 'Description',
         episodes: 12,
         score: 8.75,
@@ -83,6 +84,7 @@ void main() {
       expect(restored.id, 21);
       expect(restored.idMal, 121);
       expect(restored.titleEnglish, 'English title');
+      expect(restored.titleNative, '日本語タイトル');
       expect(restored.score, 8.75);
       expect(restored.genres, ['Comedy', 'Drama']);
       expect(restored.metadataSource, CatalogMetadataSource.kitsu);

@@ -731,6 +731,29 @@ class TetoTvDatabase {
     );
   }
 
+  /// A completed discovery request is healthy even when it has no match.
+  /// Clear its transient failure streak and circuit pause without updating
+  /// [ProviderHealth.lastSuccessAt], which is reserved for providers that
+  /// were actually validated/played and drives last-good prioritization.
+  Future<void> recordProviderHealthyResponse(String providerId) async {
+    final db = await database;
+    await db.rawInsert(
+      '''
+      INSERT INTO provider_health
+        (provider_id, consecutive_failures, total_failures, last_error,
+         last_failure_stage, last_failure_reason, quarantined_until)
+      VALUES (?, 0, 0, NULL, NULL, NULL, NULL)
+      ON CONFLICT(provider_id) DO UPDATE SET
+        consecutive_failures = 0,
+        last_error = NULL,
+        last_failure_stage = NULL,
+        last_failure_reason = NULL,
+        quarantined_until = NULL
+      ''',
+      [providerId],
+    );
+  }
+
   Future<ProviderHealth> recordProviderFailure(
     String providerId,
     Object error, {

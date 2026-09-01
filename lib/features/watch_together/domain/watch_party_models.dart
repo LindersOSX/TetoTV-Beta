@@ -209,6 +209,7 @@ class WatchPartyMedia {
     this.episode,
     this.titleEnglish,
     this.titleRomaji,
+    this.titleNative,
     this.year,
     this.coverUrl,
     this.timelineFingerprint,
@@ -222,6 +223,7 @@ class WatchPartyMedia {
   final int? episode;
   final String? titleEnglish;
   final String? titleRomaji;
+  final String? titleNative;
   final int? year;
   final String? coverUrl;
   final String? timelineFingerprint;
@@ -241,6 +243,7 @@ class WatchPartyMedia {
     add('episode', episode);
     add('title_english', titleEnglish);
     add('title_romaji', titleRomaji);
+    add('title_native', titleNative);
     add('year', year);
     add('cover_url', coverUrl);
     add('timeline_fingerprint', timelineFingerprint);
@@ -259,6 +262,7 @@ class WatchPartyMedia {
       episode: (value['episode'] as num?)?.toInt(),
       titleEnglish: value['title_english'] as String?,
       titleRomaji: value['title_romaji'] as String?,
+      titleNative: value['title_native'] as String?,
       year: (value['year'] as num?)?.toInt(),
       coverUrl: value['cover_url'] as String?,
       timelineFingerprint: value['timeline_fingerprint'] as String?,
@@ -286,6 +290,7 @@ class WatchPartyMedia {
     episode: episode,
     titleEnglish: titleEnglish,
     titleRomaji: titleRomaji,
+    titleNative: titleNative,
     year: year,
     coverUrl: coverUrl,
     timelineFingerprint: timelineFingerprint,
@@ -299,6 +304,7 @@ class WatchPartyMedia {
     episode: episode,
     titleEnglish: titleEnglish,
     titleRomaji: titleRomaji,
+    titleNative: titleNative,
     year: year,
     coverUrl: coverUrl,
     timelineFingerprint: timelineFingerprint,
@@ -322,6 +328,7 @@ class WatchPartyMedia {
       episode == other.episode &&
       titleEnglish == other.titleEnglish &&
       titleRomaji == other.titleRomaji &&
+      titleNative == other.titleNative &&
       year == other.year &&
       coverUrl == other.coverUrl &&
       timelineFingerprint == other.timelineFingerprint &&
@@ -336,6 +343,7 @@ class WatchPartyMedia {
     episode,
     titleEnglish,
     titleRomaji,
+    titleNative,
     year,
     coverUrl,
     timelineFingerprint,

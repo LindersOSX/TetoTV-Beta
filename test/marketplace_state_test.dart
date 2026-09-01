@@ -540,6 +540,9 @@ class _CompatibilityStore extends AddonStore {
   Future<void> recordProviderSuccess(String id) async {}
 
   @override
+  Future<void> recordProviderHealthyResponse(String id) async {}
+
+  @override
   Future<ProviderHealth> recordProviderFailure(
     String id,
     Object error, {

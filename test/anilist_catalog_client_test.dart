@@ -400,6 +400,7 @@ void main() {
                     'userPreferred': 'Test Anime',
                     'english': 'Test Anime English',
                     'romaji': 'Test Anime Romaji',
+                    'native': 'テストアニメ',
                   },
                   'description':
                       'A <b>bold</b> story.<br/>Second line.<br />'
@@ -433,6 +434,7 @@ void main() {
       expect(desc, contains('Second line.'));
       expect(desc, contains('& " \''));
       expect(results.first.title, 'Test Anime English');
+      expect(results.first.titleNative, 'テストアニメ');
       expect(
         results.first.displayTitle(TitleLanguagePreference.romaji),
         'Test Anime Romaji',

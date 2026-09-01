@@ -640,7 +640,9 @@ int _webStreamAudioSupportFromWire(
       }
       final audioTrackCollection = const {
         'audiotracks',
+        'availableaudiotracks',
         'audiostreams',
+        'audios',
       }.contains(key);
       final audioMetadata = const {
         'audiocapability',

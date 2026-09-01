@@ -35,6 +35,7 @@ void main() {
       'title': 'Display Title',
       'titleEnglish': 'English Title',
       'titleRomaji': 'Romaji Title',
+      'titleNative': 'ネイティブタイトル',
       'synonyms': 'Alternate One|Alternate Two',
       'status': 'FINISHED',
       'format': 'ONA',
@@ -44,6 +45,7 @@ void main() {
 
     expect(episode.titleEnglish, 'English Title');
     expect(episode.titleRomaji, 'Romaji Title');
+    expect(episode.titleNative, 'ネイティブタイトル');
     expect(episode.alternativeTitles, ['Alternate One', 'Alternate Two']);
     expect(episode.status, 'FINISHED');
     expect(episode.format, 'ONA');

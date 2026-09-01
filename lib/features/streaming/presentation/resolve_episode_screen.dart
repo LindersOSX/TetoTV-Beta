@@ -593,6 +593,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
   DateTime? _automaticResolveDeadline;
   bool _autoPlayStarted = false;
   bool _webSearchFinished = false;
+  bool _webForegroundSearchFinished = false;
   bool _webSearchEnabled = false;
   bool _debridSearchFinished = false;
   bool _debridSearchEnabled = false;
@@ -609,6 +610,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
   bool _watchPartyDifferentSourceNotified = false;
   bool _directTorrentSupported = false;
   bool _preparingDownload = false;
+  bool _retryingWebProviders = false;
   Timer? _preferredWebWaitTimer;
   Timer? _autoPickDeadlineTimer;
 
@@ -982,6 +984,9 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
     final generation = ++_releaseSearchGeneration;
     setState(() {
       _loadingReleases = true;
+      // A full refresh supersedes any selective retry. Its finally block may
+      // belong to the previous generation, so reset this state here as well.
+      _retryingWebProviders = false;
       _status = 'Searching enabled stream sources…';
       _error = null;
       _releases = const [];
@@ -1002,6 +1007,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
       _debridSearchFinished = !shouldSearchDebrid;
       _webSearchEnabled = preferences.webStreamsEnabled;
       _webSearchFinished = !preferences.webStreamsEnabled;
+      _webForegroundSearchFinished = !preferences.webStreamsEnabled;
       _librarySearchEnabled = shouldSearchLibrary;
       _librarySearchFinished = !shouldSearchLibrary;
       _autoplayDebridExhausted = false;
@@ -1120,6 +1126,9 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
             _webProvidersTotal = progress.totalProviders;
             _webDiagnosticSessionId = progress.diagnosticSessionId;
             _pendingWebProviders = progress.pendingProviderNames;
+            if (progress.isForegroundComplete) {
+              _webForegroundSearchFinished = true;
+            }
             if (progress.isComplete) _webSearchFinished = true;
           });
           if (progress.isComplete) {
@@ -1144,6 +1153,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
       } finally {
         if (mounted && generation == _releaseSearchGeneration) {
           _webSearchFinished = true;
+          _webForegroundSearchFinished = true;
           finishVisibleSearchIfReady();
           _tryStartAutoPlay(
             generation: generation,
@@ -1219,6 +1229,44 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
     } finally {
       if (mounted && generation == _releaseSearchGeneration) {
         setState(() => _loadingReleases = false);
+      }
+    }
+  }
+
+  Future<void> _retryFailedWebProviders() async {
+    if (_retryingWebProviders || !_webSearchFinished) return;
+    final providerIds = _retryableWebProviderIds;
+    if (providerIds.isEmpty) return;
+    final generation = _releaseSearchGeneration;
+    final previousFailures = _webFailures;
+    setState(() => _retryingWebProviders = true);
+    var receivedProgress = false;
+    try {
+      await for (final progress
+          in ref
+              .read(webStreamAggregatorProvider)
+              .retryProvidersIncrementally(widget.episode, providerIds)) {
+        if (!mounted || generation != _releaseSearchGeneration) return;
+        receivedProgress = true;
+        setState(() {
+          _webStreams = progress.aggregation.streams;
+          _webFailures = progress.aggregation.failures;
+          _webProvidersCompleted = progress.completedProviders;
+          _webProvidersTotal = progress.totalProviders;
+          _webDiagnosticSessionId = progress.diagnosticSessionId;
+          _pendingWebProviders = progress.pendingProviderNames;
+          if (_webStreams.isNotEmpty) _error = null;
+        });
+      }
+      if (mounted && generation == _releaseSearchGeneration) {
+        _recordWebProviderVisibilityDiagnostic(phase: 'retry_final');
+      }
+    } catch (_) {
+      if (!mounted || generation != _releaseSearchGeneration) return;
+      if (!receivedProgress) setState(() => _webFailures = previousFailures);
+    } finally {
+      if (mounted && generation == _releaseSearchGeneration) {
+        setState(() => _retryingWebProviders = false);
       }
     }
   }
@@ -2266,6 +2314,17 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
         failure.status == WebProviderFailureStatus.unavailable,
   );
 
+  Set<String> get _retryableWebProviderIds => _webFailures
+      .where(
+        (failure) =>
+            failure.status == WebProviderFailureStatus.failed ||
+            failure.status == WebProviderFailureStatus.paused,
+      )
+      .map((failure) => failure.providerId?.trim().toLowerCase())
+      .whereType<String>()
+      .where((providerId) => providerId.isNotEmpty)
+      .toSet();
+
   List<WebStreamResult> _providerFairManualWebStreams(
     List<WebStreamResult> ranked,
   ) {
@@ -2683,6 +2742,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
           title: widget.episode.title,
           titleEnglish: widget.episode.titleEnglish,
           titleRomaji: widget.episode.titleRomaji,
+          titleNative: widget.episode.titleNative,
           description: 'Saved for offline playback.',
           episodes: widget.episode.episodeCount,
           score: null,
@@ -3531,7 +3591,12 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
       );
     }
     if (_webProvidersTotal > 0) {
-      progress.add('Web $_webProvidersCompleted/$_webProvidersTotal');
+      final background = _webForegroundSearchFinished && !_webSearchFinished
+          ? ' background'
+          : '';
+      progress.add(
+        'Web $_webProvidersCompleted/$_webProvidersTotal$background',
+      );
     }
     if (_librarySearchEnabled) {
       progress.add(
@@ -3543,6 +3608,8 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
     final remaining = pending.length - 3;
     final detail = pendingLabel.isEmpty
         ? ''
+        : _webForegroundSearchFinished && !_webSearchFinished
+        ? ' • Still checking $pendingLabel${remaining > 0 ? ' +$remaining' : ''}'
         : ' • Waiting for $pendingLabel${remaining > 0 ? ' +$remaining' : ''}';
     return '${progress.isEmpty ? 'Starting providers' : progress.join(' • ')}$detail';
   }
@@ -3628,6 +3695,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
       );
     }
     if (_loadingReleases &&
+        !(_webSearchEnabled && _webForegroundSearchFinished) &&
         !_autoPickManualFallback &&
         ((_downloadedAsset == null &&
                 _releases.isEmpty &&
@@ -3660,6 +3728,10 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
     // route; watching it here removes/restores long-press download actions
     // immediately even when there is no completed local asset to refresh.
     final sourcePreferences = ref.watch(settingsPreferencesProvider);
+    final webBackgroundSearchPending =
+        _webSearchEnabled &&
+        _webForegroundSearchFinished &&
+        !_webSearchFinished;
     final everyDiscoveredWebStreamFailed =
         _webStreams.isNotEmpty &&
         _webStreams.every(
@@ -3749,6 +3821,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
     if (!_showManual &&
         (_downloadedAsset != null ||
             _canPlayTorrentReleases ||
+            webBackgroundSearchPending ||
             _webStreams.isNotEmpty ||
             _librarySources.isNotEmpty)) {
       final filtered = _filteredAndSortedReleases(_releases)
@@ -3799,9 +3872,13 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
             )
             .length,
         webFailures: _webFailures,
+        retryableWebProviders: _retryableWebProviderIds.length,
+        retryingWebProviders: _retryingWebProviders,
         failedDebridSources: _releaseFailures.length,
-        isSearching: _loadingReleases,
-        searchStatus: _sourceSearchStatus,
+        isSearching: _loadingReleases || _retryingWebProviders,
+        searchStatus: _retryingWebProviders
+            ? 'Retrying failed Web providers'
+            : _sourceSearchStatus,
         debridEnabled: _canPlayTorrentReleases,
         directTorrentMode: _useDirectTorrent,
         webEnabled: sourcePreferences.webStreamsEnabled,
@@ -3842,7 +3919,15 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
         onRetry: _lastAttemptedRelease == null
             ? null
             : () => _resolveCandidate(_lastAttemptedRelease!),
-        onRefresh: () => _loadConfiguredReleases(refreshWeb: true),
+        onRefresh: _retryingWebProviders
+            ? null
+            : () => _loadConfiguredReleases(refreshWeb: true),
+        onRetryFailedWebProviders:
+            !_retryingWebProviders &&
+                _webSearchFinished &&
+                _retryableWebProviderIds.isNotEmpty
+            ? _retryFailedWebProviders
+            : null,
         searchController: _streamSearchController,
         searchFocusNode: _streamSearchFocusNode,
         searchQuery: _streamSearchQuery,
@@ -3857,6 +3942,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
     }
     if (_downloadedAsset == null &&
         !_canPlayTorrentReleases &&
+        !webBackgroundSearchPending &&
         _webStreams.isEmpty &&
         _librarySources.isEmpty) {
       final localOnly =
@@ -4055,6 +4141,8 @@ class _StreamPicker extends StatelessWidget {
     required this.libraryEnabled,
     required this.failedWebProviders,
     required this.webFailures,
+    required this.retryableWebProviders,
+    required this.retryingWebProviders,
     required this.failedDebridSources,
     required this.isSearching,
     required this.searchStatus,
@@ -4089,6 +4177,7 @@ class _StreamPicker extends StatelessWidget {
     required this.error,
     required this.onRetry,
     required this.onRefresh,
+    required this.onRetryFailedWebProviders,
     required this.searchController,
     required this.searchFocusNode,
     required this.searchQuery,
@@ -4108,6 +4197,8 @@ class _StreamPicker extends StatelessWidget {
   final bool libraryEnabled;
   final int failedWebProviders;
   final List<WebProviderFailure> webFailures;
+  final int retryableWebProviders;
+  final bool retryingWebProviders;
   final int failedDebridSources;
   final bool isSearching;
   final String searchStatus;
@@ -4141,7 +4232,8 @@ class _StreamPicker extends StatelessWidget {
   final String? autoPickNotice;
   final String? error;
   final VoidCallback? onRetry;
-  final VoidCallback onRefresh;
+  final VoidCallback? onRefresh;
+  final VoidCallback? onRetryFailedWebProviders;
   final TextEditingController searchController;
   final FocusNode searchFocusNode;
   final String searchQuery;
@@ -4325,7 +4417,9 @@ class _StreamPicker extends StatelessWidget {
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    searchQuery.isEmpty
+                    isSearching && searchQuery.isEmpty
+                        ? 'Still searching providers…'
+                        : searchQuery.isEmpty
                         ? 'No streams match the selected filters.'
                         : 'No streams match this search.',
                   ),
@@ -4725,7 +4819,7 @@ class _StreamPicker extends StatelessWidget {
               child: Container(
                 key: const ValueKey('stream-picker-provider-status'),
                 width: double.infinity,
-                height: 30,
+                height: onRetryFailedWebProviders == null ? 30 : 42,
                 padding: const EdgeInsets.symmetric(horizontal: 11),
                 decoration: BoxDecoration(
                   color: palette.surfaceRaised.withValues(alpha: .7),
@@ -4760,6 +4854,47 @@ class _StreamPicker extends StatelessWidget {
                         ),
                       ),
                     ),
+                    if (onRetryFailedWebProviders case final retry?) ...[
+                      const SizedBox(width: 10),
+                      TvFocusable(
+                        key: const ValueKey(
+                          'stream-picker-retry-failed-providers',
+                        ),
+                        onPressed: retry,
+                        borderRadius: BorderRadius.circular(8),
+                        focusScale: 1.025,
+                        child: Container(
+                          height: 28,
+                          padding: const EdgeInsets.symmetric(horizontal: 10),
+                          alignment: Alignment.center,
+                          color: palette.surface,
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(Icons.replay_rounded, size: 15),
+                              const SizedBox(width: 5),
+                              Text(
+                                'Retry failed ($retryableWebProviders)',
+                                style: const TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ] else if (retryingWebProviders) ...[
+                      const SizedBox(width: 10),
+                      SizedBox(
+                        width: 15,
+                        height: 15,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: palette.secondaryAccent,
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -4793,7 +4928,7 @@ class _StreamPickerPrimaryControls extends StatefulWidget {
   final bool showAdvancedFilters;
   final int activeAdvancedFilters;
   final ValueChanged<bool> onAdvancedFiltersChanged;
-  final VoidCallback onRefresh;
+  final VoidCallback? onRefresh;
 
   @override
   State<_StreamPickerPrimaryControls> createState() =>
@@ -4878,6 +5013,7 @@ class _StreamPickerPrimaryControlsState
         icon: Icons.refresh_rounded,
         label: 'Refresh',
         onPressed: widget.onRefresh,
+        enabled: widget.onRefresh != null,
         focusNode: _focusNodes[4],
         onKeyEvent: (node, event) => _handleHorizontalNavigation(4, event),
       ),
@@ -5438,6 +5574,7 @@ class _CompactIconAction extends StatelessWidget {
     required this.icon,
     required this.label,
     required this.onPressed,
+    this.enabled = true,
     this.badge = 0,
     this.focusNode,
     this.onKeyEvent,
@@ -5446,7 +5583,8 @@ class _CompactIconAction extends StatelessWidget {
 
   final IconData icon;
   final String label;
-  final VoidCallback onPressed;
+  final VoidCallback? onPressed;
+  final bool enabled;
   final int badge;
   final FocusNode? focusNode;
   final FocusOnKeyEventCallback? onKeyEvent;
@@ -5458,7 +5596,8 @@ class _CompactIconAction extends StatelessWidget {
     child: Tooltip(
       message: label,
       child: TvFocusable(
-        onPressed: onPressed,
+        onPressed: onPressed ?? () {},
+        enabled: enabled,
         focusNode: focusNode,
         onKeyEvent: onKeyEvent,
         borderRadius: BorderRadius.circular(10),
@@ -5467,7 +5606,9 @@ class _CompactIconAction extends StatelessWidget {
           width: 44,
           height: 44,
           alignment: Alignment.center,
-          color: context.appPalette.surface,
+          color: context.appPalette.surface.withValues(
+            alpha: enabled ? 1 : 0.55,
+          ),
           child: Stack(
             clipBehavior: Clip.none,
             children: [

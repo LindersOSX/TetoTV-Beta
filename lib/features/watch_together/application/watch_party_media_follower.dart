@@ -322,6 +322,7 @@ String watchPartyCatalogFollowLocation(
   final title = _boundedRouteText(media.title, maxLength: 240) ?? 'Anime';
   final titleEnglish = _boundedRouteText(media.titleEnglish, maxLength: 240);
   final titleRomaji = _boundedRouteText(media.titleRomaji, maxLength: 240);
+  final titleNative = _boundedRouteText(media.titleNative, maxLength: 240);
   final year = media.year != null && media.year! >= 1900 && media.year! <= 2200
       ? media.year
       : null;
@@ -358,6 +359,7 @@ String watchPartyCatalogFollowLocation(
     'title': title,
     'titleEnglish': ?titleEnglish,
     'titleRomaji': ?titleRomaji,
+    'titleNative': ?titleNative,
     'year': ?yearText,
     'cover': ?cover,
     'autoplay': '1',

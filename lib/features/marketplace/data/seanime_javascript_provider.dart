@@ -6,11 +6,15 @@ import 'dart:typed_data';
 
 import 'package:anime_tv/features/marketplace/domain/addon_models.dart';
 import 'package:anime_tv/features/marketplace/data/public_https_dio.dart';
+import 'package:anime_tv/features/streaming/domain/episode_identity_guard.dart';
 import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_js/flutter_js.dart';
 import 'package:flutter_js/quickjs/quickjs_runtime2.dart';
+
+const seanimeProviderRuntimeLimit = Duration(milliseconds: 10500);
+const seanimeHlsEnrichmentBudget = Duration(milliseconds: 700);
 
 abstract interface class WebStreamingProvider {
   String get id;
@@ -113,6 +117,7 @@ class SeanimeJavascriptProvider implements WebStreamingProvider {
         'synonyms': seanimeProviderMediaSynonyms(episode),
         'titleEnglish': episode.titleEnglish,
         'titleRomaji': episode.titleRomaji,
+        'titleNative': episode.titleNative,
         'status': episode.status,
         'format': episode.format,
         'episodeCount': episode.episodeCount,
@@ -121,12 +126,13 @@ class SeanimeJavascriptProvider implements WebStreamingProvider {
         'anilistId': episode.anilistMediaId,
         'malId': episode.malMediaId,
         'year': episode.year,
+        'requestedSeason': catalogSeasonNumber(episode),
       },
-      timeout: const Duration(seconds: 19),
+      timeout: seanimeProviderRuntimeLimit,
       cancellation: cancellation,
     );
     cancellation?.throwIfCancelled();
-    final expandedRaw = await _expandHlsVariants(raw, cancellation);
+    final expandedRaw = await expandHlsVariantsWithinBudget(raw, cancellation);
     cancellation?.throwIfCancelled();
     final results = <WebStreamResult>[];
     final publicHosts = <String, bool>{};
@@ -220,14 +226,24 @@ String? _boundedProviderTitle(Object? value) {
 }
 
 bool isSeanimeProviderNoMatch(Object error) {
-  if (!error.toString().contains('NO_MATCH:')) return false;
+  final explicitlyNoMatch = error.toString().contains('NO_MATCH:');
   final details = seanimeProviderFailureDetails(error);
   // Current TetoTV runtimes attach the last bounded stage/reason marker. A
   // genuine empty search is a normal no-match; a marker such as network,
   // http_5xx, or runtime_api means the provider never completed the search
   // and must remain a runtime failure. Marker-free legacy providers retain
   // their historical no-match behavior.
-  return details == null || details.reason == 'empty_result';
+  if (details == null) return explicitlyNoMatch;
+  final neutralAvailability =
+      details.reason == 'empty_result' || details.reason == 'empty_sources';
+  final neutralStage = const {
+    'search',
+    'title_matching',
+    'episode_lookup',
+    'episodes',
+    'server_lookup',
+  }.contains(details.stage);
+  return neutralAvailability && neutralStage;
 }
 
 /// Ordered title queries for older Seanime providers that inspect only
@@ -242,6 +258,7 @@ List<String> seanimeProviderSearchTitles(EpisodeReference episode) {
   final values = <String?>[
     episode.titleEnglish,
     episode.titleRomaji,
+    episode.titleNative,
     episode.title,
     ...episode.alternativeTitles,
   ];
@@ -258,12 +275,12 @@ List<String> seanimeProviderSearchTitles(EpisodeReference episode) {
   }
   final groupFirstIndex = <String, int>{};
   for (final entry in canonical) {
-    final key = _providerAsciiTitleVariant(entry.title).toLowerCase();
+    final key = _providerAliasGroupKey(entry.title);
     groupFirstIndex.putIfAbsent(key, () => entry.index);
   }
   canonical.sort((left, right) {
-    final leftAscii = _providerAsciiTitleVariant(left.title).toLowerCase();
-    final rightAscii = _providerAsciiTitleVariant(right.title).toLowerCase();
+    final leftAscii = _providerAliasGroupKey(left.title);
+    final rightAscii = _providerAliasGroupKey(right.title);
     final groupOrder = groupFirstIndex[leftAscii]!.compareTo(
       groupFirstIndex[rightAscii]!,
     );
@@ -288,6 +305,11 @@ List<String> seanimeProviderSearchTitles(EpisodeReference episode) {
   return result;
 }
 
+String _providerAliasGroupKey(String value) {
+  final ascii = _providerAsciiTitleVariant(value).toLowerCase();
+  return ascii.isEmpty ? value.trim().toLowerCase() : ascii;
+}
+
 String _providerAsciiTitleVariant(String value) {
   final withoutDecorativeSymbols = value
       .replaceAll(RegExp(r'[\u2600-\u27ff\u2b00-\u2bff]'), ' ')
@@ -306,6 +328,7 @@ List<String> seanimeProviderMediaSynonyms(EpisodeReference episode) {
   final values = <String?>[
     episode.titleEnglish,
     episode.titleRomaji,
+    episode.titleNative,
     ...episode.alternativeTitles,
   ];
   final primary = episode.title.trim().toLowerCase();
@@ -666,11 +689,28 @@ Map<String, String> _hlsAttributes(String value) {
   return result;
 }
 
-Future<List<Map<String, dynamic>>> _expandHlsVariants(
+typedef HlsInspectionLoader =
+    Future<List<Map<String, dynamic>>> Function(
+      Map<String, dynamic> item,
+      WebProviderCancellation? cancellation,
+    );
+
+/// Adds optional HLS quality/audio metadata without holding playable provider
+/// results hostage to another network round trip.
+///
+/// The provider runtime is deliberately shorter than the worker-pool deadline,
+/// and this enrichment receives only the small remaining reserve. Timeout or
+/// inspection failures return the original streams. A real parent
+/// cancellation still propagates so leaving the resolver stops all work.
+Future<List<Map<String, dynamic>>> expandHlsVariantsWithinBudget(
   List<Map<String, dynamic>> raw,
-  WebProviderCancellation? cancellation,
-) async {
-  final result = raw.toList(growable: true);
+  WebProviderCancellation? cancellation, {
+  Duration budget = seanimeHlsEnrichmentBudget,
+  HlsInspectionLoader? inspectItem,
+}) async {
+  final original = mergeDuplicateWebStreamItems(
+    raw,
+  ).take(120).toList(growable: false);
   // A provider may label its HLS master as a concrete resolution even though
   // the manifest still owns switchable English/Japanese audio renditions.
   // Inspect every bounded HLS candidate rather than only Auto/Adaptive labels;
@@ -678,17 +718,43 @@ Future<List<Map<String, dynamic>>> _expandHlsVariants(
   // Enrichment is optional: the original streams remain usable even when a
   // master cannot be inspected. Deduplicate mirrors before doing I/O and run
   // the small bounded set together. The previous three sequential batches
-  // could consume nearly the provider's entire 20-second deadline after the
+  // could consume nearly the provider's entire worker deadline after the
   // provider had already returned valid streams.
   final hlsCandidates = selectHlsInspectionCandidates(raw);
   cancellation?.throwIfCancelled();
-  final groups = await Future.wait(
-    hlsCandidates.map((item) => _hlsVariantsForItem(item, cancellation)),
-  );
-  for (final variants in groups) {
-    result.addAll(variants);
+  if (hlsCandidates.isEmpty || budget <= Duration.zero) return original;
+
+  final enrichmentCancellation = WebProviderCancellation();
+  final removeParentListener =
+      cancellation?.addListener(enrichmentCancellation.cancel) ?? () {};
+  final loader = inspectItem ?? _hlsVariantsForItem;
+  try {
+    final groups = await Future.wait(
+      hlsCandidates.map((item) => loader(item, enrichmentCancellation)),
+    ).timeout(budget);
+    cancellation?.throwIfCancelled();
+    final result = raw.toList(growable: true);
+    for (final variants in groups) {
+      result.addAll(variants);
+    }
+    return mergeDuplicateWebStreamItems(
+      result,
+    ).take(120).toList(growable: false);
+  } on TimeoutException {
+    enrichmentCancellation.cancel();
+    cancellation?.throwIfCancelled();
+    return original;
+  } on WebProviderSearchCancelled {
+    if (cancellation?.isCancelled == true) rethrow;
+    return original;
+  } catch (_) {
+    if (cancellation?.isCancelled == true) {
+      throw const WebProviderSearchCancelled();
+    }
+    return original;
+  } finally {
+    removeParentListener();
   }
-  return mergeDuplicateWebStreamItems(result).take(120).toList(growable: false);
 }
 
 int _rawAudioCapabilityScore(Object? value) =>
@@ -1070,7 +1136,7 @@ Future<List<Map<String, dynamic>>> _executeProvider(
   );
   var disposed = false;
   final runtimeStartedAt = DateTime.now();
-  const runtimeNetworkWindow = Duration(seconds: 18);
+  const runtimeNetworkWindow = Duration(milliseconds: 9500);
   final completed = Completer<List<Map<String, dynamic>>>();
   final networkBudget = AddonRuntimeNetworkBudget();
   final sleepTimers = <String, Timer>{};
@@ -1211,6 +1277,7 @@ Future<List<Map<String, dynamic>>> _executeProvider(
               all.findIndex(other => String(other).toLowerCase() === String(title).toLowerCase()) === index
             ).slice(0, 8);
           const episodeNumber = ${input['episode']};
+          const requestedSeason = ${input['requestedSeason'] ?? 'null'};
           // Match Seanime's documented provider contract exactly. Providers
           // are allowed to branch on these sentinel values when catalog
           // metadata is unavailable.
@@ -1233,11 +1300,14 @@ Future<List<Map<String, dynamic>>> _executeProvider(
             idAniList: {value: media.id, enumerable: false},
           });
           const englishTitle = ${jsonEncode(input['titleEnglish'])};
+          const nativeTitle = ${jsonEncode(input['titleNative'])};
           if (englishTitle) media.englishTitle = englishTitle;
+          if (nativeTitle) media.nativeTitle = nativeTitle;
           Object.defineProperties(media, {
             title: {value: titles[0] || media.romajiTitle, enumerable: false},
             titleRomaji: {value: media.romajiTitle, enumerable: false},
             titleEnglish: {value: englishTitle || undefined, enumerable: false},
+            titleNative: {value: nativeTitle || undefined, enumerable: false},
           });
           const malMediaId = ${input['malId'] ?? 'null'};
           if (malMediaId != null) {
@@ -1278,10 +1348,28 @@ Future<List<Map<String, dynamic>>> _executeProvider(
                 label === 'both') return false;
             return /(^| )dub(bed)?( |\$)/.test(label);
           };
-          const supportsDub = enabledSetting(settings.supportsDub) ||
-            enabledSetting(settings.supportsDubbed) || enabledSetting(settings.hasDub) ||
-            configuredServerList.some(serverSupportsDub);
-          const modes = supportsDub ? [false, true] : [false];
+          const dubSettingKeys = [
+            'supportsDub', 'supportsDubbed', 'hasDub', 'supportsDubAudio',
+            'supportsEnglishDub', 'dubSupported', 'isDubAvailable', 'hasDubbed',
+          ];
+          const hasDubSettingDeclaration = dubSettingKeys.some(key =>
+            Object.prototype.hasOwnProperty.call(settings, key)
+          );
+          const hasDubServerMarker = configuredServerList.some(serverSupportsDub);
+          const supportsDub = dubSettingKeys.some(key => enabledSetting(settings[key])) ||
+            hasDubServerMarker;
+          // Current Seanime providers explicitly declare supportsDub. A
+          // bounded compatibility probe covers older providers that accept a
+          // dub SearchOption without declaring the capability. Never probe a
+          // provider that explicitly opted out, and never treat the requested
+          // flag itself as proof that the returned stream is dubbed.
+          const modes = supportsDub
+            ? [{dub: false, undeclaredDubProbe: false},
+               {dub: true, undeclaredDubProbe: false}]
+            : (!hasDubSettingDeclaration && !hasDubServerMarker)
+              ? [{dub: false, undeclaredDubProbe: false},
+                 {dub: true, undeclaredDubProbe: true}]
+              : [{dub: false, undeclaredDubProbe: false}];
           const output = [];
           const errors = [];
           let foundTitle = false;
@@ -1291,8 +1379,15 @@ Future<List<Map<String, dynamic>>> _executeProvider(
           let successfulSearchCalls = 0;
           let episodeLookupAttempts = 0;
           let successfulEpisodeLookups = 0;
+          // Keep letters and numbers from native-script aliases. The older
+          // ASCII-only normalization reduced Japanese titles to an empty
+          // string, so an otherwise exact native-title provider could never
+          // pass title matching.
           const normalize = value => String(value || '').toLowerCase()
-            .normalize('NFKD').replace(/[^a-z0-9]+/g, ' ').trim();
+            .normalize('NFKD')
+            .replace(/[\\u0300-\\u036f]/g, '')
+            .replace(/[\\u0000-\\u002f\\u003a-\\u0040\\u005b-\\u0060\\u007b-\\u00bf\\u2000-\\u206f\\u3000-\\u303f\\uff00-\\uff65]+/g, ' ')
+            .replace(/\\s+/g, ' ').trim();
           const explicitSeason = value => {
             const text = String(value || '');
             if (globalThis.\$scannerUtils &&
@@ -1440,7 +1535,8 @@ Future<List<Map<String, dynamic>>> _executeProvider(
             catch (_) { return candidateTitle(item).slice(0, 512); }
           };
           const candidateTitle = item => String(valueFrom(item, [
-            'title', 'name', 'englishTitle', 'romajiTitle', 'label',
+            'title', 'name', 'englishTitle', 'romajiTitle', 'nativeTitle',
+            'titleNative', 'label',
           ]) || '');
           const candidateYearOf = item => {
             const raw = valueFrom(item, [
@@ -1475,6 +1571,11 @@ Future<List<Map<String, dynamic>>> _executeProvider(
             if (/network|socket|dns|connection|fetch failed|host lookup/.test(message)) return 'network';
             if (/referenceerror|is not defined|is not a function|undefined/.test(message)) return 'runtime_api';
             return 'provider_error';
+          };
+          const isSearchArgumentShapeError = error => {
+            const message = String(error && error.message || error || '');
+            return /argument|expected(?: an?)? (?:string|object)|cannot read (?:properties|property) of (?:undefined|null)|(?:undefined|null) is not an object|(?:replace|trim|tolowercase) is not a function|cannot convert (?:undefined|null)/i
+              .test(message);
           };
           const toHttps = (value, bases) => {
             if (typeof value !== 'string' || !value.trim()) return null;
@@ -1535,13 +1636,15 @@ Future<List<Map<String, dynamic>>> _executeProvider(
             let support = 0;
             if (['sub', 'subbed', 'subtitle', 'subtitles', 'subtitled']
                 .some(word => words.has(word)) || item.isSubbed === true ||
-                item.subbed === true || item.supportsSub === true ||
+                item.subbed === true || item.sub === true ||
+                item.supportsSub === true || item.hasSub === true ||
                 item.hasJapaneseAudio === true || item.hasOriginalAudio === true) {
               support |= 1;
             }
             if (['dub', 'dubbed'].some(word => words.has(word)) ||
                 item.isDubbed === true || item.dubbed === true ||
-                item.supportsDub === true || item.hasEnglishAudio === true) {
+                item.dub === true || item.supportsDub === true ||
+                item.hasDub === true || item.hasEnglishAudio === true) {
               support |= 2;
             }
             if (!subtitleContext &&
@@ -1557,8 +1660,12 @@ Future<List<Map<String, dynamic>>> _executeProvider(
           const audioSupportFromTracks = item => {
             if (!item || typeof item !== 'object') return 0;
             const explicit = listFrom(
-              item.audioTracks || item.audioStreams,
-              ['audioTracks', 'audioStreams', 'items'],
+              item.audioTracks || item.availableAudioTracks ||
+                item.audioStreams || item.audios,
+              [
+                'audioTracks', 'availableAudioTracks', 'audioStreams',
+                'audios', 'items',
+              ],
             );
             // A generic tracks collection is frequently subtitles. Accept it
             // only when the provider identifies each entry as audio.
@@ -1616,66 +1723,170 @@ Future<List<Map<String, dynamic>>> _executeProvider(
             if (providerCapability) return providerCapability;
             return requestedDub ? 'dub' : 'sub';
           };
-          for (const dub of modes) {
+          let providerRequiresLegacySearch = false;
+          const cleanEmptyLegacyProbedModes = new Set();
+          let providerSearchRuntimeFailed = false;
+          for (const mode of modes) {
+            if (providerSearchRuntimeFailed) break;
+            const dub = mode.dub;
+            const undeclaredDubProbe = mode.undeclaredDubProbe;
+            // Do not stack the undeclared-Dub compatibility probe on top of
+            // a legacy-signature fallback. Explicitly Dub-capable legacy
+            // providers still receive their declared second audio mode.
+            if (undeclaredDubProbe && providerRequiresLegacySearch) break;
             const candidates = new Map();
-            for (const title of titles) {
-              const searchInput = {
-                query: title,
-                dub,
-                year: releaseYear,
-                media,
-                opts: {dub, year: releaseYear, media},
-              };
-              let matches = [];
-              searchAttempts += 1;
-              try {
-                const rawMatches = await providerCall(
-                  () => provider.search(searchInput)
-                );
-                successfulSearchCalls += 1;
-                matches = listFrom(rawMatches, ['results', 'items', 'data', 'matches']);
-              } catch (error) {
-                errors.push({stage: 'search', reason: providerReason(error)});
-              }
-              // Several pre-SearchOptions providers throw when handed the
-              // canonical object (for example they call query.replace()). A
-              // failure must not suppress the bounded legacy string attempt.
-              if (!matches.length) {
-                searchAttempts += 1;
-                try {
-                  const legacyOptions = {dub, year: releaseYear, media};
-                  const rawMatches = await providerCall(
-                    () => provider.search(title, legacyOptions)
-                  );
-                  successfulSearchCalls += 1;
-                  matches = listFrom(rawMatches, ['results', 'items', 'data', 'matches']);
-                } catch (error) {
-                  errors.push({stage: 'search', reason: providerReason(error)});
-                }
-              }
+            const modeTitles = undeclaredDubProbe ? titles.slice(0, 1) : titles;
+            const addMatches = (matches, title) => {
               matches.slice(0, 40).forEach((item, index) => {
                 if (!item || typeof item !== 'object') return;
                 const candidateName = candidateTitle(item);
+                const titleSeason = explicitSeason(candidateName);
+                const structuredSeasonValue = seasonNumberOf(item);
+                const structuredSeason = Number.isInteger(structuredSeasonValue) &&
+                  structuredSeasonValue > 0 ? structuredSeasonValue : null;
+                // Alias scoring is intentionally broad, but it must not let a
+                // bare/native alias erase the catalog's numbered-season
+                // identity. Provider-owned title/season fields or an exact
+                // catalog ID are independent corroboration; another query
+                // alias is not.
+                if (requestedSeason != null &&
+                    ((titleSeason != null && titleSeason !== requestedSeason) ||
+                     (structuredSeason != null && structuredSeason !== requestedSeason))) {
+                  return;
+                }
                 const titleScore = titles.reduce(
                   (best, alias) => Math.max(best, score(candidateName, alias)),
                   score(candidateName, title),
                 );
                 const mediaId = valueFrom(item, ['anilistId', 'aniListId', 'idAniList']);
                 const idBonus = Number(mediaId) === media.id ? 2000 : 0;
+                if (requestedSeason != null && requestedSeason > 1 &&
+                    titleSeason == null && structuredSeason == null && idBonus === 0) {
+                  return;
+                }
                 const candidateYear = candidateYearOf(item);
-                if (releaseYear > 0 && candidateYear != null &&
-                    candidateYear !== releaseYear) return;
                 if (titleScore < 0) return;
                 if (idBonus === 0 && titleScore < 300) return;
+                let yearPenalty = 0;
+                if (releaseYear > 0 && candidateYear != null &&
+                    candidateYear !== releaseYear) {
+                  const exactAlias = titles.find(alias =>
+                    normalize(candidateName) === normalize(alias)
+                  );
+                  const candidateSeason = explicitSeason(candidateName);
+                  const aliasSeason = exactAlias == null
+                    ? null : explicitSeason(exactAlias);
+                  const exactNumberedSeason = candidateSeason != null &&
+                    aliasSeason != null && candidateSeason === aliasSeason;
+                  const explicitDubMetadata = (
+                    audioSupportFromMetadata(item) | audioSupportFromTracks(item)
+                  ) & 2;
+                  const corroboratedDubReleaseYear = exactAlias != null &&
+                    explicitDubMetadata !== 0 &&
+                    Math.abs(candidateYear - releaseYear) === 1;
+                  // Provider franchise years are common for an explicitly
+                  // numbered season. A one-year dub release difference is
+                  // accepted only when the result itself carries Dub audio
+                  // evidence. Bare exact-title remakes stay rejected unless
+                  // the exact AniList identity corroborates the result.
+                  if (idBonus === 0 && !exactNumberedSeason &&
+                      !corroboratedDubReleaseYear) {
+                    return;
+                  }
+                  yearPenalty = Math.min(
+                    240,
+                    40 + Math.abs(candidateYear - releaseYear) * 20,
+                  );
+                }
                 const providerOrderBonus = Math.max(0, 39 - index);
-                const points = titleScore + idBonus + providerOrderBonus;
+                const points = titleScore + idBonus + providerOrderBonus - yearPenalty;
                 const key = candidateKey(item);
                 const existing = candidates.get(key);
                 if (!existing || points > existing.points) {
                   candidates.set(key, {item, points});
                 }
               });
-              if (Array.from(candidates.values()).some(item => item.points >= 1000)) break;
+            };
+            let canonicalCleanEmpty = true;
+            let canonicalQueriesCompleted = 0;
+            let canonicalShapeFailure = false;
+            let canonicalSearchFailure = false;
+            let runLegacySearch = providerRequiresLegacySearch;
+            if (!providerRequiresLegacySearch) {
+              for (const title of modeTitles) {
+                const searchInput = {
+                  query: title,
+                  dub,
+                  year: releaseYear,
+                  media,
+                  opts: {dub, year: releaseYear, media},
+                };
+                searchAttempts += 1;
+                try {
+                  const rawMatches = await providerCall(
+                    () => provider.search(searchInput)
+                  );
+                  successfulSearchCalls += 1;
+                  canonicalQueriesCompleted += 1;
+                  const matches = listFrom(
+                    rawMatches,
+                    ['results', 'items', 'data', 'matches'],
+                  );
+                  if (matches.length) canonicalCleanEmpty = false;
+                  addMatches(matches, title);
+                } catch (error) {
+                  errors.push({stage: 'search', reason: providerReason(error)});
+                  canonicalShapeFailure = isSearchArgumentShapeError(error);
+                  canonicalSearchFailure = !canonicalShapeFailure;
+                  if (canonicalShapeFailure) providerRequiresLegacySearch = true;
+                  if (canonicalSearchFailure) providerSearchRuntimeFailed = true;
+                  break;
+                }
+                if (Array.from(candidates.values())
+                    .some(item => item.points >= 1000)) break;
+              }
+              const allCanonicalAliasesCleanEmpty = canonicalCleanEmpty &&
+                canonicalQueriesCompleted === modeTitles.length;
+              if (canonicalShapeFailure) {
+                runLegacySearch = true;
+              } else if (!canonicalSearchFailure &&
+                  allCanonicalAliasesCleanEmpty &&
+                  !cleanEmptyLegacyProbedModes.has(dub)) {
+                // A few old providers accept the object without throwing but
+                // read it as a string and silently return no results. Probe
+                // the best alias once per supported audio mode, never once
+                // per alias. This lets an explicitly Dub-capable legacy
+                // provider return an empty Sub result and a valid Dub result.
+                cleanEmptyLegacyProbedModes.add(dub);
+                runLegacySearch = true;
+              }
+            }
+            // A proven string-signature provider gets one call per supported
+            // audio mode. Clean-empty compatibility probes are bounded to at
+            // most one Sub plus one Dub call and are never attempted after a
+            // network/runtime error.
+            if (runLegacySearch && !canonicalSearchFailure && modeTitles.length) {
+              searchAttempts += 1;
+              try {
+                const title = modeTitles[0];
+                const legacyOptions = {dub, year: releaseYear, media};
+                const rawMatches = await providerCall(
+                  () => provider.search(title, legacyOptions)
+                );
+                successfulSearchCalls += 1;
+                const matches = listFrom(
+                  rawMatches,
+                  ['results', 'items', 'data', 'matches'],
+                );
+                if (matches.length) providerRequiresLegacySearch = true;
+                addMatches(matches, title);
+              } catch (error) {
+                const reason = providerReason(error);
+                errors.push({stage: 'search', reason});
+                if (reason !== 'empty_result' && reason !== 'empty_sources') {
+                  providerSearchRuntimeFailed = true;
+                }
+              }
             }
             const rankedCandidates = Array.from(candidates.values())
               .sort((left, right) => right.points - left.points)
@@ -1814,6 +2025,24 @@ Future<List<Map<String, dynamic>>> _executeProvider(
                       english.href || english.uri || english.subtitleUrl,
                     bases,
                   );
+                  const explicitDubSelection =
+                    /dub/i.test(String(selected.item.subOrDub || '')) ||
+                    /dub/i.test(serverName(server));
+                  const audioCapability = audioCapabilityOf(
+                    source,
+                    resolved,
+                    selected.item,
+                    (!undeclaredDubProbe && dub) || explicitDubSelection,
+                    serverName(server || resolved.server),
+                  );
+                  // A provider that omits Dub capability metadata might ignore
+                  // the probe flag and return its ordinary Sub feed. Keep only
+                  // probe results with independent result/server/track evidence
+                  // so the request flag can never mislabel a stream.
+                  if (undeclaredDubProbe && audioCapability !== 'dub' &&
+                      audioCapability !== 'sub_and_dub') {
+                    continue;
+                  }
                   output.push({
                     title: serverName(server || resolved.server) + ' / ' +
                       String(source.quality || source.label || 'Auto'),
@@ -1828,14 +2057,7 @@ Future<List<Map<String, dynamic>>> _executeProvider(
                     headers: Object.assign({}, serverHeaders, source.headers || {}),
                     subtitleUrl,
                     subtitleLanguage: english && String(english.language || english.lang || english.label || ''),
-                    audioCapability: audioCapabilityOf(
-                      source,
-                      resolved,
-                      selected.item,
-                      dub || /dub/i.test(String(selected.item.subOrDub || '')) ||
-                        /dub/i.test(serverName(server)),
-                      serverName(server || resolved.server),
-                    ),
+                    audioCapability,
                     matchedEpisodeNumber: explicitEpisodeNumberOf(episode),
                     matchedSeasonNumber: seasonNumberOf(episode),
                     matchedSeriesTitle: candidateTitle(selected.item),
@@ -1896,7 +2118,7 @@ Future<List<Map<String, dynamic>>> _executeProvider(
       cancellation.whenCancelled.then<List<Map<String, dynamic>>>(
         (_) => throw const WebProviderSearchCancelled(),
       ),
-    ]).timeout(const Duration(seconds: 18));
+    ]).timeout(const Duration(seconds: 10));
   } finally {
     disposed = true;
     for (final timer in sleepTimers.values) {

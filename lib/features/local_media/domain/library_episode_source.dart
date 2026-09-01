@@ -161,6 +161,7 @@ List<String> libraryCatalogSearchTerms(EpisodeReference episode) {
     episode.title,
     episode.titleEnglish,
     episode.titleRomaji,
+    episode.titleNative,
     ...episode.alternativeTitles,
   ];
   final result = <String>[];

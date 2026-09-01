@@ -39,8 +39,12 @@ std::atomic<std::uint64_t> g_connection_generation{0};
 std::unique_ptr<discordpp::Client> g_client;
 
 struct Presence {
+    std::string activity_kind;
     std::string title;
     int episode = 0;
+    std::string chapter_label;
+    int page = 0;
+    int page_count = 0;
     bool playing = false;
     std::int64_t position_ms = 0;
     std::int64_t duration_ms = 0;
@@ -212,7 +216,10 @@ bool connect_pending_if_disconnected() {
 bool same_presence_timeline(const Presence& previous,
                             const Presence& next,
                             std::chrono::steady_clock::time_point now) {
-    if (previous.title != next.title || previous.episode != next.episode ||
+    if (previous.activity_kind != next.activity_kind ||
+        previous.title != next.title || previous.episode != next.episode ||
+        previous.chapter_label != next.chapter_label ||
+        previous.page != next.page || previous.page_count != next.page_count ||
         previous.playing != next.playing || previous.duration_ms != next.duration_ms ||
         previous.artwork_url != next.artwork_url) {
         return false;
@@ -274,11 +281,22 @@ void flush_pending_presence() {
     }
     activity.SetAssets(std::move(assets));
 
-    std::string state = value.episode > 0 ? "Episode " + std::to_string(value.episode) : "Watching";
-    state += value.playing ? " - Playing" : " - Paused";
+    std::string state;
+    if (value.activity_kind == "reading") {
+        state = value.chapter_label.empty() ? "Reading" : value.chapter_label;
+        if (value.page > 0) {
+            state += " - Page " + std::to_string(value.page);
+            if (value.page_count >= value.page) {
+                state += " of " + std::to_string(value.page_count);
+            }
+        }
+    } else {
+        state = value.episode > 0 ? "Episode " + std::to_string(value.episode) : "Watching";
+        state += value.playing ? " - Playing" : " - Paused";
+    }
     activity.SetState(state);
 
-    if (value.playing && value.position_ms >= 0) {
+    if (value.activity_kind != "reading" && value.playing && value.position_ms >= 0) {
         const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
                              std::chrono::system_clock::now().time_since_epoch())
                              .count();
@@ -653,7 +671,7 @@ Java_dev_animetv_anime_1tv_DiscordRichPresenceBridge_nativeRevoke(JNIEnv* env,
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_dev_animetv_anime_1tv_DiscordRichPresenceBridge_nativeUpdatePresence(
+Java_dev_animetv_anime_1tv_DiscordRichPresenceBridge_nativeUpdatePlaybackPresence(
     JNIEnv* env,
     jobject,
     jstring title,
@@ -663,12 +681,39 @@ Java_dev_animetv_anime_1tv_DiscordRichPresenceBridge_nativeUpdatePresence(
     jlong duration_ms,
     jstring artwork_url) {
     Presence presence{
+        "watching",
         from_jstring(env, title),
         static_cast<int>(episode),
+        "",
+        0,
+        0,
         playing == JNI_TRUE,
         static_cast<std::int64_t>(position_ms),
         static_cast<std::int64_t>(duration_ms),
         from_jstring(env, artwork_url),
+    };
+    post([presence = std::move(presence)] { publish_presence(presence); });
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_dev_animetv_anime_1tv_DiscordRichPresenceBridge_nativeUpdateReadingPresence(
+    JNIEnv* env,
+    jobject,
+    jstring title,
+    jstring chapter_label,
+    jint page,
+    jint page_count) {
+    Presence presence{
+        "reading",
+        from_jstring(env, title),
+        0,
+        from_jstring(env, chapter_label),
+        static_cast<int>(page),
+        static_cast<int>(page_count),
+        false,
+        0,
+        0,
+        "",
     };
     post([presence = std::move(presence)] { publish_presence(presence); });
 }

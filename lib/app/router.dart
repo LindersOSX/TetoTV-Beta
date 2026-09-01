@@ -19,6 +19,10 @@ import 'package:anime_tv/features/home/presentation/home_screen.dart';
 import 'package:anime_tv/features/local_media/presentation/local_media_screen.dart';
 import 'package:anime_tv/features/marketplace/presentation/marketplace_screen.dart';
 import 'package:anime_tv/features/marketplace/data/web_playback_proxy.dart';
+import 'package:anime_tv/features/manga/domain/manga_reader_models.dart';
+import 'package:anime_tv/features/manga/presentation/developer_manga_gate.dart';
+import 'package:anime_tv/features/manga/presentation/manga_reader_screen.dart';
+import 'package:anime_tv/features/manga/presentation/manga_screen.dart';
 import 'package:anime_tv/features/player/presentation/tv_player_screen.dart';
 import 'package:anime_tv/features/settings/presentation/accounts_screen.dart';
 import 'package:anime_tv/features/settings/presentation/device_setup_screen.dart';
@@ -200,6 +204,19 @@ final appRouter = GoRouter(
     GoRoute(
       path: '/downloads',
       builder: (context, state) => const DownloadManagerScreen(),
+    ),
+    GoRoute(
+      path: '/manga',
+      builder: (context, state) =>
+          const DeveloperMangaGate(child: MangaScreen()),
+    ),
+    GoRoute(
+      path: MangaReaderScreen.routePath,
+      builder: (context, state) => DeveloperMangaGate(
+        child: state.extra is MangaReaderRequest
+            ? MangaReaderScreen(request: state.extra! as MangaReaderRequest)
+            : const _InvalidRouteScreen(),
+      ),
     ),
     GoRoute(
       path: '/library',

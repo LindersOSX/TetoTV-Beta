@@ -7,6 +7,8 @@ import 'package:anime_tv/core/widgets/network_artwork.dart';
 import 'package:anime_tv/core/widgets/tv_text_input.dart';
 import 'package:anime_tv/features/auth/application/tracking_token_service.dart';
 import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
+import 'package:anime_tv/features/home/application/top_navigation_availability.dart';
+import 'package:anime_tv/features/settings/application/app_update_controller.dart';
 import 'package:anime_tv/features/settings/application/local_profiles_controller.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:anime_tv/features/settings/application/tracking_accounts_controller.dart';
@@ -22,6 +24,7 @@ enum MainNavigationDestination {
   calendar,
   watchTogether,
   downloads,
+  manga,
 }
 
 /// The shared geometry contract for the Modern Layout navigation rail.
@@ -294,6 +297,8 @@ class _HomeSideNavigationState extends ConsumerState<HomeSideNavigation> {
         context.go('/watch-together');
       case TopNavigationDestination.downloads:
         context.go('/downloads');
+      case TopNavigationDestination.manga:
+        context.go('/manga');
       case TopNavigationDestination.settings:
         context.push('/settings/accounts');
     }
@@ -336,6 +341,11 @@ class _HomeSideNavigationState extends ConsumerState<HomeSideNavigation> {
   Widget build(BuildContext context) {
     final accounts = ref.watch(trackingAccountsControllerProvider);
     final localProfiles = ref.watch(localProfilesControllerProvider);
+    final developerNavigation = ref.watch(
+      appUpdateControllerProvider.select(
+        (state) => (loaded: state.loaded, enabled: state.developerMode),
+      ),
+    );
     final hasProfile =
         accounts.profiles.isNotEmpty || localProfiles.activeProfile != null;
     final settingsInProfileMenu =
@@ -343,16 +353,18 @@ class _HomeSideNavigationState extends ConsumerState<HomeSideNavigation> {
         !accounts.isLoading &&
         widget.preferences.settingsEntryPlacement ==
             SettingsEntryPlacement.profileMenu;
-    final configuredDestinations = widget.preferences.topNavigationOrder
-        .where(
-          (destination) =>
-              widget.preferences.isTopNavigationDestinationVisible(
-                destination,
-              ) &&
-              (destination != TopNavigationDestination.settings ||
-                  !settingsInProfileMenu),
-        )
-        .toList(growable: false);
+    final configuredDestinations =
+        runtimeTopNavigationOrder(
+              widget.preferences,
+              developerStateLoaded: developerNavigation.loaded,
+              developerMode: developerNavigation.enabled,
+            )
+            .where(
+              (destination) =>
+                  destination != TopNavigationDestination.settings ||
+                  !settingsInProfileMenu,
+            )
+            .toList(growable: false);
     final showBottomSettings = configuredDestinations.contains(
       TopNavigationDestination.settings,
     );
@@ -568,6 +580,11 @@ class _PhoneBottomNavigationState extends ConsumerState<PhoneBottomNavigation> {
   Widget build(BuildContext context) {
     final accounts = ref.watch(trackingAccountsControllerProvider);
     final localProfiles = ref.watch(localProfilesControllerProvider);
+    final developerNavigation = ref.watch(
+      appUpdateControllerProvider.select(
+        (state) => (loaded: state.loaded, enabled: state.developerMode),
+      ),
+    );
     final hasProfile =
         accounts.profiles.isNotEmpty || localProfiles.activeProfile != null;
     final settingsInProfileMenu =
@@ -575,16 +592,18 @@ class _PhoneBottomNavigationState extends ConsumerState<PhoneBottomNavigation> {
         !accounts.isLoading &&
         widget.preferences.settingsEntryPlacement ==
             SettingsEntryPlacement.profileMenu;
-    final destinations = widget.preferences.topNavigationOrder
-        .where(
-          (destination) =>
-              widget.preferences.isTopNavigationDestinationVisible(
-                destination,
-              ) &&
-              (destination != TopNavigationDestination.settings ||
-                  !settingsInProfileMenu),
-        )
-        .toList(growable: false);
+    final destinations =
+        runtimeTopNavigationOrder(
+              widget.preferences,
+              developerStateLoaded: developerNavigation.loaded,
+              developerMode: developerNavigation.enabled,
+            )
+            .where(
+              (destination) =>
+                  destination != TopNavigationDestination.settings ||
+                  !settingsInProfileMenu,
+            )
+            .toList(growable: false);
 
     return Material(
       key: const ValueKey('phone-bottom-navigation'),
@@ -737,6 +756,8 @@ void _activateTopNavigationDestination(
       context.go('/watch-together');
     case TopNavigationDestination.downloads:
       context.go('/downloads');
+    case TopNavigationDestination.manga:
+      context.go('/manga');
     case TopNavigationDestination.settings:
       context.push('/settings/accounts');
   }
@@ -755,6 +776,7 @@ Key _navigationKey(TopNavigationDestination destination) =>
       TopNavigationDestination.downloads => const ValueKey(
         'main-nav-downloads',
       ),
+      TopNavigationDestination.manga => const ValueKey('main-nav-manga'),
       TopNavigationDestination.settings => const ValueKey('main-nav-settings'),
     };
 
@@ -767,6 +789,7 @@ IconData _navigationIcon(TopNavigationDestination destination) =>
       TopNavigationDestination.calendar => Icons.calendar_month_rounded,
       TopNavigationDestination.watchTogether => Icons.person_outline_rounded,
       TopNavigationDestination.downloads => Icons.download_rounded,
+      TopNavigationDestination.manga => Icons.menu_book_rounded,
       TopNavigationDestination.settings => Icons.settings_rounded,
     };
 
@@ -1187,6 +1210,11 @@ class MainNavigationBar extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final accounts = ref.watch(trackingAccountsControllerProvider);
     final localProfiles = ref.watch(localProfilesControllerProvider);
+    final developerNavigation = ref.watch(
+      appUpdateControllerProvider.select(
+        (state) => (loaded: state.loaded, enabled: state.developerMode),
+      ),
+    );
     final profiles = [
       for (final provider in TrackingProvider.values)
         ?accounts.profiles[provider],
@@ -1209,14 +1237,18 @@ class MainNavigationBar extends ConsumerWidget {
             !accounts.isLoading &&
             preferences.settingsEntryPlacement ==
                 SettingsEntryPlacement.profileMenu;
-        final visibleDestinations = preferences.topNavigationOrder
-            .where(
-              (destination) =>
-                  preferences.isTopNavigationDestinationVisible(destination) &&
-                  (destination != TopNavigationDestination.settings ||
-                      !settingsInProfileMenu),
-            )
-            .toList(growable: false);
+        final visibleDestinations =
+            runtimeTopNavigationOrder(
+                  preferences,
+                  developerStateLoaded: developerNavigation.loaded,
+                  developerMode: developerNavigation.enabled,
+                )
+                .where(
+                  (destination) =>
+                      destination != TopNavigationDestination.settings ||
+                      !settingsInProfileMenu,
+                )
+                .toList(growable: false);
         // Header height depends only on width, never on asynchronously loaded
         // account data, so linking/loading a tracker cannot shift the screen.
         final headerHeight = width >= 760 ? 96.0 : 62.0;
@@ -1377,6 +1409,21 @@ Widget _navigationAction({
     onPressed: active == MainNavigationDestination.downloads
         ? onActivePressed ?? () {}
         : () => context.go('/downloads'),
+  ),
+  TopNavigationDestination.manga => _NavigationAction(
+    key: const ValueKey('main-nav-manga'),
+    icon: Icons.menu_book_rounded,
+    label: 'Manga',
+    compact: true,
+    dense: dense,
+    active: active == MainNavigationDestination.manga,
+    autofocus: autofocusActive && active == MainNavigationDestination.manga,
+    focusNode: active == MainNavigationDestination.manga
+        ? activeFocusNode
+        : null,
+    onPressed: active == MainNavigationDestination.manga
+        ? onActivePressed ?? () {}
+        : () => context.go('/manga'),
   ),
   TopNavigationDestination.settings => _NavigationAction(
     key: const ValueKey('main-nav-settings'),

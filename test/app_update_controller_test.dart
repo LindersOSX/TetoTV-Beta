@@ -924,10 +924,12 @@ void main() {
       );
       final first = controller.load();
       final second = controller.load();
+      expect(controller.state.loaded, isFalse);
       await Future<void>.delayed(Duration.zero);
       expect(loads, 1);
       version.complete('1.0.1+410000');
       await Future.wait([first, second]);
+      expect(controller.state.loaded, isTrue);
       expect(controller.state.currentVersion, '1.0.1+410000');
     });
 

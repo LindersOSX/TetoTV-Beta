@@ -14,6 +14,7 @@ import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
 import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
+import 'package:anime_tv/features/home/application/top_navigation_availability.dart';
 import 'package:anime_tv/features/settings/application/display_preferences_controller.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:anime_tv/features/settings/application/setup_progress_controller.dart';
@@ -669,6 +670,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     final enabledShelves = ref.watch(homeShelfPreferencesProvider);
     final shelfOrder = ref.watch(homeShelfOrderProvider);
     final preferences = ref.watch(settingsPreferencesProvider);
+    final developerNavigation = ref.watch(
+      appUpdateControllerProvider.select(
+        (state) => (loaded: state.loaded, enabled: state.developerMode),
+      ),
+    );
     final accounts = ref.watch(trackingAccountsControllerProvider);
     final localProfiles = ref.watch(localProfilesControllerProvider);
     final isTelevision = ref.watch(isTelevisionProvider);
@@ -808,12 +814,16 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           !accounts.isLoading &&
           preferences.settingsEntryPlacement ==
               SettingsEntryPlacement.profileMenu;
-      _hasVisibleNavigationAction = preferences.topNavigationOrder.any(
-        (destination) =>
-            preferences.isTopNavigationDestinationVisible(destination) &&
-            (destination != TopNavigationDestination.settings ||
-                !settingsInProfileMenu),
-      );
+      _hasVisibleNavigationAction =
+          runtimeTopNavigationOrder(
+            preferences,
+            developerStateLoaded: developerNavigation.loaded,
+            developerMode: developerNavigation.enabled,
+          ).any(
+            (destination) =>
+                destination != TopNavigationDestination.settings ||
+                !settingsInProfileMenu,
+          );
     } else {
       _hasVisibleNavigationAction = true;
     }

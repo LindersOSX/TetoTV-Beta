@@ -162,13 +162,31 @@ object DiscordRichPresenceBridge {
             "discordUpdatePresence" -> {
                 val title = call.argument<String>("title").orEmpty().trim().take(120)
                 if (title.isNotEmpty()) {
-                    nativeUpdatePresence(
+                    nativeUpdatePlaybackPresence(
                         title,
                         (call.argument<Number>("episode")?.toInt() ?: 0).coerceAtLeast(0),
                         call.argument<Boolean>("playing") ?: false,
                         (call.argument<Number>("positionMs")?.toLong() ?: 0L).coerceAtLeast(0L),
                         (call.argument<Number>("durationMs")?.toLong() ?: 0L).coerceAtLeast(0L),
                         sanitizeDiscordArtworkUrl(call.argument<String>("artworkUrl")),
+                    )
+                }
+                result.success(null)
+                true
+            }
+            "discordUpdateReadingPresence" -> {
+                val title = call.argument<String>("title").orEmpty().trim().take(120)
+                val chapterLabel = call.argument<String>("chapterLabel").orEmpty().trim().take(80)
+                val pageCount = (call.argument<Number>("pageCount")?.toInt() ?: 0)
+                    .coerceIn(0, 1_000)
+                val page = (call.argument<Number>("page")?.toInt() ?: 0)
+                    .coerceIn(0, if (pageCount > 0) pageCount else 1_000)
+                if (title.isNotEmpty()) {
+                    nativeUpdateReadingPresence(
+                        title,
+                        chapterLabel,
+                        page,
+                        pageCount,
                     )
                 }
                 result.success(null)
@@ -224,7 +242,7 @@ object DiscordRichPresenceBridge {
         if (!initialized || connectionState != "ready") return
         val safeTitle = title.trim().take(120)
         if (safeTitle.isEmpty()) return
-        nativeUpdatePresence(
+        nativeUpdatePlaybackPresence(
             safeTitle,
             episode.coerceAtLeast(0),
             playing,
@@ -375,13 +393,19 @@ object DiscordRichPresenceBridge {
     private external fun nativeRefreshToken(refreshToken: String)
     private external fun nativeConnect(accessToken: String, tokenType: Int)
     private external fun nativeRevoke(token: String)
-    private external fun nativeUpdatePresence(
+    private external fun nativeUpdatePlaybackPresence(
         title: String,
         episode: Int,
         playing: Boolean,
         positionMs: Long,
         durationMs: Long,
         artworkUrl: String,
+    )
+    private external fun nativeUpdateReadingPresence(
+        title: String,
+        chapterLabel: String,
+        page: Int,
+        pageCount: Int,
     )
     private external fun nativeClearPresence()
     private external fun nativeDisconnect()

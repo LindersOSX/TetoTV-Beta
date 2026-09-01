@@ -2473,7 +2473,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       SnackBar(
         content: Text(
           enabled
-              ? 'Developer mode enabled. Release history is now available.'
+              ? 'Developer mode enabled. Release history and Manga Preview are now available.'
               : 'Developer mode disabled. Standard update controls remain available.',
         ),
       ),

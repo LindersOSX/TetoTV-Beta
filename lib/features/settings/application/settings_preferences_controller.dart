@@ -198,6 +198,7 @@ enum TopNavigationDestination {
   // stable. The separately persisted order still places this before Settings.
   watchTogether,
   downloads,
+  manga,
 }
 
 /// Controls the title shown on featured, show-detail, and episode experiences.
@@ -242,6 +243,7 @@ extension TopNavigationDestinationLabel on TopNavigationDestination {
     TopNavigationDestination.settings => 'Settings',
     TopNavigationDestination.watchTogether => 'Watch Party',
     TopNavigationDestination.downloads => 'Downloads',
+    TopNavigationDestination.manga => 'Manga',
   };
 }
 
@@ -729,6 +731,9 @@ class SettingsPreferences {
     TopNavigationDestination.watchTogether => showWatchTogether,
     TopNavigationDestination.downloads =>
       offlineDownloadsEnabled && showDownloads,
+    // Manga is a runtime-gated Developer Mode destination. It deliberately
+    // has no persisted visibility bit in the general settings snapshot.
+    TopNavigationDestination.manga => true,
     // Settings is the permanent recovery path for navigation customization.
     TopNavigationDestination.settings => true,
   };
@@ -736,7 +741,8 @@ class SettingsPreferences {
   /// Settings is always available so every other destination can be hidden.
   bool canHideTopNavigationDestination(TopNavigationDestination destination) {
     return switch (destination) {
-      TopNavigationDestination.settings => false,
+      TopNavigationDestination.settings ||
+      TopNavigationDestination.manga => false,
       _ => true,
     };
   }
@@ -1519,6 +1525,9 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
     TopNavigationDestination destination,
     bool visible,
   ) {
+    if (destination == TopNavigationDestination.manga) {
+      return Future<void>.value();
+    }
     if (!visible && !state.canHideTopNavigationDestination(destination)) {
       return Future<void>.value();
     }
@@ -1541,8 +1550,9 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
       TopNavigationDestination.settings => state.copyWith(
         showSettings: visible,
       ),
+      TopNavigationDestination.manga => state,
     };
-    final visibilityKey = switch (destination) {
+    final String? visibilityKey = switch (destination) {
       TopNavigationDestination.search => _showSearchKey,
       TopNavigationDestination.home => _showHomeKey,
       TopNavigationDestination.myList => _showMyListKey,
@@ -1551,13 +1561,14 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
       TopNavigationDestination.watchTogether => _showWatchTogetherKey,
       TopNavigationDestination.downloads => _showDownloadsKey,
       TopNavigationDestination.settings => _showSettingsKey,
+      TopNavigationDestination.manga => null,
     };
     final landingPage = _landingPageForTopDestination(destination);
     final nextLandingPage = !visible && state.defaultLandingPage == landingPage
         ? LandingPage.home
         : state.defaultLandingPage;
     return _update(next.copyWith(defaultLandingPage: nextLandingPage), {
-      visibilityKey: visible.toString(),
+      ?visibilityKey: visible.toString(),
       if (nextLandingPage != state.defaultLandingPage)
         _defaultLandingPageKey: nextLandingPage.name,
     });
@@ -2215,6 +2226,7 @@ LandingPage? _landingPageForTopDestination(
   TopNavigationDestination.watchTogether => null,
   TopNavigationDestination.downloads => null,
   TopNavigationDestination.settings => null,
+  TopNavigationDestination.manga => null,
 };
 
 List<TopNavigationDestination> _parseTopNavigationOrder(String? value) {

@@ -103,6 +103,7 @@ enum AppUpdatePhase {
 
 class AppUpdateState {
   const AppUpdateState({
+    this.loaded = false,
     this.phase = AppUpdatePhase.idle,
     this.currentVersion = '…',
     this.latestVersion,
@@ -117,6 +118,12 @@ class AppUpdateState {
     this.releaseHistoryLoading = false,
   });
 
+  /// Whether the persisted update and Developer Mode preferences are ready.
+  ///
+  /// Runtime-only destinations must remain hidden until this becomes true so
+  /// a fresh frame cannot briefly expose developer features while storage is
+  /// still loading.
+  final bool loaded;
   final AppUpdatePhase phase;
   final String currentVersion;
   final String? latestVersion;
@@ -136,6 +143,7 @@ class AppUpdateState {
       phase == AppUpdatePhase.installing;
 
   AppUpdateState copyWith({
+    bool? loaded,
     AppUpdatePhase? phase,
     String? currentVersion,
     Object? latestVersion = _notProvided,
@@ -150,6 +158,7 @@ class AppUpdateState {
     bool? releaseHistoryLoading,
   }) {
     return AppUpdateState(
+      loaded: loaded ?? this.loaded,
       phase: phase ?? this.phase,
       currentVersion: currentVersion ?? this.currentVersion,
       latestVersion: identical(latestVersion, _notProvided)
@@ -921,18 +930,18 @@ class AppUpdateController extends StateNotifier<AppUpdateState> {
 
   Future<void> _performLoad() async {
     final values = await Future.wait([
-      _storage.read(key: _legacyGithubUpdateTokenStorageKey),
-      _storage.read(key: automaticUpdatesStorageKey),
-      _storage.read(key: updateChannelStorageKey),
-      _storage.read(key: developerModeStorageKey),
+      _safeStorageRead(_legacyGithubUpdateTokenStorageKey),
+      _safeStorageRead(automaticUpdatesStorageKey),
+      _safeStorageRead(updateChannelStorageKey),
+      _safeStorageRead(developerModeStorageKey),
       _currentVersionLoader(),
     ]);
     // Older builds could store update credentials on the device. GitHub update
     // checks are anonymous now, so both legacy secrets are removed on load.
     if (values[0] != null) {
-      await _storage.delete(key: _legacyGithubUpdateTokenStorageKey);
+      await _safeStorageDelete(_legacyGithubUpdateTokenStorageKey);
     }
-    await _storage.delete(key: _legacyBetaUpdateAccessKeyStorageKey);
+    await _safeStorageDelete(_legacyBetaUpdateAccessKeyStorageKey);
     final developerMode = values[3] == 'true';
     // Beta access is a normal user preference. Developer mode only unlocks
     // release history so testers can deliberately move between older and
@@ -945,11 +954,32 @@ class AppUpdateController extends StateNotifier<AppUpdateState> {
     _loaded = true;
     if (!mounted) return;
     state = state.copyWith(
+      loaded: true,
       currentVersion: installedVersion,
       automaticUpdates: values[1] != 'false',
       developerMode: developerMode,
       updateChannel: updateChannel,
     );
+  }
+
+  /// Update/navigation availability must fail closed when secure storage is
+  /// unavailable (for example, before the Android plugin is attached or in a
+  /// desktop widget host). A storage failure must not crash every screen that
+  /// renders the shared navigation bar or briefly expose Developer Mode.
+  Future<String?> _safeStorageRead(String key) async {
+    try {
+      return await _storage.read(key: key);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _safeStorageDelete(String key) async {
+    try {
+      await _storage.delete(key: key);
+    } catch (_) {
+      // Legacy update secrets are deleted again on a later successful load.
+    }
   }
 
   Future<void> enableDeveloperMode() async {

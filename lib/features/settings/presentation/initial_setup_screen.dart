@@ -434,6 +434,7 @@ class _TvExperiencePreview extends StatelessWidget {
         TopNavigationDestination.calendar => Icons.calendar_month_rounded,
         TopNavigationDestination.watchTogether => Icons.person_outline_rounded,
         TopNavigationDestination.downloads => Icons.download_rounded,
+        TopNavigationDestination.manga => Icons.menu_book_rounded,
         TopNavigationDestination.settings => Icons.settings_rounded,
       };
 

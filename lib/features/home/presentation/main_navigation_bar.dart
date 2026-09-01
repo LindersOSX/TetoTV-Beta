@@ -1558,7 +1558,10 @@ class _ProfileMenuButton extends StatelessWidget {
           onKeyEvent: onKeyEvent,
           onFocusChanged: onFocusChanged,
           onPressed: isLoading ? () {} : () => _openMenu(buttonContext),
-          borderRadius: BorderRadius.circular(compactAvatar ? 11 : 9),
+          // Keep the focus outline and clipped avatar on the same rounded-
+          // square geometry. A different outer radius made the border look
+          // circular even after the profile image itself became square.
+          borderRadius: _profileAvatarBorderRadius,
           focusScale: compactAvatar ? 1.01 : 1.02,
           child: Container(
             key: ValueKey('main-nav-profile-$slug'),
@@ -1985,7 +1988,11 @@ class _ProfileMenuStats extends StatelessWidget {
         children: [
           Row(
             children: [
-              const _LocalProfileAvatar(size: 34, identify: false),
+              const _LocalProfileAvatar(
+                size: 34,
+                identify: false,
+                outlined: true,
+              ),
               const SizedBox(width: 9),
               Expanded(
                 child: Text(
@@ -2024,7 +2031,12 @@ class _ProfileMenuStats extends StatelessWidget {
       children: [
         Row(
           children: [
-            _ProfileAvatar(profile: profile, size: 34, identify: false),
+            _ProfileAvatar(
+              profile: profile,
+              size: 34,
+              identify: false,
+              outlined: true,
+            ),
             const SizedBox(width: 9),
             Expanded(
               child: Text(
@@ -2184,13 +2196,13 @@ class _ProfileAvatar extends StatelessWidget {
     return Container(
       key: identify
           ? ValueKey('main-nav-profile-avatar-${profile.provider.slug}')
-          : null,
+          : ValueKey('main-nav-profile-menu-avatar-${profile.provider.slug}'),
       width: size,
       height: size,
       clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
         shape: BoxShape.rectangle,
-        borderRadius: BorderRadius.circular(size >= 40 ? 10 : 7),
+        borderRadius: _profileAvatarBorderRadius,
         color: context.appPalette.surfaceRaised,
         border: outlined
             ? Border.all(color: context.appPalette.accentBright, width: 2)
@@ -2218,12 +2230,14 @@ class _LocalProfileAvatar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-    key: identify ? const ValueKey('main-nav-profile-avatar-local') : null,
+    key: identify
+        ? const ValueKey('main-nav-profile-avatar-local')
+        : const ValueKey('main-nav-profile-menu-avatar-local'),
     width: size,
     height: size,
     decoration: BoxDecoration(
       shape: BoxShape.rectangle,
-      borderRadius: BorderRadius.circular(size >= 40 ? 10 : 7),
+      borderRadius: _profileAvatarBorderRadius,
       color: context.appPalette.secondaryAccent.withValues(alpha: .18),
       border: outlined
           ? Border.all(color: context.appPalette.accentBright, width: 2)
@@ -2236,6 +2250,8 @@ class _LocalProfileAvatar extends StatelessWidget {
     ),
   );
 }
+
+const _profileAvatarBorderRadius = BorderRadius.all(Radius.circular(10));
 
 class _NavigationAction extends StatelessWidget {
   const _NavigationAction({

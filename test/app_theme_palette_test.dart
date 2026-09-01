@@ -105,6 +105,12 @@ void main() {
     expect(theme.snackBarTheme.behavior, SnackBarBehavior.floating);
     expect(theme.snackBarTheme.backgroundColor, palette.surfaceRaised);
     expect(theme.snackBarTheme.actionTextColor, palette.accentBright);
+    final notificationText = theme.snackBarTheme.contentTextStyle!;
+    final appLabelText = theme.textTheme.labelLarge!;
+    expect(notificationText.color, appLabelText.color);
+    expect(notificationText.fontSize, appLabelText.fontSize);
+    expect(notificationText.fontWeight, appLabelText.fontWeight);
+    expect(notificationText.letterSpacing, appLabelText.letterSpacing);
     expect(snackShape.borderRadius, BorderRadius.circular(12));
     expect(snackShape.side.color, palette.accent.withValues(alpha: .64));
   });

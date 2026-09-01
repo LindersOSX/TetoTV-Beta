@@ -30,6 +30,12 @@ abstract final class AppTheme {
 
   static ThemeData darkFor(AppThemePalette palette) {
     final accentForeground = contrastForeground(palette.accent);
+    final appLabelStyle = TextStyle(
+      color: palette.primaryText,
+      fontSize: 15,
+      fontWeight: FontWeight.w700,
+      letterSpacing: .2,
+    );
     final scheme = ColorScheme.dark(
       primary: palette.accent,
       onPrimary: accentForeground,
@@ -69,11 +75,10 @@ abstract final class AppTheme {
         actionTextColor: palette.accentBright,
         disabledActionTextColor: palette.mutedText,
         elevation: 12,
-        contentTextStyle: TextStyle(
-          color: palette.primaryText,
-          fontSize: 14,
-          fontWeight: FontWeight.w700,
-        ),
+        // SnackBars are TetoTV's in-app notification surface. Reuse the
+        // regular app label typography so notifications do not look like a
+        // separate system UI layered over the app.
+        contentTextStyle: appLabelStyle,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(12),
           side: BorderSide(color: palette.accent.withValues(alpha: .64)),
@@ -129,12 +134,7 @@ abstract final class AppTheme {
           fontSize: 14,
           height: 1.35,
         ),
-        labelLarge: TextStyle(
-          color: palette.primaryText,
-          fontSize: 15,
-          fontWeight: FontWeight.w700,
-          letterSpacing: .2,
-        ),
+        labelLarge: appLabelStyle,
       ),
       iconTheme: IconThemeData(color: palette.primaryText),
       dividerColor: palette.primaryText.withValues(alpha: .08),

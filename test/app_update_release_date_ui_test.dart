@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:anime_tv/features/settings/application/app_update_controller.dart';
 import 'package:anime_tv/features/settings/presentation/accounts_screen.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -75,6 +76,53 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('Load release history opens the release picker after fetching', (
+    tester,
+  ) async {
+    final latest = _release(
+      '2.0.10',
+      releasedAtUtc: DateTime.utc(2026, 8, 20, 2, 5),
+    );
+    final previous = _release(
+      '2.0.9',
+      releasedAtUtc: DateTime.utc(2026, 8, 12, 17, 30),
+    );
+    await _pumpSystemUpdates(
+      tester,
+      AppUpdateState(
+        currentVersion: '2.0.10+410010',
+        latestVersion: latest.version,
+        release: latest,
+        updateChannel: AppUpdateChannel.beta,
+        developerMode: true,
+      ),
+      releaseHistoryOnRefresh: [latest, previous],
+    );
+
+    for (var index = 0; index < 9; index++) {
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pumpAndSettle();
+    }
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.updates.release-history',
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+
+    expect(find.byType(Dialog), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byType(Dialog),
+        matching: find.text('Choose a compatible signed release'),
+      ),
+      findsOneWidget,
+    );
+    expect(find.text('2.0.10 Beta • Aug 20, 2026'), findsWidgets);
+    expect(find.text('2.0.9 Beta • Aug 12, 2026'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('missing GitHub dates leave the version label clean', (
     tester,
   ) async {
@@ -138,14 +186,18 @@ void main() {
 
 Future<void> _pumpSystemUpdates(
   WidgetTester tester,
-  AppUpdateState state,
-) async {
+  AppUpdateState state, {
+  List<AppReleaseInfo>? releaseHistoryOnRefresh,
+}) async {
   FlutterSecureStorage.setMockInitialValues({});
   tester.view.physicalSize = const Size(1280, 720);
   tester.view.devicePixelRatio = 1;
   addTearDown(tester.view.resetPhysicalSize);
   addTearDown(tester.view.resetDevicePixelRatio);
-  final controller = _FixedAppUpdateController(state);
+  final controller = _FixedAppUpdateController(
+    state,
+    releaseHistoryOnRefresh: releaseHistoryOnRefresh,
+  );
 
   await tester.pumpWidget(
     ProviderScope(
@@ -180,16 +232,27 @@ AppReleaseInfo _release(
 );
 
 class _FixedAppUpdateController extends AppUpdateController {
-  _FixedAppUpdateController(AppUpdateState fixedState)
-    : super(
-        const FlutterSecureStorage(),
-        _UnusedReleaseSource(),
-        () async => fixedState.currentVersion,
-        () async => const [],
-        () async => Directory.systemTemp,
-        (_) async => '',
-      ) {
+  _FixedAppUpdateController(
+    AppUpdateState fixedState, {
+    this.releaseHistoryOnRefresh,
+  }) : super(
+         const FlutterSecureStorage(),
+         _UnusedReleaseSource(),
+         () async => fixedState.currentVersion,
+         () async => const [],
+         () async => Directory.systemTemp,
+         (_) async => '',
+       ) {
     state = fixedState;
+  }
+
+  final List<AppReleaseInfo>? releaseHistoryOnRefresh;
+
+  @override
+  Future<void> refreshReleaseHistory() async {
+    final releases = releaseHistoryOnRefresh;
+    if (releases == null) return;
+    state = state.copyWith(releaseHistory: releases);
   }
 }
 

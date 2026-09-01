@@ -171,18 +171,33 @@ String? _safeWatchPartyAvatarUrl(Object? value) {
     return null;
   }
   final uri = Uri.tryParse(value);
+  final host = uri?.host.toLowerCase();
+  final isMalAvatarHost =
+      host == 'cdn.myanimelist.net' || host == 'api-cdn.myanimelist.net';
+  final query = uri?.queryParametersAll ?? const <String, List<String>>{};
+  // MAL's official profile API appends a public numeric `t` cache-buster to
+  // user pictures. It is not part of the image identity and the Watch Party
+  // broker intentionally rejects every query string, so discard this one
+  // documented cosmetic value before sharing the already-public URL. Keep all
+  // other query keys rejected so account tokens or tracking values can never
+  // enter a room payload.
+  final hasSafeMalCacheBuster =
+      isMalAvatarHost &&
+      query.length == 1 &&
+      query['t']?.length == 1 &&
+      RegExp(r'^\d{1,16}$').hasMatch(query['t']!.single);
   if (uri == null ||
       uri.scheme != 'https' ||
       uri.host.isEmpty ||
       uri.userInfo.isNotEmpty ||
-      uri.hasQuery ||
+      (uri.hasQuery && !hasSafeMalCacheBuster) ||
       uri.hasFragment ||
       (uri.hasPort && uri.port != 443) ||
       uri.path.contains('\\') ||
-      !_watchPartyAvatarHosts.contains(uri.host.toLowerCase())) {
+      !_watchPartyAvatarHosts.contains(host)) {
     return null;
   }
-  return uri.toString();
+  return uri.hasQuery ? value.substring(0, value.indexOf('?')) : uri.toString();
 }
 
 @immutable

@@ -3757,12 +3757,19 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                                                 .notifier,
                                           )
                                           .setUpdateChannel,
-                                      onRefreshHistory: ref
-                                          .read(
-                                            appUpdateControllerProvider
-                                                .notifier,
-                                          )
-                                          .refreshReleaseHistory,
+                                      onRefreshHistory: () async {
+                                        final controller = ref.read(
+                                          appUpdateControllerProvider.notifier,
+                                        );
+                                        await controller
+                                            .refreshReleaseHistory();
+                                        if (!mounted) {
+                                          return const <AppReleaseInfo>[];
+                                        }
+                                        return ref
+                                            .read(appUpdateControllerProvider)
+                                            .releaseHistory;
+                                      },
                                       onReleaseSelected: ref
                                           .read(
                                             appUpdateControllerProvider
@@ -5538,6 +5545,124 @@ class _SettingsOption<T> {
   final bool enabled;
 }
 
+Future<T?> _showSettingsSelectionDialog<T>({
+  required BuildContext context,
+  required String label,
+  required T value,
+  required List<_SettingsOption<T>> options,
+}) => showDialog<T>(
+  context: context,
+  barrierDismissible: true,
+  builder: (context) {
+    final tvScale = _usesTvSettingsScale(context);
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      child: Container(
+        width: tvScale ? 430 : 560,
+        padding: EdgeInsets.all(tvScale ? 11 : 22),
+        decoration: BoxDecoration(
+          color: context.appPalette.surface,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: context.appPalette.accent.withValues(alpha: .7),
+          ),
+        ),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.sizeOf(context).height * .78,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                label,
+                style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                  fontSize: tvScale ? 18 : null,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              SizedBox(height: tvScale ? 7 : 14),
+              Flexible(
+                child: ListView.separated(
+                  shrinkWrap: true,
+                  itemCount: options.length,
+                  separatorBuilder: (_, _) => SizedBox(height: tvScale ? 4 : 8),
+                  itemBuilder: (context, index) {
+                    final option = options[index];
+                    final optionControl = TvFocusable(
+                      autofocus: option.enabled && option.value == value,
+                      onPressed: () => Navigator.of(context).pop(option.value),
+                      borderRadius: BorderRadius.circular(9),
+                      child: Container(
+                        width: double.infinity,
+                        padding: EdgeInsets.symmetric(
+                          horizontal: tvScale ? 9 : 16,
+                          vertical: tvScale ? 6 : 13,
+                        ),
+                        decoration: BoxDecoration(
+                          color: option.value == value
+                              ? context.appPalette.accent.withValues(alpha: .28)
+                              : context.appPalette.surfaceRaised,
+                          borderRadius: BorderRadius.circular(9),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(
+                              option.value == value
+                                  ? Icons.radio_button_checked_rounded
+                                  : Icons.radio_button_off_rounded,
+                              color: option.value == value
+                                  ? context.appPalette.accentBright
+                                  : context.appPalette.mutedText,
+                            ),
+                            SizedBox(width: tvScale ? 7 : 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    option.label,
+                                    style: TextStyle(
+                                      color: _settingsPrimaryText(context),
+                                      fontWeight: FontWeight.w900,
+                                    ),
+                                  ),
+                                  if (option.detail case final detail?) ...[
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      detail,
+                                      style: TextStyle(
+                                        color: context.appPalette.mutedText,
+                                        fontSize: tvScale ? 12 : 11,
+                                      ),
+                                    ),
+                                  ],
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                    if (option.enabled) return optionControl;
+                    return ExcludeFocus(
+                      excluding: true,
+                      child: IgnorePointer(
+                        child: Opacity(opacity: .45, child: optionControl),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  },
+);
+
 class _SettingsSelection<T> extends StatelessWidget {
   const _SettingsSelection({
     required this.label,
@@ -5567,131 +5692,11 @@ class _SettingsSelection<T> extends StatelessWidget {
       focusNode: focusNode,
       showDivider: showDivider,
       onPressed: () async {
-        final result = await showDialog<T>(
+        final result = await _showSettingsSelectionDialog<T>(
           context: context,
-          barrierDismissible: true,
-          builder: (context) {
-            final tvScale = _usesTvSettingsScale(context);
-            return Dialog(
-              backgroundColor: Colors.transparent,
-              child: Container(
-                width: tvScale ? 430 : 560,
-                padding: EdgeInsets.all(tvScale ? 11 : 22),
-                decoration: BoxDecoration(
-                  color: context.appPalette.surface,
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(
-                    color: context.appPalette.accent.withValues(alpha: .7),
-                  ),
-                ),
-                child: ConstrainedBox(
-                  constraints: BoxConstraints(
-                    maxHeight: MediaQuery.sizeOf(context).height * .78,
-                  ),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        label,
-                        style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                          fontSize: tvScale ? 18 : null,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                      SizedBox(height: tvScale ? 7 : 14),
-                      Flexible(
-                        child: ListView.separated(
-                          shrinkWrap: true,
-                          itemCount: options.length,
-                          separatorBuilder: (_, _) =>
-                              SizedBox(height: tvScale ? 4 : 8),
-                          itemBuilder: (context, index) {
-                            final option = options[index];
-                            final optionControl = TvFocusable(
-                              autofocus:
-                                  option.enabled && option.value == value,
-                              onPressed: () =>
-                                  Navigator.of(context).pop(option.value),
-                              borderRadius: BorderRadius.circular(9),
-                              child: Container(
-                                width: double.infinity,
-                                padding: EdgeInsets.symmetric(
-                                  horizontal: tvScale ? 9 : 16,
-                                  vertical: tvScale ? 6 : 13,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: option.value == value
-                                      ? context.appPalette.accent.withValues(
-                                          alpha: .28,
-                                        )
-                                      : context.appPalette.surfaceRaised,
-                                  borderRadius: BorderRadius.circular(9),
-                                ),
-                                child: Row(
-                                  children: [
-                                    Icon(
-                                      option.value == value
-                                          ? Icons.radio_button_checked_rounded
-                                          : Icons.radio_button_off_rounded,
-                                      color: option.value == value
-                                          ? context.appPalette.accentBright
-                                          : context.appPalette.mutedText,
-                                    ),
-                                    SizedBox(width: tvScale ? 7 : 12),
-                                    Expanded(
-                                      child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          Text(
-                                            option.label,
-                                            style: TextStyle(
-                                              color: _settingsPrimaryText(
-                                                context,
-                                              ),
-                                              fontWeight: FontWeight.w900,
-                                            ),
-                                          ),
-                                          if (option.detail
-                                              case final detail?) ...[
-                                            const SizedBox(height: 2),
-                                            Text(
-                                              detail,
-                                              style: TextStyle(
-                                                color: context
-                                                    .appPalette
-                                                    .mutedText,
-                                                fontSize: tvScale ? 12 : 11,
-                                              ),
-                                            ),
-                                          ],
-                                        ],
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            );
-                            if (option.enabled) return optionControl;
-                            return ExcludeFocus(
-                              excluding: true,
-                              child: IgnorePointer(
-                                child: Opacity(
-                                  opacity: .45,
-                                  child: optionControl,
-                                ),
-                              ),
-                            );
-                          },
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            );
-          },
+          label: label,
+          value: value,
+          options: options,
         );
         if (result != null) onSelected(result);
       },
@@ -7275,7 +7280,7 @@ class _DeveloperUpdatePanel extends StatelessWidget {
   final FocusNode channelFocusNode;
   final FocusNode releaseHistoryFocusNode;
   final ValueChanged<AppUpdateChannel> onChannelSelected;
-  final VoidCallback onRefreshHistory;
+  final Future<List<AppReleaseInfo>> Function() onRefreshHistory;
   final ValueChanged<AppReleaseInfo> onReleaseSelected;
 
   String _releaseCompatibilityDetail(AppReleaseInfo release) {
@@ -7297,6 +7302,29 @@ class _DeveloperUpdatePanel extends StatelessWidget {
       return 'Older release • Android build compatibility checked before download';
     }
     return 'Newer release • package and signature checked before install';
+  }
+
+  Future<void> _loadAndOpenReleaseHistory(BuildContext context) async {
+    final releases = await onRefreshHistory();
+    if (!context.mounted || releases.isEmpty) return;
+    final selected = await _showSettingsSelectionDialog<AppReleaseInfo>(
+      context: context,
+      label: 'Choose a compatible signed release',
+      value: releases.first,
+      options: [
+        for (final release in releases)
+          _SettingsOption(
+            value: release,
+            label: appReleaseDisplayLabel(release, state.updateChannel),
+            detail: _releaseCompatibilityDetail(release),
+            enabled: !isKnownAndroidVersionDowngrade(
+              currentVersion: state.currentVersion,
+              releaseVersionCode: release.androidVersionCode,
+            ),
+          ),
+      ],
+    );
+    if (selected != null) onReleaseSelected(selected);
   }
 
   @override
@@ -7376,7 +7404,7 @@ class _DeveloperUpdatePanel extends StatelessWidget {
               focusNode: releaseHistoryFocusNode,
               onPressed: state.isBusy || state.releaseHistoryLoading
                   ? null
-                  : onRefreshHistory,
+                  : () => _loadAndOpenReleaseHistory(context),
             ),
           SizedBox(height: _usesTvSettingsScale(context) ? 4 : 7),
           Text(

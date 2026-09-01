@@ -104,9 +104,17 @@ void main() {
     final panelDecoration = panel.decoration! as BoxDecoration;
     expect(
       panelDecoration.border!.top.color,
-      _customPalette.accent.withValues(alpha: .32),
+      _customPalette.accentBright.withValues(alpha: .82),
     );
-    expect(_paintedColors(tester), contains(_customPalette.selectableSurface));
+    expect(
+      _paintedColors(tester),
+      contains(
+        Color.alphaBlend(
+          Colors.white.withValues(alpha: .075),
+          _customPalette.surface,
+        ),
+      ),
+    );
     expect(tester.takeException(), isNull);
   });
 }

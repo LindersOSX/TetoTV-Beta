@@ -74,7 +74,9 @@ void main() {
           for (final letter in const ['f', 'r', 'i', 'e', 'r', 'e', 'n']) {
             await tester.tap(find.text(letter));
           }
-          await tester.tap(find.text('DONE'));
+          await tester.tap(
+            find.byKey(const ValueKey('tv-keyboard-key-submit')),
+          );
         } else {
           final field = find.byType(TextField);
           expect(field, findsOneWidget);

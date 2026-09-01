@@ -63,7 +63,7 @@ void main() {
       provider: TrackingProvider.myAnimeList,
       username: 'MAL Guest',
       avatarUrl:
-          'https://api-cdn.myanimelist.net/images/userimages/456/avatar.jpg',
+          'https://api-cdn.myanimelist.net/images/userimages/456/avatar.jpg?t=1725123456',
     );
 
     final snapshot = _crossTrackerSnapshot(host: host, guest: guest);
@@ -79,6 +79,33 @@ void main() {
       snapshot.participants[1].avatarUrl,
       'https://api-cdn.myanimelist.net/images/userimages/456/avatar.jpg',
     );
+  });
+
+  test('MAL cache-buster is removed without accepting private query data', () {
+    final identity = WatchPartyPublicIdentity.tryCreate(
+      displayName: 'MAL Viewer',
+      avatarUrl:
+          'https://api-cdn.myanimelist.net/images/userimages/456.jpg?t=1619168400',
+    );
+
+    expect(identity?.toJson(), {
+      'display_name': 'MAL Viewer',
+      'avatar_url': 'https://api-cdn.myanimelist.net/images/userimages/456.jpg',
+    });
+    for (final unsafeUrl in <String>[
+      'https://api-cdn.myanimelist.net/images/userimages/456.jpg?token=secret',
+      'https://api-cdn.myanimelist.net/images/userimages/456.jpg?t=1&token=secret',
+      'https://s4.anilist.co/avatar.jpg?t=1619168400',
+    ]) {
+      expect(
+        WatchPartyPublicIdentity.tryCreate(
+          displayName: 'MAL Viewer',
+          avatarUrl: unsafeUrl,
+        )?.toJson(),
+        {'display_name': 'MAL Viewer'},
+        reason: unsafeUrl,
+      );
+    }
   });
 
   test('MAL host and AniList guest exchange public avatars', () {

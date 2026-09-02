@@ -752,6 +752,16 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             );
           } else if (seasonalItems.isNotEmpty) {
             shelfRows.add(_HomeShelfRow(shelf: shelf, items: seasonalItems));
+          } else {
+            shelfRows.add(
+              _HomeShelfRow(
+                shelf: shelf,
+                items: const [],
+                emptyMessage: seasonalAsync.hasError
+                    ? 'Recently released titles are temporarily unavailable.'
+                    : 'No recently released titles are available yet.',
+              ),
+            );
           }
           break;
         case HomeShelf.trending:
@@ -852,6 +862,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                     title: row.shelf.displayName,
                     preferences: preferences,
                     modernPosterSizing: tvNavigation,
+                  )
+                : row.emptyMessage != null
+                ? _MediaShelfNotice(
+                    title: row.shelf.displayName,
+                    message: row.emptyMessage!,
+                    preferences: preferences,
                   )
                 : _MediaShelf(
                     key: _shelfKeys[row.shelf],
@@ -1092,12 +1108,14 @@ class _HomeShelfRow {
     required this.items,
     this.loading = false,
     this.landscape = false,
+    this.emptyMessage,
   });
 
   final HomeShelf shelf;
   final List<_ShelfItem> items;
   final bool loading;
   final bool landscape;
+  final String? emptyMessage;
 }
 
 class _HeroPanel extends StatelessWidget {
@@ -1786,6 +1804,44 @@ class _MediaShelfSkeleton extends StatelessWidget {
                   ],
                 ),
               ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MediaShelfNotice extends StatelessWidget {
+  const _MediaShelfNotice({
+    required this.title,
+    required this.message,
+    required this.preferences,
+  });
+
+  final String title;
+  final String message;
+  final SettingsPreferences preferences;
+
+  @override
+  Widget build(BuildContext context) {
+    final dense = preferences.homeLayout == HomeLayout.compact;
+    return Padding(
+      padding: EdgeInsets.only(bottom: dense ? 12 : 18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(title, style: Theme.of(context).textTheme.titleLarge),
+          SizedBox(
+            height:
+                (MediaQuery.sizeOf(context).width >= 840 ? 4 : 9) *
+                preferences.contentDensity.spacingScale,
+          ),
+          Text(
+            message,
+            key: ValueKey('home-empty-${title.toLowerCase()}'),
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+              color: context.appPalette.mutedText,
             ),
           ),
         ],

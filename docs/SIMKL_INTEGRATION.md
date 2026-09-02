@@ -1,7 +1,8 @@
 # SIMKL integration boundary
 
-SIMKL support is intentionally capability-gated and not yet visible in the
-app. The companion can complete SIMKL's confidential OAuth flow at
+SIMKL account linking is visible under **Settings > Accounts > Anime
+tracking**. It is capability-gated: the companion completes SIMKL's
+confidential OAuth flow at
 `/oauth/simkl/callback`, while the client secret remains only in the companion
 environment. Its `/health` response reports `providers.simkl: true` and a
 public `provider_client_ids.simkl` only when both server-side credentials are
@@ -18,9 +19,10 @@ History writes accept `SimklAnimeId`, a canonical SIMKL identifier type, rather
 than the existing generic tracking `mediaId`. This is deliberate: current list
 and playback models can carry AniList or MAL IDs in similarly named integer
 fields, so treating one of those integers as a SIMKL ID could update the wrong
-title. The visible provider option, token storage wiring, list reads, and
-outbox integration must remain disabled until a verified crosswalk persists a
-canonical SIMKL ID for each title and carries that typed ID end to end.
+title. Account linking, encrypted token storage, disconnect, and profile
+verification are enabled. SIMKL list reads and progress-outbox writes remain
+disabled until a verified crosswalk persists a canonical SIMKL ID for each
+title and carries that typed ID end to end.
 
 Companion deployment prerequisites:
 
@@ -29,7 +31,7 @@ Companion deployment prerequisites:
   console.
 - Set `SIMKL_CLIENT_ID` and `SIMKL_CLIENT_SECRET` only in the private companion
   environment.
-- Confirm `/health` reports SIMKL ready before enabling any future UI.
+- Confirm `/health` reports SIMKL ready before testing the Connect SIMKL row.
 
 References: [authentication](https://api.simkl.org/authentication),
 [OAuth](https://api.simkl.org/api-reference/oauth),

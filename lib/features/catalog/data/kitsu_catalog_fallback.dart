@@ -50,12 +50,20 @@ class KitsuCatalogFallback {
 
   /// Best-effort seasonal catalog results for the Home seasonal shelf.
   ///
-  /// Kitsu does not expose an authoritative anime-season filter, so the
-  /// public page is filtered locally by its real start date. Returning fewer
-  /// titles is preferable to silently showing titles from another season.
+  /// Ask Kitsu for the requested season before applying the local start-date
+  /// check. Fetching its globally popular page first can contain no titles
+  /// from the current season, which made an enabled Recently released shelf
+  /// disappear during an AniList/Jikan outage.
   Future<List<AnimeSummary>> seasonal(DateTime date, {int page = 1}) async {
     final expectedSeason = _season(date);
-    final results = await _catalogPage(page: page, sort: '-userCount');
+    final results = await _catalogPage(
+      page: page,
+      sort: '-userCount',
+      filters: {
+        'filter[seasonYear]': date.year,
+        'filter[season]': expectedSeason!.toLowerCase(),
+      },
+    );
     return List.unmodifiable(
       results.where(
         (anime) =>
@@ -112,10 +120,12 @@ class KitsuCatalogFallback {
   Future<List<AnimeSummary>> _catalogPage({
     required int page,
     required String sort,
+    Map<String, dynamic> filters = const {},
   }) async {
     final body = await _get(
       'anime',
       queryParameters: {
+        ...filters,
         'page[limit]': _pageSize,
         'page[offset]': (page - 1).clamp(0, 9999) * _pageSize,
         'include': 'mappings,categories',

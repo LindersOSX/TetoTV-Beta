@@ -4,6 +4,7 @@ import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/features/catalog/data/kitsu_catalog_fallback.dart';
 import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
 import 'package:anime_tv/features/catalog/domain/anime_trailer.dart';
+import 'package:anime_tv/features/catalog/domain/catalog_availability_exception.dart';
 import 'package:anime_tv/features/catalog/domain/franchise_watch_order.dart';
 import 'package:dio/dio.dart';
 
@@ -835,10 +836,11 @@ class AniListCatalogClient {
       await _recordCatalogFallback('jikan-airing');
       return List.unmodifiable(entries);
     } catch (_) {
-      throw StateError(
-        'The airing calendar and its read-only backup are temporarily '
-        'unavailable. Please try again shortly.',
+      await _recordCatalogAvailabilityFailure(
+        surface: 'airing-calendar',
+        backup: CatalogMetadataSource.jikan,
       );
+      throw const AiringCalendarUnavailableException();
     }
   }
 
@@ -1682,6 +1684,30 @@ class AniListCatalogClient {
       );
     } catch (_) {
       // A diagnostic write can never invalidate a successful catalog fallback.
+    }
+  }
+
+  Future<void> _recordCatalogAvailabilityFailure({
+    required String surface,
+    required CatalogMetadataSource backup,
+  }) async {
+    // Keep the outage visible in an exported diagnostic report without
+    // retaining the provider exception, request URL, query, media ID, account
+    // state, or response payload that caused it.
+    try {
+      await TetoTvDatabase.instance.recordDiagnosticEvent(
+        category: 'catalog-availability',
+        severity: 'warning',
+        message: 'Primary catalog and read-only backup unavailable',
+        details: {
+          'surface': surface,
+          'primary': CatalogMetadataSource.aniList.name,
+          'backup': backup.name,
+          'retryable': true,
+        },
+      );
+    } catch (_) {
+      // Diagnostics must never replace the safe user-facing outage error.
     }
   }
 

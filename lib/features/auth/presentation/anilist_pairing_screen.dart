@@ -7,6 +7,7 @@ import 'package:anime_tv/features/auth/application/pairing_controller.dart';
 import 'package:anime_tv/features/auth/domain/pairing_session.dart';
 import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
 import 'package:anime_tv/features/settings/application/tracking_accounts_controller.dart';
+import 'package:anime_tv/features/settings/application/simkl_account_controller.dart';
 import 'package:anime_tv/features/tracking/application/tracking_home_provider.dart';
 import 'package:anime_tv/features/tracking/application/tracking_sync_service.dart';
 import 'package:flutter/material.dart';
@@ -101,7 +102,7 @@ class _TrackingPairingScreenState extends ConsumerState<TrackingPairingScreen> {
               children: [
                 _TrackingHeader(
                   compact: narrow,
-                  provider: widget.provider,
+                  providerName: widget.provider.displayName,
                   onBack: context.pop,
                 ),
                 SizedBox(height: short ? 16 : 28),
@@ -145,7 +146,10 @@ class _TrackingPairingScreenState extends ConsumerState<TrackingPairingScreen> {
                                 return const SizedBox.shrink();
                               }
                               return _PairingPanel(
-                                provider: widget.provider,
+                                providerName: widget.provider.displayName,
+                                showMalCallback:
+                                    widget.provider ==
+                                    TrackingProvider.myAnimeList,
                                 session: session,
                                 onRestart: () => ref
                                     .read(
@@ -171,15 +175,147 @@ class _TrackingPairingScreenState extends ConsumerState<TrackingPairingScreen> {
   }
 }
 
+class SimklPairingScreen extends ConsumerStatefulWidget {
+  const SimklPairingScreen({super.key});
+
+  @override
+  ConsumerState<SimklPairingScreen> createState() => _SimklPairingScreenState();
+}
+
+class _SimklPairingScreenState extends ConsumerState<SimklPairingScreen> {
+  late final TextEditingController _brokerController;
+  String? _brokerError;
+  bool _editingBroker = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _brokerController = TextEditingController();
+    Future.microtask(_loadConfigurationAndStart);
+  }
+
+  Future<void> _loadConfigurationAndStart() async {
+    final storage = ref.read(secureStorageProvider);
+    final saved = await storage.read(key: authBrokerUrlStorageKey);
+    final effective = await effectiveAuthBrokerBaseUrl(storage);
+    if (!mounted) return;
+    _brokerController.text = saved ?? effective ?? '';
+    await ref.read(simklPairingControllerProvider.notifier).start();
+  }
+
+  Future<void> _saveBrokerAndStart() async {
+    final normalized = normalizeAuthBrokerBaseUrl(_brokerController.text);
+    if (normalized == null) {
+      setState(() {
+        _brokerError =
+            'Enter the public HTTPS URL where the TetoTV companion is deployed.';
+      });
+      return;
+    }
+    await ref
+        .read(secureStorageProvider)
+        .write(key: authBrokerUrlStorageKey, value: normalized);
+    if (!mounted) return;
+    setState(() {
+      _brokerController.text = normalized;
+      _brokerError = null;
+      _editingBroker = false;
+    });
+    await ref.read(simklPairingControllerProvider.notifier).start();
+  }
+
+  @override
+  void dispose() {
+    _brokerController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    ref.listen(simklPairingControllerProvider, (previous, next) {
+      final previousStatus = previous?.valueOrNull?.status;
+      final nextStatus = next.valueOrNull?.status;
+      if (nextStatus == PairingStatus.authorized &&
+          previousStatus != PairingStatus.authorized) {
+        ref.invalidate(simklAccountControllerProvider);
+      }
+    });
+    final pairing = ref.watch(simklPairingControllerProvider);
+    return Scaffold(
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          final narrow = constraints.maxWidth < 720;
+          final short = constraints.maxHeight < 600;
+          return SafeArea(
+            minimum: EdgeInsets.symmetric(
+              horizontal: narrow ? 20 : 42,
+              vertical: short ? 14 : 28,
+            ),
+            child: Column(
+              children: [
+                _TrackingHeader(
+                  compact: narrow,
+                  providerName: 'SIMKL',
+                  onBack: context.pop,
+                ),
+                SizedBox(height: short ? 16 : 28),
+                Expanded(
+                  child: SingleChildScrollView(
+                    padding: EdgeInsets.only(bottom: short ? 8 : 20),
+                    child: Center(
+                      child: pairing.when(
+                        loading: () => const CircularProgressIndicator(),
+                        error: (error, _) {
+                          if (error is AuthBrokerNotConfigured ||
+                              _editingBroker) {
+                            return _BrokerSetupPanel(
+                              controller: _brokerController,
+                              error: _brokerError,
+                              onSave: _saveBrokerAndStart,
+                            );
+                          }
+                          return _ErrorPanel(
+                            message: error.toString(),
+                            onRetry: () => ref
+                                .read(simklPairingControllerProvider.notifier)
+                                .start(),
+                            onConfigure: () =>
+                                setState(() => _editingBroker = true),
+                          );
+                        },
+                        data: (session) => session == null
+                            ? const SizedBox.shrink()
+                            : _PairingPanel(
+                                providerName: 'SIMKL',
+                                session: session,
+                                onRestart: () => ref
+                                    .read(
+                                      simklPairingControllerProvider.notifier,
+                                    )
+                                    .start(),
+                              ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
 class _TrackingHeader extends StatelessWidget {
   const _TrackingHeader({
     required this.compact,
-    required this.provider,
+    required this.providerName,
     required this.onBack,
   });
 
   final bool compact;
-  final TrackingProvider provider;
+  final String providerName;
   final VoidCallback onBack;
 
   @override
@@ -190,7 +326,7 @@ class _TrackingHeader extends StatelessWidget {
         const SizedBox(width: 18),
         Expanded(
           child: Text(
-            'Connect ${provider.displayName}',
+            'Connect $providerName',
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: Theme.of(context).textTheme.headlineSmall,
@@ -220,14 +356,16 @@ class _TrackingHeader extends StatelessWidget {
 
 class _PairingPanel extends StatelessWidget {
   const _PairingPanel({
-    required this.provider,
+    required this.providerName,
     required this.session,
     required this.onRestart,
+    this.showMalCallback = false,
   });
 
-  final TrackingProvider provider;
+  final String providerName;
   final PairingSession session;
   final VoidCallback onRestart;
+  final bool showMalCallback;
 
   @override
   Widget build(BuildContext context) {
@@ -242,7 +380,7 @@ class _PairingPanel extends StatelessWidget {
     if (session.status == PairingStatus.authorized) {
       return _StatusPanel(
         icon: Icons.check_circle_rounded,
-        title: '${provider.displayName} connected',
+        title: '$providerName connected',
         body: 'Your token is encrypted in the Android Keystore.',
         color: const Color(0xFF67D49B),
       );
@@ -310,10 +448,8 @@ class _PairingPanel extends StatelessWidget {
               CopyableCodeInteraction(
                 code: session.userCode,
                 semanticsLabel:
-                    '${provider.displayName} one-time pairing code '
-                    '${session.userCode}',
-                confirmationMessage:
-                    '${provider.displayName} pairing code copied.',
+                    '$providerName one-time pairing code ${session.userCode}',
+                confirmationMessage: '$providerName pairing code copied.',
                 child: Text(
                   session.userCode,
                   style: TextStyle(
@@ -329,7 +465,7 @@ class _PairingPanel extends StatelessWidget {
                 'This screen updates automatically after approval.',
                 style: Theme.of(context).textTheme.bodyMedium,
               ),
-              if (provider == TrackingProvider.myAnimeList) ...[
+              if (showMalCallback) ...[
                 const SizedBox(height: 10),
                 Text(
                   'Registered callback: '

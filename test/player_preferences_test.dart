@@ -617,9 +617,91 @@ void main() {
       isLikelyVideoDecodeFailure(
         "Failed to initialize a decoder for codec 'truehd'.",
       ),
-      true,
+      false,
     );
     expect(isLikelyVideoDecodeFailure('HTTP 403 forbidden'), false);
+  });
+
+  test('keeps decoded hardware video for ambiguous late codec errors', () {
+    expect(
+      automaticVideoDecoderRecovery(
+        message: 'Could not open codec.',
+        decodedVideoObserved: true,
+      ),
+      AutomaticVideoDecoderRecovery.normalSourceRecovery,
+    );
+    expect(
+      automaticVideoDecoderRecovery(
+        message: "Failed to initialize a decoder for codec 'truehd'.",
+        decodedVideoObserved: true,
+        currentAudioCodec: 'truehd',
+      ),
+      AutomaticVideoDecoderRecovery.normalSourceRecovery,
+      reason: 'a late audio codec error must not disable video hardware',
+    );
+  });
+
+  test('all common audio codec failures stay on normal source recovery', () {
+    for (final codec in const [
+      'truehd',
+      'eac3',
+      'ac3',
+      'dts',
+      'aac',
+      'flac',
+      'opus',
+    ]) {
+      expect(
+        automaticVideoDecoderRecovery(
+          message: 'Failed to initialize decoder for codec $codec',
+          decodedVideoObserved: true,
+          currentAudioCodec: codec,
+        ),
+        AutomaticVideoDecoderRecovery.normalSourceRecovery,
+        reason: '$codec must not disable hardware video decoding',
+      );
+    }
+    expect(
+      automaticVideoDecoderRecovery(
+        message: 'Codec E-AC-3 failed to initialize.',
+        decodedVideoObserved: false,
+        currentAudioCodec: 'E-AC-3',
+      ),
+      AutomaticVideoDecoderRecovery.normalSourceRecovery,
+      reason: 'the selected audio codec is matched despite punctuation',
+    );
+    expect(
+      automaticVideoDecoderRecoveryReasonCode(
+        recovery: AutomaticVideoDecoderRecovery.normalSourceRecovery,
+        decodedVideoObserved: true,
+      ),
+      'auxiliary_codec_error_after_video',
+      reason: 'diagnostics persist only a fixed privacy-safe reason code',
+    );
+  });
+
+  test('still recovers explicit video failures with software decoding', () {
+    expect(
+      automaticVideoDecoderRecovery(
+        message: 'MediaCodec video decoder failed at runtime.',
+        decodedVideoObserved: true,
+      ),
+      AutomaticVideoDecoderRecovery.softwareFallback,
+    );
+    expect(
+      automaticVideoDecoderRecovery(
+        message: 'Could not open codec.',
+        decodedVideoObserved: false,
+      ),
+      AutomaticVideoDecoderRecovery.softwareFallback,
+    );
+    expect(
+      automaticVideoDecoderRecovery(
+        message: 'HTTP 403 forbidden',
+        decodedVideoObserved: true,
+      ),
+      AutomaticVideoDecoderRecovery.unrelated,
+    );
   });
 
   test('automatic recovery preserves a resume seek that never took effect', () {

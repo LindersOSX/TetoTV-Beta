@@ -354,6 +354,7 @@ bool playerCanUseSkipMarkers({required bool guestControlsLocked}) =>
     !guestControlsLocked;
 
 bool isLikelyVideoDecodeFailure(String message) {
+  if (isLikelyAuxiliaryCodecFailure(message: message)) return false;
   final value = message.toLowerCase();
   return const [
     'mediacodec',
@@ -369,6 +370,89 @@ bool isLikelyVideoDecodeFailure(String message) {
     'surface',
   ].any(value.contains);
 }
+
+enum AutomaticVideoDecoderRecovery {
+  unrelated,
+  softwareFallback,
+  normalSourceRecovery,
+}
+
+bool isLikelyAuxiliaryCodecFailure({
+  required String message,
+  String? currentAudioCodec,
+}) {
+  final words =
+      ' ${message.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), ' ')} ';
+  const knownAudioCodecs = <String>{
+    'truehd',
+    'eac3',
+    'ac3',
+    'dts',
+    'aac',
+    'flac',
+    'opus',
+  };
+  if (knownAudioCodecs.any((codec) => words.contains(' $codec ')) ||
+      words.contains(' audio codec ') ||
+      words.contains(' audio decoder ')) {
+    return true;
+  }
+  final selectedCodec = currentAudioCodec?.trim().toLowerCase().replaceAll(
+    RegExp(r'[^a-z0-9]+'),
+    '',
+  );
+  if (selectedCodec == null || selectedCodec.length < 3) return false;
+  return words.replaceAll(' ', '').contains(selectedCodec);
+}
+
+/// Decides whether an engine error is allowed to reopen the video decoder.
+///
+/// Once MPV has published decoded video parameters, an unqualified codec-open
+/// error is commonly from a late audio or subtitle track. Reopening the whole
+/// source with software *video* decoding in that state can make otherwise
+/// smooth TV playback stutter. Explicit video/MediaCodec failures still use
+/// the existing compatibility fallback.
+AutomaticVideoDecoderRecovery automaticVideoDecoderRecovery({
+  required String message,
+  required bool decodedVideoObserved,
+  String? currentAudioCodec,
+}) {
+  if (isLikelyAuxiliaryCodecFailure(
+    message: message,
+    currentAudioCodec: currentAudioCodec,
+  )) {
+    return AutomaticVideoDecoderRecovery.normalSourceRecovery;
+  }
+  if (!isLikelyVideoDecodeFailure(message)) {
+    return AutomaticVideoDecoderRecovery.unrelated;
+  }
+  if (!decodedVideoObserved) {
+    return AutomaticVideoDecoderRecovery.softwareFallback;
+  }
+  final value = message.toLowerCase();
+  final explicitlyVideo = const [
+    'mediacodec',
+    'video decoder',
+    'video codec',
+    'video output',
+    'hardware decoding',
+    'hwdec',
+    'video surface',
+    'surface',
+  ].any(value.contains);
+  return explicitlyVideo
+      ? AutomaticVideoDecoderRecovery.softwareFallback
+      : AutomaticVideoDecoderRecovery.normalSourceRecovery;
+}
+
+String? automaticVideoDecoderRecoveryReasonCode({
+  required AutomaticVideoDecoderRecovery recovery,
+  required bool decodedVideoObserved,
+}) => recovery == AutomaticVideoDecoderRecovery.normalSourceRecovery
+    ? decodedVideoObserved
+          ? 'auxiliary_codec_error_after_video'
+          : 'audio_codec_open_failed'
+    : null;
 
 bool automaticDecoderFailureNeedsLibraryRecovery({
   required bool automatic,
@@ -1340,7 +1424,29 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
           _handleLibraryStartupFailure(message)) {
         return;
       }
-      if (isLikelyVideoDecodeFailure(message) &&
+      final decoderRecovery = automaticVideoDecoderRecovery(
+        message: message,
+        decodedVideoObserved: _videoFrameSeen,
+        currentAudioCodec: _player.state.track.audio.codec,
+      );
+      if (decoderRecovery ==
+          AutomaticVideoDecoderRecovery.normalSourceRecovery) {
+        // Preserve the already-decoding hardware path and use the ordinary
+        // source/audio failover. The fixed override makes future reports show
+        // why a video decoder reopen was intentionally avoided without ever
+        // storing the raw engine error or codec name.
+        unawaited(
+          _tryNextStream(
+            message,
+            diagnosticReasonCode: automaticVideoDecoderRecoveryReasonCode(
+              recovery: decoderRecovery,
+              decodedVideoObserved: _videoFrameSeen,
+            ),
+          ),
+        );
+        return;
+      }
+      if (decoderRecovery == AutomaticVideoDecoderRecovery.softwareFallback &&
           !_softwareFallbackUsed &&
           !_hasUntriedDirectStream) {
         unawaited(_restartWithSoftwareDecoder(message));
@@ -3551,6 +3657,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     String reason, {
     bool notify = true,
     Duration? resumePosition,
+    String? diagnosticReasonCode,
   }) async {
     if (!mounted ||
         _engineHandoffInProgress ||
@@ -3573,7 +3680,8 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
           manualSourceSelectionInProgress: _manualSourceSelectionInProgress,
         );
 
-    final failoverReasonCode = playbackDiagnosticFailureReasonCode(reason);
+    final failoverReasonCode =
+        diagnosticReasonCode ?? playbackDiagnosticFailureReasonCode(reason);
     unawaited(
       _playbackDiagnostics.fallbackAttempted(
         fallbackKind: PlaybackDiagnosticFallbackKind.source,

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:anime_tv/core/config/app_config.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/core/storage/tetotv_database.dart';
+import 'package:anime_tv/features/catalog/domain/catalog_availability_exception.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -400,6 +401,10 @@ enum AnonymousErrorArea {
 }
 
 bool _isUnexpectedHandledError(Object error) {
+  // Both providers being temporarily unavailable is an expected, retryable
+  // calendar state. The source records a fixed, sanitized on-device diagnostic
+  // event, so do not mislabel or upload it as an anonymous application crash.
+  if (error is AiringCalendarUnavailableException) return false;
   if (error is DioException && error.type == DioExceptionType.cancel) {
     return false;
   }

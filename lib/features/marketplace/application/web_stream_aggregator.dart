@@ -6,6 +6,7 @@ import 'package:anime_tv/features/marketplace/application/marketplace_controller
 import 'package:anime_tv/features/marketplace/data/addon_store.dart';
 import 'package:anime_tv/features/marketplace/data/seanime_javascript_provider.dart';
 import 'package:anime_tv/features/marketplace/domain/addon_models.dart';
+import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:anime_tv/features/streaming/domain/episode_identity_guard.dart';
 import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -51,7 +52,14 @@ ReleaseAudioIntent releaseAudioIntentForWebStream(WebStreamResult result) {
 }
 
 final webStreamAggregatorProvider = Provider<WebStreamAggregator>(
-  (ref) => WebStreamAggregator(ref.watch(addonStoreProvider)),
+  (ref) => WebStreamAggregator(
+    ref.watch(addonStoreProvider),
+    preferredSubtitleLanguage: ref.watch(
+      settingsPreferencesProvider.select(
+        (preferences) => preferences.preferredCaptionLanguage,
+      ),
+    ),
+  ),
 );
 
 class WebStreamSearchProgress {
@@ -93,6 +101,7 @@ class WebStreamAggregator {
     this.backgroundBudget = defaultWebProviderBackgroundBudget,
     this.cleanupBudget = defaultWebProviderCleanupBudget,
     this.sharedSessionGrace = const Duration(seconds: 2),
+    this.preferredSubtitleLanguage = 'eng',
   });
 
   final AddonStore _store;
@@ -102,6 +111,7 @@ class WebStreamAggregator {
   final Duration backgroundBudget;
   final Duration cleanupBudget;
   final Duration sharedSessionGrace;
+  final String preferredSubtitleLanguage;
   final Map<String, _SharedWebSearchSession> _sharedSessions = {};
 
   /// Replays and shares one provider search per episode across resolver and
@@ -299,7 +309,7 @@ class WebStreamAggregator {
     final searchStopwatch = Stopwatch()..start();
     final diagnosticSessionId = nextWebProviderSearchDiagnosticSessionId();
     final health = await _store.providerHealth();
-    final allInstalledAddons = await _store.installedAddons();
+    final allInstalledAddons = await _store.installedStreamingAddons();
     final installedAddons = onlyProviderIds == null
         ? allInstalledAddons
         : allInstalledAddons
@@ -316,7 +326,10 @@ class WebStreamAggregator {
     final searchable = <InstalledStreamingAddon>[];
     var blockedProviders = 0;
     for (final addon in enabledAddons) {
-      final provider = SeanimeJavascriptProvider(addon);
+      final provider = SeanimeJavascriptProvider(
+        addon,
+        preferredSubtitleLanguage: preferredSubtitleLanguage,
+      );
       final availabilityFailure = installedWebProviderAvailabilityFailure(
         addon,
         health[addon.manifest.id],
@@ -346,7 +359,14 @@ class WebStreamAggregator {
       }
     }
     final addons = orderInstalledProvidersByHealth(searchable, health);
-    final providers = addons.map(SeanimeJavascriptProvider.new).toList();
+    final providers = addons
+        .map(
+          (addon) => SeanimeJavascriptProvider(
+            addon,
+            preferredSubtitleLanguage: preferredSubtitleLanguage,
+          ),
+        )
+        .toList();
     _recordProviderSearchSummary(
       webProviderSearchSummaryDiagnosticDetails(
         phase: 'start',

@@ -5,11 +5,13 @@ import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/widgets/network_artwork.dart';
 import 'package:anime_tv/core/widgets/poster_metadata_overlay.dart';
+import 'package:anime_tv/core/widgets/tv_text_input.dart';
 import 'package:anime_tv/core/storage/storage_providers.dart';
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
 import 'package:anime_tv/features/catalog/application/filler_episode_providers.dart';
 import 'package:anime_tv/features/catalog/domain/anime_franchise_context.dart';
 import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
+import 'package:anime_tv/features/catalog/domain/episode_airing_availability.dart';
 import 'package:anime_tv/features/catalog/domain/filler_episode_lookup.dart';
 import 'package:anime_tv/features/catalog/presentation/anime_title_logo_view.dart';
 import 'package:anime_tv/features/downloads/application/season_download_controller.dart';
@@ -29,6 +31,7 @@ import 'package:anime_tv/features/watch_together/application/watch_party_control
 import 'package:anime_tv/features/watch_together/application/watch_party_public_identity_provider.dart';
 import 'package:anime_tv/features/watch_together/domain/watch_party_models.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -104,6 +107,9 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
     debugLabel: 'episode.previous',
   );
   final FocusNode _nextEpisodeFocusNode = FocusNode(debugLabel: 'episode.next');
+  final FocusNode _episodePickerFocusNode = FocusNode(
+    debugLabel: 'episode.manual-picker',
+  );
   final FocusNode _backFocusNode = FocusNode(debugLabel: 'anime-details.back');
   Timer? _prefetchDebounce;
   EpisodeDiscoveryPrefetchHandle? _activePrefetch;
@@ -121,6 +127,7 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
     _skipFillerFocusNode.dispose();
     _previousEpisodeFocusNode.dispose();
     _nextEpisodeFocusNode.dispose();
+    _episodePickerFocusNode.dispose();
     _backFocusNode.dispose();
     super.dispose();
   }
@@ -222,7 +229,22 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
           1,
           knownEpisodes,
         );
-    _scheduleEpisodePrefetch(selectedEpisode);
+    final releaseCheckAt = DateTime.now();
+    final selectedAvailability = episodeAiringAvailability(
+      anime: anime,
+      episode: selectedEpisode,
+      now: releaseCheckAt,
+    );
+    final resumeAvailability = episodeAiringAvailability(
+      anime: anime,
+      episode: targetEpisode,
+      now: releaseCheckAt,
+    );
+    if (selectedAvailability.isAvailable) {
+      _scheduleEpisodePrefetch(selectedEpisode);
+    } else {
+      _suppressEpisodePrefetchForUnavailableSelection();
+    }
     final onDownloadSeason = !settings.offlineDownloadsEnabled || isUnreleased
         ? null
         : seasonDownload.isRunning
@@ -247,7 +269,8 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
     _EpisodeActions episodeActions({
       required bool autofocusPrimary,
     }) => _EpisodeActions(
-      isAvailable: !isUnreleased,
+      selectedAvailability: selectedAvailability,
+      resumeAvailability: resumeAvailability,
       autofocusPrimary: autofocusPrimary,
       selectedEpisode: selectedEpisode,
       resumeEpisode: targetEpisode,
@@ -268,7 +291,16 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
           !guestInWatchParty && !isUnreleased && selectedEpisode < knownEpisodes
           ? () => setState(() => _selectedEpisode = selectedEpisode + 1)
           : null,
-      onPlayFromBeginning: isUnreleased || guestInWatchParty
+      onSelectEpisode: !guestInWatchParty && !isUnreleased
+          ? () => unawaited(
+              _showEpisodeNumberPicker(
+                selectedEpisode: selectedEpisode,
+                totalEpisodes: knownEpisodes,
+              ),
+            )
+          : null,
+      onPlayFromBeginning:
+          !selectedAvailability.isAvailable || guestInWatchParty
           ? null
           : () => unawaited(
               _openEpisodeWithFillerCheck(
@@ -278,12 +310,12 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
                 restart: true,
               ),
             ),
-      onResume: isUnreleased || guestInWatchParty
+      onResume: !resumeAvailability.isAvailable || guestInWatchParty
           ? null
           : () => unawaited(
               _openEpisodeWithFillerCheck(anime, targetEpisode, knownEpisodes),
             ),
-      onPlaySelected: isUnreleased || guestInWatchParty
+      onPlaySelected: !selectedAvailability.isAvailable || guestInWatchParty
           ? null
           : () => unawaited(
               _openEpisodeWithFillerCheck(
@@ -304,6 +336,7 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
       watchPartyFocusNode: _watchPartyFocusNode,
       skipFillerFocusNode: _skipFillerFocusNode,
       previousEpisodeFocusNode: _previousEpisodeFocusNode,
+      episodePickerFocusNode: _episodePickerFocusNode,
       nextEpisodeFocusNode: _nextEpisodeFocusNode,
       showWatchPartyAction: settings.showWatchTogether,
       onWatchPartyPressed: watchParty.session?.role == WatchPartyRole.guest
@@ -312,7 +345,9 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
             )
           : watchParty.isActive
           ? null
-          : !isUnreleased && !_startingWatchParty && !watchParty.isBusy
+          : selectedAvailability.isAvailable &&
+                !_startingWatchParty &&
+                !watchParty.isBusy
           ? () => unawaited(_startWatchParty())
           : null,
     );
@@ -812,6 +847,49 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
     }
   }
 
+  Future<void> _showEpisodeNumberPicker({
+    required int selectedEpisode,
+    required int totalEpisodes,
+  }) async {
+    final restoreFocus = _episodePickerFocusNode.hasFocus;
+    final value = await showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      barrierColor: Colors.black.withValues(alpha: .20),
+      builder: (_) => TvKeyboardDialog(
+        title: 'Choose episode (1–$totalEpisodes)',
+        initialValue: '$selectedEpisode',
+        numericOnly: true,
+        maxLength: totalEpisodes.toString().length,
+        reduceWidthForTelevision: ref.read(isTelevisionProvider),
+        inputFormatters: <TextInputFormatter>[
+          FilteringTextInputFormatter.digitsOnly,
+        ],
+        validator: (input) {
+          final episode = int.tryParse(input.trim());
+          if (episode == null || episode < 1 || episode > totalEpisodes) {
+            return 'Enter an episode from 1 to $totalEpisodes.';
+          }
+          return null;
+        },
+      ),
+    );
+    if (!mounted) return;
+    if (restoreFocus) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _episodePickerFocusNode.canRequestFocus) {
+          _episodePickerFocusNode.requestFocus();
+        }
+      });
+    }
+    if (value == null) return;
+    final episode = int.tryParse(value.trim());
+    if (episode == null || episode < 1 || episode > totalEpisodes) return;
+    if (_selectedEpisode != episode) {
+      setState(() => _selectedEpisode = episode);
+    }
+  }
+
   Future<void> _startWatchParty() async {
     final party = ref.read(watchPartyControllerProvider);
     if (_startingWatchParty || party.isActive || party.isBusy) {
@@ -840,6 +918,7 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
       if (!mounted) return;
       for (final node in <FocusNode>[
         _nextEpisodeFocusNode,
+        _episodePickerFocusNode,
         _previousEpisodeFocusNode,
         _skipFillerFocusNode,
         _backFocusNode,
@@ -890,6 +969,19 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
       if (!mounted || _requestedPrefetchEpisode != episode) return;
       _startEpisodePrefetch(episode);
     });
+  }
+
+  void _suppressEpisodePrefetchForUnavailableSelection() {
+    if (_requestedPrefetchEpisode == null &&
+        _prefetchDebounce == null &&
+        _activePrefetch == null) {
+      return;
+    }
+    _requestedPrefetchEpisode = null;
+    _prefetchGeneration++;
+    _prefetchDebounce?.cancel();
+    _prefetchDebounce = null;
+    _cancelActivePrefetch();
   }
 
   void _startEpisodePrefetch(int episode) {
@@ -1058,6 +1150,16 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
     int totalEpisodes, {
     bool restart = false,
   }) async {
+    final availability = episodeAiringAvailability(
+      anime: anime,
+      episode: requestedEpisode,
+    );
+    if (!availability.isAvailable) {
+      if (mounted && _selectedEpisode != requestedEpisode) {
+        setState(() => _selectedEpisode = requestedEpisode);
+      }
+      return;
+    }
     var skipEnabled = false;
     final preferencesFuture = ref.read(
       seriesPlaybackPreferencesProvider(anime.id).future,
@@ -1519,7 +1621,8 @@ class _InformationButton extends StatelessWidget {
 
 class _EpisodeActions extends StatelessWidget {
   const _EpisodeActions({
-    required this.isAvailable,
+    required this.selectedAvailability,
+    required this.resumeAvailability,
     required this.autofocusPrimary,
     required this.selectedEpisode,
     required this.resumeEpisode,
@@ -1531,6 +1634,7 @@ class _EpisodeActions extends StatelessWidget {
     required this.selectedIsFiller,
     required this.onDecrease,
     required this.onIncrease,
+    required this.onSelectEpisode,
     required this.onPlayFromBeginning,
     required this.onResume,
     required this.onPlaySelected,
@@ -1542,12 +1646,14 @@ class _EpisodeActions extends StatelessWidget {
     required this.watchPartyFocusNode,
     required this.skipFillerFocusNode,
     required this.previousEpisodeFocusNode,
+    required this.episodePickerFocusNode,
     required this.nextEpisodeFocusNode,
     required this.showWatchPartyAction,
     required this.onWatchPartyPressed,
   });
 
-  final bool isAvailable;
+  final EpisodeAiringAvailability selectedAvailability;
+  final EpisodeAiringAvailability resumeAvailability;
   final bool autofocusPrimary;
   final int selectedEpisode;
   final int resumeEpisode;
@@ -1559,6 +1665,7 @@ class _EpisodeActions extends StatelessWidget {
   final bool selectedIsFiller;
   final VoidCallback? onDecrease;
   final VoidCallback? onIncrease;
+  final VoidCallback? onSelectEpisode;
   final VoidCallback? onPlayFromBeginning;
   final VoidCallback? onResume;
   final VoidCallback? onPlaySelected;
@@ -1570,6 +1677,7 @@ class _EpisodeActions extends StatelessWidget {
   final FocusNode watchPartyFocusNode;
   final FocusNode skipFillerFocusNode;
   final FocusNode previousEpisodeFocusNode;
+  final FocusNode episodePickerFocusNode;
   final FocusNode nextEpisodeFocusNode;
   final bool showWatchPartyAction;
   final VoidCallback? onWatchPartyPressed;
@@ -1590,40 +1698,53 @@ class _EpisodeActions extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           if (!guestInWatchParty) ...[
-            _EpisodeActionButton(
-              key: const ValueKey('episode-action-resume'),
-              label: !isAvailable
-                  ? 'Not released yet'
-                  : resumePosition == null
-                  ? (hasProgress ? 'Resume' : 'Start watching')
-                  : 'Resume at ${_formatDuration(resumePosition!)}',
-              trailing: isAvailable ? 'EP-$resumeEpisode' : null,
-              badge: resumeIsFiller ? 'FILLER' : null,
-              icon: Icons.play_arrow_rounded,
-              primary: true,
-              autofocus: isAvailable && autofocusPrimary,
-              onPressed: onResume,
-              large: large,
-            ),
-            SizedBox(height: large ? 14 : 6),
-            _EpisodeActionButton(
-              key: const ValueKey('episode-action-restart'),
-              label: 'Play from beginning',
-              icon: Icons.replay_rounded,
-              onPressed: onPlayFromBeginning,
-              large: large,
-            ),
-            SizedBox(height: large ? 14 : 6),
-            _EpisodeActionButton(
-              key: const ValueKey('episode-action-selected'),
-              label: 'Play selected',
-              trailing: 'EP-$selectedEpisode',
-              badge: selectedIsFiller ? 'FILLER' : null,
-              icon: Icons.skip_next_rounded,
-              onPressed: onPlaySelected,
-              large: large,
-            ),
-            SizedBox(height: large ? 14 : 6),
+            if (resumeAvailability.isAvailable ||
+                selectedAvailability.isAvailable) ...[
+              _EpisodeActionButton(
+                key: const ValueKey('episode-action-resume'),
+                label: !resumeAvailability.isAvailable
+                    ? _unavailableEpisodeActionLabel(resumeAvailability)
+                    : resumePosition == null
+                    ? (hasProgress ? 'Resume' : 'Start watching')
+                    : 'Resume at ${_formatDuration(resumePosition!)}',
+                trailing: resumeAvailability.isAvailable
+                    ? 'EP-$resumeEpisode'
+                    : null,
+                badge: resumeIsFiller ? 'FILLER' : null,
+                icon: Icons.play_arrow_rounded,
+                primary: true,
+                autofocus: resumeAvailability.isAvailable && autofocusPrimary,
+                onPressed: onResume,
+                large: large,
+              ),
+              SizedBox(height: large ? 14 : 6),
+            ],
+            if (!selectedAvailability.isAvailable) ...[
+              _EpisodeAiringNotice(
+                availability: selectedAvailability,
+                large: large,
+              ),
+              SizedBox(height: large ? 14 : 6),
+            ] else ...[
+              _EpisodeActionButton(
+                key: const ValueKey('episode-action-restart'),
+                label: 'Play from beginning',
+                icon: Icons.replay_rounded,
+                onPressed: onPlayFromBeginning,
+                large: large,
+              ),
+              SizedBox(height: large ? 14 : 6),
+              _EpisodeActionButton(
+                key: const ValueKey('episode-action-selected'),
+                label: 'Play selected',
+                trailing: 'EP-$selectedEpisode',
+                badge: selectedIsFiller ? 'FILLER' : null,
+                icon: Icons.skip_next_rounded,
+                onPressed: onPlaySelected,
+                large: large,
+              ),
+              SizedBox(height: large ? 14 : 6),
+            ],
           ],
           _EpisodeActionButton(
             key: const ValueKey('episode-action-manage-list'),
@@ -1639,6 +1760,20 @@ class _EpisodeActions extends StatelessWidget {
             value: skipFillerEpisodes,
             onPressed: onToggleSkipFiller,
             focusNode: skipFillerFocusNode,
+            onExitDown: watchPartyState.session?.role == WatchPartyRole.host
+                ? () {
+                    for (final node in <FocusNode>[
+                      nextEpisodeFocusNode,
+                      episodePickerFocusNode,
+                      previousEpisodeFocusNode,
+                    ]) {
+                      if (node.context != null && node.canRequestFocus) {
+                        node.requestFocus();
+                        return;
+                      }
+                    }
+                  }
+                : null,
             large: large,
           ),
           if (showWatchPartyAction) ...[
@@ -1684,15 +1819,13 @@ class _EpisodeActions extends StatelessWidget {
                   focusNode: previousEpisodeFocusNode,
                 ),
                 Expanded(
-                  child: Text(
-                    'Episode $selectedEpisode of $totalEpisodes',
-                    textAlign: TextAlign.center,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontWeight: FontWeight.w900,
-                      fontSize: large ? 16 : 13,
-                    ),
+                  child: _EpisodeSelectionButton(
+                    key: const ValueKey('episode-manual-selector'),
+                    selectedEpisode: selectedEpisode,
+                    totalEpisodes: totalEpisodes,
+                    onPressed: onSelectEpisode,
+                    focusNode: episodePickerFocusNode,
+                    large: large,
                   ),
                 ),
                 _EpisodeStepButton(
@@ -1709,6 +1842,112 @@ class _EpisodeActions extends StatelessWidget {
       ),
     );
   }
+}
+
+class _EpisodeAiringNotice extends StatelessWidget {
+  const _EpisodeAiringNotice({required this.availability, required this.large});
+
+  final EpisodeAiringAvailability availability;
+  final bool large;
+
+  @override
+  Widget build(BuildContext context) {
+    final isSeries =
+        availability.kind == EpisodeAiringAvailabilityKind.seriesUnaired;
+    final title = isSeries
+        ? 'This series has not aired yet.'
+        : 'Episode ${availability.episode} has not aired yet.';
+    final expectedAt = availability.expectedAt;
+    final dateLabel = expectedAt == null
+        ? null
+        : '${isSeries ? 'Expected premiere date' : 'Expected air date'}: '
+              '${_formatAiringDate(expectedAt)}';
+    return Semantics(
+      liveRegion: true,
+      label: dateLabel == null ? title : '$title $dateLabel',
+      child: Container(
+        key: const ValueKey('episode-unavailable-notice'),
+        width: double.infinity,
+        padding: EdgeInsets.symmetric(
+          horizontal: large ? 18 : 12,
+          vertical: large ? 14 : 9,
+        ),
+        decoration: BoxDecoration(
+          color: context.appPalette.accent.withValues(alpha: .12),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: context.appPalette.accentBright.withValues(alpha: .62),
+          ),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(
+              Icons.schedule_rounded,
+              color: context.appPalette.accentBright,
+              size: large ? 26 : 19,
+            ),
+            SizedBox(width: large ? 12 : 8),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: TextStyle(
+                      color: context.appPalette.primaryText,
+                      fontSize: large ? 16 : 12,
+                      height: 1.15,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  if (dateLabel != null) ...[
+                    SizedBox(height: large ? 6 : 3),
+                    Text(
+                      dateLabel,
+                      style: TextStyle(
+                        color: context.appPalette.mutedText,
+                        fontSize: large ? 13 : 10,
+                        height: 1.2,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+String _unavailableEpisodeActionLabel(EpisodeAiringAvailability availability) =>
+    switch (availability.kind) {
+      EpisodeAiringAvailabilityKind.seriesUnaired => 'Not aired yet',
+      EpisodeAiringAvailabilityKind.episodeUnaired =>
+        'Episode ${availability.episode} has not aired yet',
+      EpisodeAiringAvailabilityKind.available => 'Start watching',
+    };
+
+String _formatAiringDate(DateTime value) {
+  const months = <String>[
+    'January',
+    'February',
+    'March',
+    'April',
+    'May',
+    'June',
+    'July',
+    'August',
+    'September',
+    'October',
+    'November',
+    'December',
+  ];
+  final local = value.toLocal();
+  return '${months[local.month - 1]} ${local.day}, ${local.year}';
 }
 
 class _EpisodeWatchPartyAction extends StatelessWidget {
@@ -2066,12 +2305,14 @@ class _EpisodeToggleButton extends StatelessWidget {
     required this.value,
     required this.onPressed,
     required this.focusNode,
+    this.onExitDown,
     required this.large,
   });
 
   final bool value;
   final VoidCallback? onPressed;
   final FocusNode focusNode;
+  final VoidCallback? onExitDown;
   final bool large;
 
   @override
@@ -2126,6 +2367,15 @@ class _EpisodeToggleButton extends StatelessWidget {
       child: enabled
           ? TvFocusable(
               focusNode: focusNode,
+              onKeyEvent: (_, event) {
+                if (event is KeyDownEvent &&
+                    event.logicalKey == LogicalKeyboardKey.arrowDown &&
+                    onExitDown != null) {
+                  onExitDown!();
+                  return KeyEventResult.handled;
+                }
+                return KeyEventResult.ignored;
+              },
               focusScale: 1.025,
               borderRadius: BorderRadius.circular(10),
               onPressed: onPressed!,
@@ -2234,6 +2484,81 @@ class _EpisodeActionButton extends StatelessWidget {
       borderRadius: BorderRadius.circular(10),
       onPressed: onPressed!,
       child: content,
+    );
+  }
+}
+
+class _EpisodeSelectionButton extends StatelessWidget {
+  const _EpisodeSelectionButton({
+    super.key,
+    required this.selectedEpisode,
+    required this.totalEpisodes,
+    required this.onPressed,
+    required this.focusNode,
+    required this.large,
+  });
+
+  final int selectedEpisode;
+  final int totalEpisodes;
+  final VoidCallback? onPressed;
+  final FocusNode focusNode;
+  final bool large;
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = onPressed != null;
+    final content = Container(
+      height: large ? 58 : 38,
+      alignment: Alignment.center,
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Flexible(
+            child: Text(
+              'Episode $selectedEpisode of $totalEpisodes',
+              textAlign: TextAlign.center,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontWeight: FontWeight.w900,
+                fontSize: large ? 16 : 13,
+              ),
+            ),
+          ),
+          if (enabled) ...[
+            const SizedBox(width: 6),
+            Icon(
+              Icons.edit_rounded,
+              size: large ? 18 : 14,
+              color: context.appPalette.mutedText,
+            ),
+          ],
+        ],
+      ),
+    );
+    if (!enabled) {
+      return Semantics(
+        label: 'Episode $selectedEpisode of $totalEpisodes',
+        button: true,
+        enabled: false,
+        child: content,
+      );
+    }
+    return Semantics(
+      label:
+          'Episode $selectedEpisode of $totalEpisodes. Choose episode number',
+      button: true,
+      enabled: true,
+      onTap: onPressed,
+      excludeSemantics: true,
+      child: TvFocusable(
+        focusNode: focusNode,
+        focusScale: 1.025,
+        borderRadius: BorderRadius.circular(9),
+        onPressed: onPressed!,
+        child: content,
+      ),
     );
   }
 }

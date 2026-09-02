@@ -17,7 +17,7 @@
 
 <p align="center">
   <a href="https://github.com/LindersOSX/TetoTV-Beta/releases/latest"><strong>Download Beta</strong></a>
-  · <a href="docs/RELEASE_NOTES_2.0.63.md">What's new</a>
+  · <a href="docs/RELEASE_NOTES_2.0.64.md">What's new</a>
   · <a href="https://github.com/LindersOSX/TetoTV-Beta/issues/new">Report an issue</a>
   · <a href="https://discord.gg/juC6k7d4WY">Discord</a>
   · <a href="https://www.youtube.com/@TetoTVApp">YouTube</a>
@@ -84,7 +84,7 @@ TetoTV runs directly on the Android device with no companion server required for
 | AniList / MyAnimeList | Optional | Sync lists and progress, or use a local-only profile. |
 | MPV playback | Supported | Integrated audio/caption selection remembers explicit choices between episodes; Playback settings include Preferred CC Automatic, On, and Off. |
 | Offline downloads | Beta | Individual episodes, whole-season queues, and offline playback. |
-| Manga reader | Developer preview | Hidden unless Developer Mode is enabled. Reads only user-added OPDS 1/2 catalogs or declarative TetoTV manga repositories; no manga catalog is bundled or recommended. |
+| Manga reader | Developer preview | Hidden unless Developer Mode is enabled. Reads user-added OPDS catalogs and user-installed Seanime-format manga extensions; no manga catalog is bundled or recommended, and no repository or provider is bundled. |
 | Debrid services | Optional | Users may connect a supported account for media they are authorized to access. |
 | Direct peer-to-peer playback | Optional beta | Off by default and requires an explicit privacy warning and opt-in. |
 | Plex / Jellyfin | Optional | Requires the viewer's own configured media server. |
@@ -95,10 +95,10 @@ TetoTV runs directly on the Android device with no companion server required for
 | Channel | Version | Best for |
 | --- | --- | --- |
 | Public | Not published | Source and release-readiness documents are available, but no Public APK is currently offered |
-| Beta | [2.0.63](docs/RELEASE_NOTES_2.0.63.md) | Developer Manga Preview with secure user-added sources, offline reading, foldable spreads, and Discord activity |
+| Beta | [2.0.64](docs/RELEASE_NOTES_2.0.64.md) | Faster provider discovery, multilingual playback preferences, safer crash diagnostics, unaired-episode guidance, and expanded Manga Preview support |
 
 > [!WARNING]
-> Beta 2.0.63 uses the repository's explicit unreviewed-Beta exception. Its native-library and corresponding-source material did not receive independent license review, and automated integrity checks are not a legal compliance determination. Read the [complete Beta disclosure](docs/RELEASE_NOTES_2.0.63.md). This exception does not apply to a future Public release.
+> Beta 2.0.64 uses the repository's explicit unreviewed-Beta exception. Its native-library and corresponding-source material did not receive independent license review, and automated integrity checks are not a legal compliance determination. Read the [complete Beta disclosure](docs/RELEASE_NOTES_2.0.64.md). This exception does not apply to a future Public release.
 
 The Public updater repository intentionally has no release while the Public build is held for review. Existing Beta installations continue to update from the Beta repository. Android never permits an in-place install of an APK with a lower build code; Developer Mode does not bypass that platform rule.
 
@@ -134,9 +134,13 @@ Third-party services and extensions can change independently of TetoTV. TetoTV d
 
 Developer Mode exposes a book destination for TetoTV's experimental manga
 reader. This preview is isolated from anime provider extensions and accepts
-only sources that the viewer adds: OPDS 1.x, OPDS 2.0, or a declarative
-TetoTV repository document that points to OPDS catalogs. TetoTV does not ship,
-suggest, rank, or remotely install a manga catalog, repository URL, or title.
+only sources that the viewer adds. Viewers can connect OPDS 1.x/2.0 catalogs,
+use a declarative TetoTV document that points to OPDS catalogs, or install a
+Seanime-format `manga-provider` extension from a Marketplace repository they
+entered themselves. Manga extensions provide a source-search, chapter-list,
+and page-resolution flow similar to a dedicated source-based reader; they do
+not require a personal server. TetoTV does not ship, suggest, rank, or remotely
+install a manga catalog, repository URL, provider, or title.
 
 The preview includes paged, vertical, and webtoon reading; right-to-left and
 left-to-right navigation; single, double, and automatic spreads; page-fit,
@@ -150,9 +154,17 @@ are not persisted. Automatic spreads can use a separating vertical fold or
 hinge so an opened foldable displays two physical pages without losing the
 current reading position.
 
-Manga sources are data-only. TetoTV does not load Tachiyomi/Mihon APK
-extensions or execute code from a manga repository. Optional Basic, Bearer,
-or API-key credentials are entered by the viewer and kept in Android
+OPDS and declarative TetoTV repositories are data-only; they do not install
+extensions or execute code. A manga-provider
+extension is untrusted JavaScript or TypeScript that runs inside TetoTV's
+bounded QuickJS compatibility runtime with public-HTTPS-only networking,
+request/response limits, cancellation, and no direct Android, file, native,
+tracker-token, Discord-token, or Debrid-token access. TetoTV does not load
+Tachiyomi/Mihon APK extensions. An installed extension and the hosts it calls
+can observe the searches, titles, chapters, request paths, public IP address,
+and ordinary connection metadata needed for that request, so viewers should
+install only providers they trust and are authorized to use. Optional OPDS
+Basic, Bearer, or API-key credentials are entered by the viewer and kept in Android
 Keystore-backed secure storage rather than in the repository document,
 catalog/download database, or diagnostics. Credentials are forwarded only to
 the exact source origin; reader redirects to another origin continue without
@@ -163,8 +175,8 @@ a private or signed capability. A reader privacy control replaces the title
 with **Reading manga** while retaining chapter/page activity.
 
 Only connect catalogs and download material that you are authorized to use.
-The [manga repository format](docs/MANGA_REPOSITORIES.md) documents the
-supported schema and security boundary.
+The [manga source and repository format](docs/MANGA_REPOSITORIES.md) documents
+the supported source types and security boundary.
 
 ## Downloads
 

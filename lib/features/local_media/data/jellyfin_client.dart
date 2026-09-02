@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:anime_tv/core/preferences/caption_language.dart';
 import 'package:anime_tv/core/preferences/playback_audio_preference.dart';
 import 'package:anime_tv/features/local_media/domain/jellyfin_models.dart';
 import 'package:dio/dio.dart';
@@ -477,12 +478,14 @@ class JellyfinClient {
     JellyfinMediaItem item, {
     required String playSessionId,
     String preferredSubtitleLanguage = 'eng',
+    String preferredAudioLanguage = 'auto',
     PlaybackAudioPreference? requestedAudio,
   }) => _playbackPlan(
     connection,
     item,
     playSessionId: playSessionId,
     preferredSubtitleLanguage: preferredSubtitleLanguage,
+    preferredAudioLanguage: preferredAudioLanguage,
     requestedAudio: requestedAudio,
   );
 
@@ -493,12 +496,14 @@ class JellyfinClient {
     JellyfinMediaItem item, {
     required String playSessionId,
     String preferredSubtitleLanguage = 'eng',
+    String preferredAudioLanguage = 'auto',
     PlaybackAudioPreference? requestedAudio,
   }) => _playbackPlan(
     connection,
     item,
     playSessionId: playSessionId,
     preferredSubtitleLanguage: preferredSubtitleLanguage,
+    preferredAudioLanguage: preferredAudioLanguage,
     requestedAudio: requestedAudio,
     forceCompatibility: true,
   );
@@ -508,6 +513,7 @@ class JellyfinClient {
     JellyfinMediaItem item, {
     required String playSessionId,
     required String preferredSubtitleLanguage,
+    required String preferredAudioLanguage,
     required PlaybackAudioPreference? requestedAudio,
     bool forceCompatibility = false,
   }) {
@@ -563,6 +569,7 @@ class JellyfinClient {
     final audioStream = _preferredAudioStream(
       item.audioStreams,
       requestedAudio,
+      preferredAudioLanguage,
     );
     final uri = connection.baseUri
         .resolve(path)
@@ -599,9 +606,15 @@ class JellyfinClient {
   JellyfinAudioStream? _preferredAudioStream(
     List<JellyfinAudioStream> streams,
     PlaybackAudioPreference? requestedAudio,
+    String preferredAudioLanguage,
   ) {
     if (streams.isEmpty) return null;
-    final preferredLanguage = requestedAudio?.audioLanguage;
+    final configuredLanguage = canonicalCaptionLanguageCode(
+      preferredAudioLanguage,
+    );
+    final preferredLanguage = configuredLanguage.isNotEmpty
+        ? configuredLanguage
+        : requestedAudio?.audioLanguage;
     if (preferredLanguage != null) {
       final matching = streams
           .where(
@@ -922,20 +935,8 @@ String? _containerContentType(String? container) =>
     };
 
 String? _canonicalJellyfinLanguage(String? value) {
-  final normalized = value?.trim().toLowerCase().split(RegExp('[-_]')).first;
-  return switch (normalized) {
-    'en' || 'eng' => 'eng',
-    'ja' || 'jpn' || 'jp' => 'jpn',
-    'es' || 'spa' => 'spa',
-    'fr' || 'fra' || 'fre' => 'fra',
-    'de' || 'deu' || 'ger' => 'deu',
-    'it' || 'ita' => 'ita',
-    'pt' || 'por' => 'por',
-    'ko' || 'kor' => 'kor',
-    'zh' || 'zho' || 'chi' => 'zho',
-    final language? when language.isNotEmpty => language,
-    _ => null,
-  };
+  final canonical = canonicalCaptionLanguageCode(value);
+  return canonical.isEmpty ? null : canonical;
 }
 
 String? _canonicalSubtitleLanguage(String? value) =>

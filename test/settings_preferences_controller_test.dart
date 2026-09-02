@@ -282,7 +282,7 @@ void main() {
   });
 
   test(
-    'private caption preparation respects series intent and global On only',
+    'private caption preparation respects series intent and global defaults',
     () {
       expect(
         preferredCaptionLanguageForPreparation(
@@ -302,21 +302,25 @@ void main() {
         ),
         'spa',
       );
-      for (final mode in [
-        PreferredCaptionMode.automatic,
-        PreferredCaptionMode.disabled,
-      ]) {
-        expect(
-          preferredCaptionLanguageForPreparation(
-            seriesLanguage: 'eng',
-            seriesPreferenceSet: false,
-            globalMode: mode,
-            globalLanguage: 'spa',
-          ),
-          'eng',
-          reason: '${mode.name} must preserve the prior preparation default',
-        );
-      }
+      expect(
+        preferredCaptionLanguageForPreparation(
+          seriesLanguage: 'eng',
+          seriesPreferenceSet: false,
+          globalMode: PreferredCaptionMode.automatic,
+          globalLanguage: 'spa',
+        ),
+        'spa',
+        reason: 'Automatic preparation must request the preferred language',
+      );
+      expect(
+        preferredCaptionLanguageForPreparation(
+          seriesLanguage: 'eng',
+          seriesPreferenceSet: false,
+          globalMode: PreferredCaptionMode.disabled,
+          globalLanguage: 'spa',
+        ),
+        'eng',
+      );
     },
   );
 
@@ -334,6 +338,50 @@ void main() {
     final disabled = SettingsPreferencesController(storage);
     await disabled.load();
     expect(disabled.state.preferredCaptionMode, PreferredCaptionMode.disabled);
+  });
+
+  test(
+    'preferred subtitle language persists without changing CC mode',
+    () async {
+      FlutterSecureStorage.setMockInitialValues({});
+      const storage = FlutterSecureStorage();
+      final controller = SettingsPreferencesController(storage);
+
+      await controller.setPreferredCaptionMode(PreferredCaptionMode.automatic);
+      await controller.setPreferredCaptionLanguage('es-MX');
+
+      expect(
+        controller.state.preferredCaptionMode,
+        PreferredCaptionMode.automatic,
+      );
+      expect(controller.state.preferredCaptionLanguage, 'spa');
+      final restored = SettingsPreferencesController(storage);
+      await restored.load();
+      expect(
+        restored.state.preferredCaptionMode,
+        PreferredCaptionMode.automatic,
+      );
+      expect(restored.state.preferredCaptionLanguage, 'spa');
+    },
+  );
+
+  test('preferred audio language persists without changing Dub/Sub', () async {
+    FlutterSecureStorage.setMockInitialValues({});
+    const storage = FlutterSecureStorage();
+    final controller = SettingsPreferencesController(storage);
+
+    await controller.setPreferredAudio(PlaybackAudioPreference.sub);
+    await controller.setPreferredAudioLanguage('es-MX');
+
+    expect(controller.state.preferredAudio, PlaybackAudioPreference.sub);
+    expect(controller.state.preferredAudioLanguage, 'spa');
+    final restored = SettingsPreferencesController(storage);
+    await restored.load();
+    expect(restored.state.preferredAudio, PlaybackAudioPreference.sub);
+    expect(restored.state.preferredAudioLanguage, 'spa');
+
+    await restored.setPreferredAudioLanguage('follow-dub-sub');
+    expect(restored.state.preferredAudioLanguage, 'auto');
   });
 
   test(
@@ -1210,7 +1258,7 @@ void main() {
       gate.complete();
       await Future.wait([firstLoad, duplicateLoad]);
 
-      expect(reads, 60, reason: 'duplicate startup loads must be coalesced');
+      expect(reads, 61, reason: 'duplicate startup loads must be coalesced');
       expect(controller.state.webStreamsEnabled, isTrue);
       expect(controller.state.navigationSounds, isFalse);
     },

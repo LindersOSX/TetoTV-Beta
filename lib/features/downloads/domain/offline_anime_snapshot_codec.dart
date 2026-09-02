@@ -74,8 +74,10 @@ Map<String, Object?> _encodeAnime(
   'status': anime.status,
   'season': anime.season,
   'seasonYear': anime.seasonYear,
+  'startDate': anime.startDate?.toIso8601String(),
   'durationMinutes': anime.durationMinutes,
   'nextAiringEpisode': anime.nextAiringEpisode,
+  'nextAiringAt': anime.nextAiringAt?.toUtc().toIso8601String(),
   'isAdult': anime.isAdult,
   'metadataSource': anime.metadataSource.name,
   'studios': [
@@ -157,8 +159,10 @@ AnimeSummary _decodeAnime(
     status: _nonEmptyString(value['status']),
     season: _nonEmptyString(value['season']),
     seasonYear: _positiveInt(value['seasonYear']),
+    startDate: _dateTime(value['startDate']),
     durationMinutes: _positiveInt(value['durationMinutes']),
     nextAiringEpisode: _positiveInt(value['nextAiringEpisode']),
+    nextAiringAt: _dateTime(value['nextAiringAt']),
     isAdult: value['isAdult'] == true,
     metadataSource: metadataSource,
     studios: _decodeStudios(value['studios']),
@@ -304,6 +308,11 @@ double? _finiteDouble(Object? value) {
     _ => null,
   };
   return parsed?.isFinite == true ? parsed : null;
+}
+
+DateTime? _dateTime(Object? value) {
+  final text = _nonEmptyString(value);
+  return text == null ? null : DateTime.tryParse(text);
 }
 
 List<String> _stringList(Object? value) {

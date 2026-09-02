@@ -29,6 +29,7 @@ void main() {
     required String quality,
     bool dubbed = true,
     WebStreamAudioCapability? audioCapability,
+    List<String> audioLanguages = const [],
   }) => WebStreamResult(
     providerId: 'provider-$id',
     providerName: 'Provider $id',
@@ -37,6 +38,7 @@ void main() {
     quality: quality,
     isDubbed: dubbed,
     audioCapability: audioCapability,
+    audioLanguages: audioLanguages,
   );
 
   test(
@@ -167,6 +169,35 @@ void main() {
       ).first,
       same(dub720),
     );
+  });
+
+  test('structured Web audio language outranks Dub/Sub fallback', () {
+    final spanish = web(
+      id: 'spanish',
+      quality: '720p',
+      audioCapability: WebStreamAudioCapability.unknown,
+      audioLanguages: const ['es-MX'],
+    );
+    final english = web(
+      id: 'english',
+      quality: '2160p',
+      audioCapability: WebStreamAudioCapability.dub,
+      audioLanguages: const ['eng'],
+    );
+    final unknown = web(
+      id: 'unknown-language',
+      quality: '1080p',
+      audioCapability: WebStreamAudioCapability.dub,
+    );
+
+    final ranked = rankWebStreamCandidates(
+      [english, unknown, spanish],
+      quality: WebStreamQualityPreference.bestAvailable,
+      preferredAudio: PlaybackAudioPreference.dub,
+      preferredAudioLanguage: 'spa',
+    );
+
+    expect(ranked, [spanish, unknown, english]);
   });
 
   test('dual Web audio matches Sub and Dub while unknown stays All-only', () {

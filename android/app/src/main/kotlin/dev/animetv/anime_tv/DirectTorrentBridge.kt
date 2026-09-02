@@ -112,7 +112,9 @@ object DirectTorrentBridge {
             )
             return
         }
+        AnonymousCrashStore.recordBreadcrumb(context, "direct_torrent_bridge_start_requested")
         runCatching { DirectTorrentPlaybackService.start(context) }.onFailure {
+            AnonymousCrashStore.recordBreadcrumb(context, "direct_torrent_bridge_start_failed")
             synchronized(lock) {
                 if (active === manager) active = null
                 if (activeRequestId == requestId) activeRequestId = null
@@ -272,7 +274,13 @@ object DirectTorrentBridge {
 
     private fun stopServiceIfIdle(context: Context) {
         synchronized(lock) {
-            if (active == null) DirectTorrentPlaybackService.stop(context)
+            if (active == null) {
+                AnonymousCrashStore.recordBreadcrumb(
+                    context,
+                    "direct_torrent_bridge_stop_requested",
+                )
+                DirectTorrentPlaybackService.stop(context)
+            }
         }
     }
 }

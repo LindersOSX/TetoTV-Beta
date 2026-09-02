@@ -27,8 +27,10 @@ class AnimeSummary {
     this.status,
     this.season,
     this.seasonYear,
+    this.startDate,
     this.durationMinutes,
     this.nextAiringEpisode,
+    this.nextAiringAt,
     this.isAdult = false,
     this.relatedAnime = const [],
     this.studios = const [],
@@ -55,8 +57,10 @@ class AnimeSummary {
   final String? status;
   final String? season;
   final int? seasonYear;
+  final DateTime? startDate;
   final int? durationMinutes;
   final int? nextAiringEpisode;
+  final DateTime? nextAiringAt;
   final bool isAdult;
   final List<RelatedAnime> relatedAnime;
   final List<AnimeStudio> studios;

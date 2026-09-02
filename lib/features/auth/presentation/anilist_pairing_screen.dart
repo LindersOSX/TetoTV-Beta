@@ -1,4 +1,5 @@
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/widgets/copyable_code_interaction.dart';
 import 'package:anime_tv/core/widgets/copyable_qr_interaction.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/widgets/tv_text_input.dart';
@@ -306,13 +307,21 @@ class _PairingPanel extends StatelessWidget {
                 style: Theme.of(context).textTheme.bodyLarge,
               ),
               const SizedBox(height: 18),
-              Text(
-                session.userCode,
-                style: TextStyle(
-                  color: context.appPalette.primaryText,
-                  fontSize: compact ? 28 : 30,
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: compact ? 3 : 4,
+              CopyableCodeInteraction(
+                code: session.userCode,
+                semanticsLabel:
+                    '${provider.displayName} one-time pairing code '
+                    '${session.userCode}',
+                confirmationMessage:
+                    '${provider.displayName} pairing code copied.',
+                child: Text(
+                  session.userCode,
+                  style: TextStyle(
+                    color: context.appPalette.primaryText,
+                    fontSize: compact ? 28 : 30,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: compact ? 3 : 4,
+                  ),
                 ),
               ),
               const SizedBox(height: 14),

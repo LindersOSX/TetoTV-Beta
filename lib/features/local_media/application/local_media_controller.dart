@@ -539,6 +539,7 @@ class LocalMediaController extends StateNotifier<LocalMediaState> {
     JellyfinMediaItem item, {
     required String playSessionId,
     String preferredSubtitleLanguage = 'eng',
+    String preferredAudioLanguage = 'auto',
     PlaybackAudioPreference? requestedAudio,
   }) {
     final connection = state.connection;
@@ -550,6 +551,7 @@ class LocalMediaController extends StateNotifier<LocalMediaState> {
       item,
       playSessionId: playSessionId,
       preferredSubtitleLanguage: preferredSubtitleLanguage,
+      preferredAudioLanguage: preferredAudioLanguage,
       requestedAudio: requestedAudio,
     );
   }
@@ -558,6 +560,7 @@ class LocalMediaController extends StateNotifier<LocalMediaState> {
     JellyfinMediaItem item, {
     required String playSessionId,
     String preferredSubtitleLanguage = 'eng',
+    String preferredAudioLanguage = 'auto',
     PlaybackAudioPreference? requestedAudio,
   }) {
     final connection = state.connection;
@@ -569,6 +572,7 @@ class LocalMediaController extends StateNotifier<LocalMediaState> {
       item,
       playSessionId: playSessionId,
       preferredSubtitleLanguage: preferredSubtitleLanguage,
+      preferredAudioLanguage: preferredAudioLanguage,
       requestedAudio: requestedAudio,
     );
   }

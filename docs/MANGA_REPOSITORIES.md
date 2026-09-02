@@ -1,9 +1,10 @@
 # Manga repositories
 
 TetoTV's Manga Preview is hidden unless Developer Mode is enabled. It can read
-user-added OPDS 1.x Atom feeds, OPDS 2.0 JSON feeds, or the data-only TetoTV
-manga repository format described below. It does not execute repository code,
-load Android APK extensions, or provide a default catalog.
+user-added OPDS 1.x Atom feeds, OPDS 2.0 JSON feeds, the data-only TetoTV manga
+repository format described below, or user-installed Seanime-format
+`manga-provider` extensions. It does not load Android APK extensions or
+provide a default catalog, Marketplace repository, or provider.
 
 This document describes technical compatibility. It is not a review of a
 catalog's safety, content, availability, terms, or legality. A viewer should
@@ -30,6 +31,37 @@ add only services and material they are authorized to use.
   source credential before following them. TetoTV does not put credentials in
   URLs, catalog caches, diagnostics, or Discord activity.
 - No source is bundled, suggested, endorsed, or remotely enabled by TetoTV.
+
+## Seanime-format manga-provider extensions
+
+A viewer can add a compatible Marketplace repository and explicitly install
+an entry whose type is `manga-provider` and whose payload is JavaScript or
+TypeScript. The extension can implement Seanime's public manga operations:
+title search, chapter discovery, and chapter-page discovery. Results are
+adapted into TetoTV's existing reader, local library, progress, and compatible
+chapter-download pipeline. Anime stream providers and manga providers use
+separate runtime entry points and discovery lists.
+
+This is executable third-party code, not a data-only catalog. It runs in a
+bounded QuickJS isolate and can make only bounded requests to validated public
+HTTPS destinations. It is not given Android APIs, native channels, arbitrary
+device files, or TetoTV's AniList, MyAnimeList, Discord, Debrid, or personal
+server credentials. Returned identifiers and per-page request headers remain
+runtime capabilities; opaque upstream title identifiers are kept in protected
+storage when a title is saved, while page URLs and headers are not written to
+the manga database or diagnostics.
+
+The extension and every host it contacts can still observe the search, title,
+chapter, URL path, public IP address, request time, user agent, and other
+ordinary connection metadata needed to answer the request. A provider may
+also return short-lived cookies or headers for artwork/pages. Install only
+repositories and providers you trust, review updates before installing them,
+and use only services and material you are authorized to access. Technical
+compatibility is not a safety, content, availability, terms, or legality
+review.
+
+TetoTV does not directly support Tachiyomi/Mihon APK extensions. Those are
+Android packages with a different executable contract and security model.
 
 ## Request and redirect limits
 

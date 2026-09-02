@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/widgets/copyable_code_interaction.dart';
 import 'package:anime_tv/core/widgets/copyable_qr_interaction.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/features/auth/data/all_debrid_pin_auth_client.dart';
@@ -238,12 +239,17 @@ class _AllDebridPairingScreenState
               const SizedBox(height: 10),
               const Text('Or open alldebrid.com/pin and enter:'),
               const SizedBox(height: 14),
-              Text(
-                session.pin,
-                style: const TextStyle(
-                  fontSize: 34,
-                  fontWeight: FontWeight.w900,
-                  letterSpacing: 5,
+              CopyableCodeInteraction(
+                code: session.pin,
+                semanticsLabel: 'AllDebrid one-time PIN ${session.pin}',
+                confirmationMessage: 'AllDebrid PIN copied.',
+                child: Text(
+                  session.pin,
+                  style: const TextStyle(
+                    fontSize: 34,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 5,
+                  ),
                 ),
               ),
               const SizedBox(height: 12),

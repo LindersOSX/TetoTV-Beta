@@ -10,6 +10,23 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 enum MyListSort { title, score, lastUpdated, startDate }
 
+/// Expected validation returned when a list mutation has no compatible target.
+///
+/// This remains a [StateError] so existing UI surfaces keep presenting its
+/// message, while the controller and diagnostics pipeline can distinguish it
+/// from an unexpected application failure.
+final class CatalogTrackingValidationError extends StateError {
+  CatalogTrackingValidationError.connectionRequired()
+    : super(
+        'Connect AniList or MAL in Settings before changing a show status.',
+      );
+
+  CatalogTrackingValidationError.missingMediaId()
+    : super(
+        'This title is missing the media ID required by the connected tracker.',
+      );
+}
+
 typedef TrackingRepositoryFactory =
     TrackingRepository Function(TrackingProvider provider, String accessToken);
 
@@ -352,16 +369,12 @@ class TrackingStatusController extends StateNotifier<AsyncValue<void>> {
 
       if (updated.isEmpty) {
         if (connectedProviders == 0 && failures.isEmpty) {
-          throw StateError(
-            'Connect AniList or MAL in Settings before changing a show status.',
-          );
+          throw CatalogTrackingValidationError.connectionRequired();
         }
         if (connectedProviders > 0 &&
             missingMediaId.length == connectedProviders &&
             failures.isEmpty) {
-          throw StateError(
-            'This title is missing the media ID required by the connected tracker.',
-          );
+          throw CatalogTrackingValidationError.missingMediaId();
         }
         final names = failures.keys
             .map((provider) => provider.displayName)
@@ -384,7 +397,11 @@ class TrackingStatusController extends StateNotifier<AsyncValue<void>> {
         failures: Map.unmodifiable(failures),
       );
     } catch (error, stackTrace) {
-      if (mounted) state = AsyncError(error, stackTrace);
+      if (mounted) {
+        state = error is CatalogTrackingValidationError
+            ? const AsyncData(null)
+            : AsyncError(error, stackTrace);
+      }
       rethrow;
     }
   }

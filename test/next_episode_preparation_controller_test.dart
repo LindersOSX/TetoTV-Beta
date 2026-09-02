@@ -155,11 +155,13 @@ void main() {
               required episode,
               required preferredOrigin,
               required preferredSubtitleLanguage,
+              required preferredAudioLanguage,
               required requestedAudio,
             }) async {
               observedEpisode = episode;
               observedOrigin = preferredOrigin;
               expect(preferredSubtitleLanguage, 'eng');
+              expect(preferredAudioLanguage, 'jpn');
               expect(requestedAudio, PlaybackAudioPreference.sub);
               return LibraryPlaybackRequest(
                 source: Uri.parse('https://private-nas.home/video/episode-2'),
@@ -239,6 +241,7 @@ void main() {
             required episode,
             required preferredOrigin,
             required preferredSubtitleLanguage,
+            required preferredAudioLanguage,
             required requestedAudio,
           }) => preparation.future,
     );

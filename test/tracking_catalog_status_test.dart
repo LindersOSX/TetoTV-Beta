@@ -1,3 +1,4 @@
+import 'package:anime_tv/core/diagnostics/anonymous_crash_reporter.dart';
 import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
 import 'package:anime_tv/features/tracking/application/my_list_controller.dart';
 import 'package:anime_tv/features/tracking/domain/tracking_repository.dart';
@@ -43,7 +44,13 @@ void main() {
 
   test('catalog status explains when no tracker is connected', () async {
     FlutterSecureStorage.setMockInitialValues({});
-    final container = ProviderContainer();
+    final reportedErrors = <Object>[];
+    final observer = AnonymousHandledErrorObserver(
+      report: ({required area, required error, stack}) async {
+        reportedErrors.add(error);
+      },
+    );
+    final container = ProviderContainer(observers: [observer]);
     addTearDown(container.dispose);
 
     await expectLater(
@@ -55,13 +62,52 @@ void main() {
             status: TrackingListStatus.planToWatch,
           ),
       throwsA(
-        isA<StateError>().having(
+        isA<CatalogTrackingValidationError>().having(
           (error) => error.message,
           'message',
           contains('Connect AniList or MAL'),
         ),
       ),
     );
+    await Future<void>.delayed(Duration.zero);
+
+    expect(reportedErrors, isEmpty);
+    expect(container.read(trackingStatusControllerProvider).hasError, isFalse);
+  });
+
+  test('missing provider media ID stays a handled validation state', () async {
+    FlutterSecureStorage.setMockInitialValues({
+      TrackingProvider.myAnimeList.tokenStorageKey: 'mal-token',
+    });
+    final reportedErrors = <Object>[];
+    final observer = AnonymousHandledErrorObserver(
+      report: ({required area, required error, stack}) async {
+        reportedErrors.add(error);
+      },
+    );
+    final container = ProviderContainer(observers: [observer]);
+    addTearDown(container.dispose);
+
+    await expectLater(
+      container
+          .read(trackingStatusControllerProvider.notifier)
+          .updateCatalogStatus(
+            anilistId: 101,
+            malId: null,
+            status: TrackingListStatus.planToWatch,
+          ),
+      throwsA(
+        isA<CatalogTrackingValidationError>().having(
+          (error) => error.message,
+          'message',
+          contains('missing the media ID'),
+        ),
+      ),
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    expect(reportedErrors, isEmpty);
+    expect(container.read(trackingStatusControllerProvider).hasError, isFalse);
   });
 
   test(

@@ -150,28 +150,38 @@ class _MarketplaceScreenState extends ConsumerState<MarketplaceScreen> {
       ].map(_focusTarget).nonNulls.toList();
       if (row.isNotEmpty) rows.add(row);
     }
+    final installedStreamProviders = marketplace.installed
+        .where((addon) => addon.manifest.isOnlineStreamProvider)
+        .toList(growable: false);
+    final installedMangaProviders = marketplace.installed
+        .where((addon) => addon.manifest.isMangaProvider)
+        .toList(growable: false);
     final testAll = _focusTarget(_testAllProvidersFocus);
-    if (testAll != null && marketplace.installed.isNotEmpty) {
+    if (testAll != null && installedStreamProviders.isNotEmpty) {
       rows.add([testAll]);
     }
 
     rows.addAll(
       _groupByVisualRow(
-        marketplace.installed.expand((addon) {
+        [...installedStreamProviders, ...installedMangaProviders].expand((
+          addon,
+        ) {
           final id = addon.manifest.id;
           return [
-            _dynamicFocus(
-              'installed:$id:test',
-              'Marketplace installed addon Test',
-            ),
+            if (addon.manifest.isOnlineStreamProvider)
+              _dynamicFocus(
+                'installed:$id:test',
+                'Marketplace installed addon Test',
+              ),
             _dynamicFocus(
               'installed:$id:toggle',
               'Marketplace installed addon Toggle',
             ),
-            _dynamicFocus(
-              'installed:$id:reset',
-              'Marketplace installed addon Reset',
-            ),
+            if (addon.manifest.isOnlineStreamProvider)
+              _dynamicFocus(
+                'installed:$id:reset',
+                'Marketplace installed addon Reset',
+              ),
             _dynamicFocus(
               'installed:$id:uninstall',
               'Marketplace installed addon Uninstall',
@@ -186,9 +196,15 @@ class _MarketplaceScreenState extends ConsumerState<MarketplaceScreen> {
     ].map(_focusTarget).nonNulls.toList();
     if (catalogControls.isNotEmpty) rows.add(catalogControls);
     final visibleCatalog = _visibleCatalog(marketplace.catalog);
+    final visibleStreamCatalog = visibleCatalog
+        .where((addon) => addon.isOnlineStreamProvider)
+        .toList(growable: false);
+    final visibleMangaCatalog = visibleCatalog
+        .where((addon) => addon.isMangaProvider)
+        .toList(growable: false);
     rows.addAll(
       _groupByVisualRow(
-        visibleCatalog.map(
+        [...visibleStreamCatalog, ...visibleMangaCatalog].map(
           (addon) => _dynamicFocus(
             'catalog:${addon.id}:action',
             'Marketplace catalog addon action',
@@ -320,6 +336,30 @@ class _MarketplaceScreenState extends ConsumerState<MarketplaceScreen> {
       languageCode: effectiveCatalogLanguage,
       sort: _catalogSort,
     );
+    final installedStreamProviders = state.installed
+        .where((addon) => addon.manifest.isOnlineStreamProvider)
+        .toList(growable: false);
+    final installedMangaProviders = state.installed
+        .where((addon) => addon.manifest.isMangaProvider)
+        .toList(growable: false);
+    final visibleStreamCatalog = visibleCatalog
+        .where((addon) => addon.isOnlineStreamProvider)
+        .toList(growable: false);
+    final visibleMangaCatalog = visibleCatalog
+        .where((addon) => addon.isMangaProvider)
+        .toList(growable: false);
+    final compatibleCatalog = state.catalog.where(
+      (addon) => addon.isCompatible,
+    );
+    final visibleCompatibleCatalog = visibleCatalog.where(
+      (addon) => addon.isCompatible,
+    );
+    final compatibleStreamCount = visibleCompatibleCatalog
+        .where((addon) => addon.isOnlineStreamProvider)
+        .length;
+    final compatibleMangaCount = visibleCompatibleCatalog
+        .where((addon) => addon.isMangaProvider)
+        .length;
     return Focus(
       canRequestFocus: false,
       onKeyEvent: _handleNavigationKey,
@@ -463,7 +503,7 @@ class _MarketplaceScreenState extends ConsumerState<MarketplaceScreen> {
                             icon: Icons.hub_outlined,
                             title: 'Marketplace repositories',
                             subtitle:
-                                'TetoTV imports Seanime online-stream providers. Manga and UI plugins are ignored because they cannot supply playback streams. Catalogs are cached locally.',
+                                'TetoTV imports compatible Seanime anime-stream and manga providers. Anime providers appear in Web Streams; manga providers appear in Manga. Other plugin types are ignored. Catalogs are cached locally.',
                           ),
                           SliverList.builder(
                             itemCount: state.repositories.length,
@@ -496,13 +536,13 @@ class _MarketplaceScreenState extends ConsumerState<MarketplaceScreen> {
                               );
                             },
                           ),
-                          if (state.installed.isNotEmpty) ...[
+                          if (installedStreamProviders.isNotEmpty) ...[
                             _section(
                               context,
-                              icon: Icons.extension_rounded,
-                              title: 'Installed providers',
+                              icon: Icons.live_tv_rounded,
+                              title: 'Installed anime stream providers',
                               subtitle:
-                                  'Enabled providers participate in Web Stream searches. Compatibility is checked automatically every 24 hours.',
+                                  'Enabled providers participate in Web Stream searches. Stream compatibility is checked automatically every 24 hours.',
                               trailing: _MarketplaceButton(
                                 icon: state.testingAllProviders
                                     ? Icons.hourglass_top_rounded
@@ -521,7 +561,7 @@ class _MarketplaceScreenState extends ConsumerState<MarketplaceScreen> {
                               gridDelegate:
                                   const SliverGridDelegateWithMaxCrossAxisExtent(
                                     maxCrossAxisExtent: 540,
-                                    mainAxisExtent: 300,
+                                    mainAxisExtent: 324,
                                     crossAxisSpacing: 12,
                                     mainAxisSpacing: 12,
                                   ),
@@ -529,7 +569,7 @@ class _MarketplaceScreenState extends ConsumerState<MarketplaceScreen> {
                                 context,
                                 index,
                               ) {
-                                final addon = state.installed[index];
+                                final addon = installedStreamProviders[index];
                                 return _InstalledAddonCard(
                                   addon: addon,
                                   health:
@@ -567,7 +607,57 @@ class _MarketplaceScreenState extends ConsumerState<MarketplaceScreen> {
                                     addon.manifest.id,
                                   ),
                                 );
-                              }, childCount: state.installed.length),
+                              }, childCount: installedStreamProviders.length),
+                            ),
+                            const SliverToBoxAdapter(
+                              child: SizedBox(height: 28),
+                            ),
+                          ],
+                          if (installedMangaProviders.isNotEmpty) ...[
+                            _section(
+                              context,
+                              icon: Icons.menu_book_rounded,
+                              title: 'Installed manga providers',
+                              subtitle:
+                                  'Enabled manga sources appear in Manga. Stream compatibility tests do not apply to manga providers.',
+                            ),
+                            SliverGrid(
+                              gridDelegate:
+                                  const SliverGridDelegateWithMaxCrossAxisExtent(
+                                    maxCrossAxisExtent: 540,
+                                    mainAxisExtent: 324,
+                                    crossAxisSpacing: 12,
+                                    mainAxisSpacing: 12,
+                                  ),
+                              delegate: SliverChildBuilderDelegate((
+                                context,
+                                index,
+                              ) {
+                                final addon = installedMangaProviders[index];
+                                return _InstalledAddonCard(
+                                  addon: addon,
+                                  health: null,
+                                  message: null,
+                                  busy: state.busyAddonId == addon.manifest.id,
+                                  toggleFocusNode: _dynamicFocus(
+                                    'installed:${addon.manifest.id}:toggle',
+                                    'Marketplace installed addon Toggle',
+                                  ),
+                                  uninstallFocusNode: _dynamicFocus(
+                                    'installed:${addon.manifest.id}:uninstall',
+                                    'Marketplace installed addon Uninstall',
+                                  ),
+                                  onToggle: () => controller.setAddonEnabled(
+                                    addon.manifest.id,
+                                    !addon.enabled,
+                                  ),
+                                  onUninstall: () => _confirmUninstall(
+                                    context,
+                                    addon,
+                                    controller,
+                                  ),
+                                );
+                              }, childCount: installedMangaProviders.length),
                             ),
                             const SliverToBoxAdapter(
                               child: SizedBox(height: 28),
@@ -576,11 +666,11 @@ class _MarketplaceScreenState extends ConsumerState<MarketplaceScreen> {
                           _section(
                             context,
                             icon: Icons.storefront_outlined,
-                            title: 'Available web providers',
+                            title: 'Available providers',
                             subtitle:
-                                '${visibleCatalog.where((item) => item.isCompatible).length} of '
-                                '${state.catalog.where((item) => item.isCompatible).length} compatible JavaScript and TypeScript providers. '
-                                'TypeScript is compiled once during installation.',
+                                '${visibleCompatibleCatalog.length} of ${compatibleCatalog.length} compatible providers shown: '
+                                '$compatibleStreamCount anime stream and $compatibleMangaCount manga. '
+                                'JavaScript and TypeScript run in TetoTV\'s restricted provider runtime.',
                           ),
                           SliverToBoxAdapter(
                             child: Padding(
@@ -656,41 +746,39 @@ class _MarketplaceScreenState extends ConsumerState<MarketplaceScreen> {
                                     'No providers declare ${marketplaceCatalogLanguageLabel(effectiveCatalogLanguage ?? 'unknown')} support.',
                               ),
                             )
-                          else
-                            SliverGrid(
-                              gridDelegate:
-                                  const SliverGridDelegateWithMaxCrossAxisExtent(
-                                    maxCrossAxisExtent: 540,
-                                    mainAxisExtent: 250,
-                                    crossAxisSpacing: 12,
-                                    mainAxisSpacing: 12,
-                                  ),
-                              delegate: SliverChildBuilderDelegate((
+                          else ...[
+                            if (visibleStreamCatalog.isNotEmpty) ...[
+                              _providerKindSection(
                                 context,
-                                index,
-                              ) {
-                                final addon = visibleCatalog[index];
-                                final installed = state.installedById(addon.id);
-                                final busy = state.busyAddonId == addon.id;
-                                return _CatalogAddonCard(
-                                  addon: addon,
-                                  installed: installed,
-                                  updateAvailable: state.updateAvailable(addon),
-                                  busy: busy,
-                                  actionFocusNode: _dynamicFocus(
-                                    'catalog:${addon.id}:action',
-                                    'Marketplace catalog addon action',
-                                  ),
-                                  onInstall: addon.isCompatible && !busy
-                                      ? () => _confirmInstall(
-                                          context,
-                                          addon,
-                                          controller,
-                                        )
-                                      : null,
-                                );
-                              }, childCount: visibleCatalog.length),
-                            ),
+                                icon: Icons.live_tv_rounded,
+                                title: 'Anime stream providers',
+                                subtitle:
+                                    'Install these for anime playback results in Web Streams.',
+                              ),
+                              _catalogGrid(
+                                addons: visibleStreamCatalog,
+                                state: state,
+                                controller: controller,
+                              ),
+                              const SliverToBoxAdapter(
+                                child: SizedBox(height: 20),
+                              ),
+                            ],
+                            if (visibleMangaCatalog.isNotEmpty) ...[
+                              _providerKindSection(
+                                context,
+                                icon: Icons.menu_book_rounded,
+                                title: 'Manga providers',
+                                subtitle:
+                                    'Install these sources to browse, read, and download titles from Manga.',
+                              ),
+                              _catalogGrid(
+                                addons: visibleMangaCatalog,
+                                state: state,
+                                controller: controller,
+                              ),
+                            ],
+                          ],
                           const SliverToBoxAdapter(child: SizedBox(height: 28)),
                         ],
                       ),
@@ -701,6 +789,37 @@ class _MarketplaceScreenState extends ConsumerState<MarketplaceScreen> {
       ),
     );
   }
+
+  SliverGrid _catalogGrid({
+    required List<MarketplaceAddon> addons,
+    required MarketplaceState state,
+    required MarketplaceController controller,
+  }) => SliverGrid(
+    gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+      maxCrossAxisExtent: 540,
+      mainAxisExtent: 270,
+      crossAxisSpacing: 12,
+      mainAxisSpacing: 12,
+    ),
+    delegate: SliverChildBuilderDelegate((context, index) {
+      final addon = addons[index];
+      final installed = state.installedById(addon.id);
+      final busy = state.busyAddonId == addon.id;
+      return _CatalogAddonCard(
+        addon: addon,
+        installed: installed,
+        updateAvailable: state.updateAvailable(addon),
+        busy: busy,
+        actionFocusNode: _dynamicFocus(
+          'catalog:${addon.id}:action',
+          'Marketplace catalog addon action',
+        ),
+        onInstall: addon.isCompatible && !busy
+            ? () => _confirmInstall(context, addon, controller)
+            : null,
+      );
+    }, childCount: addons.length),
+  );
 }
 
 SliverToBoxAdapter _section(
@@ -727,6 +846,33 @@ SliverToBoxAdapter _section(
           ),
         ),
         if (trailing != null) ...[const SizedBox(width: 12), trailing],
+      ],
+    ),
+  ),
+);
+
+SliverToBoxAdapter _providerKindSection(
+  BuildContext context, {
+  required IconData icon,
+  required String title,
+  required String subtitle,
+}) => SliverToBoxAdapter(
+  child: Padding(
+    padding: const EdgeInsets.only(top: 4, bottom: 10),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 20, color: context.appPalette.secondaryAccent),
+        const SizedBox(width: 9),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(title, style: Theme.of(context).textTheme.titleMedium),
+              Text(subtitle, style: Theme.of(context).textTheme.bodySmall),
+            ],
+          ),
+        ),
       ],
     ),
   ),
@@ -879,33 +1025,37 @@ class _InstalledAddonCard extends StatelessWidget {
     required this.health,
     required this.message,
     required this.busy,
-    required this.testFocusNode,
+    this.testFocusNode,
     required this.toggleFocusNode,
-    required this.resetFocusNode,
+    this.resetFocusNode,
     required this.uninstallFocusNode,
     required this.onToggle,
     required this.onUninstall,
-    required this.onTest,
-    required this.onReset,
+    this.onTest,
+    this.onReset,
   });
 
   final InstalledStreamingAddon addon;
   final ProviderHealth? health;
   final String? message;
   final bool busy;
-  final FocusNode testFocusNode;
+  final FocusNode? testFocusNode;
   final FocusNode toggleFocusNode;
-  final FocusNode resetFocusNode;
+  final FocusNode? resetFocusNode;
   final FocusNode uninstallFocusNode;
   final VoidCallback onToggle;
   final VoidCallback onUninstall;
-  final VoidCallback onTest;
-  final VoidCallback onReset;
+  final VoidCallback? onTest;
+  final VoidCallback? onReset;
 
   @override
-  Widget build(BuildContext context) => _AddonShell(
-    addon: addon.manifest,
-    badge: !addon.enabled
+  Widget build(BuildContext context) {
+    final isStreamProvider = addon.manifest.isOnlineStreamProvider;
+    final badge = addon.manifest.isMangaProvider
+        ? addon.enabled
+              ? 'ENABLED'
+              : 'DISABLED'
+        : !addon.enabled
         ? 'DISABLED'
         : health?.lastFailureReason == 'runtime_api' ||
               health?.lastTestReason == 'runtime_api'
@@ -921,89 +1071,98 @@ class _InstalledAddonCard extends StatelessWidget {
         ? 'HEALTH ${health!.compatibilityScore}/100'
         : health?.lastSuccessAt != null
         ? 'HEALTHY • NOT TESTED'
-        : 'NOT TESTED',
-    footer: Column(
-      crossAxisAlignment: CrossAxisAlignment.end,
-      children: [
-        if (health?.lastTestedAt != null)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 7),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Text(
-                  'Last tested ${_shortTestDate(health!.lastTestedAt!)}',
-                  style: TextStyle(
-                    color: context.appPalette.mutedText,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700,
+        : 'NOT TESTED';
+    return _AddonShell(
+      addon: addon.manifest,
+      kindBadge: addon.manifest.isMangaProvider
+          ? 'MANGA SOURCE • APPEARS IN MANGA'
+          : 'ANIME STREAM • WEB STREAMS',
+      badge: badge,
+      footer: Column(
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          if (isStreamProvider && health?.lastTestedAt != null)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 7),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(
+                    'Last tested ${_shortTestDate(health!.lastTestedAt!)}',
+                    style: TextStyle(
+                      color: context.appPalette.mutedText,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
-                ),
-                Text(
-                  _providerStageSummary(health!),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: context.appPalette.mutedText,
-                    fontSize: 10,
+                  Text(
+                    _providerStageSummary(health!),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: context.appPalette.mutedText,
+                      fontSize: 10,
+                    ),
                   ),
-                ),
-              ],
-            ),
-          ),
-        if (message != null || health?.lastError != null)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 7),
-            child: Text(
-              message ??
-                  '${health!.consecutiveFailures} failure(s): ${health!.lastError}',
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              textAlign: TextAlign.right,
-              style: TextStyle(
-                color: context.appPalette.mutedText,
-                fontSize: 11,
+                ],
               ),
             ),
-          ),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: [
-            _MarketplaceButton(
-              icon: busy
-                  ? Icons.hourglass_top_rounded
-                  : Icons.health_and_safety,
-              label: busy ? 'Testing…' : 'Test',
-              focusNode: testFocusNode,
-              onPressed: busy || !addon.enabled ? null : onTest,
+          if (isStreamProvider &&
+              (message != null || health?.lastError != null))
+            Padding(
+              padding: const EdgeInsets.only(bottom: 7),
+              child: Text(
+                message ??
+                    '${health!.consecutiveFailures} failure(s): ${health!.lastError}',
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.right,
+                style: TextStyle(
+                  color: context.appPalette.mutedText,
+                  fontSize: 11,
+                ),
+              ),
             ),
-            _MarketplaceButton(
-              icon: addon.enabled
-                  ? Icons.pause_rounded
-                  : Icons.play_arrow_rounded,
-              label: addon.enabled ? 'Disable' : 'Enable',
-              focusNode: toggleFocusNode,
-              onPressed: onToggle,
-            ),
-            if (health != null)
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              if (isStreamProvider && onTest != null)
+                _MarketplaceButton(
+                  icon: busy
+                      ? Icons.hourglass_top_rounded
+                      : Icons.health_and_safety,
+                  label: busy ? 'Testing…' : 'Test',
+                  focusNode: testFocusNode,
+                  onPressed: busy || !addon.enabled ? null : onTest,
+                ),
               _MarketplaceButton(
-                icon: Icons.restart_alt_rounded,
-                label: 'Reset',
-                focusNode: resetFocusNode,
-                onPressed: onReset,
+                icon: addon.enabled
+                    ? Icons.pause_rounded
+                    : Icons.play_arrow_rounded,
+                label: addon.enabled ? 'Disable' : 'Enable',
+                focusNode: toggleFocusNode,
+                onPressed: onToggle,
               ),
-            _MarketplaceButton(
-              icon: Icons.delete_outline_rounded,
-              label: 'Uninstall',
-              focusNode: uninstallFocusNode,
-              onPressed: onUninstall,
-            ),
-          ],
-        ),
-      ],
-    ),
-  );
+              if (isStreamProvider && health != null && onReset != null)
+                _MarketplaceButton(
+                  icon: Icons.restart_alt_rounded,
+                  label: 'Reset',
+                  focusNode: resetFocusNode,
+                  onPressed: onReset,
+                ),
+              _MarketplaceButton(
+                icon: Icons.delete_outline_rounded,
+                label: 'Uninstall',
+                focusNode: uninstallFocusNode,
+                onPressed: onUninstall,
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 String _shortTestDate(DateTime value) {
@@ -1061,17 +1220,23 @@ class _CatalogAddonCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final unsupported = !addon.isCompatible;
+    final kindBadge = addon.isMangaProvider
+        ? installed == null
+              ? 'MANGA SOURCE • INSTALL FOR MANGA'
+              : 'MANGA SOURCE • APPEARS IN MANGA'
+        : 'ANIME STREAM • WEB STREAMS';
     return _AddonShell(
       addon: addon,
+      kindBadge: kindBadge,
       badge: unsupported
           ? '${addon.language.toUpperCase()} / UNSUPPORTED'
-          : installed == null
-          ? addon.isTypescript
-                ? 'TYPESCRIPT'
-                : 'AVAILABLE'
           : updateAvailable
           ? 'UPDATE AVAILABLE'
-          : 'INSTALLED',
+          : installed != null
+          ? 'INSTALLED'
+          : addon.isTypescript
+          ? 'TYPESCRIPT'
+          : 'AVAILABLE',
       footer: _MarketplaceButton(
         icon: busy
             ? Icons.hourglass_top_rounded
@@ -1099,17 +1264,20 @@ class _CatalogAddonCard extends StatelessWidget {
 class _AddonShell extends StatelessWidget {
   const _AddonShell({
     required this.addon,
+    required this.kindBadge,
     required this.badge,
     required this.footer,
   });
 
   final MarketplaceAddon addon;
+  final String kindBadge;
   final String badge;
   final Widget footer;
 
   @override
   Widget build(BuildContext context) {
     return Container(
+      key: ValueKey('marketplace.addon.${addon.id}'),
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: context.appPalette.surface,
@@ -1155,16 +1323,13 @@ class _AddonShell extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 10),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
-            decoration: BoxDecoration(
-              color: context.appPalette.accent.withValues(alpha: .18),
-              borderRadius: BorderRadius.circular(999),
-            ),
-            child: Text(
-              badge,
-              style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w900),
-            ),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              _ProviderBadge(label: kindBadge, emphasizesKind: true),
+              _ProviderBadge(label: badge),
+            ],
           ),
           const SizedBox(height: 8),
           Expanded(
@@ -1182,6 +1347,28 @@ class _AddonShell extends StatelessWidget {
       ),
     );
   }
+}
+
+class _ProviderBadge extends StatelessWidget {
+  const _ProviderBadge({required this.label, this.emphasizesKind = false});
+
+  final String label;
+  final bool emphasizesKind;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+    decoration: BoxDecoration(
+      color: emphasizesKind
+          ? context.appPalette.secondaryAccent.withValues(alpha: .16)
+          : context.appPalette.accent.withValues(alpha: .18),
+      borderRadius: BorderRadius.circular(999),
+    ),
+    child: Text(
+      label,
+      style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w900),
+    ),
+  );
 }
 
 class _AddonIcon extends StatelessWidget {
@@ -1492,8 +1679,9 @@ Future<void> _confirmInstall(
   final accepted = await _confirm(
     context,
     title: 'Install ${addon.name}?',
-    body:
-        'This third-party provider may access public HTTPS websites. It cannot access TetoTV tokens, device files, or native Android APIs. Only install repositories you trust.',
+    body: addon.isMangaProvider
+        ? 'This third-party manga provider can receive your manga searches and selected title/chapter IDs, and its public HTTPS hosts can see ordinary connection data such as your IP address. It cannot access TetoTV tokens, device files, or native Android APIs. Only install providers you trust.'
+        : 'This third-party provider may access public HTTPS websites. It cannot access TetoTV tokens, device files, or native Android APIs. Only install repositories you trust.',
     action: 'INSTALL',
   );
   if (!accepted) return;
@@ -1512,8 +1700,9 @@ Future<void> _confirmUninstall(
   if (await _confirm(
     context,
     title: 'Uninstall ${addon.manifest.name}?',
-    body:
-        'Its web streams will no longer appear. Playback history and tracking are not changed.',
+    body: addon.manifest.isMangaProvider
+        ? 'This source will no longer appear in Manga. Saved reading progress and downloaded chapters are not changed.'
+        : 'Its web streams will no longer appear. Playback history and tracking are not changed.',
     action: 'UNINSTALL',
   )) {
     await controller.uninstall(addon.manifest.id);

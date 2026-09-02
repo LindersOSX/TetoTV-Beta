@@ -167,7 +167,7 @@ List<MarketplaceAddon> parseMarketplaceCatalog(
       entry,
       repositoryUrl: repositoryUrl,
     );
-    if (addon != null && addon.isOnlineStreamProvider) {
+    if (addon != null && addon.isExecutableProvider) {
       unique.putIfAbsent(marketplaceAddonIdentityKey(addon.id), () => addon);
     }
   }

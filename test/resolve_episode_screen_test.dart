@@ -76,6 +76,12 @@ void main() {
       isFalse,
     );
     expect(
+      shouldRecordResolveCrashReport(
+        const WebStreamPreflightFailure('validation_failed'),
+      ),
+      isFalse,
+    );
+    expect(
       shouldRecordResolveCrashReport(StateError('unexpected player bug')),
       isTrue,
     );
@@ -5326,6 +5332,7 @@ void main() {
           autoPickAudio: AutoPickAudio.dubOnly,
           preferredCaptionMode: PreferredCaptionMode.enabled,
           preferredCaptionLanguage: 'spa',
+          preferredAudioLanguage: 'spa',
         ),
         releases: const [],
         libraryService: libraryService,
@@ -5344,6 +5351,7 @@ void main() {
         'jellyfin:local-fallback',
       );
       expect(libraryService.chosenSubtitleLanguage, 'spa');
+      expect(libraryService.chosenAudioLanguage, 'spa');
       expect(find.text('DEBRID STREAMS'), findsNothing);
     },
   );
@@ -6534,6 +6542,7 @@ class _FixedLibraryEpisodeSourceService implements LibraryEpisodeSourceService {
   final List<LibraryEpisodeSource> preparedSources = [];
   int compatibilityPrepareCount = 0;
   String? chosenSubtitleLanguage;
+  String? chosenAudioLanguage;
 
   @override
   bool get hasConnectedServer => connected;
@@ -6550,6 +6559,7 @@ class _FixedLibraryEpisodeSourceService implements LibraryEpisodeSourceService {
     LibraryEpisodeSource source, {
     LibraryWatchPartyIdentity? watchPartyIdentity,
     String preferredSubtitleLanguage = 'eng',
+    String preferredAudioLanguage = 'auto',
     PlaybackAudioPreference? requestedAudio,
     bool forceCompatibility = false,
   }) {
@@ -6557,6 +6567,7 @@ class _FixedLibraryEpisodeSourceService implements LibraryEpisodeSourceService {
     if (forceCompatibility) compatibilityPrepareCount++;
     chosenIdentity = watchPartyIdentity;
     chosenSubtitleLanguage = preferredSubtitleLanguage;
+    chosenAudioLanguage = preferredAudioLanguage;
     final callback = onPreparePlayback;
     if (callback != null) return callback(source);
     return Completer<LibraryPlaybackRequest>().future;
@@ -6608,6 +6619,7 @@ class _IncrementalLibraryEpisodeSourceService
     LibraryEpisodeSource source, {
     LibraryWatchPartyIdentity? watchPartyIdentity,
     String preferredSubtitleLanguage = 'eng',
+    String preferredAudioLanguage = 'auto',
     PlaybackAudioPreference? requestedAudio,
     bool forceCompatibility = false,
   }) {

@@ -5,6 +5,7 @@ import 'package:anime_tv/core/telemetry/anonymous_usage_reporter.dart';
 import 'package:anime_tv/core/diagnostics/playback_diagnostic_recorder.dart';
 import 'package:anime_tv/core/diagnostics/playback_session_diagnostics.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
+import 'package:anime_tv/core/preferences/caption_language.dart';
 import 'package:anime_tv/core/preferences/playback_audio_preference.dart';
 import 'package:anime_tv/core/storage/storage_providers.dart';
 import 'package:anime_tv/core/storage/tetotv_database.dart';
@@ -100,7 +101,8 @@ bool shouldKeepRegisteredExternalCaption({
   if (hasPerSeriesPreference || globalMode == PreferredCaptionMode.enabled) {
     return languageMatches;
   }
-  return globalMode == PreferredCaptionMode.automatic;
+  return globalMode == PreferredCaptionMode.automatic &&
+      (externalLanguage == null || languageMatches);
 }
 
 /// Whether an asynchronous media-open attempt still owns the player state it
@@ -838,9 +840,14 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
         seriesAudioLanguage: _seriesPreferences.audioLanguage,
         seriesOverride: _seriesPreferences.audioPreferenceSet,
       );
-  String get _effectiveAudioLanguage => _seriesPreferences.audioPreferenceSet
-      ? _seriesPreferences.audioLanguage
-      : _effectiveAudioPreference.audioLanguage;
+  String get _effectiveAudioLanguage => preferredPlaybackAudioLanguage(
+    globalPreference: _effectiveAudioPreference,
+    globalLanguage: ref
+        .read(settingsPreferencesProvider)
+        .preferredAudioLanguage,
+    seriesLanguage: _seriesPreferences.audioLanguage,
+    seriesPreferenceSet: _seriesPreferences.audioPreferenceSet,
+  );
   bool get _animeFeaturesEnabled => widget.libraryPlayback == null;
   ExternalPlayerTarget? get _externalPlayerTarget {
     if (_watchPartyActive ||
@@ -1467,10 +1474,15 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
         !_canApplyTrackSelection) {
       return;
     }
-    final preferred = _seriesPreferences.audioPreferenceSet
+    final globalAudioLanguage = ref
+        .read(settingsPreferencesProvider)
+        .preferredAudioLanguage;
+    final useLanguagePreference =
+        _seriesPreferences.audioPreferenceSet || globalAudioLanguage != 'auto';
+    final preferred = useLanguagePreference
         ? preferredAudioTrackForLanguage(
             tracks.audio,
-            language: _seriesPreferences.audioLanguage,
+            language: _effectiveAudioLanguage,
             preferSurround: device.hasHdmiAudio,
             // A demuxer may announce its default track before publishing the
             // rest. Do not lock a temporary fallback.
@@ -1483,11 +1495,8 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
             allowFallback: false,
           );
     if (preferred == null || !_canApplyTrackSelection) return;
-    final matchesPreference = _seriesPreferences.audioPreferenceSet
-        ? playerTrackMatchesAudioLanguage(
-            preferred,
-            _seriesPreferences.audioLanguage,
-          )
+    final matchesPreference = useLanguagePreference
+        ? playerTrackMatchesAudioLanguage(preferred, _effectiveAudioLanguage)
         : playerTrackMatchesAudioPreference(
             preferred,
             _effectiveAudioPreference,
@@ -1601,9 +1610,13 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     await _applyPreferredSubtitle(tracks, expectedMediaRevision: mediaRevision);
   }
 
-  void _applyAutomaticSubtitleDefaultForRelease(ReleaseCandidate release) {
+  void _applyAutomaticSubtitleDefaultForRelease(
+    ReleaseCandidate release, {
+    required String preferredLanguage,
+  }) {
     if (_seriesPreferences.subtitlePreferenceSet) return;
     _seriesPreferences = _seriesPreferences.copyWith(
+      subtitleLanguage: preferredLanguage,
       subtitleEnabled: subtitlesEnabledForAudioPreference(
         release,
         _effectiveAudioPreference,
@@ -1616,7 +1629,10 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     final preferences = ref.read(settingsPreferencesProvider);
     switch (preferences.preferredCaptionMode) {
       case PreferredCaptionMode.automatic:
-        _applyAutomaticSubtitleDefaultForRelease(release);
+        _applyAutomaticSubtitleDefaultForRelease(
+          release,
+          preferredLanguage: preferences.preferredCaptionLanguage,
+        );
       case PreferredCaptionMode.enabled:
         _seriesPreferences = _seriesPreferences.copyWith(
           subtitleLanguage: preferences.preferredCaptionLanguage,
@@ -5908,26 +5924,26 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
         icon: Icons.closed_caption_rounded,
         selectedValue: currentId,
         options: tracks
-            .map(
-              (track) => PlayerTrackOption<String>(
+            .map((track) {
+              final trackLanguage = canonicalPlayerTrackLanguage(
+                language: track.language,
+                title: track.title,
+              );
+              return PlayerTrackOption<String>(
                 value: track.id,
                 label: track.id == 'no'
                     ? 'Off'
                     : track.title ?? track.language ?? 'Track ${track.id}',
                 detail: track.id == 'no'
                     ? 'Disable captions'
-                    : playerTrackMatchesLanguage(
-                        language: track.language,
-                        title: track.title,
-                        preferredLanguage: 'eng',
-                      )
-                    ? 'English'
-                    : track.language,
+                    : trackLanguage.isEmpty
+                    ? track.language
+                    : captionLanguageDisplayName(trackLanguage),
                 icon: track.id == 'no'
                     ? Icons.closed_caption_disabled_rounded
                     : Icons.closed_caption_rounded,
-              ),
-            )
+              );
+            })
             .toList(growable: false),
       ),
     );

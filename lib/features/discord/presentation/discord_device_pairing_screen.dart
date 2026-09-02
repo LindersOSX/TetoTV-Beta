@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/widgets/copyable_code_interaction.dart';
 import 'package:anime_tv/core/widgets/copyable_qr_interaction.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/features/discord/application/discord_device_pairing_controller.dart';
@@ -344,9 +345,11 @@ class _WaitingForDiscord extends StatelessWidget {
                 style: Theme.of(context).textTheme.bodyLarge,
               ),
               const SizedBox(height: 14),
-              Semantics(
-                label: 'Discord confirmation code ${session.userCode}',
-                readOnly: true,
+              CopyableCodeInteraction(
+                code: session.userCode,
+                semanticsLabel:
+                    'Discord one-time pairing code ${session.userCode}',
+                confirmationMessage: 'Discord pairing code copied.',
                 child: Text(
                   session.userCode,
                   key: const ValueKey('discord-pairing-code'),

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/widgets/copyable_code_interaction.dart';
 import 'package:anime_tv/core/widgets/copyable_qr_interaction.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/features/auth/application/pairing_controller.dart';
@@ -332,9 +333,10 @@ class _UserCode extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Semantics(
-      label: 'Real-Debrid confirmation code $code',
-      readOnly: true,
+    return CopyableCodeInteraction(
+      code: code,
+      semanticsLabel: 'Real-Debrid one-time pairing code $code',
+      confirmationMessage: 'Real-Debrid pairing code copied.',
       child: Container(
         key: const ValueKey('real-debrid-user-code'),
         padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),

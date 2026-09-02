@@ -6,6 +6,7 @@ import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/features/catalog/application/anime_title_logo_provider.dart';
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
+import 'package:anime_tv/core/widgets/tv_text_input.dart';
 import 'package:anime_tv/features/catalog/domain/anime_title_logo.dart';
 import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
 import 'package:anime_tv/features/catalog/domain/anime_trailer.dart';
@@ -1118,20 +1119,294 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('future shows display an unreleased cover badge', (tester) async {
+  testWidgets(
+    'episode number picker validates range and selects a valid episode',
+    (tester) async {
+      tester.view.physicalSize = const Size(960, 540);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      const anime = AnimeSummary(
+        id: 13,
+        title: 'Long Running Anime',
+        description: 'A show where direct episode entry is useful.',
+        episodes: 12,
+        score: 8,
+        status: 'RELEASING',
+      );
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            animeDetailsProvider.overrideWith((_, _) async => anime),
+            trackingHomeProvider.overrideWith(
+              (_) async => const TrackingHomeData(
+                watching: [],
+                planToWatch: [],
+                completed: [],
+              ),
+            ),
+            settingsPreferencesProvider.overrideWith(
+              (_) => _LoadedSettingsController(),
+            ),
+          ],
+          child: const MaterialApp(home: AnimeDetailsScreen(animeId: 13)),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const ValueKey('episode-manual-selector')));
+      await tester.pumpAndSettle();
+      expect(find.byType(TvKeyboardDialog), findsOneWidget);
+      expect(find.text('Choose episode (1–12)'), findsOneWidget);
+
+      await tester.tap(find.text('CLEAR'));
+      await tester.tap(find.text('9'));
+      await tester.tap(find.text('9'));
+      await tester.tap(find.text('DONE'));
+      await tester.pump();
+
+      expect(find.byType(TvKeyboardDialog), findsOneWidget);
+      expect(find.text('Enter an episode from 1 to 12.'), findsOneWidget);
+
+      await tester.tap(find.text('CLEAR'));
+      await tester.tap(find.text('4'));
+      await tester.tap(find.text('DONE'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(TvKeyboardDialog), findsNothing);
+      expect(find.text('Episode 4 of 12'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('episode-step-previous')),
+        findsOneWidget,
+      );
+      expect(find.byKey(const ValueKey('episode-step-next')), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'episode number picker is semantics-actionable and Back restores focus',
+    (tester) async {
+      tester.view.physicalSize = const Size(960, 540);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final semantics = tester.ensureSemantics();
+
+      const anime = AnimeSummary(
+        id: 15,
+        title: 'Accessible Episode Picker',
+        description: 'A show with direct episode selection.',
+        episodes: 12,
+        score: 8,
+        status: 'RELEASING',
+      );
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            animeDetailsProvider.overrideWith((_, _) async => anime),
+            trackingHomeProvider.overrideWith(
+              (_) async => const TrackingHomeData(
+                watching: [],
+                planToWatch: [],
+                completed: [],
+              ),
+            ),
+            settingsPreferencesProvider.overrideWith(
+              (_) => _LoadedSettingsController(),
+            ),
+          ],
+          child: const MaterialApp(home: AnimeDetailsScreen(animeId: 15)),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final selector = find.semantics.byLabel(
+        'Episode 1 of 12. Choose episode number',
+      );
+      expect(selector, findsOneWidget);
+      final selectorFocus = tester.widget<FocusableActionDetector>(
+        find
+            .descendant(
+              of: find.byKey(const ValueKey('episode-manual-selector')),
+              matching: find.byType(FocusableActionDetector),
+            )
+            .first,
+      );
+      selectorFocus.focusNode!.requestFocus();
+      await tester.pump();
+      tester.semantics.tap(selector);
+      await tester.pumpAndSettle();
+
+      expect(find.byType(TvKeyboardDialog), findsOneWidget);
+      await tester.sendKeyDownEvent(
+        LogicalKeyboardKey.goBack,
+        physicalKey: PhysicalKeyboardKey.escape,
+      );
+      await tester.pump();
+      expect(find.byType(TvKeyboardDialog), findsOneWidget);
+      await tester.sendKeyUpEvent(
+        LogicalKeyboardKey.goBack,
+        physicalKey: PhysicalKeyboardKey.escape,
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byType(TvKeyboardDialog), findsNothing);
+      expect(selectorFocus.focusNode?.hasFocus, isTrue);
+      expect(find.byType(AnimeDetailsScreen), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      semantics.dispose();
+    },
+  );
+
+  testWidgets(
+    'manual episode selection preserves the polished unaired notice',
+    (tester) async {
+      tester.view.physicalSize = const Size(960, 540);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final anime = AnimeSummary(
+        id: 14,
+        title: 'Scheduled Anime',
+        description: 'A currently airing series.',
+        episodes: 24,
+        score: 8,
+        status: 'RELEASING',
+        nextAiringEpisode: 13,
+        nextAiringAt: DateTime.utc(2099, 9, 8, 12),
+      );
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            animeDetailsProvider.overrideWith((_, _) async => anime),
+            trackingHomeProvider.overrideWith(
+              (_) async => const TrackingHomeData(
+                watching: [],
+                planToWatch: [],
+                completed: [],
+              ),
+            ),
+            settingsPreferencesProvider.overrideWith(
+              (_) => _LoadedSettingsController(),
+            ),
+          ],
+          child: const MaterialApp(home: AnimeDetailsScreen(animeId: 14)),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const ValueKey('episode-manual-selector')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('CLEAR'));
+      await tester.tap(find.byKey(const ValueKey('tv-keyboard-key-number-1')));
+      await tester.tap(find.byKey(const ValueKey('tv-keyboard-key-number-3')));
+      await tester.tap(find.text('DONE'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Episode 13 of 24'), findsOneWidget);
+      expect(find.text('Episode 13 has not aired yet.'), findsOneWidget);
+      expect(find.text('Expected air date: September 8, 2099'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('episode-action-selected')),
+        findsNothing,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'selecting a scheduled unaired episode shows its date and skips prefetch',
+    (tester) async {
+      tester.view.physicalSize = const Size(960, 540);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final anime = AnimeSummary(
+        id: 12,
+        title: 'Weekly Anime',
+        description: 'A currently airing series.',
+        episodes: 24,
+        score: 8,
+        status: 'RELEASING',
+        nextAiringEpisode: 2,
+        nextAiringAt: DateTime.utc(2099, 9, 8, 12),
+      );
+      final prefetchedEpisodes = <int>[];
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            animeDetailsProvider.overrideWith((_, _) async => anime),
+            trackingHomeProvider.overrideWith(
+              (_) async => const TrackingHomeData(
+                watching: [],
+                planToWatch: [],
+                completed: [],
+              ),
+            ),
+            settingsPreferencesProvider.overrideWith(
+              (_) => _LoadedSettingsController(),
+            ),
+            episodeDiscoveryPrefetcherProvider.overrideWithValue((
+              episode, {
+              required preferences,
+            }) {
+              prefetchedEpisodes.add(episode.episode);
+              return EpisodeDiscoveryPrefetchHandle.completed();
+            }),
+          ],
+          child: const MaterialApp(home: AnimeDetailsScreen(animeId: 12)),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(prefetchedEpisodes, [1]);
+
+      final nextControl = tester.widget<FocusableActionDetector>(
+        find
+            .descendant(
+              of: find.byKey(const ValueKey('episode-step-next')),
+              matching: find.byType(FocusableActionDetector),
+            )
+            .first,
+      );
+      nextControl.focusNode!.requestFocus();
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pump(const Duration(milliseconds: 400));
+
+      expect(find.text('Episode 2 of 24'), findsOneWidget);
+      expect(find.text('Episode 2 has not aired yet.'), findsOneWidget);
+      expect(find.text('Expected air date: September 8, 2099'), findsOneWidget);
+      expect(prefetchedEpisodes, [1]);
+      expect(
+        find.byKey(const ValueKey('episode-action-selected')),
+        findsNothing,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('future shows display a polished unreleased premiere state', (
+    tester,
+  ) async {
     tester.view.physicalSize = const Size(960, 540);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
 
-    const anime = AnimeSummary(
+    final anime = AnimeSummary(
       id: 11,
       title: 'Future Anime',
       description: 'This series has not premiered yet.',
       episodes: 12,
       score: null,
       status: 'NOT_YET_RELEASED',
-      seasonYear: 2027,
+      seasonYear: 2100,
+      startDate: DateTime(2100, 4, 6),
     );
 
     await tester.pumpWidget(
@@ -1152,7 +1427,8 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('UNRELEASED'), findsOneWidget);
-    expect(find.text('Not released yet'), findsOneWidget);
+    expect(find.text('This series has not aired yet.'), findsOneWidget);
+    expect(find.text('Expected premiere date: April 6, 2100'), findsOneWidget);
     expect(find.text('Start watching'), findsNothing);
     for (final key in const [
       'episode-action-resume',

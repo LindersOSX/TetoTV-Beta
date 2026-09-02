@@ -1,4 +1,5 @@
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/widgets/copyable_code_interaction.dart';
 import 'package:anime_tv/features/auth/data/real_debrid_oauth_client.dart';
 import 'package:anime_tv/features/auth/presentation/real_debrid_pairing_screen.dart';
 import 'package:flutter/material.dart';
@@ -15,6 +16,7 @@ void main() {
     await _pumpScreen(tester, client: client, size: const Size(1280, 720));
 
     expect(find.text('ABCD1234EFGHI'), findsOneWidget);
+    expect(find.byType(CopyableCodeInteraction), findsOneWidget);
     expect(
       find.textContaining('https://real-debrid.com/device'),
       findsOneWidget,

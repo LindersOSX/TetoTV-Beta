@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:anime_tv/core/preferences/caption_language.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/features/player/presentation/player_presentation_palette.dart';
@@ -331,16 +332,7 @@ String canonicalPlayerLanguage(String? value) {
   ).hasMatch(normalized)) {
     return 'eng';
   }
-  if (RegExp(r'(^|[^a-z])(japanese|jpn|ja)([^a-z]|$)').hasMatch(normalized)) {
-    return 'jpn';
-  }
-  if (RegExp(r'(^|[^a-z])(spanish|spa|es)([^a-z]|$)').hasMatch(normalized)) {
-    return 'spa';
-  }
-  if (RegExp(r'(^|[^a-z])(french|fra|fre|fr)([^a-z]|$)').hasMatch(normalized)) {
-    return 'fra';
-  }
-  return normalized;
+  return canonicalCaptionLanguageCode(normalized);
 }
 
 /// Resolves the language a player actually exposed for a track.

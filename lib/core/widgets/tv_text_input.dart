@@ -577,6 +577,7 @@ class TvKeyboardDialog extends StatefulWidget {
     this.numericOnly = false,
     this.reduceWidthForTelevision = true,
     this.autofillSuggestions = const [],
+    this.validator,
     super.key,
   });
 
@@ -588,6 +589,7 @@ class TvKeyboardDialog extends StatefulWidget {
   final bool numericOnly;
   final bool reduceWidthForTelevision;
   final List<String> autofillSuggestions;
+  final String? Function(String value)? validator;
 
   @override
   State<TvKeyboardDialog> createState() => _TvKeyboardDialogState();
@@ -609,6 +611,7 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
   bool _shift = false;
   bool _symbols = false;
   late bool _reveal;
+  String? _validationError;
 
   @override
   void initState() {
@@ -629,6 +632,7 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
       );
       _value = formatted.text;
       _cursorOffset = formatted.selection.baseOffset.clamp(0, _value.length);
+      _validationError = null;
       if (_shift) _shift = false;
     });
   }
@@ -644,6 +648,7 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
       );
       _value = formatted.text;
       _cursorOffset = formatted.selection.baseOffset.clamp(0, _value.length);
+      _validationError = null;
     });
   }
 
@@ -657,7 +662,17 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
     setState(() {
       _value = '';
       _cursorOffset = 0;
+      _validationError = null;
     });
+  }
+
+  void _submit() {
+    final validationError = widget.validator?.call(_value);
+    if (validationError != null) {
+      setState(() => _validationError = validationError);
+      return;
+    }
+    Navigator.of(context).pop(_value);
   }
 
   Future<void> _paste() async {
@@ -674,6 +689,7 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
       );
       _value = formatted.text;
       _cursorOffset = formatted.selection.baseOffset.clamp(0, _value.length);
+      _validationError = null;
     });
   }
 
@@ -682,6 +698,7 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
       final formatted = _formatValue(value, selectionOffset: value.length);
       _value = formatted.text;
       _cursorOffset = formatted.selection.baseOffset.clamp(0, _value.length);
+      _validationError = null;
     });
   }
 
@@ -740,7 +757,7 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
     }
     if (event.logicalKey == LogicalKeyboardKey.enter ||
         event.logicalKey == LogicalKeyboardKey.numpadEnter) {
-      Navigator.of(context).pop(_value);
+      _submit();
       return KeyEventResult.handled;
     }
     final pressed = HardwareKeyboard.instance.logicalKeysPressed;
@@ -1044,7 +1061,7 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
                         label: submitLabel,
                         semanticLabel: submitLabel,
                         primary: true,
-                        onPressed: () => Navigator.of(context).pop(_value),
+                        onPressed: _submit,
                       ),
                     ],
                   ),
@@ -1079,7 +1096,7 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
                         semanticLabel: submitLabel,
                         primary: true,
                         fontSize: (18 * scale).clamp(11, 18),
-                        onPressed: () => Navigator.of(context).pop(_value),
+                        onPressed: _submit,
                       ),
                     ],
                   ),
@@ -1140,7 +1157,7 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
                 height: actionHeight,
                 fontSize: (19 * scale).clamp(12, 19),
                 primary: true,
-                onPressed: () => Navigator.of(context).pop(_value),
+                onPressed: _submit,
               ),
             ],
           ),
@@ -1299,6 +1316,21 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
                     ],
                   ),
                 ),
+                if (_validationError case final error?) ...[
+                  SizedBox(height: 7 * scale),
+                  Semantics(
+                    liveRegion: true,
+                    child: Text(
+                      error,
+                      key: const ValueKey('tv-keyboard-validation-error'),
+                      style: TextStyle(
+                        color: palette.accentBright,
+                        fontSize: (16 * scale).clamp(11, 16),
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                ],
                 if (widget.autofillSuggestions.isNotEmpty) ...[
                   SizedBox(height: 8 * scale),
                   Row(

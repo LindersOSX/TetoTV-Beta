@@ -144,12 +144,13 @@ review the Data safety form against `docs/STORE_DATA_SAFETY.md`, and link the
 public privacy policy. Do not upload the sideload flavor to Google Play or
 describe a GitHub/sideload declaration as Google Play approval.
 
-The extension marketplace downloads user-selected JavaScript and runs it in a
-bounded interpreter. A Play distribution must separately review or disable
-that feature and prove that every remotely loaded extension and resulting
-content complies with current Google Play dynamic-code, device/network-abuse,
-content, and intellectual-property policies. Passing Android security tests is
-not a Play policy approval.
+The extension marketplace downloads user-selected JavaScript/TypeScript,
+including optional anime-stream and Developer Mode manga-provider extensions,
+and runs it in a bounded interpreter. A Play distribution must separately
+review or disable that feature and prove that every remotely loaded extension
+and resulting content complies with current Google Play dynamic-code,
+device/network-abuse, content, and intellectual-property policies. Passing
+Android security tests is not a Play policy approval.
 
 The current GitHub APK also supports direct peer networking and companion
 features whose policy, disclosure, and permission treatment may differ in a

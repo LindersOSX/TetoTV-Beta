@@ -35,8 +35,10 @@ void main() {
         status: 'FINISHED',
         season: 'SPRING',
         seasonYear: 2024,
+        startDate: DateTime(2024, 4, 1),
         durationMinutes: 24,
         nextAiringEpisode: 13,
+        nextAiringAt: DateTime.utc(2024, 6, 24, 17),
         isAdult: true,
         metadataSource: CatalogMetadataSource.kitsu,
         studios: const [AnimeStudio(id: 1, name: 'Studio')],
@@ -86,6 +88,8 @@ void main() {
       expect(restored.titleEnglish, 'English title');
       expect(restored.titleNative, '日本語タイトル');
       expect(restored.score, 8.75);
+      expect(restored.startDate, DateTime(2024, 4, 1));
+      expect(restored.nextAiringAt, DateTime.utc(2024, 6, 24, 17));
       expect(restored.genres, ['Comedy', 'Drama']);
       expect(restored.metadataSource, CatalogMetadataSource.kitsu);
       expect(restored.trailer?.videoId, 'abcdefghijk');

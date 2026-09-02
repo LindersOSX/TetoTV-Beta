@@ -5,13 +5,20 @@ import android.app.ApplicationExitInfo
 import android.content.Context
 import android.content.res.Configuration
 import android.os.Build
+import android.os.Debug
+import android.os.Looper
 import androidx.annotation.RequiresApi
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
+import java.io.InputStream
 import java.io.PrintWriter
 import java.io.StringWriter
 import java.net.Inet6Address
 import java.net.InetAddress
+import java.security.MessageDigest
+import java.util.zip.GZIPInputStream
 
 /**
  * Keeps at most one consented upload until Flutter confirms delivery, plus a
@@ -27,11 +34,56 @@ object AnonymousCrashStore {
     private const val LOCAL_DROPPED_AGE_KEY = "local_crash_dropped_age"
     private const val LOCAL_DROPPED_CAPACITY_KEY = "local_crash_dropped_capacity"
     private const val LOCAL_LAST_SCANNED_EXIT_KEY = "local_crash_last_scanned_exit"
+    private const val BREADCRUMBS_KEY = "privacy_safe_crash_breadcrumbs"
     private const val MAX_QUEUED_BYTES = 12_000
     private const val MAX_TRACE_CHARS = 4_000
     private const val MAX_LOCAL_TRACE_CHARS = 1_800
+    private const val MAX_NATIVE_TRACE_BYTES = 64_000
     private const val MAX_LOCAL_CRASH_SUMMARIES = 12
+    private const val MAX_BREADCRUMBS = 16
+    private const val MAX_PROCESS_STATE_BYTES = 120
     private const val LOCAL_HISTORY_MILLIS = 48L * 60L * 60L * 1_000L
+    private const val BREADCRUMB_HISTORY_MILLIS = 10L * 60L * 1_000L
+
+    @Volatile
+    private var processBreadcrumbsInitialized = false
+
+    /**
+     * Records one fixed, privacy-safe lifecycle marker for crash correlation.
+     *
+     * Callers cannot attach values: only the allowlisted event codes below are
+     * accepted. The bounded ring contains no media, provider, room, account,
+     * file, URL, or credential data. Android's process-state summary receives
+     * the same compact markers so they survive a native process death.
+     */
+    fun recordBreadcrumb(context: Context, eventCode: String) {
+        if (eventCode !in BREADCRUMB_CODES) return
+        val now = System.currentTimeMillis()
+        synchronized(this) {
+            val preferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val existing = if (processBreadcrumbsInitialized) {
+                decodeBreadcrumbs(preferences.getString(BREADCRUMBS_KEY, null))
+            } else {
+                processBreadcrumbsInitialized = true
+                emptyList()
+            }
+            val bounded = boundBreadcrumbs(
+                existing + CrashBreadcrumb(eventCode, now),
+                now,
+            )
+            preferences.edit()
+                .putString(BREADCRUMBS_KEY, encodeBreadcrumbs(bounded))
+                .apply()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                val processSummary = encodeProcessStateSummary(bounded)
+                runCatching {
+                    val activityManager =
+                        context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+                    activityManager.setProcessStateSummary(processSummary)
+                }
+            }
+        }
+    }
 
     fun setEnabled(context: Context, enabled: Boolean) {
         val preferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -83,7 +135,15 @@ object AnonymousCrashStore {
                     "${error.javaClass.simpleName}: ${error.message.orEmpty()}",
                     500,
                 ),
-                "stack" to sanitizeStack(writer.toString(), MAX_TRACE_CHARS),
+                "stack" to composeCrashDetails(
+                    contextLines = listOf(
+                        currentProcessContext(),
+                        currentBreadcrumbContext(context, now),
+                        "java_context thread=${if (Looper.getMainLooper().thread === thread) "main" else "background"}",
+                    ),
+                    trace = sanitizeStack(writer.toString(), MAX_TRACE_CHARS),
+                    maximum = MAX_TRACE_CHARS,
+                ),
                 "occurred_at_ms" to now,
                 "android_sdk" to Build.VERSION.SDK_INT,
                 "abi" to (Build.SUPPORTED_ABIS.firstOrNull() ?: "unknown"),
@@ -171,17 +231,8 @@ object AnonymousCrashStore {
             ApplicationExitInfo.REASON_CRASH_NATIVE -> "Android reported a native TetoTV process crash."
             else -> "Android reported an unhandled TetoTV process crash."
         }
-        val trace = runCatching {
-            exit.traceInputStream?.bufferedReader()?.use { reader ->
-                val buffer = CharArray(MAX_TRACE_CHARS)
-                val count = reader.read(buffer)
-                if (count > 0) String(buffer, 0, count) else ""
-            }
-        }.getOrNull().orEmpty()
-        val details = listOfNotNull(
-            sanitize(exit.description.orEmpty(), 700).takeIf { it.isNotEmpty() },
-            sanitizeStack(trace, MAX_TRACE_CHARS).takeIf { it.isNotEmpty() },
-        ).joinToString(" | ")
+        val trace = exitTrace(exit, MAX_TRACE_CHARS)
+        val details = exitDetails(context, exit, trace, MAX_TRACE_CHARS)
         val isTelevision =
             context.resources.configuration.uiMode and Configuration.UI_MODE_TYPE_MASK ==
                 Configuration.UI_MODE_TYPE_TELEVISION
@@ -236,17 +287,8 @@ object AnonymousCrashStore {
             ApplicationExitInfo.REASON_CRASH_NATIVE -> "Android reported a native TetoTV process crash."
             else -> "Android reported an unhandled TetoTV process crash."
         }
-        val trace = runCatching {
-            exit.traceInputStream?.bufferedReader()?.use { reader ->
-                val buffer = CharArray(MAX_LOCAL_TRACE_CHARS)
-                val count = reader.read(buffer)
-                if (count > 0) String(buffer, 0, count) else ""
-            }
-        }.getOrNull().orEmpty()
-        val details = listOfNotNull(
-            sanitize(exit.description.orEmpty(), 500).takeIf { it.isNotEmpty() },
-            sanitizeStack(trace, MAX_LOCAL_TRACE_CHARS).takeIf { it.isNotEmpty() },
-        ).joinToString(" | ")
+        val trace = exitTrace(exit, MAX_LOCAL_TRACE_CHARS)
+        val details = exitDetails(context, exit, trace, MAX_LOCAL_TRACE_CHARS)
         val isTelevision =
             context.resources.configuration.uiMode and Configuration.UI_MODE_TYPE_MASK ==
                 Configuration.UI_MODE_TYPE_TELEVISION
@@ -284,6 +326,582 @@ object AnonymousCrashStore {
             newestScannedExit = preferences.getLong(LOCAL_LAST_SCANNED_EXIT_KEY, 0L),
         )
     }
+
+    /**
+     * ApplicationExitInfo exposes ANR/Java traces as text, but Android exposes
+     * native tombstones as protobuf bytes. Decoding those bytes with a text
+     * reader produced the corrupted, unactionable stacks seen in crash reports.
+     * Preserve only bounded, non-user-controlled crash tokens and a stable
+     * signature; never upload the raw tombstone.
+     */
+    @RequiresApi(Build.VERSION_CODES.R)
+    private fun exitTrace(exit: ApplicationExitInfo, maximumChars: Int): TraceEvidence {
+        val bounded = runCatching {
+            exit.traceInputStream?.use { stream ->
+                readAtMost(stream, MAX_NATIVE_TRACE_BYTES)
+            }
+        }.getOrNull() ?: BoundedBytes(ByteArray(0), truncated = false)
+        if (bounded.bytes.isEmpty()) {
+            return TraceEvidence("", "none", 0, bounded.truncated)
+        }
+        if (exit.reason == ApplicationExitInfo.REASON_CRASH_NATIVE) {
+            return TraceEvidence(
+                summarizeNativeTombstone(bounded.bytes, maximumChars),
+                "native_tombstone_protobuf",
+                bounded.bytes.size,
+                bounded.truncated,
+            )
+        }
+        if (isGzip(bounded.bytes)) {
+            val inflated = runCatching {
+                GZIPInputStream(ByteArrayInputStream(bounded.bytes)).use { stream ->
+                    readAtMost(stream, MAX_NATIVE_TRACE_BYTES)
+                }
+            }.getOrNull()
+            if (inflated != null) {
+                return TraceEvidence(
+                    safeTextTrace(inflated.bytes, maximumChars),
+                    "gzip_text",
+                    bounded.bytes.size,
+                    bounded.truncated || inflated.truncated,
+                )
+            }
+            return TraceEvidence(
+                binaryTraceSignature(bounded.bytes),
+                "gzip_unreadable",
+                bounded.bytes.size,
+                bounded.truncated,
+            )
+        }
+        return if (looksLikeText(bounded.bytes)) {
+            TraceEvidence(
+                safeTextTrace(bounded.bytes, maximumChars),
+                "text",
+                bounded.bytes.size,
+                bounded.truncated,
+            )
+        } else {
+            TraceEvidence(
+                binaryTraceSignature(bounded.bytes),
+                "binary",
+                bounded.bytes.size,
+                bounded.truncated,
+            )
+        }
+    }
+
+    private fun readAtMost(stream: InputStream, maximumBytes: Int): BoundedBytes {
+        val output = ByteArrayOutputStream(minOf(maximumBytes, 8_192))
+        val buffer = ByteArray(4_096)
+        while (output.size() < maximumBytes) {
+            val count = stream.read(buffer, 0, minOf(buffer.size, maximumBytes - output.size()))
+            if (count <= 0) break
+            output.write(buffer, 0, count)
+        }
+        val truncated = output.size() >= maximumBytes && stream.read() >= 0
+        return BoundedBytes(output.toByteArray(), truncated)
+    }
+
+    internal fun summarizeNativeTombstone(value: ByteArray, maximum: Int): String {
+        if (value.isEmpty() || maximum <= 0) return ""
+        val tombstone = parseNativeTombstone(value)
+        val signals = listOfNotNull(tombstone?.signal, tombstone?.signalCode).distinct().take(4)
+        val reasons = listOfNotNull(tombstone?.reason)
+        val libraries = tombstone?.frames.orEmpty().mapNotNull(NativeFrameEvidence::module).distinct().take(10)
+        val buildIds = tombstone?.frames.orEmpty().mapNotNull(NativeFrameEvidence::buildId).distinct().take(10)
+        val threads = listOfNotNull(tombstone?.thread)
+        val symbols = tombstone?.frames.orEmpty().mapNotNull(NativeFrameEvidence::function).distinct().take(10)
+        val frameLocations = tombstone?.frames.orEmpty().map {
+            "${it.module.orEmpty()}@${it.relativePc.toString(16)}#${it.buildId.orEmpty()}"
+        }
+        val signatureInput = listOf(
+            signals,
+            reasons,
+            libraries,
+            buildIds,
+            threads,
+            symbols,
+            frameLocations,
+        )
+            .flatten()
+            .joinToString("|")
+        val signatureBytes = if (signatureInput.isEmpty()) {
+            value.take(4_096).toByteArray()
+        } else {
+            signatureInput.toByteArray(Charsets.UTF_8)
+        }
+        val signature = MessageDigest.getInstance("SHA-256")
+            .digest(signatureBytes)
+            .take(8)
+            .joinToString("") { "%02x".format(it) }
+        val lines = buildList {
+            add("native_tombstone_protobuf signature=$signature")
+            if (signals.isNotEmpty()) add("signals=${signals.joinToString(",")}")
+            if (reasons.isNotEmpty()) add("reason=${reasons.joinToString(",")}")
+            if (threads.isNotEmpty()) add("threads=${threads.joinToString(",")}")
+            if (libraries.isNotEmpty()) add("libraries=${libraries.joinToString(",")}")
+            if (buildIds.isNotEmpty()) add("build_ids=${buildIds.joinToString(",")}")
+            if (symbols.isNotEmpty()) add("symbols=${symbols.joinToString(",")}")
+            tombstone?.frames.orEmpty().take(12).forEachIndexed { index, frame ->
+                add(
+                    "frame_$index rel_pc=0x${frame.relativePc.toString(16)}" +
+                        listOfNotNull(
+                            frame.module?.let { "module=$it" },
+                            frame.function?.let { "function=$it" },
+                            frame.buildId?.let { "build_id=$it" },
+                        ).joinToString(" ", prefix = " "),
+                )
+            }
+        }.joinToString("\n")
+        return lines.take(maximum)
+    }
+
+    private fun parseNativeTombstone(value: ByteArray): NativeTombstoneEvidence? {
+        val reader = ProtoReader(value)
+        var crashedTid: Long? = null
+        var signal: String? = null
+        var signalCode: String? = null
+        var reason: String? = null
+        val threads = mutableListOf<Pair<Long?, ParsedThread>>()
+        repeat(256) {
+            val field = reader.next() ?: return@repeat
+            when {
+                field.number == 6 && field.varint != null -> crashedTid = field.varint
+                field.number == 10 && field.bytes != null -> {
+                    val parsed = parseSignal(field.bytes)
+                    signal = parsed.first
+                    signalCode = parsed.second
+                }
+                field.number == 15 && field.bytes != null -> reason = parseCause(field.bytes)
+                field.number == 16 && field.bytes != null && threads.size < 8 -> {
+                    parseThreadEntry(field.bytes)?.let(threads::add)
+                }
+            }
+            if (reader.finished) return@repeat
+        }
+        val thread = threads.firstOrNull { it.first == crashedTid }?.second
+            ?: threads.firstOrNull { it.second.frames.isNotEmpty() }?.second
+        if (signal == null && signalCode == null && reason == null && thread == null) return null
+        return NativeTombstoneEvidence(signal, signalCode, reason, thread?.name, thread?.frames.orEmpty())
+    }
+
+    private fun parseSignal(value: ByteArray): Pair<String?, String?> {
+        val reader = ProtoReader(value)
+        var signal: String? = null
+        var code: String? = null
+        repeat(32) {
+            val field = reader.next() ?: return@repeat
+            if (field.bytes != null) {
+                val candidate = safeProtoString(field.bytes, 48)
+                if (field.number == 2 && candidate?.matches(Regex("SIG[A-Z0-9]+")) == true) signal = candidate
+                if (field.number == 4 && candidate?.matches(Regex("[A-Z0-9_]+")) == true) code = candidate
+            }
+        }
+        return signal to code
+    }
+
+    private fun parseCause(value: ByteArray): String? {
+        val reader = ProtoReader(value)
+        repeat(24) {
+            val field = reader.next() ?: return@repeat
+            if (field.number == 1 && field.bytes != null) {
+                val description = safeProtoString(field.bytes, 160).orEmpty().lowercase()
+                return when {
+                    "null pointer dereference" in description -> "null_pointer_dereference"
+                    "stack overflow" in description -> "stack_overflow"
+                    "destroyed mutex" in description -> "destroyed_mutex"
+                    "fortify" in description -> "fortify_abort"
+                    else -> null
+                }
+            }
+        }
+        return null
+    }
+
+    private fun parseThreadEntry(value: ByteArray): Pair<Long?, ParsedThread>? {
+        val reader = ProtoReader(value)
+        var tid: Long? = null
+        var thread: ParsedThread? = null
+        repeat(24) {
+            val field = reader.next() ?: return@repeat
+            if (field.number == 1) tid = field.varint
+            if (field.number == 2 && field.bytes != null) thread = parseThread(field.bytes)
+        }
+        return thread?.let { tid to it }
+    }
+
+    private fun parseThread(value: ByteArray): ParsedThread {
+        val reader = ProtoReader(value)
+        var name: String? = null
+        val frames = mutableListOf<NativeFrameEvidence>()
+        repeat(128) {
+            val field = reader.next() ?: return@repeat
+            if (field.number == 2 && field.bytes != null) {
+                name = safeThreadCategory(safeProtoString(field.bytes, 80))
+            } else if (field.number == 4 && field.bytes != null && frames.size < 12) {
+                parseFrame(field.bytes)?.let(frames::add)
+            }
+        }
+        return ParsedThread(name, frames)
+    }
+
+    private fun parseFrame(value: ByteArray): NativeFrameEvidence? {
+        val reader = ProtoReader(value)
+        var relativePc = 0L
+        var module: String? = null
+        var function: String? = null
+        var buildId: String? = null
+        repeat(32) {
+            val field = reader.next() ?: return@repeat
+            when {
+                field.number == 1 && field.varint != null -> relativePc = field.varint.coerceAtMost(0xffffffffffffL)
+                field.number == 4 && field.bytes != null -> function = safeFunction(safeProtoString(field.bytes, 160))
+                field.number == 6 && field.bytes != null -> module = safeModule(safeProtoString(field.bytes, 180))
+                field.number == 8 && field.bytes != null -> buildId = safeBuildId(safeProtoString(field.bytes, 80))
+            }
+        }
+        if (relativePc == 0L && module == null && function == null && buildId == null) return null
+        return NativeFrameEvidence(relativePc, module, function, buildId)
+    }
+
+    private fun safeProtoString(value: ByteArray, maximum: Int): String? {
+        if (value.isEmpty() || value.size > maximum) return null
+        if (value.any { byte -> (byte.toInt() and 0xff) !in 0x20..0x7e }) return null
+        return value.toString(Charsets.US_ASCII)
+    }
+
+    private fun safeModule(value: String?): String? {
+        val basename = value?.substringAfterLast('/')?.substringAfterLast('\\') ?: return null
+        return basename.takeIf { it.length <= 100 && it.matches(Regex("(?:lib)?[A-Za-z0-9_.+-]+\\.so")) }
+    }
+
+    private fun safeFunction(value: String?): String? = value?.takeIf {
+        it.length <= 160 && it.matches(Regex("[A-Za-z0-9_<>~:.$+@-]+"))
+    }?.replace("::", ".")
+
+    private fun safeBuildId(value: String?): String? = value?.takeIf {
+        it.matches(Regex("[A-Fa-f0-9]{8,64}"))
+    }
+
+    private fun safeThreadCategory(value: String?): String? = when {
+        value == "main" -> "main"
+        value == "RenderThread" -> "RenderThread"
+        value?.startsWith("flutter-worker-") == true -> "flutter-worker"
+        value?.startsWith("SurfaceSyncGroup") == true -> "SurfaceSyncGroup"
+        value?.startsWith("WebSocketClient") == true -> "WebSocketClient"
+        value?.startsWith("binder:") == true -> "binder"
+        value == "queued-work-loop" -> value
+        value == "TracingMuxer" -> value
+        value == "DartWorker" -> value
+        value?.startsWith("mali-compiler") == true -> "mali-compiler"
+        value?.startsWith("mpv") == true -> "mpv"
+        value?.startsWith("Discord") == true -> "Discord"
+        else -> null
+    }
+
+    private data class ParsedThread(val name: String?, val frames: List<NativeFrameEvidence>)
+
+    private data class ProtoField(val number: Int, val varint: Long? = null, val bytes: ByteArray? = null)
+
+    private class ProtoReader(private val value: ByteArray) {
+        private var offset = 0
+        val finished: Boolean get() = offset >= value.size
+
+        fun next(): ProtoField? {
+            if (finished) return null
+            val key = readVarint() ?: return null
+            val number = (key ushr 3).toInt()
+            val wire = (key and 7).toInt()
+            if (number !in 1..999) return null
+            return when (wire) {
+                0 -> ProtoField(number, varint = readVarint() ?: return null)
+                1 -> skip(8)?.let { ProtoField(number) }
+                2 -> {
+                    val length = readVarint()?.toInt() ?: return null
+                    if (length !in 0..65_536 || offset + length > value.size) return null
+                    val bytes = value.copyOfRange(offset, offset + length)
+                    offset += length
+                    ProtoField(number, bytes = bytes)
+                }
+                5 -> skip(4)?.let { ProtoField(number) }
+                else -> null
+            }
+        }
+
+        private fun readVarint(): Long? {
+            var result = 0L
+            for (shift in 0..63 step 7) {
+                if (offset >= value.size) return null
+                val byte = value[offset++].toInt() and 0xff
+                result = result or ((byte and 0x7f).toLong() shl shift)
+                if (byte and 0x80 == 0) return result
+            }
+            return null
+        }
+
+        private fun skip(count: Int): Unit? {
+            if (offset + count > value.size) return null
+            offset += count
+            return Unit
+        }
+    }
+
+    private data class BoundedBytes(val bytes: ByteArray, val truncated: Boolean)
+
+    private data class TraceEvidence(
+        val text: String,
+        val format: String,
+        val rawBytes: Int,
+        val truncated: Boolean,
+    )
+
+    internal data class CrashBreadcrumb(val code: String, val occurredAtMillis: Long)
+
+    private data class NativeFrameEvidence(
+        val relativePc: Long,
+        val module: String?,
+        val function: String?,
+        val buildId: String?,
+    )
+
+    private data class NativeTombstoneEvidence(
+        val signal: String?,
+        val signalCode: String?,
+        val reason: String?,
+        val thread: String?,
+        val frames: List<NativeFrameEvidence>,
+    )
+
+    @RequiresApi(Build.VERSION_CODES.R)
+    private fun exitDetails(
+        context: Context,
+        exit: ApplicationExitInfo,
+        trace: TraceEvidence,
+        maximum: Int,
+    ): String {
+        val processTimeline = runCatching {
+            breadcrumbContextFromProcessSummary(exit.processStateSummary, exit.timestamp)
+        }.getOrDefault("")
+        val contextLines = listOf(
+            "exit_context reason=${exitReasonName(exit.reason)} " +
+                "reason_code=${exit.reason.coerceIn(0, 999)} " +
+                "status=${exit.status.coerceIn(-999, 999)} " +
+                "importance=${importanceName(exit.importance)} " +
+                "pss_mb=${memoryMegabytes(exit.pss)} rss_mb=${memoryMegabytes(exit.rss)} " +
+                "trace_format=${trace.format} trace_bytes=${trace.rawBytes.coerceIn(0, MAX_NATIVE_TRACE_BYTES)} " +
+                "trace_truncated=${trace.truncated}",
+            processTimeline.ifEmpty { currentBreadcrumbContext(context, exit.timestamp) },
+            sanitize(exit.description.orEmpty(), 500)
+                .takeIf { it.isNotEmpty() }
+                ?.let { "exit_description=$it" }
+                .orEmpty(),
+        )
+        return composeCrashDetails(contextLines, trace.text, maximum)
+    }
+
+    internal fun composeCrashDetails(
+        contextLines: List<String>,
+        trace: String,
+        maximum: Int,
+    ): String {
+        if (maximum <= 0) return ""
+        val context = contextLines
+            .asSequence()
+            .map { sanitize(it, 700) }
+            .filter { it.isNotEmpty() }
+            .take(8)
+            .joinToString("\n")
+        val safeTrace = sanitizeStack(trace, maximum)
+        val combined = when {
+            context.isEmpty() -> safeTrace
+            safeTrace.isEmpty() -> context
+            else -> "$context\ntrace:\n$safeTrace"
+        }
+        return combined.take(maximum)
+    }
+
+    private fun currentProcessContext(): String {
+        val runtime = Runtime.getRuntime()
+        val usedHeap = (runtime.totalMemory() - runtime.freeMemory()).coerceAtLeast(0L)
+        val processState = ActivityManager.RunningAppProcessInfo()
+        runCatching { ActivityManager.getMyMemoryState(processState) }
+        return "process_context importance=${importanceName(processState.importance)} " +
+            "pss_mb=${memoryMegabytes(runCatching { Debug.getPss() }.getOrDefault(0L))} " +
+            "java_heap_used_mb=${bytesMegabytes(usedHeap)} " +
+            "java_heap_committed_mb=${bytesMegabytes(runtime.totalMemory())} " +
+            "java_heap_limit_mb=${bytesMegabytes(runtime.maxMemory())} " +
+            "native_heap_mb=${bytesMegabytes(Debug.getNativeHeapAllocatedSize())}"
+    }
+
+    private fun memoryMegabytes(kilobytes: Long): Long =
+        if (kilobytes <= 0L) 0L else ((kilobytes + 512L) / 1_024L).coerceAtMost(1_048_576L)
+
+    private fun bytesMegabytes(bytes: Long): Long =
+        if (bytes <= 0L) 0L else ((bytes + 524_288L) / 1_048_576L).coerceAtMost(1_048_576L)
+
+    private fun exitReasonName(reason: Int): String = when (reason) {
+        ApplicationExitInfo.REASON_CRASH -> "java_crash"
+        ApplicationExitInfo.REASON_CRASH_NATIVE -> "native_crash"
+        ApplicationExitInfo.REASON_ANR -> "anr"
+        else -> "other"
+    }
+
+    internal fun importanceName(importance: Int): String = when {
+        importance <= ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND -> "foreground"
+        importance <= ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND_SERVICE ->
+            "foreground_service"
+        importance <= ActivityManager.RunningAppProcessInfo.IMPORTANCE_VISIBLE -> "visible"
+        importance <= ActivityManager.RunningAppProcessInfo.IMPORTANCE_PERCEPTIBLE -> "perceptible"
+        importance <= ActivityManager.RunningAppProcessInfo.IMPORTANCE_SERVICE -> "service"
+        importance <= ActivityManager.RunningAppProcessInfo.IMPORTANCE_CACHED -> "cached"
+        else -> "unknown"
+    }
+
+    private fun isGzip(value: ByteArray): Boolean =
+        value.size >= 2 && (value[0].toInt() and 0xff) == 0x1f && (value[1].toInt() and 0xff) == 0x8b
+
+    private fun looksLikeText(value: ByteArray): Boolean {
+        if (value.isEmpty()) return false
+        var printable = 0
+        var inspected = 0
+        for (byte in value.take(4_096)) {
+            val code = byte.toInt() and 0xff
+            if (code == 0) return false
+            if (code == 0x09 || code == 0x0a || code == 0x0d || code in 0x20..0x7e) {
+                printable++
+            }
+            inspected++
+        }
+        return inspected > 0 && printable * 100 / inspected >= 85
+    }
+
+    private fun safeTextTrace(value: ByteArray, maximum: Int): String =
+        sanitizeStack(value.toString(Charsets.UTF_8), maximum)
+
+    private fun binaryTraceSignature(value: ByteArray): String =
+        "binary_trace signature=${shortDigest(value.take(4_096).toByteArray())}"
+
+    private fun shortDigest(value: ByteArray): String = MessageDigest.getInstance("SHA-256")
+        .digest(value)
+        .take(8)
+        .joinToString("") { "%02x".format(it) }
+
+    internal fun boundBreadcrumbs(
+        values: List<CrashBreadcrumb>,
+        nowMillis: Long,
+    ): List<CrashBreadcrumb> {
+        val cutoff = nowMillis - BREADCRUMB_HISTORY_MILLIS
+        return values
+            .asSequence()
+            .filter {
+                it.code in BREADCRUMB_CODES && it.occurredAtMillis in cutoff..nowMillis
+            }
+            .sortedBy(CrashBreadcrumb::occurredAtMillis)
+            .toList()
+            .takeLast(MAX_BREADCRUMBS)
+    }
+
+    private fun encodeBreadcrumbs(values: List<CrashBreadcrumb>): String {
+        val array = JSONArray()
+        values.forEach { breadcrumb ->
+            array.put(
+                JSONObject()
+                    .put("code", breadcrumb.code)
+                    .put("at_ms", breadcrumb.occurredAtMillis),
+            )
+        }
+        return array.toString()
+    }
+
+    private fun decodeBreadcrumbs(value: String?): List<CrashBreadcrumb> {
+        if (value.isNullOrBlank()) return emptyList()
+        return runCatching {
+            val array = JSONArray(value)
+            buildList {
+                for (index in 0 until minOf(array.length(), MAX_BREADCRUMBS)) {
+                    val item = array.optJSONObject(index) ?: continue
+                    val code = item.optString("code")
+                    val timestamp = item.optLong("at_ms", 0L)
+                    if (code in BREADCRUMB_CODES && timestamp > 0L) {
+                        add(CrashBreadcrumb(code, timestamp))
+                    }
+                }
+            }
+        }.getOrDefault(emptyList())
+    }
+
+    private fun encodeProcessStateSummary(values: List<CrashBreadcrumb>): ByteArray {
+        val encoded = buildString {
+            append("v1|")
+            values.takeLast(6).forEachIndexed { index, value ->
+                if (index > 0) append(',')
+                append(BREADCRUMB_CODES.getValue(value.code))
+                append('@')
+                append(value.occurredAtMillis)
+            }
+        }.toByteArray(Charsets.US_ASCII)
+        return encoded.take(MAX_PROCESS_STATE_BYTES).toByteArray()
+    }
+
+    private fun currentBreadcrumbContext(context: Context, occurredAtMillis: Long): String {
+        val preferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        return breadcrumbContext(
+            decodeBreadcrumbs(preferences.getString(BREADCRUMBS_KEY, null)),
+            occurredAtMillis,
+        )
+    }
+
+    internal fun breadcrumbContext(
+        values: List<CrashBreadcrumb>,
+        occurredAtMillis: Long,
+    ): String {
+        val bounded = boundBreadcrumbs(values, occurredAtMillis)
+        if (bounded.isEmpty()) return ""
+        return "lifecycle_timeline=" + bounded.joinToString(",") { breadcrumb ->
+            val age = (occurredAtMillis - breadcrumb.occurredAtMillis)
+                .coerceIn(0L, BREADCRUMB_HISTORY_MILLIS)
+            "${breadcrumb.code}:-${age}ms"
+        }
+    }
+
+    internal fun breadcrumbContextFromProcessSummary(
+        value: ByteArray?,
+        occurredAtMillis: Long,
+    ): String {
+        if (value == null || value.isEmpty() || value.size > MAX_PROCESS_STATE_BYTES) return ""
+        val encoded = value.toString(Charsets.US_ASCII)
+        if (!encoded.startsWith("v1|")) return ""
+        val reverseCodes = BREADCRUMB_CODES.entries.associate { (event, compact) -> compact to event }
+        val values = encoded.removePrefix("v1|")
+            .split(',')
+            .take(6)
+            .mapNotNull { item ->
+                val compact = item.substringBefore('@')
+                val timestamp = item.substringAfter('@', "").toLongOrNull()
+                val event = reverseCodes[compact]
+                if (event == null || timestamp == null) null else CrashBreadcrumb(event, timestamp)
+            }
+        return breadcrumbContext(values, occurredAtMillis)
+    }
+
+    private val BREADCRUMB_CODES = linkedMapOf(
+        "app_process_created" to "pc",
+        "activity_created" to "ac",
+        "activity_resumed" to "ar",
+        "activity_paused" to "ap",
+        "activity_destroyed" to "ad",
+        "direct_torrent_bridge_start_requested" to "dbs",
+        "direct_torrent_bridge_start_failed" to "dbf",
+        "direct_torrent_bridge_stop_requested" to "dbx",
+        "direct_torrent_service_created" to "dsc",
+        "direct_torrent_service_foreground" to "dsf",
+        "direct_torrent_service_destroyed" to "dsd",
+        "offline_download_service_created" to "osc",
+        "offline_download_service_foreground" to "osf",
+        "offline_download_service_destroyed" to "osd",
+        "external_playback_service_created" to "esc",
+        "external_playback_service_destroyed" to "esd",
+    )
 
     private fun persistLocalCrashSummaries(
         context: Context,

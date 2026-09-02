@@ -91,10 +91,12 @@ final class MangaCbzDownloadAcquisition extends MangaChapterAcquisition {
 class MangaReadingOrderPage {
   MangaReadingOrderPage({
     required Uri uri,
+    Map<String, String> headers = const <String, String>{},
     this.pixelWidth,
     this.pixelHeight,
     this.isCover = false,
-  }) : uri = requireMangaPublicHttpsUri(
+  }) : headers = _validatedEphemeralPageHeaders(headers),
+       uri = requireMangaPublicHttpsUri(
          uri.toString(),
          field: 'Manga page URL',
        ) {
@@ -106,6 +108,7 @@ class MangaReadingOrderPage {
   }
 
   final Uri uri;
+  final Map<String, String> headers;
   final int? pixelWidth;
   final int? pixelHeight;
   final bool isCover;
@@ -1044,7 +1047,13 @@ class MangaAcquisitionService {
           : maximumMangaArchivePageBytes;
       final response = await _openResponse(
         sourcePage.uri,
-        credentials,
+        sourcePage.headers.isEmpty
+            ? credentials
+            : _CredentialCapability(
+                origin: sourcePage.uri,
+                headers: sourcePage.headers,
+                stripHeadersOnCrossOriginRedirect: true,
+              ),
         operation._cancellation,
       );
       var bodyStarted = false;
@@ -1328,7 +1337,9 @@ class MangaAcquisitionService {
             'The manga server returned an unsafe redirect.',
           );
         }
-        if (sentCredentials && !_sameOrigin(current, redirected)) {
+        if (sentCredentials &&
+            !_sameOrigin(current, redirected) &&
+            !credentials.stripHeadersOnCrossOriginRedirect) {
           throw const MangaAcquisitionException(
             MangaAcquisitionFailureCode.redirectRejected,
             'An authenticated manga download cannot change origin.',
@@ -1521,10 +1532,12 @@ class _CredentialCapability {
   const _CredentialCapability({
     this.origin,
     this.headers = const <String, String>{},
+    this.stripHeadersOnCrossOriginRedirect = false,
   });
 
   final Uri? origin;
   final Map<String, String> headers;
+  final bool stripHeadersOnCrossOriginRedirect;
 }
 
 MangaDownloadJob _updatedJob(
@@ -1629,23 +1642,41 @@ String _boundedValue(String value, String field, int maximum) {
 }
 
 Map<String, String> _validatedEphemeralHeaders(Map<String, String> headers) {
+  return _validatedEphemeralHeaderMap(headers, allowPageMetadata: false);
+}
+
+Map<String, String> _validatedEphemeralPageHeaders(
+  Map<String, String> headers,
+) {
+  return _validatedEphemeralHeaderMap(headers, allowPageMetadata: true);
+}
+
+Map<String, String> _validatedEphemeralHeaderMap(
+  Map<String, String> headers, {
+  required bool allowPageMetadata,
+}) {
   if (headers.length > 32) {
     throw const FormatException('Too many manga acquisition headers.');
   }
   final normalizedNames = <String>{};
   final safe = <String, String>{};
+  var totalLength = 0;
   for (final entry in headers.entries) {
     final name = entry.key.trim();
     final lowerName = name.toLowerCase();
     final value = entry.value;
     if (!_acquisitionHeaderNamePattern.hasMatch(name) ||
-        !_allowedAcquisitionCredentialHeader(lowerName) ||
+        !(allowPageMetadata
+            ? _allowedMangaPageHeader(lowerName, value)
+            : _allowedAcquisitionCredentialHeader(lowerName)) ||
         !normalizedNames.add(lowerName) ||
         value.length > 8192 ||
-        value.contains('\r') ||
-        value.contains('\n') ||
-        value.contains('\u0000')) {
+        value.codeUnits.any((unit) => unit < 0x20 || unit == 0x7f)) {
       throw const FormatException('Invalid manga acquisition header.');
+    }
+    totalLength += name.length + value.length;
+    if (totalLength > 16 * 1024) {
+      throw const FormatException('Manga acquisition headers are too large.');
     }
     safe[name] = value;
   }
@@ -1656,6 +1687,32 @@ bool _allowedAcquisitionCredentialHeader(String name) =>
     !_blockedAcquisitionHeaders.contains(name) &&
     !name.startsWith('proxy-') &&
     !name.startsWith('sec-');
+
+bool _allowedMangaPageHeader(String name, String value) {
+  if (_blockedMangaPageHeaders.contains(name) ||
+      name.startsWith('proxy-') ||
+      name.startsWith('sec-')) {
+    return false;
+  }
+  if (name == 'origin') return _isSafeMangaMediaOrigin(value);
+  if (name == 'referer') {
+    final parsed = Uri.tryParse(value.trim());
+    return parsed != null &&
+        !parsed.hasFragment &&
+        safePublicHttpsUri(value) != null;
+  }
+  return true;
+}
+
+bool _isSafeMangaMediaOrigin(String value) {
+  final parsed = Uri.tryParse(value.trim());
+  final uri = safePublicHttpsUri(value);
+  return parsed != null &&
+      uri != null &&
+      !parsed.hasQuery &&
+      !parsed.hasFragment &&
+      (parsed.path.isEmpty || parsed.path == '/');
+}
 
 Future<Map<String, String>> _noCredentialHeaders(String _) async =>
     const <String, String>{};
@@ -1691,6 +1748,18 @@ const Set<String> _blockedAcquisitionHeaders = <String>{
   'transfer-encoding',
   'upgrade',
   'user-agent',
+};
+const Set<String> _blockedMangaPageHeaders = <String>{
+  'accept-encoding',
+  'connection',
+  'content-length',
+  'expect',
+  'forwarded',
+  'host',
+  'te',
+  'trailer',
+  'transfer-encoding',
+  'upgrade',
 };
 final RegExp _sourceIdPattern = RegExp(
   r'^[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$',

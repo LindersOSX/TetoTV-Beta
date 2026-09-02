@@ -311,6 +311,14 @@ void main() {
     expect(find.byKey(const ValueKey('episode-action-restart')), findsNothing);
     expect(find.byKey(const ValueKey('episode-action-selected')), findsNothing);
     expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('episode-manual-selector')),
+        matching: find.byType(FocusableActionDetector),
+      ),
+      findsNothing,
+      reason: 'a Watch Party guest cannot change the host-controlled episode',
+    );
+    expect(
       find.byKey(const ValueKey('episode-watch-party-leave')),
       findsOneWidget,
     );

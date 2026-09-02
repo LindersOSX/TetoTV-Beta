@@ -4,6 +4,7 @@ import 'package:anime_tv/features/auth/domain/pairing_session.dart';
 import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
 import 'package:anime_tv/features/auth/presentation/anilist_pairing_screen.dart';
 import 'package:anime_tv/features/auth/presentation/torbox_pairing_screen.dart';
+import 'package:anime_tv/core/widgets/copyable_code_interaction.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -82,6 +83,7 @@ Future<void> _setViewport(WidgetTester tester, Size size) async {
 
 void _expectVisiblePairingContent(WidgetTester tester, Size viewport) {
   expect(find.byType(SingleChildScrollView), findsOneWidget);
+  expect(find.byType(CopyableCodeInteraction), findsOneWidget);
   final hint = find.text(_copyHint);
   expect(hint, findsOneWidget);
   final center = tester.getCenter(hint);

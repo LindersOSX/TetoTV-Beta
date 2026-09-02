@@ -1593,10 +1593,12 @@ void main() {
       final request = await service.preparePlayback(
         LibraryEpisodeSource.jellyfin(item),
         preferredSubtitleLanguage: 'jpn',
+        preferredAudioLanguage: 'spa',
         requestedAudio: PlaybackAudioPreference.dub,
       );
 
       expect(local.preferredSubtitleLanguage, 'jpn');
+      expect(local.preferredAudioLanguage, 'spa');
       expect(local.requestedAudio, PlaybackAudioPreference.dub);
       expect(request.requestedAudio, PlaybackAudioPreference.dub);
       expect(request.externalSubtitleTracks.map((track) => track.label), [
@@ -1927,6 +1929,7 @@ class _FakePlexController implements PlexController {
 
 class _PlaybackLocalMediaController implements LocalMediaController {
   String? preferredSubtitleLanguage;
+  String? preferredAudioLanguage;
   PlaybackAudioPreference? requestedAudio;
   bool compatibilityRequested = false;
 
@@ -1938,9 +1941,11 @@ class _PlaybackLocalMediaController implements LocalMediaController {
     JellyfinMediaItem item, {
     required String playSessionId,
     String preferredSubtitleLanguage = 'eng',
+    String preferredAudioLanguage = 'auto',
     PlaybackAudioPreference? requestedAudio,
   }) {
     this.preferredSubtitleLanguage = preferredSubtitleLanguage;
+    this.preferredAudioLanguage = preferredAudioLanguage;
     this.requestedAudio = requestedAudio;
     return JellyfinPlaybackPlan(
       uri: Uri.parse('https://media.example/master.m3u8'),
@@ -1970,6 +1975,7 @@ class _PlaybackLocalMediaController implements LocalMediaController {
     JellyfinMediaItem item, {
     required String playSessionId,
     String preferredSubtitleLanguage = 'eng',
+    String preferredAudioLanguage = 'auto',
     PlaybackAudioPreference? requestedAudio,
   }) {
     compatibilityRequested = true;
@@ -1977,6 +1983,7 @@ class _PlaybackLocalMediaController implements LocalMediaController {
       item,
       playSessionId: playSessionId,
       preferredSubtitleLanguage: preferredSubtitleLanguage,
+      preferredAudioLanguage: preferredAudioLanguage,
       requestedAudio: requestedAudio,
     );
   }

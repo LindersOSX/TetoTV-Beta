@@ -47,6 +47,7 @@ typedef LibraryNextEpisodePreparer =
       required EpisodeReference episode,
       required LibraryEpisodeOrigin? preferredOrigin,
       required String preferredSubtitleLanguage,
+      required String preferredAudioLanguage,
       required PlaybackAudioPreference? requestedAudio,
     });
 typedef DownloadedNextEpisodePreparer =
@@ -98,6 +99,7 @@ final nextEpisodePreparationControllerProvider =
               required episode,
               required preferredOrigin,
               required preferredSubtitleLanguage,
+              required preferredAudioLanguage,
               required requestedAudio,
             }) async {
               await libraryService.loadConnections();
@@ -128,6 +130,7 @@ final nextEpisodePreparationControllerProvider =
                       episodeCount: episode.episodeCount,
                     ),
                     preferredSubtitleLanguage: preferredSubtitleLanguage,
+                    preferredAudioLanguage: preferredAudioLanguage,
                     requestedAudio: requestedAudio,
                   );
                 } catch (_) {
@@ -614,6 +617,19 @@ class NextEpisodePreparationController {
       );
     }
     final episode = _episodeReference(details, episodeNumber);
+    final preferredAudio = preferredAudioPreferenceForRelease(
+      release: request.currentLaunch.selectedRelease,
+      globalPreference: settings.preferredAudio,
+      requestedAudio: request.currentLaunch.requestedAudio,
+      seriesAudioLanguage: request.seriesPreferences.audioLanguage,
+      seriesOverride: request.seriesPreferences.audioPreferenceSet,
+    );
+    final preferredAudioLanguage = preferredPlaybackAudioLanguage(
+      globalPreference: preferredAudio,
+      globalLanguage: settings.preferredAudioLanguage,
+      seriesLanguage: request.seriesPreferences.audioLanguage,
+      seriesPreferenceSet: request.seriesPreferences.audioPreferenceSet,
+    );
     if (settings.offlineDownloadsEnabled && _prepareDownloadedEpisode != null) {
       PlaybackLaunch? downloadedLaunch;
       try {
@@ -646,6 +662,7 @@ class NextEpisodePreparationController {
         episode: episode,
         preferredOrigin: request.preferredLibraryOrigin,
         preferredSubtitleLanguage: request.seriesPreferences.subtitleLanguage,
+        preferredAudioLanguage: preferredAudioLanguage,
         requestedAudio: request.currentLaunch.requestedAudio,
       );
       try {
@@ -687,13 +704,6 @@ class NextEpisodePreparationController {
       return const NextEpisodePreparationOutcome();
     }
 
-    final preferredAudio = preferredAudioPreferenceForRelease(
-      release: request.currentLaunch.selectedRelease,
-      globalPreference: settings.preferredAudio,
-      requestedAudio: request.currentLaunch.requestedAudio,
-      seriesAudioLanguage: request.seriesPreferences.audioLanguage,
-      seriesOverride: request.seriesPreferences.audioPreferenceSet,
-    );
     var device = const TvDeviceProfile.unknown();
     var failureCounts = const <String, int>{};
     try {
@@ -723,6 +733,7 @@ class NextEpisodePreparationController {
       settings: settings,
       seriesPreferences: request.seriesPreferences,
       preferredAudio: preferredAudio,
+      preferredAudioLanguage: preferredAudioLanguage,
     );
     final releases = rankedReleases;
     final webStreams = rankedWebStreams;
@@ -925,6 +936,7 @@ class NextEpisodePreparationController {
         allReleases: releases,
         allWebStreams: webStreams,
         preferredAudio: preferredAudio,
+        preferredAudioLanguage: preferredAudioLanguage,
         sourcePriority: settings.streamSourcePriority,
         device: device,
         failureCounts: failureCounts,
@@ -956,6 +968,7 @@ class NextEpisodePreparationController {
     required List<ReleaseCandidate> allReleases,
     required List<WebStreamResult> allWebStreams,
     required PlaybackAudioPreference preferredAudio,
+    required String preferredAudioLanguage,
     required StreamSourcePriority sourcePriority,
     required TvDeviceProfile device,
     required Map<String, int> failureCounts,
@@ -971,7 +984,12 @@ class NextEpisodePreparationController {
                 (stream) =>
                     stream.providerId.trim().toLowerCase() ==
                         currentWebProvider &&
-                    webStreamAudioPreferenceRank(stream, preferredAudio) == 0,
+                    webStreamAudioPreferenceRank(
+                          stream,
+                          preferredAudio,
+                          preferredLanguage: preferredAudioLanguage,
+                        ) <=
+                        1,
               )
               .take(1)
               .toList(growable: false)
@@ -1623,12 +1641,14 @@ List<WebStreamResult> _rankWebStreams(
   required SettingsPreferences settings,
   required SeriesPlaybackPreferences seriesPreferences,
   required PlaybackAudioPreference preferredAudio,
+  required String preferredAudioLanguage,
 }) {
   return rankAutomaticAutoplayWebStreams(
     streams,
     language: preferredAudio.name,
     quality: seriesPreferences.preferredQuality,
     preferredAudio: preferredAudio,
+    preferredAudioLanguage: preferredAudioLanguage,
     qualityPreference: settings.webStreamQuality,
     preferredWebProviderId: current.stream.providerId,
     preferredQualityHeight: releaseQualityHeight(current.selectedRelease),

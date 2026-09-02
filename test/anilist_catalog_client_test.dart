@@ -272,6 +272,33 @@ void main() {
   };
 
   group('AniListCatalogClient', () {
+    test('details maps premiere and next-episode schedule metadata', () async {
+      final client = AniListCatalogClient(
+        dio: interceptedDio({
+          'data': {
+            'Media': {
+              ..._calendarMedia(100),
+              'status': 'RELEASING',
+              'startDate': {'year': 2026, 'month': 7, 'day': 3},
+              'nextAiringEpisode': {'episode': 13, 'airingAt': 1788890400},
+            },
+          },
+        }),
+      );
+
+      final anime = await client.details(100);
+
+      expect(anime.startDate, DateTime(2026, 7, 3));
+      expect(
+        anime.nextAiringAt,
+        DateTime.fromMillisecondsSinceEpoch(
+          1788890400 * Duration.millisecondsPerSecond,
+          isUtc: true,
+        ),
+      );
+      expect(anime.nextAiringEpisode, 13);
+    });
+
     test(
       'franchise watch order expands a continuation chain once per title',
       () async {

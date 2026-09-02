@@ -1,5 +1,6 @@
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
+import 'package:anime_tv/core/widgets/copyable_code_interaction.dart';
 import 'package:anime_tv/features/discord/application/discord_presence_controller.dart';
 import 'package:anime_tv/features/marketplace/domain/source_pairing.dart';
 import 'package:anime_tv/features/settings/application/all_debrid_settings_controller.dart';
@@ -47,6 +48,15 @@ void main() {
       expect(find.byType(QrImageView), findsOneWidget);
       expect(find.byType(TextField), findsNothing);
       expect(find.text('ABCD-EFGH'), findsOneWidget);
+      expect(find.byType(CopyableCodeInteraction), findsOneWidget);
+      expect(
+        find.ancestor(
+          of: find.text('SAFE 2468'),
+          matching: find.byType(CopyableCodeInteraction),
+        ),
+        findsNothing,
+        reason: 'The confirmation-only match code must not be copyable.',
+      );
       expect(find.textContaining('end-to-end encryption'), findsOneWidget);
 
       final connectRect = tester.getRect(find.text('CONNECT YOUR PHONE'));

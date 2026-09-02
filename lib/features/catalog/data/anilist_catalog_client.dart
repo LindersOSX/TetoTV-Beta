@@ -91,7 +91,8 @@ class AniListCatalogClient {
             duration
             synonyms
             isAdult
-            nextAiringEpisode { episode }
+            startDate { year month day }
+            nextAiringEpisode { episode airingAt }
           }
         }
       }
@@ -159,7 +160,8 @@ class AniListCatalogClient {
             duration
             synonyms
             isAdult
-            nextAiringEpisode { episode }
+            startDate { year month day }
+            nextAiringEpisode { episode airingAt }
           }
         }
       }
@@ -213,7 +215,8 @@ class AniListCatalogClient {
             duration
             synonyms
             isAdult
-            nextAiringEpisode { episode }
+            startDate { year month day }
+            nextAiringEpisode { episode airingAt }
           }
         }
       }
@@ -258,7 +261,8 @@ class AniListCatalogClient {
           duration
           synonyms
           isAdult
-          nextAiringEpisode { episode }
+          startDate { year month day }
+          nextAiringEpisode { episode airingAt }
           studios(isMain: true) { nodes { id name } }
           staff(perPage: 10, sort: RELEVANCE) {
             nodes { id name { full } image { large } }
@@ -293,7 +297,8 @@ class AniListCatalogClient {
                 duration
                 synonyms
                 isAdult
-                nextAiringEpisode { episode }
+                startDate { year month day }
+                nextAiringEpisode { episode airingAt }
               }
             }
           }
@@ -356,7 +361,8 @@ class AniListCatalogClient {
             id idMal title { userPreferred english romaji native }
             description(asHtml: false) episodes averageScore genres
             coverImage { extraLarge } bannerImage format status season
-            seasonYear duration synonyms isAdult nextAiringEpisode { episode }
+            seasonYear duration synonyms isAdult startDate { year month day }
+            nextAiringEpisode { episode airingAt }
           }
         }
       }
@@ -448,7 +454,8 @@ class AniListCatalogClient {
               id idMal title { userPreferred english romaji native }
               description(asHtml: false) episodes averageScore genres
               coverImage { extraLarge } bannerImage format status season
-              seasonYear duration synonyms isAdult nextAiringEpisode { episode }
+              seasonYear duration synonyms isAdult startDate { year month day }
+              nextAiringEpisode { episode airingAt }
             }
           }
         }
@@ -509,7 +516,8 @@ class AniListCatalogClient {
               id idMal title { userPreferred english romaji native }
               description(asHtml: false) episodes averageScore genres
               coverImage { extraLarge } bannerImage format status season
-              seasonYear duration synonyms isAdult nextAiringEpisode { episode }
+              seasonYear duration synonyms isAdult startDate { year month day }
+              nextAiringEpisode { episode airingAt }
             }
           }
         }
@@ -539,7 +547,8 @@ class AniListCatalogClient {
               id idMal title { userPreferred english romaji native }
               description(asHtml: false) episodes averageScore genres
               coverImage { extraLarge } bannerImage format status season
-              seasonYear duration synonyms isAdult nextAiringEpisode { episode }
+              seasonYear duration synonyms isAdult startDate { year month day }
+              nextAiringEpisode { episode airingAt }
             }
           }
         }
@@ -1136,6 +1145,9 @@ class AniListCatalogClient {
     };
     final aired = resource['aired'] as Map<String, dynamic>?;
     final start = DateTime.tryParse(aired?['from']?.toString() ?? '');
+    final startDate = start == null
+        ? null
+        : DateTime(start.year, start.month, start.day);
     final englishTitle = resource['title_english']?.toString().trim();
     final synopsis = _plainText(resource['synopsis']?.toString() ?? '');
     final jikanCover = jpg?['large_image_url']?.toString().trim();
@@ -1177,10 +1189,12 @@ class AniListCatalogClient {
       season: resource['season']?.toString().toUpperCase() ?? mapped.season,
       seasonYear:
           _integer(resource['year']) ?? start?.year ?? mapped.seasonYear,
+      startDate: startDate ?? mapped.startDate,
       durationMinutes:
           _jikanDurationMinutes(resource['duration']?.toString()) ??
           mapped.durationMinutes,
       nextAiringEpisode: mapped.nextAiringEpisode,
+      nextAiringAt: mapped.nextAiringAt,
       isAdult: mapped.isAdult,
       relatedAnime: mapped.relatedAnime,
       studios: mapped.studios,
@@ -1727,8 +1741,10 @@ class AniListCatalogClient {
       status: item['status'] as String?,
       season: item['season'] as String?,
       seasonYear: item['seasonYear'] as int?,
+      startDate: _mapAniListDate(item['startDate']),
       durationMinutes: item['duration'] as int?,
       nextAiringEpisode: airing?['episode'] as int?,
+      nextAiringAt: _unixSeconds(airing?['airingAt']),
       isAdult: item['isAdult'] == true,
       relatedAnime: _mapRelations(item['relations']),
       studios: studios,
@@ -1746,6 +1762,36 @@ class AniListCatalogClient {
               AnimeStudio(id: item['id'] as int, name: item['name'] as String),
         )
         .toList(growable: false);
+  }
+
+  DateTime? _mapAniListDate(dynamic value) {
+    if (value is! Map) return null;
+    final year = _integer(value['year']);
+    final month = _integer(value['month']);
+    final day = _integer(value['day']);
+    if (year == null ||
+        year < 1 ||
+        month == null ||
+        month < 1 ||
+        month > 12 ||
+        day == null ||
+        day < 1 ||
+        day > 31) {
+      return null;
+    }
+    final parsed = DateTime(year, month, day);
+    return parsed.year == year && parsed.month == month && parsed.day == day
+        ? parsed
+        : null;
+  }
+
+  DateTime? _unixSeconds(dynamic value) {
+    final seconds = _integer(value);
+    if (seconds == null || seconds <= 0) return null;
+    return DateTime.fromMillisecondsSinceEpoch(
+      seconds * Duration.millisecondsPerSecond,
+      isUtc: true,
+    );
   }
 
   AnimePerson _mapPerson(Map<String, dynamic> item) {

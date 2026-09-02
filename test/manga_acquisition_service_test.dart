@@ -140,6 +140,51 @@ void main() {
       },
     );
 
+    test('uses extension page headers only on the page origin', () async {
+      final fixture = await _AcquisitionFixture.create();
+      addTearDown(fixture.dispose);
+      final initial = Uri.parse('https://images.example/pages/1.png');
+      final redirected = Uri.parse('https://cdn.example/pages/1.png');
+      fixture.transport.enqueue(
+        initial,
+        (_) => MangaAcquisitionHttpResponse(
+          statusCode: HttpStatus.found,
+          headers: <String, String>{
+            HttpHeaders.locationHeader: redirected.toString(),
+          },
+          body: const Stream<List<int>>.empty(),
+        ),
+      );
+      fixture.transport.enqueue(
+        redirected,
+        (_) => _response(_pngBytes, contentType: 'image/png'),
+      );
+      final request = _request(
+        acquisition: MangaReadingOrderAcquisition(<MangaReadingOrderPage>[
+          MangaReadingOrderPage(
+            uri: initial,
+            headers: const <String, String>{
+              HttpHeaders.refererHeader: 'https://reader.example/chapter/1',
+              HttpHeaders.userAgentHeader: 'Seanime fixture',
+              HttpHeaders.cookieHeader: 'source_session=fixture',
+            },
+          ),
+        ]),
+      );
+
+      final result = await fixture.service.start(request).completed;
+
+      expect(result.pages, hasLength(1));
+      expect(fixture.transport.requests, hasLength(2));
+      expect(fixture.transport.requests.first.headers, <String, String>{
+        HttpHeaders.refererHeader: 'https://reader.example/chapter/1',
+        HttpHeaders.userAgentHeader: 'Seanime fixture',
+        HttpHeaders.cookieHeader: 'source_session=fixture',
+      });
+      expect(fixture.transport.requests.last.headers, isEmpty);
+      expect(fixture.persistence.pageRows('chapter-job'), hasLength(1));
+    });
+
     test('blocks authenticated cross-origin redirects', () async {
       final fixture = await _AcquisitionFixture.create();
       addTearDown(fixture.dispose);
@@ -644,7 +689,7 @@ void main() {
       },
     );
 
-    test('rejects unsafe ephemeral CBZ headers before networking', () {
+    test('rejects unsafe ephemeral acquisition headers before networking', () {
       expect(
         () => MangaCbzDownloadAcquisition(
           Uri.parse('https://catalog.example/chapter.cbz'),
@@ -656,6 +701,22 @@ void main() {
         () => MangaCbzDownloadAcquisition(
           Uri.parse('https://catalog.example/chapter.cbz'),
           headers: const <String, String>{'X-Api-Key': 'value\r\ninjected'},
+        ),
+        throwsFormatException,
+      );
+      expect(
+        () => MangaReadingOrderPage(
+          uri: Uri.parse('https://catalog.example/page.jpg'),
+          headers: const <String, String>{HttpHeaders.hostHeader: 'evil.test'},
+        ),
+        throwsFormatException,
+      );
+      expect(
+        () => MangaReadingOrderPage(
+          uri: Uri.parse('https://catalog.example/page.jpg'),
+          headers: const <String, String>{
+            'Origin': 'http://reader.example',
+          },
         ),
         throwsFormatException,
       );

@@ -4,6 +4,7 @@ import 'package:anime_tv/core/diagnostics/anonymous_crash_reporter.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/features/streaming/domain/debrid_service.dart';
 import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
+import 'package:anime_tv/features/tracking/application/my_list_controller.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -155,6 +156,9 @@ void main() {
           type: DioExceptionType.cancel,
         ),
         const DebridCacheMissException(DebridService.realDebrid),
+        const WebStreamPreflightFailure('validation_failed'),
+        CatalogTrackingValidationError.connectionRequired(),
+        CatalogTrackingValidationError.missingMediaId(),
         StateError('No results matched these filters.'),
         StateError('authorization_pending'),
         StateError('access_denied'),
@@ -299,6 +303,15 @@ void main() {
       expect(captured, [error, error]);
     },
   );
+}
+
+class WebStreamPreflightFailure implements Exception {
+  const WebStreamPreflightFailure(this.reasonCode);
+
+  final String reasonCode;
+
+  @override
+  String toString() => 'Web stream preflight failed ($reasonCode).';
 }
 
 class _CrashClient implements AnonymousCrashReportClient {

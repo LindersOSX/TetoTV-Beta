@@ -175,7 +175,9 @@ class MarketplaceController extends StateNotifier<MarketplaceState> {
     _compatibilityTestTimer?.cancel();
     _compatibilityTestTimer = null;
     if (!_scheduleCompatibilityTests || !mounted) return;
-    final enabledProviders = state.installed.where((addon) => addon.enabled);
+    final enabledProviders = state.installed.where(
+      (addon) => addon.enabled && addon.manifest.isOnlineStreamProvider,
+    );
     final delay = nextProviderCompatibilityTestDelay(
       enabledProviders.map(
         (addon) => state.providerHealth[addon.manifest.id]?.lastTestedAt,
@@ -476,7 +478,9 @@ class MarketplaceController extends StateNotifier<MarketplaceState> {
     final now = DateTime.now();
     final providers = state.installed
         .where((addon) {
-          if (!addon.enabled) return false;
+          if (!addon.enabled || !addon.manifest.isOnlineStreamProvider) {
+            return false;
+          }
           if (!onlyDue) return true;
           final lastTested =
               state.providerHealth[addon.manifest.id]?.lastTestedAt;

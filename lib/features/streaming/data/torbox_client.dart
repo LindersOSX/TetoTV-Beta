@@ -32,6 +32,7 @@ class TorBoxClient {
               headers: {
                 'Accept': 'application/json',
                 'Authorization': 'Bearer $token',
+                'User-Agent': 'TetoTV-Android',
               },
             ),
           );

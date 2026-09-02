@@ -491,6 +491,7 @@ class _NavigationLocalMediaController extends LocalMediaController {
     JellyfinMediaItem item, {
     required String playSessionId,
     String preferredSubtitleLanguage = 'eng',
+    String preferredAudioLanguage = 'auto',
     PlaybackAudioPreference? requestedAudio,
   }) {
     this.preferredSubtitleLanguage = preferredSubtitleLanguage;

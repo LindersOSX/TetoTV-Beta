@@ -125,6 +125,111 @@ void main() {
     expect(find.text('PAUSED AFTER FAILURES'), findsNothing);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets(
+    'mixed installed providers use kind-specific sections and actions',
+    (tester) async {
+      tester.view.physicalSize = const Size(1920, 1080);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            marketplaceControllerProvider.overrideWith(
+              (_) => _MixedProviderController(installedOnly: true),
+            ),
+            userTorrentSourcesControllerProvider.overrideWith(
+              (_) => _EmptyTorrentSourcesController(),
+            ),
+          ],
+          child: const MaterialApp(home: MarketplaceScreen()),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.scrollUntilVisible(
+        find.text('Installed anime stream providers'),
+        280,
+        scrollable: find.byType(Scrollable).last,
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Installed anime stream providers'), findsOneWidget);
+      expect(find.text('Test all'), findsOneWidget);
+
+      await tester.scrollUntilVisible(
+        find.text('Installed manga providers'),
+        280,
+        scrollable: find.byType(Scrollable).last,
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Installed manga providers'), findsOneWidget);
+      expect(find.text('MANGA SOURCE • APPEARS IN MANGA'), findsOneWidget);
+
+      final mangaCard = find.byKey(
+        const ValueKey('marketplace.addon.manga.fixture'),
+      );
+      expect(mangaCard, findsOneWidget);
+      expect(
+        find.descendant(of: mangaCard, matching: find.text('Test')),
+        findsNothing,
+      );
+      expect(
+        find.descendant(of: mangaCard, matching: find.text('Reset')),
+        findsNothing,
+      );
+      expect(
+        find.descendant(of: mangaCard, matching: find.text('Disable')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: mangaCard, matching: find.text('Uninstall')),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('mixed catalog separates anime and manga provider destinations', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1920, 1080);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          marketplaceControllerProvider.overrideWith(
+            (_) => _MixedProviderController(installedOnly: false),
+          ),
+          userTorrentSourcesControllerProvider.overrideWith(
+            (_) => _EmptyTorrentSourcesController(),
+          ),
+        ],
+        child: const MaterialApp(home: MarketplaceScreen()),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+      find.text('Available providers'),
+      280,
+      scrollable: find.byType(Scrollable).last,
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Anime stream providers'), findsOneWidget);
+    expect(find.text('Manga providers'), findsOneWidget);
+    expect(
+      find.textContaining('2 of 2 compatible providers shown'),
+      findsOneWidget,
+    );
+    expect(find.text('ANIME STREAM • WEB STREAMS'), findsOneWidget);
+    expect(find.text('MANGA SOURCE • INSTALL FOR MANGA'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 }
 
 class _ProviderHealthController extends MarketplaceController {
@@ -249,6 +354,45 @@ class _RuntimeIncompatibleProviderHealthController
       loading: false,
     );
   }
+}
+
+class _MixedProviderController extends MarketplaceController {
+  _MixedProviderController({required bool installedOnly})
+    : super(
+        AddonStore(TetoTvDatabase.instance),
+        MarketplaceClient(AddonStore(TetoTvDatabase.instance)),
+      ) {
+    final stream = _provider('stream.fixture', 'onlinestream-provider');
+    final manga = _provider('manga.fixture', 'manga-provider');
+    state = MarketplaceState(
+      installed: installedOnly
+          ? [_installed(stream), _installed(manga)]
+          : const [],
+      catalog: installedOnly ? const [] : [stream, manga],
+      loading: false,
+    );
+  }
+
+  static MarketplaceAddon _provider(String id, String type) => MarketplaceAddon(
+    id: id,
+    name: id,
+    description: 'Mixed provider UI fixture',
+    author: 'TetoTV tests',
+    manifestUri: Uri.parse('https://example.test/$id.json'),
+    repositoryUrl: 'https://example.test/marketplace.json',
+    language: 'javascript',
+    type: type,
+    locale: 'en',
+  );
+
+  static InstalledStreamingAddon _installed(MarketplaceAddon manifest) =>
+      InstalledStreamingAddon(
+        manifest: manifest,
+        payload: 'class Provider {}',
+        enabled: true,
+        installedAt: DateTime(2026),
+        updatedAt: DateTime(2026),
+      );
 }
 
 class _EmptyTorrentSourcesController extends UserTorrentSourcesController {

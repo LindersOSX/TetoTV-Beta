@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/widgets/copyable_code_interaction.dart';
 import 'package:anime_tv/core/widgets/copyable_qr_interaction.dart';
 import 'package:anime_tv/features/marketplace/application/source_pairing_controller.dart';
 import 'package:anime_tv/features/marketplace/domain/source_pairing.dart';
@@ -240,13 +241,20 @@ class _WaitingForSources extends StatelessWidget {
               style: Theme.of(context).textTheme.bodyLarge,
             ),
             const SizedBox(height: 14),
-            SelectableText(
-              session.userCode,
-              style: TextStyle(
-                color: context.appPalette.accentBright,
-                fontSize: 30,
-                fontWeight: FontWeight.w900,
-                letterSpacing: 4,
+            CopyableCodeInteraction(
+              code: session.userCode,
+              semanticsLabel:
+                  'Marketplace source-pairing code ${session.userCode}',
+              confirmationMessage: 'Source-pairing code copied.',
+              child: Text(
+                session.userCode,
+                key: const ValueKey('source-pairing-user-code'),
+                style: TextStyle(
+                  color: context.appPalette.accentBright,
+                  fontSize: 30,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: 4,
+                ),
               ),
             ),
             const SizedBox(height: 12),

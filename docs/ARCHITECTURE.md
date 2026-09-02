@@ -17,7 +17,7 @@ device-agnostic Android playback path.
 | Local state | SQLite (`sqflite`, WAL mode) | Exact resume, history, per-series settings, compatibility failures, catalog cache, and performance events. |
 | Native TV | Kotlin method channel | MediaSession, Watch Next, reminders, codec/display/audio capabilities, content-URI permissions, and display mode selection. |
 | Metadata | AniList GraphQL with mapped Kitsu and Jikan fallbacks | AniList remains canonical; two independent account-free backups provide bounded read-only coverage when identity and requested filters can be preserved, and otherwise fail safely. |
-| Auth | Direct Real-Debrid device OAuth plus a tracker pairing broker | Real-Debrid exposes a TV-friendly device flow; AniList/MAL authorization is adapted by a small server so secrets never ship in the APK. |
+| Auth | Direct Real-Debrid device OAuth plus an account pairing broker | Real-Debrid exposes a TV-friendly device flow; AniList, MAL, and SIMKL authorization is adapted by a small server so provider secrets never ship in the APK. |
 | Debrid | Real-Debrid, TorBox, AllDebrid, and Premiumize APIs | Magnets are processed remotely and only provider-generated HTTPS streams reach the player. |
 | Direct torrent | libtorrent4j 2.1.0-38 behind an Android loopback Range server | Optional peer playback without a Debrid account; disabled by default, ARM-only, capability-scoped, and cleaned up with the player lease. |
 

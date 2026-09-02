@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:anime_tv/core/preferences/title_language_preference.dart';
 import 'package:anime_tv/features/catalog/data/anilist_catalog_client.dart';
 import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
+import 'package:anime_tv/features/catalog/domain/catalog_availability_exception.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -882,6 +883,41 @@ void main() {
       expect(results.single.episode, 1);
       expect(results.single.airingAt, DateTime.utc(2024, 4, 1, 3));
     });
+
+    test(
+      'airing calendar reports a typed safe outage when both catalogs fail',
+      () async {
+        final client = AniListCatalogClient(
+          dio: rejectedAniListDio(),
+          kitsuDio: mappedKitsuDio(),
+          jikanDio: jikanDio(
+            (_) => throw StateError(
+              'private provider detail https://example.test/?token=secret',
+            ),
+          ),
+        );
+
+        await expectLater(
+          client.airingSchedule(
+            from: DateTime.utc(2024, 4),
+            to: DateTime.utc(2024, 4, 8),
+          ),
+          throwsA(
+            isA<AiringCalendarUnavailableException>()
+                .having(
+                  (error) => error.toString(),
+                  'safe message',
+                  AiringCalendarUnavailableException.message,
+                )
+                .having(
+                  (error) => error.toString(),
+                  'provider details',
+                  isNot(contains('example.test')),
+                ),
+          ),
+        );
+      },
+    );
 
     test(
       'calendar fallback follows bounded pagination and omits guessed episodes',

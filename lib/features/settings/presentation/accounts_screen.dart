@@ -25,6 +25,7 @@ import 'package:anime_tv/features/settings/application/display_preferences_contr
 import 'package:anime_tv/features/settings/application/home_shelf_preferences_controller.dart';
 import 'package:anime_tv/features/settings/application/local_profiles_controller.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
+import 'package:anime_tv/features/settings/application/simkl_account_controller.dart';
 import 'package:anime_tv/features/settings/application/premiumize_settings_controller.dart';
 import 'package:anime_tv/features/settings/application/torbox_settings_controller.dart';
 import 'package:anime_tv/features/settings/application/tracking_accounts_controller.dart';
@@ -293,6 +294,7 @@ extension _SettingsSectionMetadata on _SettingsSection {
       'AniList',
       'MyAnimeList',
       'MAL',
+      'SIMKL',
       'Connect tracker',
     ],
     _SettingsSection.profiles => const [
@@ -596,6 +598,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
   );
   final _anilistFocus = FocusNode(debugLabel: 'accounts.anilist');
   final _malFocus = FocusNode(debugLabel: 'accounts.myanimelist');
+  final _simklFocus = FocusNode(debugLabel: 'accounts.simkl');
   final _trackingDisconnectFocus = FocusNode(
     debugLabel: 'accounts.tracking.disconnect',
   );
@@ -977,12 +980,14 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     final selectedTrackingNodes =
         preferences.trackingProvider == TrackingProvider.anilist
         ? <FocusNode?>[
+            _simklFocus,
             _anilistSaveFocus,
             _anilistTokenFocus,
             _trackingDisconnectFocus,
             _anilistFocus,
           ]
         : <FocusNode?>[
+            _simklFocus,
             _malSaveFocus,
             _malTokenFocus,
             _trackingDisconnectFocus,
@@ -1122,6 +1127,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       'myanimelist' ||
       'mal' ||
       'connect tracker' => _trackingProviderFocus,
+      'simkl' => _simklFocus,
       'local profiles' ||
       'manage viewers' ||
       'profile switcher' => _localProfilesFocus,
@@ -1164,6 +1170,9 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       _settingsSearchController.clear();
       _systemActivationCount = 0;
     });
+    if (match.section.area == _SettingsArea.accounts) {
+      unawaited(ref.read(simklAccountControllerProvider.notifier).load());
+    }
     await WidgetsBinding.instance.endOfFrame;
     if (!mounted) return;
     var target = _focusNodeForSettingsSearchMatch(match);
@@ -1181,6 +1190,11 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     _activeArea = widget.openTracking
         ? _SettingsArea.accounts
         : _SettingsArea.appearance;
+    if (widget.openTracking) {
+      Future.microtask(
+        () => ref.read(simklAccountControllerProvider.notifier).load(),
+      );
+    }
   }
 
   Future<void> _setDirectTorrentEnabled(bool enabled) async {
@@ -1333,6 +1347,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     _premiumizeSaveFocus.dispose();
     _anilistFocus.dispose();
     _malFocus.dispose();
+    _simklFocus.dispose();
     _trackingDisconnectFocus.dispose();
     _anilistTokenFocus.dispose();
     _anilistSaveFocus.dispose();
@@ -1541,6 +1556,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       _anilistSaveFocus,
       _malTokenFocus,
       _malSaveFocus,
+      _simklFocus,
       _localProfilesFocus,
       _trackingThresholdFocus,
       _subEpisodeNotificationsFocus,
@@ -2121,7 +2137,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       } else if (key == LogicalKeyboardKey.arrowDown) {
         target = tvListLayout && focusNodeIsMounted(_trackingDisconnectFocus)
             ? _trackingDisconnectFocus
-            : _localProfilesFocus;
+            : _simklFocus;
       }
       if (key == LogicalKeyboardKey.arrowUp) target = _trackingProviderFocus;
     } else if (current == _malFocus) {
@@ -2131,7 +2147,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       } else if (key == LogicalKeyboardKey.arrowDown) {
         target = tvListLayout && focusNodeIsMounted(_trackingDisconnectFocus)
             ? _trackingDisconnectFocus
-            : _localProfilesFocus;
+            : _simklFocus;
       }
       if (key == LogicalKeyboardKey.arrowUp) target = _trackingProviderFocus;
     } else if (current == _anilistTokenFocus) {
@@ -2140,7 +2156,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     } else if (current == _anilistSaveFocus) {
       if (key == LogicalKeyboardKey.arrowUp) target = _anilistTokenFocus;
       if (key == LogicalKeyboardKey.arrowDown) {
-        target = _localProfilesFocus;
+        target = _simklFocus;
       }
     } else if (current == _malTokenFocus) {
       if (key == LogicalKeyboardKey.arrowUp) target = _malFocus;
@@ -2148,18 +2164,18 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     } else if (current == _malSaveFocus) {
       if (key == LogicalKeyboardKey.arrowUp) target = _malTokenFocus;
       if (key == LogicalKeyboardKey.arrowDown) {
-        target = _localProfilesFocus;
+        target = _simklFocus;
       }
     } else if (current == _trackingDisconnectFocus) {
       if (key == LogicalKeyboardKey.arrowUp) {
         target = selectedTrackingAction;
       }
       if (key == LogicalKeyboardKey.arrowDown) {
-        target = _localProfilesFocus;
+        target = _simklFocus;
       }
-    } else if (current == _localProfilesFocus) {
+    } else if (current == _simklFocus) {
       if (key == LogicalKeyboardKey.arrowUp) {
-        if (tvListLayout && focusNodeIsMounted(_trackingDisconnectFocus)) {
+        if (focusNodeIsMounted(_trackingDisconnectFocus)) {
           target = _trackingDisconnectFocus;
         } else {
           final selectedSave =
@@ -2170,6 +2186,11 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
               ? selectedSave
               : selectedTrackingAction;
         }
+      }
+      if (key == LogicalKeyboardKey.arrowDown) target = _localProfilesFocus;
+    } else if (current == _localProfilesFocus) {
+      if (key == LogicalKeyboardKey.arrowUp) {
+        target = _simklFocus;
       }
       if (key == LogicalKeyboardKey.arrowDown) {
         target = _trackingThresholdFocus;
@@ -2477,6 +2498,9 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       setState(() => _activeArea = area);
     }
     _scrollSettingsToTop();
+    if (area == _SettingsArea.accounts) {
+      unawaited(ref.read(simklAccountControllerProvider.notifier).load());
+    }
     if (area != _SettingsArea.system) {
       _systemActivationCount = 0;
       return;
@@ -2583,6 +2607,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     final allDebrid = ref.watch(allDebridSettingsControllerProvider);
     final premiumize = ref.watch(premiumizeSettingsControllerProvider);
     final tracking = ref.watch(trackingAccountsControllerProvider);
+    final simkl = ref.watch(simklAccountControllerProvider);
     final localProfiles = ref.watch(localProfilesControllerProvider);
     final titlePreference = ref.watch(titleLanguagePreferenceProvider);
     final homeShelves = ref.watch(homeShelfPreferencesProvider);
@@ -3564,6 +3589,25 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                                           : _malSaveFocus,
                                       disconnectFocusNode:
                                           _trackingDisconnectFocus,
+                                    ),
+                                    _SimklPanel(
+                                      state: simkl,
+                                      focusNode: _simklFocus,
+                                      onConnect: () async {
+                                        await context.push('/pair/simkl');
+                                        await ref
+                                            .read(
+                                              simklAccountControllerProvider
+                                                  .notifier,
+                                            )
+                                            .load(force: true);
+                                      },
+                                      onDisconnect: () => ref
+                                          .read(
+                                            simklAccountControllerProvider
+                                                .notifier,
+                                          )
+                                          .disconnect(),
                                     ),
                                   ],
                                 ),
@@ -8400,7 +8444,7 @@ class _LegalNoticesPanel extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'TetoTV is an independent, unofficial client. It is not affiliated with or endorsed by AniList, MAL, debrid services, addon authors, or media rights holders. Users add and are responsible for their own services and repositories.',
+              'TetoTV is an independent, unofficial client. It is not affiliated with or endorsed by AniList, MAL, SIMKL, debrid services, addon authors, or media rights holders. Users add and are responsible for their own services and repositories.',
               style: TextStyle(
                 color: context.appPalette.mutedText,
                 fontSize: _usesTvSettingsScale(context) ? 12 : 11,
@@ -9229,7 +9273,7 @@ class _LocalProfilesPanel extends StatelessWidget {
         _SettingsPanelSummary(
           title: 'Local profiles',
           subtitle: active == null
-              ? 'Use TetoTV without AniList or MAL by creating a name stored only on this device. History and settings are shared; tracker credentials stay separate.'
+              ? 'Use TetoTV without linking AniList, MAL, or SIMKL by creating a name stored only on this device. History and settings are shared; account credentials stay separate.'
               : 'Using ${active.displayName}. This name appears in the profile switcher and Watch Party. History and settings are shared; tracker credentials stay separate.',
           icon: Icons.person_outline_rounded,
           iconColor: context.appPalette.secondaryAccent,
@@ -9746,6 +9790,76 @@ class _TrackingPanelState extends State<_TrackingPanel> {
             onSubmitted: _saveToken,
             error: _inputError ?? widget.error,
           ),
+      ],
+    );
+  }
+}
+
+class _SimklPanel extends StatelessWidget {
+  const _SimklPanel({
+    required this.state,
+    required this.focusNode,
+    required this.onConnect,
+    required this.onDisconnect,
+  });
+
+  final SimklAccountState state;
+  final FocusNode focusNode;
+  final VoidCallback onConnect;
+  final VoidCallback onDisconnect;
+
+  @override
+  Widget build(BuildContext context) {
+    final connected = state.isConnected;
+    final hasCredentials = state.hasSavedCredentials;
+    final reconnect = hasCredentials && !connected;
+    final statusLabel = state.isLoading
+        ? 'CHECKING'
+        : connected
+        ? 'CONNECTED'
+        : hasCredentials
+        ? 'RECONNECT'
+        : state.isAvailable
+        ? 'READY'
+        : 'UNAVAILABLE';
+    final description = connected
+        ? 'Connected as ${state.username}. SIMKL is available as a linked account.'
+        : hasCredentials
+        ? state.error ?? 'Reconnect SIMKL to verify this saved account.'
+        : state.isAvailable
+        ? 'Link SIMKL securely through its official sign-in page.'
+        : state.error ??
+              'SIMKL sign-in must be enabled on the TetoTV companion first.';
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Divider(color: _settingsBorderColor(context, .10), height: 1),
+        _SettingsPanelSummary(
+          title: 'SIMKL',
+          subtitle: description,
+          icon: Icons.playlist_add_check_circle_rounded,
+          iconColor: const Color(0xFF32C8FF),
+          status: _StatusPill(connected: connected, label: statusLabel),
+          error: hasCredentials && !connected ? state.error : null,
+        ),
+        _SettingsPanelActionRow(
+          key: const ValueKey('accounts-simkl-action'),
+          label: connected
+              ? 'Disconnect'
+              : reconnect
+              ? 'Reconnect SIMKL'
+              : 'Connect SIMKL',
+          subtitle: connected
+              ? 'Remove the saved SIMKL connection from TetoTV.'
+              : reconnect
+              ? 'Replace the saved connection through SIMKL’s secure sign-in.'
+              : 'Open the secure SIMKL authorization flow.',
+          icon: connected ? Icons.link_off_rounded : Icons.open_in_new_rounded,
+          focusNode: focusNode,
+          showChevron: !connected,
+          destructive: connected,
+          onPressed: connected ? onDisconnect : onConnect,
+        ),
       ],
     );
   }

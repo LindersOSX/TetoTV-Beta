@@ -2250,6 +2250,7 @@ void main() {
       LogicalKeyboardKey.arrowDown,
       LogicalKeyboardKey.arrowDown,
       LogicalKeyboardKey.arrowDown,
+      LogicalKeyboardKey.arrowDown,
     ]) {
       await tester.sendKeyEvent(key);
       await tester.pumpAndSettle();

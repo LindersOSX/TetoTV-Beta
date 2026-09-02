@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:anime_tv/core/diagnostics/anonymous_crash_reporter.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
+import 'package:anime_tv/features/catalog/domain/catalog_availability_exception.dart';
 import 'package:anime_tv/features/streaming/domain/debrid_service.dart';
 import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
 import 'package:anime_tv/features/tracking/application/my_list_controller.dart';
@@ -148,7 +149,8 @@ void main() {
     'expected cancellations, cache misses, and no-results states stay quiet',
     () async {
       final client = _CrashClient();
-      final reporter = AnonymousCrashReporter(client, _CrashPlatform());
+      final platform = _CrashPlatform();
+      final reporter = AnonymousCrashReporter(client, platform);
       reporter.setEnabled(true);
       final errors = <Object>[
         DioException(
@@ -159,6 +161,7 @@ void main() {
         const WebStreamPreflightFailure('validation_failed'),
         CatalogTrackingValidationError.connectionRequired(),
         CatalogTrackingValidationError.missingMediaId(),
+        const AiringCalendarUnavailableException(),
         StateError('No results matched these filters.'),
         StateError('authorization_pending'),
         StateError('access_denied'),
@@ -173,6 +176,7 @@ void main() {
       }
 
       expect(client.reports, isEmpty);
+      expect(platform.stored, isEmpty);
     },
   );
 

@@ -152,6 +152,10 @@ final appRouter = GoRouter(
           const TrackingPairingScreen(provider: TrackingProvider.myAnimeList),
     ),
     GoRoute(
+      path: '/pair/simkl',
+      builder: (context, state) => const SimklPairingScreen(),
+    ),
+    GoRoute(
       path: '/pair/realdebrid',
       builder: (context, state) => const RealDebridPairingScreen(),
     ),

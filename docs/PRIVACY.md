@@ -95,7 +95,9 @@ persistent manga settings, source definitions, progress, and downloads.
 TetoTV makes network requests only for app features the user uses:
 
 - AniList and MAL receive the catalog, search, list, and progress requests
-  needed for the tracker features the user chooses. When AniList is
+  needed for the tracker features the user chooses. SIMKL receives an account
+  profile-verification request when the user links or rechecks SIMKL; TetoTV
+  does not currently send list or progress updates to SIMKL. When AniList is
   unavailable, Kitsu can receive bounded read-only title or identifier lookups
   for search/details and for mapping backup catalog results back to real
   AniList and MAL identifiers;
@@ -348,6 +350,11 @@ credential database, but it necessarily handles the following transient data:
   process. They are not end-to-end encrypted while the broker is receiving and
   holding them. This short plaintext interval is required to receive the
   provider callback and deliver the result to the already-bound browser.
+- Standalone SIMKL linking uses the same companion origin but is not included
+  in the unified setup bundle. The companion receives the official OAuth
+  callback, holds the resulting token only in volatile memory, and delivers it
+  once to the requesting device through a short-lived random pairing
+  capability. The SIMKL password and client secret never enter the APK.
 - Linked-service credentials are held only in volatile server memory and are
   removed after the browser claims them or when their one-hour maximum expiry
   is reached. The bound browser assembles the selected credentials, source

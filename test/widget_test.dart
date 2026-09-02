@@ -56,6 +56,11 @@ void main() {
     expect(find.byKey(const ValueKey('main-nav-wordmark')), findsOneWidget);
     expect(find.byType(Image), findsWidgets);
     expect(find.text('Continue watching'), findsOneWidget);
+    expect(find.text('Recently released'), findsOneWidget);
+    expect(
+      find.text('No recently released titles are available yet.'),
+      findsOneWidget,
+    );
     expect(find.text('Watch now'), findsOneWidget);
     expect(find.byKey(const ValueKey('main-nav-my-list')), findsOneWidget);
     expect(find.byKey(const ValueKey('main-nav-settings')), findsOneWidget);
@@ -93,6 +98,51 @@ void main() {
     expect(find.text('Continue watching'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets(
+    'keeps an enabled reordered Recently released shelf visible on outage',
+    (tester) async {
+      FlutterSecureStorage.setMockInitialValues({
+        initialSetupCompletedStorageKey: 'true',
+        'home_shelves_v2': 'recentlyReleased',
+        'home_shelf_order_v1':
+            'trending,recentlyReleased,tracking,history,planned,airing,completed',
+      });
+      tester.view.physicalSize = const Size(1280, 720);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            trendingAnimeProvider.overrideWith((_) => const <AnimeSummary>[]),
+            seasonalAnimeProvider.overrideWith(
+              (_) => throw StateError('catalog temporarily unavailable'),
+            ),
+            trackingHomeProvider.overrideWith(
+              (_) => const TrackingHomeData(
+                watching: [],
+                planToWatch: [],
+                completed: [],
+              ),
+            ),
+          ],
+          child: const MaterialApp(home: HomeScreen()),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+
+      expect(find.text('Recently released'), findsOneWidget);
+      expect(
+        find.text('Recently released titles are temporarily unavailable.'),
+        findsOneWidget,
+      );
+      expect(find.text('Trending now'), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets('double activating the in-app Home action refreshes shelves', (
     tester,

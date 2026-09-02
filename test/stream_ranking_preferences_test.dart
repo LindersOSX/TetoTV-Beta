@@ -41,6 +41,244 @@ void main() {
     audioLanguages: audioLanguages,
   );
 
+  ReleaseCandidate codecRelease({
+    required String id,
+    required String name,
+    String? codec,
+    String? quality = '1080p',
+  }) => ReleaseCandidate(
+    infoHash: id.padRight(40, id),
+    magnetUri: 'magnet:?xt=urn:btih:${id.padRight(40, id)}',
+    releaseName: name,
+    seeders: 10,
+    sourceId: 'codec-source',
+    quality: quality,
+    codec: codec,
+    isDubbed: true,
+  );
+
+  const avcOnlyDevice = TvDeviceProfile(
+    manufacturer: 'Test',
+    model: 'AVC only',
+    sdk: 34,
+    abis: ['arm64-v8a'],
+    displayModes: [],
+    hdrTypes: [],
+    codecs: [
+      TvCodecCapability(
+        name: 'hardware.avc.decoder',
+        mime: 'video/avc',
+        hardware: true,
+      ),
+    ],
+    audioOutputs: [],
+  );
+
+  const av1Device = TvDeviceProfile(
+    manufacturer: 'Test',
+    model: 'AV1 capable',
+    sdk: 34,
+    abis: ['arm64-v8a'],
+    displayModes: [],
+    hdrTypes: [],
+    codecs: [
+      TvCodecCapability(
+        name: 'hardware.avc.decoder',
+        mime: 'video/avc',
+        hardware: true,
+      ),
+      TvCodecCapability(
+        name: 'hardware.av1.decoder',
+        mime: 'video/av01',
+        hardware: true,
+        maxWidth: 3840,
+        maxHeight: 2160,
+      ),
+    ],
+    audioOutputs: [],
+  );
+
+  test(
+    'codec compatibility is device-specific and fails open when unknown',
+    () {
+      final av1 = codecRelease(id: 'a', name: 'Example 1080p', codec: 'AV1');
+      final av01FromName = codecRelease(
+        id: 'b',
+        name: 'Example S01E01 1080p AV01',
+      );
+      final unknown = codecRelease(
+        id: 'c',
+        name: 'Example S01E01 1080p WEB-DL',
+      );
+
+      expect(
+        releaseCodecCompatibility(av1, device: avcOnlyDevice),
+        ReleaseCodecCompatibility.unsupported,
+      );
+      expect(
+        releaseCodecCompatibility(av01FromName, device: avcOnlyDevice),
+        ReleaseCodecCompatibility.unsupported,
+      );
+      expect(
+        releaseCodecCompatibility(av1, device: av1Device),
+        ReleaseCodecCompatibility.supported,
+      );
+      expect(
+        releaseCodecCompatibility(av1, device: const TvDeviceProfile.unknown()),
+        ReleaseCodecCompatibility.unknown,
+      );
+      expect(
+        releaseCodecCompatibility(unknown, device: avcOnlyDevice),
+        ReleaseCodecCompatibility.unknown,
+      );
+      expect(
+        releaseCodecIsPlayableOnDevice(unknown, device: avcOnlyDevice),
+        isTrue,
+      );
+    },
+  );
+
+  test('a software-only AV1 decoder is not advertised as playable', () {
+    final av1 = codecRelease(id: 'a', name: 'Example 1080p AV1', codec: 'AV1');
+    const softwareAv1Device = TvDeviceProfile(
+      manufacturer: 'Test',
+      model: 'Software AV1 only',
+      sdk: 34,
+      abis: ['arm64-v8a'],
+      displayModes: [],
+      hdrTypes: [],
+      codecs: [
+        TvCodecCapability(
+          name: 'c2.android.av1.decoder',
+          mime: 'video/av01',
+          hardware: false,
+        ),
+      ],
+      audioOutputs: [],
+    );
+
+    expect(
+      releaseCodecCompatibility(av1, device: softwareAv1Device),
+      ReleaseCodecCompatibility.unsupported,
+    );
+  });
+
+  test('decoder dimensions reject only known oversized releases', () {
+    final av1p2160 = codecRelease(
+      id: 'a',
+      name: 'Example 2160p AV1',
+      codec: 'AV1',
+      quality: '2160p',
+    );
+    final av1p1080 = codecRelease(
+      id: 'b',
+      name: 'Example 1080p AV1',
+      codec: 'AV1',
+    );
+    final av1UnknownResolution = codecRelease(
+      id: 'c',
+      name: 'Example AV1 WEB-DL',
+      codec: 'AV1',
+      quality: null,
+    );
+    const cappedAv1Device = TvDeviceProfile(
+      manufacturer: 'Test',
+      model: '1080p AV1',
+      sdk: 34,
+      abis: ['arm64-v8a'],
+      displayModes: [],
+      hdrTypes: [],
+      codecs: [
+        TvCodecCapability(
+          name: 'hardware.av1.decoder',
+          mime: 'video/av01',
+          hardware: true,
+          maxWidth: 1920,
+          maxHeight: 1080,
+        ),
+      ],
+      audioOutputs: [],
+    );
+
+    expect(
+      releaseCodecCompatibility(av1p2160, device: cappedAv1Device),
+      ReleaseCodecCompatibility.unsupported,
+    );
+    expect(
+      releaseCodecCompatibility(av1p1080, device: cappedAv1Device),
+      ReleaseCodecCompatibility.supported,
+    );
+    expect(
+      releaseCodecCompatibility(av1UnknownResolution, device: cappedAv1Device),
+      ReleaseCodecCompatibility.supported,
+    );
+  });
+
+  test('unknown decoder dimensions fail open for known resolutions', () {
+    final av1p2160 = codecRelease(
+      id: 'a',
+      name: 'Example 2160p AV1',
+      codec: 'AV1',
+      quality: '2160p',
+    );
+    const dimensionsUnknown = TvDeviceProfile(
+      manufacturer: 'Test',
+      model: 'Unknown AV1 limits',
+      sdk: 34,
+      abis: ['arm64-v8a'],
+      displayModes: [],
+      hdrTypes: [],
+      codecs: [
+        TvCodecCapability(
+          name: 'hardware.av1.decoder',
+          mime: 'video/av01',
+          hardware: true,
+        ),
+      ],
+      audioOutputs: [],
+    );
+
+    expect(
+      releaseCodecCompatibility(av1p2160, device: dimensionsUnknown),
+      ReleaseCodecCompatibility.unknown,
+    );
+    expect(
+      releaseCodecIsPlayableOnDevice(av1p2160, device: dimensionsUnknown),
+      isTrue,
+    );
+  });
+
+  test('automatic release pools omit only codecs known unsupported', () {
+    final av1 = codecRelease(id: 'a', name: 'Example 1080p AV1', codec: 'AV1');
+    final h264 = codecRelease(
+      id: 'b',
+      name: 'Example 1080p x264',
+      codec: 'H.264',
+    );
+    final unknown = codecRelease(id: 'c', name: 'Example 1080p WEB-DL');
+
+    List<ReleaseCandidate> rankFor(TvDeviceProfile device) =>
+        rankAutomaticAutoplayReleases(
+          [av1, h264, unknown],
+          language: 'dub',
+          quality: 'any',
+          codec: 'any',
+          hdr: 'any',
+          allowBatch: true,
+          preferredAudio: PlaybackAudioPreference.dub,
+          rankingPreference: DebridStreamSort.bestQuality,
+          device: device,
+        );
+
+    expect(rankFor(avcOnlyDevice), containsAll([h264, unknown]));
+    expect(rankFor(avcOnlyDevice), isNot(contains(av1)));
+    expect(rankFor(av1Device), containsAll([av1, h264, unknown]));
+    expect(
+      rankFor(const TvDeviceProfile.unknown()),
+      containsAll([av1, h264, unknown]),
+    );
+  });
+
   test(
     'debrid modes rank quality, seeders, and known size deterministically',
     () {

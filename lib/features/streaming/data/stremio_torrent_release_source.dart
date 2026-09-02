@@ -410,7 +410,7 @@ class StremioTorrentReleaseSource implements ReleaseSource {
       );
       final codecRaw = _firstMatch(
         RegExp(
-          r'\b(AV1|HEVC|x265|H[.]?265|x264|H[.]?264)\b',
+          r'\b(AV0?1|AV[ ._-]1|HEVC|x265|H[ ._-]?265|x264|H[ ._-]?264|VP[ ._-]?9)\b',
           caseSensitive: false,
         ),
         searchable,
@@ -577,7 +577,9 @@ class StremioTorrentReleaseSource implements ReleaseSource {
   static String? _normalizeCodec(String? value) {
     if (value == null) return null;
     final lower = value.toLowerCase();
-    if (lower == 'av1') return 'AV1';
+    final compact = lower.replaceAll(RegExp(r'[ ._-]+'), '');
+    if (compact == 'av1' || compact == 'av01') return 'AV1';
+    if (compact == 'vp9') return 'VP9';
     if (lower == 'hevc' || lower.contains('265')) return 'HEVC';
     if (lower.contains('264')) return 'H.264';
     return value.toUpperCase();

@@ -549,6 +549,84 @@ void main() {
         );
   });
 
+  testWidgets(
+    'manual picker hides AV1 only when this device lacks a hardware decoder',
+    (tester) async {
+      FlutterSecureStorage.setMockInitialValues({
+        DebridService.realDebrid.tokenStorageKey: 'valid-manual-token',
+        'streaming_web_enabled': 'false',
+      });
+      await tester.binding.setSurfaceSize(const Size(1920, 1080));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      const av1 = ReleaseCandidate(
+        infoHash: '1111111111111111111111111111111111111111',
+        magnetUri:
+            'magnet:?xt=urn:btih:1111111111111111111111111111111111111111',
+        releaseName: 'Unsupported AV1 release',
+        seeders: 50,
+        sourceId: 'test',
+        quality: '1080p',
+        codec: 'AV1',
+        isDubbed: true,
+      );
+      const h264 = ReleaseCandidate(
+        infoHash: '2222222222222222222222222222222222222222',
+        magnetUri:
+            'magnet:?xt=urn:btih:2222222222222222222222222222222222222222',
+        releaseName: 'Supported H264 release',
+        seeders: 5,
+        sourceId: 'test',
+        quality: '1080p',
+        codec: 'H.264',
+        isDubbed: true,
+      );
+      const avcOnly = TvDeviceProfile(
+        manufacturer: 'Test',
+        model: 'AVC only',
+        sdk: 34,
+        abis: ['arm64-v8a'],
+        displayModes: [],
+        hdrTypes: [],
+        codecs: [
+          TvCodecCapability(
+            name: 'hardware.avc.decoder',
+            mime: 'video/avc',
+            hardware: true,
+          ),
+        ],
+        audioOutputs: [],
+      );
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            configuredReleaseSourceProvider.overrideWithValue(
+              const _ListReleaseSource([av1, h264]),
+            ),
+            resolveDeviceProfileReaderProvider.overrideWithValue(
+              () async => avcOnly,
+            ),
+            resolveFailureCountsReaderProvider.overrideWithValue(
+              (_) async => const {},
+            ),
+          ],
+          child: const MaterialApp(
+            home: ResolveEpisodeScreen(
+              episode: EpisodeReference(
+                anilistMediaId: 99001,
+                title: 'Codec picker test',
+                episode: 1,
+              ),
+            ),
+          ),
+        ),
+      );
+
+      await _pumpUntilFound(tester, find.text(h264.releaseName));
+      expect(find.text(av1.releaseName), findsNothing);
+    },
+  );
+
   testWidgets('saved Web-first preference orders picker source sections', (
     tester,
   ) async {

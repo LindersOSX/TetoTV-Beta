@@ -3,6 +3,7 @@ import 'package:anime_tv/core/storage/secure_storage_snapshot.dart';
 import 'package:anime_tv/features/streaming/data/torbox_client.dart';
 import 'package:anime_tv/features/streaming/data/torbox_models.dart';
 import 'package:anime_tv/features/streaming/domain/debrid_service.dart';
+import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
@@ -38,12 +39,14 @@ class TorBoxSettingsState {
     this.hasSavedToken = false,
     this.account,
     this.errorMessage,
+    this.retryableError = false,
   });
 
   final bool isLoading;
   final bool hasSavedToken;
   final TorBoxAccount? account;
   final String? errorMessage;
+  final bool retryableError;
 }
 
 class TorBoxSettingsController extends StateNotifier<TorBoxSettingsState> {
@@ -85,6 +88,8 @@ class TorBoxSettingsController extends StateNotifier<TorBoxSettingsState> {
       if (!account.hasApiStreaming) {
         throw const TorBoxException(
           'TorBox API streaming requires an active paid plan.',
+          code: 'SUBSCRIPTION_REQUIRED',
+          category: DebridFailureCategory.account,
         );
       }
       if (persist) {
@@ -99,6 +104,11 @@ class TorBoxSettingsController extends StateNotifier<TorBoxSettingsState> {
       state = TorBoxSettingsState(
         hasSavedToken: hadSavedToken,
         errorMessage: error.toString(),
+        retryableError:
+            error is TorBoxException &&
+            (error.failureCategory ==
+                    DebridFailureCategory.serviceUnavailable ||
+                error.failureCategory == DebridFailureCategory.rateLimited),
       );
       return false;
     }

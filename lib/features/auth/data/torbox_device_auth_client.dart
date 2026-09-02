@@ -1,10 +1,15 @@
 import 'package:dio/dio.dart';
 
 class TorBoxDeviceAuthException implements Exception {
-  const TorBoxDeviceAuthException(this.message, {this.code});
+  const TorBoxDeviceAuthException(
+    this.message, {
+    this.code,
+    this.retryable = false,
+  });
 
   final String message;
   final String? code;
+  final bool retryable;
 
   @override
   String toString() => message;
@@ -91,56 +96,126 @@ class TorBoxDeviceAuthClient {
   final Dio _dio;
 
   Future<TorBoxDeviceSession> start() async {
-    final response = await _dio.get<Map<String, dynamic>>(
-      '/user/auth/device/start',
-      queryParameters: const {'app': 'TetoTV'},
-    );
-    final body = response.data ?? const <String, dynamic>{};
-    final data = body['data'];
-    if (body['success'] != true || data is! Map<String, dynamic>) {
-      throw StateError(
-        body['detail']?.toString() ??
-            'TorBox could not start device authorization.',
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/user/auth/device/start',
+        queryParameters: const {'app': 'TetoTV'},
       );
+      final body = response.data ?? const <String, dynamic>{};
+      final data = body['data'];
+      if (body['success'] != true || data is! Map<String, dynamic>) {
+        throw TorBoxDeviceAuthException(
+          body['detail']?.toString() ??
+              'TorBox could not start device authorization.',
+          code: body['error']?.toString(),
+        );
+      }
+      return TorBoxDeviceSession.fromJson(data);
+    } on TorBoxDeviceAuthException {
+      rethrow;
+    } on DioException catch (error) {
+      throw _torBoxTransportFailure(error);
     }
-    return TorBoxDeviceSession.fromJson(data);
   }
 
   Future<String?> poll(TorBoxDeviceSession session) async {
     if (DateTime.now().isAfter(session.expiresAt)) {
-      throw StateError('The TorBox authorization code expired.');
+      throw const TorBoxDeviceAuthException(
+        'The TorBox authorization code expired. Get a new code and try again.',
+        code: 'AUTHORIZATION_EXPIRED',
+      );
     }
-    final response = await _dio.post<Map<String, dynamic>>(
-      '/user/auth/device/token',
-      data: {'device_code': session.deviceCode},
-      options: Options(
-        contentType: Headers.jsonContentType,
-        validateStatus: (status) => status != null && status < 500,
-      ),
-    );
-    final body = response.data ?? const <String, dynamic>{};
-    if (response.statusCode == 200 && body['success'] == true) {
-      final data = body['data'];
-      final token = data is Map<String, dynamic>
-          ? data['access_token']?.toString()
-          : null;
-      if (token == null || token.isEmpty) {
-        throw const FormatException(
-          'TorBox approved the device without returning an API token.',
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/user/auth/device/token',
+        data: {'device_code': session.deviceCode},
+        options: Options(
+          contentType: Headers.jsonContentType,
+          validateStatus: (status) => status != null && status < 500,
+        ),
+      );
+      final body = response.data ?? const <String, dynamic>{};
+      if (response.statusCode == 200 && body['success'] == true) {
+        final data = body['data'];
+        final token = data is Map<String, dynamic>
+            ? data['access_token']?.toString()
+            : null;
+        if (token == null || token.isEmpty) {
+          throw const FormatException(
+            'TorBox approved the device without returning an API token.',
+          );
+        }
+        return token;
+      }
+      final code = body['error']?.toString().trim().toUpperCase();
+      // TorBox documents DEVICE_CODE_NOT_USED as the normal pending response.
+      if (response.statusCode == 400 && code == 'DEVICE_CODE_NOT_USED') {
+        return null;
+      }
+      if (_torBoxTransientResponse(response.statusCode, code)) {
+        throw TorBoxDeviceAuthException(
+          'TorBox is temporarily unreachable. TetoTV will keep retrying this code.',
+          code: code ?? '${response.statusCode ?? ''}',
+          retryable: true,
         );
       }
-      return token;
+      if (code == 'ITEM_NOT_FOUND') {
+        throw const TorBoxDeviceAuthException(
+          'The TorBox authorization code expired. Get a new code and try again.',
+          code: 'ITEM_NOT_FOUND',
+        );
+      }
+      if (code == 'PLAN_RESTRICTED_FEATURE') {
+        throw const TorBoxDeviceAuthException(
+          'TorBox device linking requires an active paid TorBox plan.',
+          code: 'PLAN_RESTRICTED_FEATURE',
+        );
+      }
+      throw TorBoxDeviceAuthException(
+        body['detail']?.toString() ?? 'TorBox device authorization failed.',
+        code: code,
+      );
+    } on TorBoxDeviceAuthException {
+      rethrow;
+    } on DioException catch (error) {
+      throw _torBoxTransportFailure(error);
     }
-    final code = body['error']?.toString().trim().toUpperCase();
-    // TorBox documents DEVICE_CODE_NOT_USED as the normal pending response.
-    // Other 400 responses (expired/invalid code, free-plan rejection, etc.)
-    // are terminal and must not be hidden behind ten minutes of polling.
-    if (response.statusCode == 400 && code == 'DEVICE_CODE_NOT_USED') {
-      return null;
-    }
-    throw TorBoxDeviceAuthException(
-      body['detail']?.toString() ?? 'TorBox device authorization failed.',
-      code: code,
-    );
   }
+}
+
+const _torBoxTransientCodes = {
+  'DATABASE_ERROR',
+  'DOWNLOAD_SERVER_ERROR',
+  'NO_SERVERS_AVAILABLE_ERROR',
+  'TOO_MANY_REQUESTS',
+  'UNKNOWN_ERROR',
+};
+
+bool _torBoxTransientResponse(int? status, String? code) {
+  return status == 408 ||
+      status == 425 ||
+      status == 429 ||
+      (status != null && status >= 500) ||
+      _torBoxTransientCodes.contains(code);
+}
+
+TorBoxDeviceAuthException _torBoxTransportFailure(DioException error) {
+  final status = error.response?.statusCode;
+  final retryable =
+      _torBoxTransientResponse(status, null) ||
+      switch (error.type) {
+        DioExceptionType.connectionTimeout ||
+        DioExceptionType.sendTimeout ||
+        DioExceptionType.receiveTimeout ||
+        DioExceptionType.connectionError ||
+        DioExceptionType.unknown => true,
+        _ => false,
+      };
+  return TorBoxDeviceAuthException(
+    retryable
+        ? 'TorBox is temporarily unreachable. TetoTV will keep retrying this code.'
+        : 'TorBox could not complete device authorization. Try again.',
+    code: status == null ? 'NETWORK_ERROR' : '$status',
+    retryable: retryable,
+  );
 }

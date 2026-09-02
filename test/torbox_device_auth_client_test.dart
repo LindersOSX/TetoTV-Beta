@@ -108,6 +108,26 @@ void main() {
       );
     });
 
+    test('expired local sessions are terminal and never contact TorBox', () {
+      final expiredSession = TorBoxDeviceSession(
+        deviceCode: 'expired-device-secret',
+        userCode: '654321',
+        verificationUrl: Uri.parse('https://torbox.app/oauth/device'),
+        friendlyVerificationUrl: Uri.parse('https://tor.box/link'),
+        expiresAt: DateTime.now().subtract(const Duration(seconds: 1)),
+        interval: const Duration(seconds: 5),
+      );
+
+      expect(
+        () => TorBoxDeviceAuthClient().poll(expiredSession),
+        throwsA(
+          isA<TorBoxDeviceAuthException>()
+              .having((error) => error.code, 'code', 'AUTHORIZATION_EXPIRED')
+              .having((error) => error.retryable, 'retryable', isFalse),
+        ),
+      );
+    });
+
     test('surfaces non-pending 400 responses instead of polling forever', () {
       final dio = _responseDio(
         statusCode: 400,
@@ -131,6 +151,75 @@ void main() {
               ),
         ),
       );
+    });
+
+    test(
+      'marks temporary DNS failures as retryable without leaking details',
+      () {
+        final dio = Dio(BaseOptions(baseUrl: 'https://torbox.test'))
+          ..interceptors.add(
+            InterceptorsWrapper(
+              onRequest: (options, handler) => handler.reject(
+                DioException(
+                  requestOptions: options,
+                  type: DioExceptionType.connectionError,
+                  message: "Failed host lookup: 'api.torbox.app'",
+                ),
+              ),
+            ),
+          );
+
+        expect(
+          () => TorBoxDeviceAuthClient(dio: dio).poll(session()),
+          throwsA(
+            isA<TorBoxDeviceAuthException>()
+                .having((error) => error.retryable, 'retryable', isTrue)
+                .having(
+                  (error) => error.message,
+                  'message',
+                  allOf(
+                    contains('keep retrying'),
+                    isNot(contains('host lookup')),
+                  ),
+                ),
+          ),
+        );
+      },
+    );
+
+    test('keeps rate limits and temporary provider errors retryable', () async {
+      for (final response in [
+        (
+          429,
+          const <String, dynamic>{
+            'success': false,
+            'error': 'TOO_MANY_REQUESTS',
+            'detail': 'Slow down.',
+          },
+        ),
+        (
+          400,
+          const <String, dynamic>{
+            'success': false,
+            'error': 'DATABASE_ERROR',
+            'detail': 'Try later.',
+          },
+        ),
+      ]) {
+        final client = TorBoxDeviceAuthClient(
+          dio: _responseDio(statusCode: response.$1, body: response.$2),
+        );
+        await expectLater(
+          client.poll(session()),
+          throwsA(
+            isA<TorBoxDeviceAuthException>().having(
+              (error) => error.retryable,
+              'retryable',
+              isTrue,
+            ),
+          ),
+        );
+      }
     });
   });
 }

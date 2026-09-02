@@ -2,6 +2,66 @@ import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
 
 enum EpisodeAiringAvailabilityKind { available, episodeUnaired, seriesUnaired }
 
+/// Builds the short, human-readable countdown used beside a releasing
+/// series' status.
+///
+/// AniList only exposes an exact timestamp for the immediate next episode,
+/// so this deliberately returns `null` when that timestamp is missing,
+/// stale, or belongs to a non-releasing series. The UI must never estimate a
+/// schedule from a show's usual broadcast day.
+String? nextEpisodeAiringCountdownLabel({
+  required AnimeSummary anime,
+  DateTime? now,
+}) {
+  final normalizedStatus = anime.status?.trim().toUpperCase().replaceAll(
+    RegExp(r'[\s-]+'),
+    '_',
+  );
+  if (normalizedStatus != 'RELEASING' &&
+      normalizedStatus != 'AIRING' &&
+      normalizedStatus != 'CURRENTLY_AIRING') {
+    return null;
+  }
+
+  final airingAt = anime.nextAiringAt;
+  final nextEpisode = anime.nextAiringEpisode;
+  if (airingAt == null || nextEpisode == null || nextEpisode <= 0) return null;
+
+  final remaining = airingAt.difference(now ?? DateTime.now());
+  if (remaining <= Duration.zero) return null;
+
+  final minutes = remaining.inMinutes;
+  if (minutes < 60) return 'next episode in less than an hour';
+
+  if (minutes < Duration.minutesPerDay) {
+    final hours = (minutes / Duration.minutesPerHour).ceil();
+    return 'next episode in $hours ${hours == 1 ? 'hour' : 'hours'}';
+  }
+
+  final days = (minutes / Duration.minutesPerDay).ceil();
+  return 'next episode in $days ${days == 1 ? 'day' : 'days'}';
+}
+
+/// Formats a known catalog air date without implying a time of day.
+String episodeAiringDateLabel(DateTime value) {
+  const months = <String>[
+    'January',
+    'February',
+    'March',
+    'April',
+    'May',
+    'June',
+    'July',
+    'August',
+    'September',
+    'October',
+    'November',
+    'December',
+  ];
+  final local = value.toLocal();
+  return '${months[local.month - 1]} ${local.day}, ${local.year}';
+}
+
 class EpisodeAiringAvailability {
   const EpisodeAiringAvailability._({
     required this.kind,

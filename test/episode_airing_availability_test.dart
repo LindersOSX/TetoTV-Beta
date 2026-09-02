@@ -5,6 +5,46 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   final now = DateTime.utc(2026, 9, 2, 12);
 
+  test('describes a known next episode without estimating a schedule', () {
+    final anime = AnimeSummary(
+      id: 6,
+      title: 'Countdown series',
+      description: '',
+      episodes: 12,
+      score: null,
+      status: 'RELEASING',
+      nextAiringEpisode: 7,
+      nextAiringAt: DateTime.utc(2026, 9, 5, 12),
+    );
+
+    expect(
+      nextEpisodeAiringCountdownLabel(anime: anime, now: now),
+      'next episode in 3 days',
+    );
+    expect(
+      episodeAiringDateLabel(anime.nextAiringAt!),
+      contains('September 5, 2026'),
+    );
+  });
+
+  test('does not fabricate a next-episode countdown', () {
+    expect(
+      nextEpisodeAiringCountdownLabel(
+        anime: const AnimeSummary(
+          id: 7,
+          title: 'Schedule unknown',
+          description: '',
+          episodes: 12,
+          score: null,
+          status: 'RELEASING',
+          nextAiringEpisode: 7,
+        ),
+        now: now,
+      ),
+      isNull,
+    );
+  });
+
   test('marks the explicitly scheduled next episode unaired with its date', () {
     final availability = episodeAiringAvailability(
       anime: AnimeSummary(

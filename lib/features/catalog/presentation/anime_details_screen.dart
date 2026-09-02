@@ -14,6 +14,7 @@ import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
 import 'package:anime_tv/features/catalog/domain/episode_airing_availability.dart';
 import 'package:anime_tv/features/catalog/domain/filler_episode_lookup.dart';
 import 'package:anime_tv/features/catalog/presentation/anime_title_logo_view.dart';
+import 'package:anime_tv/features/catalog/presentation/episode_browser_dialog.dart';
 import 'package:anime_tv/features/downloads/application/season_download_controller.dart';
 import 'package:anime_tv/features/downloads/domain/season_download_plan.dart';
 import 'package:anime_tv/features/downloads/presentation/season_download_dialog.dart';
@@ -97,6 +98,7 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
   bool _initialPrefetchStarted = false;
   bool _initialPrefetchScheduled = false;
   bool _startingWatchParty = false;
+  bool _episodeBrowserOpen = false;
   final FocusNode _watchPartyFocusNode = FocusNode(
     debugLabel: 'episode.watch-together',
   );
@@ -230,6 +232,7 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
           knownEpisodes,
         );
     final releaseCheckAt = DateTime.now();
+    final statusText = _animeDetailsStatusText(anime, releaseCheckAt);
     final selectedAvailability = episodeAiringAvailability(
       anime: anime,
       episode: selectedEpisode,
@@ -294,6 +297,14 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
       onSelectEpisode: !guestInWatchParty && !isUnreleased
           ? () => unawaited(
               _showEpisodeNumberPicker(
+                selectedEpisode: selectedEpisode,
+                totalEpisodes: knownEpisodes,
+              ),
+            )
+          : null,
+      onBrowseEpisodes: isTelevision && !guestInWatchParty && !isUnreleased
+          ? () => unawaited(
+              _showEpisodeBrowser(
                 selectedEpisode: selectedEpisode,
                 totalEpisodes: knownEpisodes,
               ),
@@ -484,10 +495,10 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
                                           context,
                                         ).textTheme.headlineSmall,
                                       ),
-                                      if (anime.status case final status?) ...[
+                                      if (statusText case final status?) ...[
                                         const SizedBox(height: 9),
                                         Text(
-                                          'Status: ${status.replaceAll('_', ' ')}',
+                                          'Status: $status',
                                           style: TextStyle(
                                             color: context.appPalette.mutedText,
                                             fontSize: 11,
@@ -700,10 +711,10 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
                                           height: 1.48,
                                         ),
                                   ),
-                                  if (anime.status case final status?) ...[
+                                  if (statusText case final status?) ...[
                                     SizedBox(height: wide ? 20 : 10),
                                     Text(
-                                      'Status:  ${status.replaceAll('_', ' ')}',
+                                      'Status: $status',
                                       style: TextStyle(
                                         color: context.appPalette.accentBright,
                                         fontSize: wide ? 17 : 13,
@@ -887,6 +898,50 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
     if (episode == null || episode < 1 || episode > totalEpisodes) return;
     if (_selectedEpisode != episode) {
       setState(() => _selectedEpisode = episode);
+    }
+  }
+
+  Future<void> _showEpisodeBrowser({
+    required int selectedEpisode,
+    required int totalEpisodes,
+  }) async {
+    if (_episodeBrowserOpen) return;
+    FocusNode? restoreFocusNode;
+    for (final node in <FocusNode>[
+      _previousEpisodeFocusNode,
+      _episodePickerFocusNode,
+      _nextEpisodeFocusNode,
+    ]) {
+      if (node.hasFocus) {
+        restoreFocusNode = node;
+        break;
+      }
+    }
+    _episodeBrowserOpen = true;
+    int? episode;
+    try {
+      episode = await showEpisodeBrowserDialog(
+        context,
+        anime: anime,
+        selectedEpisode: selectedEpisode,
+        totalEpisodes: totalEpisodes,
+      );
+    } finally {
+      _episodeBrowserOpen = false;
+    }
+    if (!mounted) return;
+    if (episode != null &&
+        episode >= 1 &&
+        episode <= totalEpisodes &&
+        _selectedEpisode != episode) {
+      setState(() => _selectedEpisode = episode);
+    }
+    if (restoreFocusNode != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && restoreFocusNode!.canRequestFocus) {
+          restoreFocusNode.requestFocus();
+        }
+      });
     }
   }
 
@@ -1635,6 +1690,7 @@ class _EpisodeActions extends StatelessWidget {
     required this.onDecrease,
     required this.onIncrease,
     required this.onSelectEpisode,
+    required this.onBrowseEpisodes,
     required this.onPlayFromBeginning,
     required this.onResume,
     required this.onPlaySelected,
@@ -1666,6 +1722,7 @@ class _EpisodeActions extends StatelessWidget {
   final VoidCallback? onDecrease;
   final VoidCallback? onIncrease;
   final VoidCallback? onSelectEpisode;
+  final VoidCallback? onBrowseEpisodes;
   final VoidCallback? onPlayFromBeginning;
   final VoidCallback? onResume;
   final VoidCallback? onPlaySelected;
@@ -1816,6 +1873,7 @@ class _EpisodeActions extends StatelessWidget {
                   icon: Icons.remove_rounded,
                   label: 'Previous episode',
                   onPressed: onDecrease,
+                  onBrowseEpisodes: onBrowseEpisodes,
                   focusNode: previousEpisodeFocusNode,
                 ),
                 Expanded(
@@ -1824,6 +1882,7 @@ class _EpisodeActions extends StatelessWidget {
                     selectedEpisode: selectedEpisode,
                     totalEpisodes: totalEpisodes,
                     onPressed: onSelectEpisode,
+                    onBrowseEpisodes: onBrowseEpisodes,
                     focusNode: episodePickerFocusNode,
                     large: large,
                   ),
@@ -1833,6 +1892,7 @@ class _EpisodeActions extends StatelessWidget {
                   icon: Icons.add_rounded,
                   label: 'Next episode',
                   onPressed: onIncrease,
+                  onBrowseEpisodes: onBrowseEpisodes,
                   focusNode: nextEpisodeFocusNode,
                 ),
               ],
@@ -1861,7 +1921,7 @@ class _EpisodeAiringNotice extends StatelessWidget {
     final dateLabel = expectedAt == null
         ? null
         : '${isSeries ? 'Expected premiere date' : 'Expected air date'}: '
-              '${_formatAiringDate(expectedAt)}';
+              '${episodeAiringDateLabel(expectedAt)}';
     return Semantics(
       liveRegion: true,
       label: dateLabel == null ? title : '$title $dateLabel',
@@ -1931,23 +1991,20 @@ String _unavailableEpisodeActionLabel(EpisodeAiringAvailability availability) =>
       EpisodeAiringAvailabilityKind.available => 'Start watching',
     };
 
-String _formatAiringDate(DateTime value) {
-  const months = <String>[
-    'January',
-    'February',
-    'March',
-    'April',
-    'May',
-    'June',
-    'July',
-    'August',
-    'September',
-    'October',
-    'November',
-    'December',
-  ];
-  final local = value.toLocal();
-  return '${months[local.month - 1]} ${local.day}, ${local.year}';
+String? _animeDetailsStatusText(AnimeSummary anime, DateTime now) {
+  final rawStatus = anime.status?.trim();
+  if (rawStatus == null || rawStatus.isEmpty) return null;
+  final status = rawStatus
+      .replaceAll(RegExp(r'[\s_-]+'), ' ')
+      .toLowerCase()
+      .split(' ')
+      .where((part) => part.isNotEmpty)
+      .map((part) => '${part[0].toUpperCase()}${part.substring(1)}')
+      .join(' ');
+  final countdown = nextEpisodeAiringCountdownLabel(anime: anime, now: now);
+  final nextAiringAt = anime.nextAiringAt;
+  if (countdown == null || nextAiringAt == null) return status;
+  return '$status · $countdown · ${episodeAiringDateLabel(nextAiringAt)}';
 }
 
 class _EpisodeWatchPartyAction extends StatelessWidget {
@@ -2494,6 +2551,7 @@ class _EpisodeSelectionButton extends StatelessWidget {
     required this.selectedEpisode,
     required this.totalEpisodes,
     required this.onPressed,
+    required this.onBrowseEpisodes,
     required this.focusNode,
     required this.large,
   });
@@ -2501,6 +2559,7 @@ class _EpisodeSelectionButton extends StatelessWidget {
   final int selectedEpisode;
   final int totalEpisodes;
   final VoidCallback? onPressed;
+  final VoidCallback? onBrowseEpisodes;
   final FocusNode focusNode;
   final bool large;
 
@@ -2516,7 +2575,7 @@ class _EpisodeSelectionButton extends StatelessWidget {
         children: [
           Flexible(
             child: Text(
-              'Episode $selectedEpisode of $totalEpisodes',
+              '$selectedEpisode of $totalEpisodes',
               textAlign: TextAlign.center,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
@@ -2557,6 +2616,15 @@ class _EpisodeSelectionButton extends StatelessWidget {
         focusScale: 1.025,
         borderRadius: BorderRadius.circular(9),
         onPressed: onPressed!,
+        onKeyEvent: (_, event) {
+          if (onBrowseEpisodes == null ||
+              event is! KeyDownEvent ||
+              event.logicalKey != LogicalKeyboardKey.arrowDown) {
+            return KeyEventResult.ignored;
+          }
+          onBrowseEpisodes!();
+          return KeyEventResult.handled;
+        },
         child: content,
       ),
     );
@@ -2569,12 +2637,14 @@ class _EpisodeStepButton extends StatelessWidget {
     required this.icon,
     required this.label,
     required this.onPressed,
+    required this.onBrowseEpisodes,
     required this.focusNode,
   });
 
   final IconData icon;
   final String label;
   final VoidCallback? onPressed;
+  final VoidCallback? onBrowseEpisodes;
   final FocusNode focusNode;
 
   @override
@@ -2601,6 +2671,15 @@ class _EpisodeStepButton extends StatelessWidget {
         focusScale: 1.04,
         borderRadius: BorderRadius.circular(9),
         onPressed: onPressed!,
+        onKeyEvent: (_, event) {
+          if (onBrowseEpisodes == null ||
+              event is! KeyDownEvent ||
+              event.logicalKey != LogicalKeyboardKey.arrowDown) {
+            return KeyEventResult.ignored;
+          }
+          onBrowseEpisodes!();
+          return KeyEventResult.handled;
+        },
         child: content,
       ),
     );

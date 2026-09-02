@@ -477,7 +477,7 @@ void main() {
       await tester.pump(const Duration(milliseconds: 50));
     }
 
-    expect(find.text('Episode 4 of 12'), findsOneWidget);
+    expect(find.text('4 of 12'), findsOneWidget);
     expect(warmedEpisodes, isEmpty);
     await tester.pump(const Duration(milliseconds: 299));
     expect(warmedEpisodes, isEmpty);
@@ -568,7 +568,7 @@ void main() {
       await tester.pump();
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pump(const Duration(milliseconds: 100));
-      expect(find.text('Episode 2 of 12'), findsOneWidget);
+      expect(find.text('2 of 12'), findsOneWidget);
       expect(cancelledEpisodes, [1]);
       expect(activeHandles, 1);
 
@@ -585,7 +585,7 @@ void main() {
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 299));
-      expect(find.text('Episode 1 of 12'), findsOneWidget);
+      expect(find.text('1 of 12'), findsOneWidget);
       expect(startedEpisodes, [1]);
 
       await tester.pump(const Duration(milliseconds: 1));
@@ -749,7 +749,7 @@ void main() {
     expect(find.text('Play from beginning'), findsOneWidget);
     expect(find.text('Start watching'), findsOneWidget);
     expect(find.text('My List status'), findsOneWidget);
-    expect(find.text('Episode 1 of 24'), findsOneWidget);
+    expect(find.text('1 of 24'), findsOneWidget);
     expect(find.text('Watch trailer'), findsOneWidget);
     expect(find.text('Cast & crew'), findsOneWidget);
     expect(find.text('Related series'), findsOneWidget);
@@ -1175,7 +1175,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.byType(TvKeyboardDialog), findsNothing);
-      expect(find.text('Episode 4 of 12'), findsOneWidget);
+      expect(find.text('4 of 12'), findsOneWidget);
       expect(
         find.byKey(const ValueKey('episode-step-previous')),
         findsOneWidget,
@@ -1184,6 +1184,162 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets(
+    'Down on the middle episode selector browses and restores selection focus',
+    (tester) async {
+      tester.view.physicalSize = const Size(960, 540);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      const anime = AnimeSummary(
+        id: 130,
+        title: 'Remote Episode Browser',
+        description: '',
+        episodes: 12,
+        score: 8,
+        status: 'RELEASING',
+        durationMinutes: 24,
+      );
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            isTelevisionProvider.overrideWithValue(true),
+            animeDetailsProvider.overrideWith((_, _) async => anime),
+            trackingHomeProvider.overrideWith(
+              (_) async => const TrackingHomeData(
+                watching: [],
+                planToWatch: [],
+                completed: [],
+              ),
+            ),
+            settingsPreferencesProvider.overrideWith(
+              (_) => _LoadedSettingsController(),
+            ),
+          ],
+          child: const MaterialApp(home: AnimeDetailsScreen(animeId: 130)),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final selector = tester.widget<FocusableActionDetector>(
+        find
+            .descendant(
+              of: find.byKey(const ValueKey('episode-manual-selector')),
+              matching: find.byType(FocusableActionDetector),
+            )
+            .first,
+      );
+      selector.focusNode!.requestFocus();
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const ValueKey('episode-browser-dialog')),
+        findsOneWidget,
+      );
+      expect(find.byType(TvKeyboardDialog), findsNothing);
+
+      await tester.tap(find.byKey(const ValueKey('episode-browser-card-4')));
+      await tester.pumpAndSettle();
+      expect(find.text('4 of 12'), findsOneWidget);
+      expect(selector.focusNode!.hasFocus, isTrue);
+
+      final previous = tester.widget<FocusableActionDetector>(
+        find
+            .descendant(
+              of: find.byKey(const ValueKey('episode-step-previous')),
+              matching: find.byType(FocusableActionDetector),
+            )
+            .first,
+      );
+      previous.focusNode!.requestFocus();
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('episode-browser-dialog')),
+        findsOneWidget,
+      );
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(previous.focusNode!.hasFocus, isTrue);
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pump();
+      expect(find.text('3 of 12'), findsOneWidget);
+
+      selector.focusNode!.requestFocus();
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+      expect(find.byType(TvKeyboardDialog), findsOneWidget);
+      expect(find.text('Choose episode (1–12)'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('Back closes the episode browser and restores middle focus', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(960, 540);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    const anime = AnimeSummary(
+      id: 131,
+      title: 'Episode Browser Back',
+      description: '',
+      episodes: 12,
+      score: 8,
+    );
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          isTelevisionProvider.overrideWithValue(true),
+          animeDetailsProvider.overrideWith((_, _) async => anime),
+          trackingHomeProvider.overrideWith(
+            (_) async => const TrackingHomeData(
+              watching: [],
+              planToWatch: [],
+              completed: [],
+            ),
+          ),
+          settingsPreferencesProvider.overrideWith(
+            (_) => _LoadedSettingsController(),
+          ),
+        ],
+        child: const MaterialApp(home: AnimeDetailsScreen(animeId: 131)),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final selector = tester.widget<FocusableActionDetector>(
+      find
+          .descendant(
+            of: find.byKey(const ValueKey('episode-manual-selector')),
+            matching: find.byType(FocusableActionDetector),
+          )
+          .first,
+    );
+    selector.focusNode!.requestFocus();
+    await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('episode-browser-dialog')),
+      findsOneWidget,
+    );
+
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('episode-browser-dialog')), findsNothing);
+    expect(selector.focusNode!.hasFocus, isTrue);
+    expect(find.text('1 of 12'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets(
     'episode number picker is semantics-actionable and Back restores focus',
@@ -1298,6 +1454,18 @@ void main() {
       );
       await tester.pumpAndSettle();
 
+      expect(
+        find.byWidgetPredicate(
+          (widget) =>
+              widget is Text &&
+              (widget.data?.startsWith(
+                    'Status: Releasing · next episode in ',
+                  ) ??
+                  false) &&
+              (widget.data?.endsWith('September 8, 2099') ?? false),
+        ),
+        findsOneWidget,
+      );
       await tester.tap(find.byKey(const ValueKey('episode-manual-selector')));
       await tester.pumpAndSettle();
       await tester.tap(find.text('CLEAR'));
@@ -1306,7 +1474,7 @@ void main() {
       await tester.tap(find.text('DONE'));
       await tester.pumpAndSettle();
 
-      expect(find.text('Episode 13 of 24'), findsOneWidget);
+      expect(find.text('13 of 24'), findsOneWidget);
       expect(find.text('Episode 13 has not aired yet.'), findsOneWidget);
       expect(find.text('Expected air date: September 8, 2099'), findsOneWidget);
       expect(
@@ -1378,7 +1546,7 @@ void main() {
       await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pump(const Duration(milliseconds: 400));
 
-      expect(find.text('Episode 2 of 24'), findsOneWidget);
+      expect(find.text('2 of 24'), findsOneWidget);
       expect(find.text('Episode 2 has not aired yet.'), findsOneWidget);
       expect(find.text('Expected air date: September 8, 2099'), findsOneWidget);
       expect(prefetchedEpisodes, [1]);

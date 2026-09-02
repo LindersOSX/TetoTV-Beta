@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/widgets/copyable_code_interaction.dart';
 import 'package:anime_tv/features/discord/application/discord_presence_controller.dart';
 import 'package:anime_tv/features/settings/application/phone_setup_pairing_controller.dart';
 import 'package:anime_tv/features/settings/domain/phone_setup_pairing.dart';
@@ -270,13 +271,18 @@ class _ConnectionCard extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 18),
-            SelectableText(
-              session.userCode,
-              key: const ValueKey('phone-setup-user-code'),
-              textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                fontWeight: FontWeight.w900,
-                letterSpacing: 3,
+            CopyableCodeInteraction(
+              code: session.userCode,
+              semanticsLabel: 'Phone setup one-time code ${session.userCode}',
+              confirmationMessage: 'Phone setup code copied.',
+              child: Text(
+                session.userCode,
+                key: const ValueKey('phone-setup-user-code'),
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: 3,
+                ),
               ),
             ),
             const SizedBox(height: 6),

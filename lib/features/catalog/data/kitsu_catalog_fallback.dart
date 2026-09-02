@@ -296,6 +296,7 @@ class KitsuCatalogFallback {
       status: _status(attributes['status']?.toString()),
       season: _season(startDate),
       seasonYear: startDate?.year,
+      startDate: startDate,
       durationMinutes: _integer(attributes['episodeLength']),
       metadataSource: CatalogMetadataSource.kitsu,
     );

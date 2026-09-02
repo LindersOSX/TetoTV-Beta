@@ -7,14 +7,17 @@ import 'package:anime_tv/core/widgets/teto_top_level_shell.dart';
 import 'package:anime_tv/core/widgets/tv_text_input.dart';
 import 'package:anime_tv/features/home/presentation/main_navigation_bar.dart';
 import 'package:anime_tv/features/manga/application/manga_acquisition_controller.dart';
+import 'package:anime_tv/features/manga/application/manga_extension_controller.dart';
 import 'package:anime_tv/features/manga/application/manga_hub_controller.dart';
 import 'package:anime_tv/features/manga/data/manga_acquisition_service.dart';
 import 'package:anime_tv/features/manga/data/manga_catalog_client.dart';
 import 'package:anime_tv/features/manga/data/manga_store.dart';
 import 'package:anime_tv/features/manga/domain/manga_reader_models.dart';
+import 'package:anime_tv/features/manga/domain/manga_extension_models.dart';
 import 'package:anime_tv/features/manga/domain/manga_source_models.dart';
 import 'package:anime_tv/features/manga/presentation/manga_artwork.dart';
 import 'package:anime_tv/features/manga/presentation/manga_reader_screen.dart';
+import 'package:anime_tv/features/marketplace/domain/addon_models.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
@@ -114,6 +117,14 @@ class _MangaScreenState extends ConsumerState<MangaScreen> {
     }
   }
 
+  void _searchMangaExtensions(String value) {
+    final query = value.trim();
+    if (query.isEmpty) return;
+    unawaited(
+      ref.read(mangaExtensionControllerProvider.notifier).search(query),
+    );
+  }
+
   KeyEventResult _handleHeaderKey(KeyEvent event, TetoTopLevelLayout layout) {
     if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
       return KeyEventResult.ignored;
@@ -139,12 +150,20 @@ class _MangaScreenState extends ConsumerState<MangaScreen> {
   Widget build(BuildContext context) {
     final preferences = ref.watch(settingsPreferencesProvider);
     final state = ref.watch(mangaHubControllerProvider);
+    final extensions = ref.watch(mangaExtensionControllerProvider);
     final acquisitions = ref.watch(mangaAcquisitionControllerProvider);
     ref.listen<MangaHubState>(mangaHubControllerProvider, (previous, next) {
       final error = next.error;
       if (error != null && error != previous?.error) _showMessage(error);
     });
     ref.listen<MangaAcquisitionState>(mangaAcquisitionControllerProvider, (
+      previous,
+      next,
+    ) {
+      final error = next.error;
+      if (error != null && error != previous?.error) _showMessage(error);
+    });
+    ref.listen<MangaExtensionState>(mangaExtensionControllerProvider, (
       previous,
       next,
     ) {
@@ -187,6 +206,7 @@ class _MangaScreenState extends ConsumerState<MangaScreen> {
                       searchVisible: _section == MangaHubSection.browse,
                       onSearchEditingChanged: (value) => _searchEditing = value,
                       onSearchChanged: _controller.setQuery,
+                      onSearchSubmitted: _searchMangaExtensions,
                       onRefresh: state.isLoading ? null : _refresh,
                     ),
                     const SizedBox(height: 12),
@@ -223,6 +243,7 @@ class _MangaScreenState extends ConsumerState<MangaScreen> {
                           MangaHubSection.browse => _MangaBrowseView(
                             key: const ValueKey('manga-browse'),
                             state: state,
+                            extensions: extensions,
                             firstFocusNode: _fallbackContentFocus,
                             onAddSource: _addSource,
                             onSelectSource: (source) =>
@@ -231,6 +252,17 @@ class _MangaScreenState extends ConsumerState<MangaScreen> {
                             onNavigate: (link) =>
                                 unawaited(_controller.navigate(link)),
                             onOpenPublication: _showPublication,
+                            onSelectExtensionProvider: (providerId) {
+                              ref
+                                  .read(
+                                    mangaExtensionControllerProvider.notifier,
+                                  )
+                                  .selectProvider(providerId);
+                            },
+                            onSearchExtensions: _searchMangaExtensions,
+                            onOpenExtensionTitle: _showExtensionTitle,
+                            onManageExtensions: () =>
+                                context.push('/settings/marketplace'),
                           ),
                           MangaHubSection.downloads => _MangaDownloadsView(
                             key: const ValueKey('manga-downloads'),
@@ -245,6 +277,7 @@ class _MangaScreenState extends ConsumerState<MangaScreen> {
                           MangaHubSection.sources => _MangaSourcesView(
                             key: const ValueKey('manga-sources'),
                             sources: state.sources,
+                            extensions: extensions.providers,
                             selectedSourceId: state.selectedSource?.id,
                             firstFocusNode: _fallbackContentFocus,
                             onAdd: _addSource,
@@ -266,6 +299,8 @@ class _MangaScreenState extends ConsumerState<MangaScreen> {
                             ),
                             onCredentials: _editCredentials,
                             onRemove: _removeSource,
+                            onManageExtensions: () =>
+                                context.push('/settings/marketplace'),
                           ),
                         },
                       ),
@@ -339,12 +374,47 @@ class _MangaScreenState extends ConsumerState<MangaScreen> {
   }
 
   Future<void> _removeLibraryEntry(MangaLibraryEntry entry) async {
+    final extensionController = ref.read(
+      mangaExtensionControllerProvider.notifier,
+    );
+    if (extensionController.isExtensionLibraryEntry(entry)) {
+      try {
+        final title = await extensionController.openLibraryEntry(entry);
+        if (title == null) return;
+        await extensionController.toggleLibrary(title);
+        await _controller.initialize();
+        _showMessage('Removed from your manga library.');
+      } catch (error) {
+        _showMessage(
+          error is StateError
+              ? error.message
+              : 'TetoTV could not remove that extension title.',
+        );
+      }
+      return;
+    }
     if (await _controller.removeLibraryEntry(entry)) {
       _showMessage('Removed from your manga library.');
     }
   }
 
   Future<void> _openLibraryEntry(MangaLibraryEntry entry) async {
+    final extensionController = ref.read(
+      mangaExtensionControllerProvider.notifier,
+    );
+    if (extensionController.isExtensionLibraryEntry(entry)) {
+      try {
+        final title = await extensionController.openLibraryEntry(entry);
+        if (title != null) await _showExtensionTitle(title);
+      } catch (error) {
+        _showMessage(
+          error is StateError
+              ? error.message
+              : 'TetoTV could not reopen that extension title.',
+        );
+      }
+      return;
+    }
     final publication = await _controller.openLibraryEntry(entry);
     if (publication == null) {
       final message = ref.read(mangaHubControllerProvider).error;
@@ -378,6 +448,118 @@ class _MangaScreenState extends ConsumerState<MangaScreen> {
         },
       ),
     );
+  }
+
+  Future<void> _showExtensionTitle(MangaExtensionTitle title) async {
+    final extensionController = ref.read(
+      mangaExtensionControllerProvider.notifier,
+    );
+    try {
+      final inLibrary = await extensionController.isInLibrary(title);
+      if (!mounted) return;
+      await showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        useSafeArea: true,
+        backgroundColor: Colors.transparent,
+        builder: (sheetContext) => _MangaExtensionTitleSheet(
+          title: title,
+          initiallyInLibrary: inLibrary,
+          loadChapters: () => extensionController.chapters(title),
+          onRead: (chapter) async {
+            Navigator.of(sheetContext).pop();
+            await _readExtensionChapter(title, chapter);
+          },
+          onDownload: (chapter) {
+            Navigator.of(sheetContext).pop();
+            unawaited(_downloadExtensionChapter(title, chapter));
+          },
+          onLibrary: () async {
+            final saved = await extensionController.toggleLibrary(title);
+            await _controller.initialize();
+            return saved;
+          },
+        ),
+      );
+    } catch (error) {
+      _showMessage(
+        error is StateError
+            ? error.message
+            : 'That manga source could not open this title.',
+      );
+    }
+  }
+
+  Future<void> _readExtensionChapter(
+    MangaExtensionTitle title,
+    MangaExtensionChapter chapter,
+  ) async {
+    try {
+      final request = await ref
+          .read(mangaExtensionControllerProvider.notifier)
+          .buildReaderRequest(title, chapter);
+      if (mounted) {
+        await context.push<void>(MangaReaderScreen.routePath, extra: request);
+      }
+    } catch (error) {
+      _showMessage(
+        error is StateError
+            ? error.message
+            : 'That manga chapter could not be opened.',
+      );
+    }
+  }
+
+  Future<void> _downloadExtensionChapter(
+    MangaExtensionTitle title,
+    MangaExtensionChapter chapter,
+  ) async {
+    try {
+      final reader = await ref
+          .read(mangaExtensionControllerProvider.notifier)
+          .buildReaderRequest(title, chapter);
+      final pages = <MangaReadingOrderPage>[];
+      for (final page in reader.pages) {
+        final resource = page.resource;
+        if (resource is! MangaRemotePageResource) {
+          throw StateError('This chapter did not return remote image pages.');
+        }
+        pages.add(
+          MangaReadingOrderPage(
+            uri: resource.uri,
+            headers: resource.headers,
+            pixelWidth: page.pixelWidth,
+            pixelHeight: page.pixelHeight,
+            isCover: page.isCover,
+          ),
+        );
+      }
+      final request = MangaAcquisitionRequest(
+        jobId: _mangaDownloadJobId(reader),
+        sourceId: reader.sourceId,
+        publicationId: reader.publicationId,
+        chapterId: reader.chapterId,
+        seriesTitle: reader.seriesTitle,
+        chapterTitle: reader.chapterTitle,
+        chapterNumber: reader.chapterNumber,
+        initialPageIndex: reader.initialPageIndex,
+        acquisition: MangaReadingOrderAcquisition(pages),
+      );
+      await ref
+          .read(mangaAcquisitionControllerProvider.notifier)
+          .start(request);
+      if (!mounted) return;
+      _setSection(MangaHubSection.downloads);
+      _showMessage('Manga chapter download started.');
+    } catch (error) {
+      _showMessage(
+        error is StateError
+            ? error.message
+            : error is MangaAcquisitionException
+            ? error.message
+            : 'TetoTV could not start that manga download.',
+      );
+    }
   }
 
   bool _isInLibrary(MangaPublication publication) {
@@ -730,6 +912,7 @@ class _MangaHeader extends StatelessWidget {
     required this.searchVisible,
     required this.onSearchEditingChanged,
     required this.onSearchChanged,
+    required this.onSearchSubmitted,
     required this.onRefresh,
   });
 
@@ -739,6 +922,7 @@ class _MangaHeader extends StatelessWidget {
   final bool searchVisible;
   final ValueChanged<bool> onSearchEditingChanged;
   final ValueChanged<String> onSearchChanged;
+  final ValueChanged<String> onSearchSubmitted;
   final VoidCallback? onRefresh;
 
   @override
@@ -813,7 +997,7 @@ class _MangaHeader extends StatelessWidget {
           variant: TvTextInputVariant.headerSearch,
           onEditingChanged: onSearchEditingChanged,
           onChanged: onSearchChanged,
-          onSubmitted: onSearchChanged,
+          onSubmitted: onSearchSubmitted,
         ),
       );
       return compact
@@ -955,22 +1139,32 @@ class _MangaSectionButton extends StatelessWidget {
 class _MangaBrowseView extends StatelessWidget {
   const _MangaBrowseView({
     required this.state,
+    required this.extensions,
     required this.firstFocusNode,
     required this.onAddSource,
     required this.onSelectSource,
     required this.onBack,
     required this.onNavigate,
     required this.onOpenPublication,
+    required this.onSelectExtensionProvider,
+    required this.onSearchExtensions,
+    required this.onOpenExtensionTitle,
+    required this.onManageExtensions,
     super.key,
   });
 
   final MangaHubState state;
+  final MangaExtensionState extensions;
   final FocusNode firstFocusNode;
   final VoidCallback onAddSource;
   final ValueChanged<StoredMangaSource> onSelectSource;
   final bool Function() onBack;
   final ValueChanged<MangaCatalogLink> onNavigate;
   final ValueChanged<MangaPublication> onOpenPublication;
+  final ValueChanged<String?> onSelectExtensionProvider;
+  final ValueChanged<String> onSearchExtensions;
+  final ValueChanged<MangaExtensionTitle> onOpenExtensionTitle;
+  final VoidCallback onManageExtensions;
 
   @override
   Widget build(BuildContext context) {
@@ -980,15 +1174,61 @@ class _MangaBrowseView extends StatelessWidget {
               source.enabled && source.kind != StoredMangaSourceKind.repository,
         )
         .toList(growable: false);
-    if (catalogs.isEmpty) {
-      return _MangaEmptyState(
-        icon: Icons.add_link_rounded,
-        title: 'Add your manga source',
-        message:
-            'TetoTV does not include a catalog. Add an OPDS 1, OPDS 2, or declarative Teto manga repository you are authorized to use.',
-        actionLabel: 'Add source',
-        onAction: onAddSource,
-        focusNode: firstFocusNode,
+    final enabledExtensions = extensions.enabledProviders;
+    final showingExtensionSearch =
+        extensions.searching ||
+        extensions.query.isNotEmpty ||
+        extensions.results.isNotEmpty;
+    if (showingExtensionSearch) {
+      return CustomScrollView(
+        key: const ValueKey('manga-extension-results'),
+        slivers: [
+          SliverToBoxAdapter(
+            child: _MangaExtensionSearchHeader(
+              state: extensions,
+              onSelectProvider: onSelectExtensionProvider,
+              onSearchAgain: () => onSearchExtensions(extensions.query),
+              onManageExtensions: onManageExtensions,
+            ),
+          ),
+          if (extensions.searching)
+            const SliverToBoxAdapter(
+              child: Padding(
+                padding: EdgeInsets.symmetric(vertical: 10),
+                child: LinearProgressIndicator(minHeight: 2),
+              ),
+            ),
+          if (extensions.results.isEmpty && !extensions.searching)
+            SliverFillRemaining(
+              hasScrollBody: false,
+              child: _MangaEmptyState(
+                icon: Icons.search_off_rounded,
+                title: 'No extension results',
+                message: extensions.failures.isEmpty
+                    ? 'Try another title or choose Search all sources.'
+                    : '${extensions.failures.length} source(s) could not complete this search.',
+              ),
+            )
+          else
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(3, 8, 3, 30),
+              sliver: SliverGrid.builder(
+                itemCount: extensions.results.length,
+                gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+                  maxCrossAxisExtent: 210,
+                  childAspectRatio: .60,
+                  crossAxisSpacing: 12,
+                  mainAxisSpacing: 14,
+                ),
+                itemBuilder: (context, index) => _MangaExtensionTitleCard(
+                  title: extensions.results[index],
+                  focusNode: index == 0 ? firstFocusNode : null,
+                  onPressed: () =>
+                      onOpenExtensionTitle(extensions.results[index]),
+                ),
+              ),
+            ),
+        ],
       );
     }
     if (state.selectedFeed == null) {
@@ -996,6 +1236,51 @@ class _MangaBrowseView extends StatelessWidget {
         key: const ValueKey('manga-source-picker'),
         padding: const EdgeInsets.fromLTRB(3, 3, 3, 24),
         children: [
+          Text(
+            'Manga extensions',
+            style: Theme.of(context).textTheme.titleLarge,
+          ),
+          const SizedBox(height: 6),
+          Text(
+            enabledExtensions.isEmpty
+                ? 'No manga extensions are enabled. TetoTV bundles and recommends no sources.'
+                : 'Choose one source or Search all, then enter a title in the search bar above.',
+            style: Theme.of(context).textTheme.bodyMedium,
+          ),
+          const SizedBox(height: 14),
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: [
+              if (enabledExtensions.isNotEmpty)
+                _MangaActionButton(
+                  key: const ValueKey('manga-search-all-extensions'),
+                  icon: Icons.manage_search_rounded,
+                  label: 'Search all sources',
+                  focusNode: firstFocusNode,
+                  prominent: extensions.selectedProviderId == null,
+                  onPressed: () => onSelectExtensionProvider(null),
+                ),
+              for (final addon in enabledExtensions)
+                _MangaActionButton(
+                  key: ValueKey('manga-extension-source-${addon.manifest.id}'),
+                  icon: Icons.extension_rounded,
+                  label: addon.manifest.name,
+                  prominent: extensions.selectedProviderId == addon.manifest.id,
+                  onPressed: () => onSelectExtensionProvider(addon.manifest.id),
+                ),
+              _MangaActionButton(
+                key: const ValueKey('manga-manage-extensions'),
+                icon: Icons.extension_rounded,
+                label: 'Manage extensions',
+                focusNode: enabledExtensions.isEmpty && catalogs.isEmpty
+                    ? firstFocusNode
+                    : null,
+                onPressed: onManageExtensions,
+              ),
+            ],
+          ),
+          const SizedBox(height: 24),
           Text(
             'Choose a catalog',
             style: Theme.of(context).textTheme.titleLarge,
@@ -1015,9 +1300,13 @@ class _MangaBrowseView extends StatelessWidget {
                   key: ValueKey('manga-open-source-${catalogs[index].id}'),
                   icon: Icons.menu_book_rounded,
                   label: catalogs[index].name,
-                  focusNode: index == 0 ? firstFocusNode : null,
                   onPressed: () => onSelectSource(catalogs[index]),
                 ),
+              _MangaActionButton(
+                icon: Icons.add_link_rounded,
+                label: 'Add source',
+                onPressed: onAddSource,
+              ),
             ],
           ),
         ],
@@ -1147,6 +1436,143 @@ class _MangaBrowseView extends StatelessWidget {
   }
 }
 
+class _MangaExtensionSearchHeader extends StatelessWidget {
+  const _MangaExtensionSearchHeader({
+    required this.state,
+    required this.onSelectProvider,
+    required this.onSearchAgain,
+    required this.onManageExtensions,
+  });
+
+  final MangaExtensionState state;
+  final ValueChanged<String?> onSelectProvider;
+  final VoidCallback onSearchAgain;
+  final VoidCallback onManageExtensions;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.fromLTRB(3, 3, 3, 8),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          'Results for “${state.query}”',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: Theme.of(context).textTheme.titleLarge,
+        ),
+        const SizedBox(height: 5),
+        Text(
+          state.searching
+              ? '${state.results.length} result(s) so far • searching enabled sources…'
+              : '${state.results.length} result(s) from installed manga extensions',
+          style: Theme.of(context).textTheme.bodyMedium,
+        ),
+        const SizedBox(height: 11),
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          clipBehavior: Clip.none,
+          child: Row(
+            children: [
+              _MangaActionButton(
+                icon: Icons.manage_search_rounded,
+                label: 'Search all',
+                prominent: state.selectedProviderId == null,
+                onPressed: () {
+                  onSelectProvider(null);
+                  onSearchAgain();
+                },
+              ),
+              for (final addon in state.enabledProviders) ...[
+                const SizedBox(width: 8),
+                _MangaActionButton(
+                  icon: Icons.extension_rounded,
+                  label: addon.manifest.name,
+                  prominent: state.selectedProviderId == addon.manifest.id,
+                  onPressed: () {
+                    onSelectProvider(addon.manifest.id);
+                    onSearchAgain();
+                  },
+                ),
+              ],
+              const SizedBox(width: 8),
+              _MangaActionButton(
+                icon: Icons.settings_rounded,
+                label: 'Manage extensions',
+                onPressed: onManageExtensions,
+              ),
+            ],
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+class _MangaExtensionTitleCard extends StatelessWidget {
+  const _MangaExtensionTitleCard({
+    required this.title,
+    required this.onPressed,
+    this.focusNode,
+  });
+
+  final MangaExtensionTitle title;
+  final VoidCallback onPressed;
+  final FocusNode? focusNode;
+
+  @override
+  Widget build(BuildContext context) => TvFocusable(
+    key: ValueKey(
+      'manga-extension-title-${title.providerId}-${title.id.hashCode}',
+    ),
+    focusNode: focusNode,
+    onPressed: onPressed,
+    borderRadius: BorderRadius.circular(11),
+    focusScale: 1.025,
+    child: DecoratedBox(
+      decoration: _panelDecoration(context, radius: 11),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Expanded(
+            child: ClipRRect(
+              borderRadius: const BorderRadius.vertical(
+                top: Radius.circular(10),
+              ),
+              child: MangaArtwork(
+                uri: title.image,
+                headers: title.imageHeaders,
+                icon: Icons.menu_book_rounded,
+                cacheWidth: 420,
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(10, 9, 10, 3),
+            child: Text(
+              title.title,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontWeight: FontWeight.w900, height: 1.1),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(10, 0, 10, 10),
+            child: Text(
+              '${title.providerName} • ${title.language.toUpperCase()}',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: context.appPalette.mutedText,
+              ),
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
 class _MangaLibraryView extends StatelessWidget {
   const _MangaLibraryView({
     required this.state,
@@ -1260,6 +1686,7 @@ class _MangaDownloadsView extends StatelessWidget {
 class _MangaSourcesView extends StatelessWidget {
   const _MangaSourcesView({
     required this.sources,
+    required this.extensions,
     required this.selectedSourceId,
     required this.firstFocusNode,
     required this.onAdd,
@@ -1267,10 +1694,12 @@ class _MangaSourcesView extends StatelessWidget {
     required this.onToggle,
     required this.onCredentials,
     required this.onRemove,
+    required this.onManageExtensions,
     super.key,
   });
 
   final List<StoredMangaSource> sources;
+  final List<InstalledStreamingAddon> extensions;
   final String? selectedSourceId;
   final FocusNode firstFocusNode;
   final VoidCallback onAdd;
@@ -1278,14 +1707,41 @@ class _MangaSourcesView extends StatelessWidget {
   final ValueChanged<StoredMangaSource> onToggle;
   final ValueChanged<StoredMangaSource> onCredentials;
   final ValueChanged<StoredMangaSource> onRemove;
+  final VoidCallback onManageExtensions;
 
   @override
   Widget build(BuildContext context) => ListView(
     key: const ValueKey('manga-sources-list'),
     padding: const EdgeInsets.fromLTRB(3, 3, 3, 30),
     children: [
-      _MangaPolicyBanner(onAdd: onAdd, focusNode: firstFocusNode),
+      _MangaPolicyBanner(
+        onAdd: onAdd,
+        onManageExtensions: onManageExtensions,
+        focusNode: firstFocusNode,
+      ),
       const SizedBox(height: 14),
+      Text('Manga extensions', style: Theme.of(context).textTheme.titleLarge),
+      const SizedBox(height: 8),
+      if (extensions.isEmpty)
+        _MangaEmptyState(
+          icon: Icons.extension_off_rounded,
+          title: 'No manga extensions installed',
+          message:
+              'Add a repository and install sources from Marketplace. TetoTV bundles and recommends no sources.',
+          actionLabel: 'Manage extensions',
+          onAction: onManageExtensions,
+        )
+      else
+        for (var index = 0; index < extensions.length; index++) ...[
+          _MangaExtensionSourceCard(addon: extensions[index]),
+          if (index != extensions.length - 1) const SizedBox(height: 10),
+        ],
+      const SizedBox(height: 20),
+      Text(
+        'Optional OPDS catalogs',
+        style: Theme.of(context).textTheme.titleLarge,
+      ),
+      const SizedBox(height: 8),
       if (sources.isEmpty)
         const _MangaEmptyState(
           icon: Icons.link_off_rounded,
@@ -1310,9 +1766,14 @@ class _MangaSourcesView extends StatelessWidget {
 }
 
 class _MangaPolicyBanner extends StatelessWidget {
-  const _MangaPolicyBanner({required this.onAdd, required this.focusNode});
+  const _MangaPolicyBanner({
+    required this.onAdd,
+    required this.onManageExtensions,
+    required this.focusNode,
+  });
 
   final VoidCallback onAdd;
+  final VoidCallback onManageExtensions;
   final FocusNode focusNode;
 
   @override
@@ -1321,11 +1782,23 @@ class _MangaPolicyBanner extends StatelessWidget {
     decoration: _panelDecoration(context),
     child: LayoutBuilder(
       builder: (context, constraints) {
-        final action = _MangaActionButton(
-          icon: Icons.add_link_rounded,
-          label: 'Add source',
-          focusNode: focusNode,
-          onPressed: onAdd,
+        final actions = Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            _MangaActionButton(
+              icon: Icons.extension_rounded,
+              label: 'Manage extensions',
+              focusNode: focusNode,
+              prominent: true,
+              onPressed: onManageExtensions,
+            ),
+            _MangaActionButton(
+              icon: Icons.add_link_rounded,
+              label: 'Add source',
+              onPressed: onAdd,
+            ),
+          ],
         );
         final copy = Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -1336,7 +1809,7 @@ class _MangaPolicyBanner extends StatelessWidget {
             ),
             const SizedBox(height: 4),
             Text(
-              'TetoTV accepts data-only OPDS catalogs and never executes manga source code. Only add services you trust and are authorized to use.',
+              'Installed Seanime manga extensions run in TetoTV’s restricted provider runtime. OPDS is data-only and never executes manga source code. Only add sources you trust and are authorized to use.',
               style: Theme.of(context).textTheme.bodyMedium,
             ),
           ],
@@ -1344,17 +1817,67 @@ class _MangaPolicyBanner extends StatelessWidget {
         if (constraints.maxWidth < 600) {
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [copy, const SizedBox(height: 12), action],
+            children: [copy, const SizedBox(height: 12), actions],
           );
         }
         return Row(
           children: [
             Expanded(child: copy),
             const SizedBox(width: 18),
-            action,
+            actions,
           ],
         );
       },
+    ),
+  );
+}
+
+class _MangaExtensionSourceCard extends StatelessWidget {
+  const _MangaExtensionSourceCard({required this.addon});
+
+  final InstalledStreamingAddon addon;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    key: ValueKey('manga-installed-extension-${addon.manifest.id}'),
+    padding: const EdgeInsets.all(14),
+    decoration: _panelDecoration(context),
+    child: Row(
+      children: [
+        Container(
+          width: 44,
+          height: 44,
+          decoration: BoxDecoration(
+            color: addon.enabled
+                ? context.appPalette.accent.withValues(alpha: .18)
+                : context.appPalette.surfaceRaised,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: const Icon(Icons.extension_rounded),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                addon.manifest.name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              const SizedBox(height: 3),
+              Text(
+                '${addon.manifest.locale.toUpperCase()} • ${addon.manifest.author}',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+            ],
+          ),
+        ),
+        _MangaStatusBadge(label: addon.enabled ? 'ENABLED' : 'DISABLED'),
+      ],
     ),
   );
 }
@@ -1775,6 +2298,208 @@ class _MangaSourceCard extends StatelessWidget {
           ],
         );
       },
+    ),
+  );
+}
+
+class _MangaExtensionTitleSheet extends StatefulWidget {
+  const _MangaExtensionTitleSheet({
+    required this.title,
+    required this.initiallyInLibrary,
+    required this.loadChapters,
+    required this.onRead,
+    required this.onDownload,
+    required this.onLibrary,
+  });
+
+  final MangaExtensionTitle title;
+  final bool initiallyInLibrary;
+  final Future<List<MangaExtensionChapter>> Function() loadChapters;
+  final ValueChanged<MangaExtensionChapter> onRead;
+  final ValueChanged<MangaExtensionChapter> onDownload;
+  final Future<bool> Function() onLibrary;
+
+  @override
+  State<_MangaExtensionTitleSheet> createState() =>
+      _MangaExtensionTitleSheetState();
+}
+
+class _MangaExtensionTitleSheetState extends State<_MangaExtensionTitleSheet> {
+  late final Future<List<MangaExtensionChapter>> _chapters;
+  late bool _inLibrary;
+  bool _libraryBusy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _chapters = widget.loadChapters();
+    _inLibrary = widget.initiallyInLibrary;
+  }
+
+  Future<void> _toggleLibrary() async {
+    if (_libraryBusy) return;
+    setState(() => _libraryBusy = true);
+    try {
+      final saved = await widget.onLibrary();
+      if (mounted) setState(() => _inLibrary = saved);
+    } finally {
+      if (mounted) setState(() => _libraryBusy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Align(
+    alignment: Alignment.bottomCenter,
+    child: ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 940, maxHeight: 760),
+      child: Material(
+        color: context.appPalette.surface,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(22)),
+        clipBehavior: Clip.antiAlias,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 18, 14, 14),
+              child: Row(
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(9),
+                    child: SizedBox(
+                      width: 72,
+                      height: 102,
+                      child: MangaArtwork(
+                        uri: widget.title.image,
+                        headers: widget.title.imageHeaders,
+                        cacheWidth: 220,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          widget.title.title,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.headlineSmall,
+                        ),
+                        const SizedBox(height: 5),
+                        Text(
+                          '${widget.title.providerName} • ${widget.title.language.toUpperCase()}'
+                          '${widget.title.year == null ? '' : ' • ${widget.title.year}'}',
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
+                        const SizedBox(height: 10),
+                        _MangaActionButton(
+                          icon: _inLibrary
+                              ? Icons.bookmark_remove_rounded
+                              : Icons.bookmark_add_rounded,
+                          label: _libraryBusy
+                              ? 'Updating…'
+                              : _inLibrary
+                              ? 'Remove from library'
+                              : 'Add to library',
+                          onPressed: _libraryBusy ? null : _toggleLibrary,
+                        ),
+                      ],
+                    ),
+                  ),
+                  _MangaIconAction(
+                    icon: Icons.close_rounded,
+                    tooltip: 'Close',
+                    onPressed: () => Navigator.of(context).pop(),
+                  ),
+                ],
+              ),
+            ),
+            Divider(
+              color: context.appPalette.primaryText.withValues(alpha: .1),
+            ),
+            Expanded(
+              child: FutureBuilder<List<MangaExtensionChapter>>(
+                future: _chapters,
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState != ConnectionState.done) {
+                    return const Center(child: CircularProgressIndicator());
+                  }
+                  if (snapshot.hasError) {
+                    return const _MangaEmptyState(
+                      icon: Icons.error_outline_rounded,
+                      title: 'Chapters unavailable',
+                      message: 'This manga source could not load its chapters.',
+                    );
+                  }
+                  final chapters = snapshot.data ?? const [];
+                  if (chapters.isEmpty) {
+                    return const _MangaEmptyState(
+                      icon: Icons.menu_book_outlined,
+                      title: 'No chapters found',
+                      message: 'This source did not return any chapters.',
+                    );
+                  }
+                  return ListView.separated(
+                    key: const ValueKey('manga-extension-chapters'),
+                    padding: const EdgeInsets.fromLTRB(18, 10, 18, 28),
+                    itemCount: chapters.length,
+                    separatorBuilder: (_, _) => const SizedBox(height: 8),
+                    itemBuilder: (context, index) {
+                      final chapter = chapters[index];
+                      return Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: _panelDecoration(context, radius: 11),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    chapter.title,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w800,
+                                    ),
+                                  ),
+                                  if (chapter.scanlator case final group?)
+                                    Text(
+                                      group,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: Theme.of(
+                                        context,
+                                      ).textTheme.bodySmall,
+                                    ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            _MangaActionButton(
+                              icon: Icons.auto_stories_rounded,
+                              label: 'Read',
+                              prominent: true,
+                              onPressed: () => widget.onRead(chapter),
+                            ),
+                            const SizedBox(width: 8),
+                            _MangaIconAction(
+                              icon: Icons.download_rounded,
+                              tooltip: 'Download chapter',
+                              onPressed: () => widget.onDownload(chapter),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
     ),
   );
 }

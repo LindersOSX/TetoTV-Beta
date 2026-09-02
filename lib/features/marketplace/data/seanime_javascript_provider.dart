@@ -4,8 +4,10 @@ import 'dart:io';
 import 'dart:isolate';
 import 'dart:typed_data';
 
+import 'package:anime_tv/core/preferences/caption_language.dart';
 import 'package:anime_tv/features/marketplace/domain/addon_models.dart';
 import 'package:anime_tv/features/marketplace/data/public_https_dio.dart';
+import 'package:anime_tv/features/manga/domain/manga_extension_models.dart';
 import 'package:anime_tv/features/streaming/domain/episode_identity_guard.dart';
 import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
 import 'package:dio/dio.dart';
@@ -73,12 +75,14 @@ class SeanimeJavascriptProvider implements WebStreamingProvider {
   const SeanimeJavascriptProvider(
     this.addon, {
     this.validateResultTarget = validatePublicNetworkTarget,
+    this.preferredSubtitleLanguage = 'eng',
   });
 
   static Future<String>? _domRuntimeSource;
 
   final InstalledStreamingAddon addon;
   final Future<void> Function(Uri uri) validateResultTarget;
+  final String preferredSubtitleLanguage;
 
   @override
   String get id => addon.manifest.id;
@@ -127,6 +131,7 @@ class SeanimeJavascriptProvider implements WebStreamingProvider {
         'malId': episode.malMediaId,
         'year': episode.year,
         'requestedSeason': catalogSeasonNumber(episode),
+        'preferredSubtitleLanguage': preferredSubtitleLanguage,
       },
       timeout: seanimeProviderRuntimeLimit,
       cancellation: cancellation,
@@ -194,6 +199,7 @@ class SeanimeJavascriptProvider implements WebStreamingProvider {
           subtitleLanguage: item['subtitleLanguage'] as String?,
           isDubbed: audioCapability?.supportsDub ?? legacyDubbed,
           audioCapability: audioCapability,
+          audioLanguages: webStreamAudioLanguagesFromWire(item),
           matchedEpisodeNumber: matchedEpisodeNumber,
           matchedSeasonNumber: matchedSeasonNumber,
           matchedSeriesTitle: matchedSeriesTitle,
@@ -208,6 +214,286 @@ class SeanimeJavascriptProvider implements WebStreamingProvider {
     }
     return results;
   }
+}
+
+/// Sandboxed adapter for Seanime's public `manga-provider` contract.
+///
+/// It intentionally shares the same isolate, QuickJS heap, network policy,
+/// redirect validation, and bounded compatibility surface as video providers,
+/// while exposing only search, chapter, and page operations to manga code.
+class SeanimeJavascriptMangaProvider {
+  const SeanimeJavascriptMangaProvider(
+    this.addon, {
+    this.validateResultTarget = validatePublicNetworkTarget,
+  });
+
+  static Future<String>? _domRuntimeSource;
+
+  final InstalledStreamingAddon addon;
+  final Future<void> Function(Uri uri) validateResultTarget;
+
+  String get id => addon.manifest.id;
+  String get name => addon.manifest.name;
+  String get language => addon.manifest.locale;
+
+  Future<List<MangaExtensionTitle>> search(
+    String query, {
+    int? year,
+    WebProviderCancellation? cancellation,
+  }) async {
+    final normalized = _boundedMangaProviderString(
+      query,
+      field: 'Manga query',
+      maximum: 240,
+    );
+    final raw = await _runMangaOperation('manga-search', <String, Object?>{
+      'query': normalized,
+      'year': year,
+    }, cancellation: cancellation);
+    final allowedHosts = <String, bool>{};
+    final output = <MangaExtensionTitle>[];
+    for (final item in raw.take(120)) {
+      final mangaId = _optionalMangaProviderString(item['id'], maximum: 2048);
+      final title = _optionalMangaProviderString(item['title'], maximum: 512);
+      if (mangaId == null || title == null) continue;
+      Uri? image;
+      final candidate = safePublicHttpsUri(item['image']);
+      if (candidate != null &&
+          await _mangaResultTargetAllowed(
+            candidate,
+            allowedHosts,
+            cancellation,
+          )) {
+        image = candidate;
+      }
+      final synonyms = <String>[];
+      final rawSynonyms = item['synonyms'];
+      if (rawSynonyms is Iterable) {
+        for (final value in rawSynonyms.take(32)) {
+          final synonym = _optionalMangaProviderString(value, maximum: 256);
+          if (synonym != null &&
+              !synonyms.any(
+                (current) => current.toLowerCase() == synonym.toLowerCase(),
+              )) {
+            synonyms.add(synonym);
+          }
+        }
+      }
+      output.add(
+        MangaExtensionTitle(
+          providerId: id,
+          providerName: name,
+          language: language,
+          id: mangaId,
+          title: title,
+          synonyms: synonyms,
+          year: _boundedMangaYear(item['year']),
+          image: image,
+          imageHeaders: image == null
+              ? const <String, String>{}
+              : sanitizeAddonHeaders(
+                  item['imageHeaders'],
+                  maximumValueLength: 1024,
+                ),
+        ),
+      );
+    }
+    return List<MangaExtensionTitle>.unmodifiable(output);
+  }
+
+  Future<List<MangaExtensionChapter>> findChapters(
+    String mangaId, {
+    WebProviderCancellation? cancellation,
+  }) async {
+    final raw = await _runMangaOperation('manga-chapters', <String, Object?>{
+      'mangaId': _boundedMangaProviderString(
+        mangaId,
+        field: 'Manga identifier',
+        maximum: 2048,
+      ),
+    }, cancellation: cancellation);
+    final output = <MangaExtensionChapter>[];
+    for (final item in raw.take(1000)) {
+      final chapterId = _optionalMangaProviderString(item['id'], maximum: 2048);
+      final chapter = _optionalMangaProviderString(
+        item['chapter'],
+        maximum: 80,
+      );
+      if (chapterId == null || chapter == null) continue;
+      final title =
+          _optionalMangaProviderString(item['title'], maximum: 512) ??
+          'Chapter $chapter';
+      final rawIndex = item['index'];
+      final index = rawIndex is num && rawIndex.isFinite
+          ? rawIndex.toInt().clamp(0, 999)
+          : output.length;
+      final url = safePublicHttpsUri(item['url']);
+      output.add(
+        MangaExtensionChapter(
+          id: chapterId,
+          title: title,
+          chapter: chapter,
+          index: index,
+          url: url,
+          scanlator: _optionalMangaProviderString(
+            item['scanlator'],
+            maximum: 160,
+          ),
+          language: _optionalMangaProviderString(item['language'], maximum: 32),
+          rating: _boundedMangaRating(item['rating']),
+          updatedAt: _boundedMangaDate(item['updatedAt']),
+        ),
+      );
+    }
+    output.sort((left, right) {
+      final byNumber = (left.chapterNumber ?? left.index.toDouble()).compareTo(
+        right.chapterNumber ?? right.index.toDouble(),
+      );
+      return byNumber != 0 ? byNumber : left.index.compareTo(right.index);
+    });
+    return List<MangaExtensionChapter>.unmodifiable(output);
+  }
+
+  Future<List<MangaExtensionPage>> findChapterPages(
+    String chapterId, {
+    WebProviderCancellation? cancellation,
+  }) async {
+    final raw = await _runMangaOperation('manga-pages', <String, Object?>{
+      'chapterId': _boundedMangaProviderString(
+        chapterId,
+        field: 'Chapter identifier',
+        maximum: 2048,
+      ),
+    }, cancellation: cancellation);
+    final allowedHosts = <String, bool>{};
+    final output = <MangaExtensionPage>[];
+    for (final item in raw.take(1000)) {
+      cancellation?.throwIfCancelled();
+      final uri = safePublicHttpsUri(item['url']);
+      if (uri == null ||
+          !await _mangaResultTargetAllowed(uri, allowedHosts, cancellation)) {
+        continue;
+      }
+      final rawIndex = item['index'];
+      final index = rawIndex is num && rawIndex.isFinite
+          ? rawIndex.toInt().clamp(0, 999)
+          : output.length;
+      output.add(
+        MangaExtensionPage(
+          uri: uri,
+          index: index,
+          headers: sanitizeAddonHeaders(
+            item['headers'],
+            maximumValueLength: 1024,
+          ),
+        ),
+      );
+    }
+    output.sort((left, right) => left.index.compareTo(right.index));
+    if (output.isEmpty && raw.isNotEmpty) {
+      throw StateError('Manga pages failed URL or network safety validation.');
+    }
+    return List<MangaExtensionPage>.unmodifiable(output);
+  }
+
+  Future<List<Map<String, dynamic>>> _runMangaOperation(
+    String operation,
+    Map<String, Object?> arguments, {
+    WebProviderCancellation? cancellation,
+  }) async {
+    if (!addon.enabled || !addon.manifest.isMangaProvider) {
+      throw const FormatException('This is not an enabled manga provider.');
+    }
+    cancellation?.throwIfCancelled();
+    final domRuntime = await (_domRuntimeSource ??= rootBundle.loadString(
+      'assets/addon_runtime/linkedom.js',
+      cache: true,
+    ));
+    cancellation?.throwIfCancelled();
+    return _runProviderIsolate(
+      <String, Object?>{
+        'id': id,
+        'name': name,
+        'payload': addon.payload,
+        'userConfig': addon.manifest.userConfigDefaults,
+        'domRuntime': domRuntime,
+        'operation': operation,
+        ...arguments,
+      },
+      timeout: seanimeProviderRuntimeLimit,
+      cancellation: cancellation,
+    );
+  }
+
+  Future<bool> _mangaResultTargetAllowed(
+    Uri uri,
+    Map<String, bool> cache,
+    WebProviderCancellation? cancellation,
+  ) async {
+    cancellation?.throwIfCancelled();
+    final key =
+        '${uri.scheme.toLowerCase()}://${uri.host.toLowerCase()}:${uri.port}';
+    final known = cache[key];
+    if (known != null) return known;
+    try {
+      await validateResultTarget(uri);
+      cancellation?.throwIfCancelled();
+      cache[key] = true;
+      return true;
+    } on WebProviderSearchCancelled {
+      rethrow;
+    } catch (_) {
+      cancellation?.throwIfCancelled();
+      cache[key] = false;
+      return false;
+    }
+  }
+}
+
+String _boundedMangaProviderString(
+  Object? value, {
+  required String field,
+  required int maximum,
+}) {
+  final parsed = _optionalMangaProviderString(value, maximum: maximum);
+  if (parsed == null) throw FormatException('$field is invalid.');
+  return parsed;
+}
+
+String? _optionalMangaProviderString(Object? value, {required int maximum}) {
+  if (value is! String) return null;
+  final text = value.trim();
+  if (text.isEmpty ||
+      text.length > maximum ||
+      text.contains(RegExp(r'[\u0000-\u001f\u007f]'))) {
+    return null;
+  }
+  return text;
+}
+
+int? _boundedMangaYear(Object? value) {
+  final parsed = switch (value) {
+    final int item => item,
+    final num item when item.isFinite => item.toInt(),
+    final String item => int.tryParse(item.trim()),
+    _ => null,
+  };
+  return parsed != null && parsed >= 1000 && parsed <= 3000 ? parsed : null;
+}
+
+double? _boundedMangaRating(Object? value) {
+  final parsed = switch (value) {
+    final num item when item.isFinite => item.toDouble(),
+    final String item => double.tryParse(item.trim()),
+    _ => null,
+  };
+  return parsed != null && parsed >= 0 && parsed <= 100 ? parsed : null;
+}
+
+DateTime? _boundedMangaDate(Object? value) {
+  if (value is! String || value.length > 80) return null;
+  final parsed = DateTime.tryParse(value.trim());
+  return parsed?.toUtc();
 }
 
 int? _positiveProviderInt(Object? value) {
@@ -501,6 +787,7 @@ class HlsMasterPlaylistInspection {
     required this.variants,
     required this.audioCapability,
     required this.hasAlternateAudio,
+    this.audioLanguages = const [],
   });
 
   final List<HlsStreamVariant> variants;
@@ -509,6 +796,7 @@ class HlsMasterPlaylistInspection {
   /// True when the master owns audio renditions that would be lost by handing
   /// MPV one child video playlist instead of the original master playlist.
   final bool hasAlternateAudio;
+  final List<String> audioLanguages;
 }
 
 HlsMasterPlaylistInspection inspectHlsMasterPlaylist(
@@ -546,8 +834,8 @@ HlsMasterPlaylistInspection inspectHlsMasterPlaylist(
     );
     if (language != null) languages.add(language);
   }
-  final hasEnglish = languages.contains('en');
-  final hasJapanese = languages.contains('ja');
+  final hasEnglish = languages.contains('eng');
+  final hasJapanese = languages.contains('jpn');
   final audioCapability = hasEnglish && hasJapanese
       ? WebStreamAudioCapability.subAndDub
       : hasEnglish
@@ -559,6 +847,7 @@ HlsMasterPlaylistInspection inspectHlsMasterPlaylist(
     variants: variants,
     audioCapability: audioCapability,
     hasAlternateAudio: audioRenditions.isNotEmpty,
+    audioLanguages: List.unmodifiable(languages),
   );
 }
 
@@ -569,10 +858,12 @@ String? _normalizedHlsAudioLanguage(String? value) {
       .replaceAll(RegExp(r'[^a-z]+'), ' ')
       .trim();
   if (normalized == null || normalized.isEmpty) return null;
-  final words = normalized.split(RegExp(r'\s+'));
-  if (words.any(const {'en', 'eng', 'english'}.contains)) return 'en';
-  if (words.any(const {'ja', 'jp', 'jpn', 'japanese'}.contains)) return 'ja';
-  return null;
+  final canonical = canonicalCaptionLanguageCode(normalized);
+  return preferredCaptionLanguageOptions.any(
+        (option) => option.code == canonical,
+      )
+      ? canonical
+      : null;
 }
 
 List<HlsStreamVariant> parseHlsMasterPlaylist(String source, Uri masterUri) {
@@ -640,19 +931,22 @@ List<Map<String, dynamic>> expandHlsResultVariants(
   final title = '${item['title'] ?? 'Auto'}';
   final inspection = inspectHlsMasterPlaylist(playlist, masterUri);
   final detected = inspection.audioCapability;
-  final annotatedMaster = detected == WebStreamAudioCapability.unknown
-      ? item
-      : <String, dynamic>{
-          ...item,
-          'audioCapability': switch (detected) {
-            WebStreamAudioCapability.subAndDub => 'sub_and_dub',
-            WebStreamAudioCapability.dub => 'dub',
-            WebStreamAudioCapability.sub => 'sub',
-            WebStreamAudioCapability.unknown => 'unknown',
-          },
-        };
+  final annotatedMaster = <String, dynamic>{
+    ...item,
+    if (inspection.audioLanguages.isNotEmpty)
+      'audioLanguages': inspection.audioLanguages,
+    if (detected != WebStreamAudioCapability.unknown)
+      'audioCapability': switch (detected) {
+        WebStreamAudioCapability.subAndDub => 'sub_and_dub',
+        WebStreamAudioCapability.dub => 'dub',
+        WebStreamAudioCapability.sub => 'sub',
+        WebStreamAudioCapability.unknown => 'unknown',
+      },
+  };
   return [
-    if (detected != WebStreamAudioCapability.unknown) annotatedMaster,
+    if (inspection.hasAlternateAudio ||
+        detected != WebStreamAudioCapability.unknown)
+      annotatedMaster,
     // An alternate-audio HLS master must stay intact. A child video variant
     // does not carry the master's audio rendition list and can otherwise turn
     // a dual-audio stream into silent or apparently Sub-only playback.
@@ -1195,8 +1489,13 @@ Future<List<Map<String, dynamic>>> _executeProvider(
     }
     final data = value['result'];
     final streams = <Map<String, dynamic>>[];
+    final maximumItems = switch (input['operation']) {
+      'manga-search' => 120,
+      'manga-chapters' || 'manga-pages' => 1000,
+      _ => 80,
+    };
     if (data is List) {
-      for (final item in data.take(80)) {
+      for (final item in data.take(maximumItems)) {
         if (item is Map) {
           streams.add(item.map((key, value) => MapEntry('$key', value)));
         }
@@ -1256,7 +1555,8 @@ Future<List<Map<String, dynamic>>> _executeProvider(
     );
     if (provider.isError) throw StateError(provider.stringResult);
     cancellation.throwIfCancelled();
-    final invocation = runtime.evaluate('''
+    final invocationSource = input['operation'] == null
+        ? '''
       (async function() {
         try {
           const provider = new Provider();
@@ -1278,6 +1578,7 @@ Future<List<Map<String, dynamic>>> _executeProvider(
             ).slice(0, 8);
           const episodeNumber = ${input['episode']};
           const requestedSeason = ${input['requestedSeason'] ?? 'null'};
+          const preferredSubtitleLanguage = ${jsonEncode(input['preferredSubtitleLanguage'] ?? 'eng')};
           // Match Seanime's documented provider contract exactly. Providers
           // are allowed to branch on these sentinel values when catalog
           // metadata is unavailable.
@@ -1593,11 +1894,39 @@ Future<List<Map<String, dynamic>>> _executeProvider(
             }
             return null;
           };
-          const englishTrack = tracks => {
+          const subtitleLanguageAliases = {
+            ara: ['ara', 'ar', 'arabic'], ben: ['ben', 'bn', 'bengali', 'bangla'],
+            bul: ['bul', 'bg', 'bulgarian'], cat: ['cat', 'ca', 'catalan'],
+            ces: ['ces', 'cze', 'cs', 'czech'], dan: ['dan', 'da', 'danish'],
+            deu: ['deu', 'ger', 'de', 'german', 'deutsch'],
+            ell: ['ell', 'gre', 'el', 'greek'], eng: ['eng', 'en', 'english'],
+            fas: ['fas', 'per', 'fa', 'persian', 'farsi'],
+            fil: ['fil', 'tl', 'filipino', 'tagalog'], fin: ['fin', 'fi', 'finnish'],
+            fra: ['fra', 'fre', 'fr', 'french'], heb: ['heb', 'he', 'iw', 'hebrew'],
+            hin: ['hin', 'hi', 'hindi'], hrv: ['hrv', 'hr', 'croatian'],
+            hun: ['hun', 'hu', 'hungarian'], ind: ['ind', 'id', 'indonesian'],
+            ita: ['ita', 'it', 'italian'], jpn: ['jpn', 'ja', 'jp', 'japanese'],
+            kor: ['kor', 'ko', 'korean'], msa: ['msa', 'may', 'ms', 'malay'],
+            nld: ['nld', 'dut', 'nl', 'dutch'],
+            nor: ['nor', 'no', 'nb', 'nn', 'norwegian'],
+            pol: ['pol', 'pl', 'polish'], por: ['por', 'pt', 'portuguese'],
+            ron: ['ron', 'rum', 'ro', 'romanian'], rus: ['rus', 'ru', 'russian'],
+            slk: ['slk', 'slo', 'sk', 'slovak'], slv: ['slv', 'sl', 'slovenian'],
+            spa: ['spa', 'es', 'spanish'], srp: ['srp', 'sr', 'serbian'],
+            swe: ['swe', 'sv', 'swedish'], tam: ['tam', 'ta', 'tamil'],
+            tel: ['tel', 'te', 'telugu'], tha: ['tha', 'th', 'thai'],
+            tur: ['tur', 'tr', 'turkish'], ukr: ['ukr', 'uk', 'ukrainian'],
+            urd: ['urd', 'ur', 'urdu'], vie: ['vie', 'vi', 'vietnamese'],
+            zho: ['zho', 'chi', 'zh', 'chinese', 'mandarin'],
+          };
+          const preferredSubtitleTrack = tracks => {
             if (!tracks.length) return null;
+            const aliases = subtitleLanguageAliases[preferredSubtitleLanguage] ||
+              [preferredSubtitleLanguage];
             return tracks.find(track => {
               const value = normalize(track && (track.language || track.lang || track.label || track.name));
-              return value === 'en' || value === 'eng' || value.includes('english');
+              const words = new Set(value.split(' ').filter(Boolean));
+              return aliases.some(alias => value === alias || words.has(alias));
             }) || tracks[0];
           };
           const audioEvidenceText = (value, depth) => {
@@ -1688,6 +2017,42 @@ Future<List<Map<String, dynamic>>> _executeProvider(
             }
             return support;
           };
+          const audioLanguagesWithin = item => {
+            if (!item || typeof item !== 'object') return [];
+            const output = [];
+            const add = value => {
+              if (typeof value === 'string' && value.trim()) {
+                output.push(value.trim().slice(0, 80));
+              }
+            };
+            const addValue = value => {
+              if (Array.isArray(value)) {
+                for (const entry of value.slice(0, 24)) addValue(entry);
+                return;
+              }
+              if (value && typeof value === 'object') {
+                add(value.language || value.lang || value.label || value.name);
+                return;
+              }
+              add(value);
+            };
+            addValue(item.audioLanguage);
+            addValue(item.audioLanguages);
+            addValue(item.availableAudioLanguages);
+            for (const track of listFrom(
+              item.audioTracks || item.availableAudioTracks ||
+                item.audioStreams || item.audios,
+              ['audioTracks', 'availableAudioTracks', 'audioStreams', 'audios', 'items'],
+            )) {
+              addValue(track);
+            }
+            return output.slice(0, 24);
+          };
+          const audioLanguagesOf = (source, resolved, selectedResult) =>
+            audioLanguagesWithin(source)
+              .concat(audioLanguagesWithin(resolved))
+              .concat(audioLanguagesWithin(selectedResult))
+              .slice(0, 24);
           const capabilityFromSupport = support => support === 3
             ? 'sub_and_dub' : support === 2 ? 'dub' : support === 1 ? 'sub' : null;
           const capabilityWithin = item => capabilityFromSupport(
@@ -2019,10 +2384,12 @@ Future<List<Map<String, dynamic>>> _executeProvider(
                     resolved.subtitles || resolved.tracks || resolved.captions,
                     ['subtitles', 'tracks', 'captions'],
                   ));
-                  const english = englishTrack(subtitles);
-                  const subtitleUrl = english && toHttps(
-                    english.url || english.file || english.src || english.link ||
-                      english.href || english.uri || english.subtitleUrl,
+                  const preferredSubtitle = preferredSubtitleTrack(subtitles);
+                  const subtitleUrl = preferredSubtitle && toHttps(
+                    preferredSubtitle.url || preferredSubtitle.file ||
+                      preferredSubtitle.src || preferredSubtitle.link ||
+                      preferredSubtitle.href || preferredSubtitle.uri ||
+                      preferredSubtitle.subtitleUrl,
                     bases,
                   );
                   const explicitDubSelection =
@@ -2056,8 +2423,16 @@ Future<List<Map<String, dynamic>>> _executeProvider(
                     ).slice(0, 64),
                     headers: Object.assign({}, serverHeaders, source.headers || {}),
                     subtitleUrl,
-                    subtitleLanguage: english && String(english.language || english.lang || english.label || ''),
+                    subtitleLanguage: preferredSubtitle && String(
+                      preferredSubtitle.language || preferredSubtitle.lang ||
+                        preferredSubtitle.label || preferredSubtitleLanguage
+                    ),
                     audioCapability,
+                    audioLanguages: audioLanguagesOf(
+                      source,
+                      resolved,
+                      selected.item,
+                    ),
                     matchedEpisodeNumber: explicitEpisodeNumberOf(episode),
                     matchedSeasonNumber: seasonNumberOf(episode),
                     matchedSeriesTitle: candidateTitle(selected.item),
@@ -2110,7 +2485,12 @@ Future<List<Map<String, dynamic>>> _executeProvider(
           sendMessage('TetoDone', JSON.stringify({ok: false, error: String(error && error.message || error)}));
         }
       })();
-    ''', sourceUrl: 'tetotv://provider-runner.js');
+    '''
+        : _mangaProviderInvocationSource(input);
+    final invocation = runtime.evaluate(
+      invocationSource,
+      sourceUrl: 'tetotv://provider-runner.js',
+    );
     if (invocation.isError) throw StateError(invocation.stringResult);
     await runtime.dispatch();
     return await Future.any<List<Map<String, dynamic>>>([
@@ -2127,6 +2507,135 @@ Future<List<Map<String, dynamic>>> _executeProvider(
     sleepTimers.clear();
     runtime.dispose();
   }
+}
+
+String _mangaProviderInvocationSource(Map<String, Object?> input) {
+  final operation = jsonEncode(input['operation']);
+  final query = jsonEncode(input['query']);
+  final year = input['year'] is int ? input['year'] : null;
+  final mangaId = jsonEncode(input['mangaId']);
+  final chapterId = jsonEncode(input['chapterId']);
+  return '''
+    (async function() {
+      try {
+        const provider = new Provider();
+        const providerCall = async callback => {
+          try {
+            return await callback();
+          } finally {
+            await __tetoAwaitSleeps();
+          }
+        };
+        const boundedString = (value, maximum) =>
+          typeof value === 'string' && value.length <= maximum ? value : null;
+        const boundedNumber = value =>
+          typeof value === 'number' && Number.isFinite(value) ? value : null;
+        const projectHeaders = value => {
+          if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+          const projected = {};
+          let count = 0;
+          let inspected = 0;
+          let total = 0;
+          for (const rawKey of Object.keys(value)) {
+            inspected += 1;
+            if (inspected > 64) break;
+            if (count >= 24) break;
+            const rawValue = value[rawKey];
+            if (typeof rawValue !== 'string' &&
+                typeof rawValue !== 'number' &&
+                typeof rawValue !== 'boolean') continue;
+            const key = String(rawKey);
+            const headerValue = String(rawValue);
+            if (!key || key.length > 80 || headerValue.length > 1024) continue;
+            total += key.length + headerValue.length;
+            if (total > 16 * 1024) break;
+            projected[key] = headerValue;
+            count += 1;
+          }
+          return projected;
+        };
+        const projectResult = (operation, value) => {
+          if (!Array.isArray(value)) return [];
+          const maximum = operation === 'manga-search' ? 120 : 1000;
+          const projected = [];
+          for (const item of value.slice(0, maximum)) {
+            if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+            if (operation === 'manga-search') {
+              const synonyms = Array.isArray(item.synonyms)
+                ? item.synonyms.slice(0, 32)
+                    .map(value => boundedString(value, 256))
+                    .filter(value => value != null)
+                : [];
+              projected.push({
+                id: boundedString(item.id, 2048),
+                title: boundedString(item.title, 512),
+                synonyms: synonyms,
+                year: boundedNumber(item.year) ?? boundedString(item.year, 16),
+                image: boundedString(item.image, 2048),
+                imageHeaders: projectHeaders(item.imageHeaders),
+              });
+            } else if (operation === 'manga-chapters') {
+              projected.push({
+                id: boundedString(item.id, 2048),
+                url: boundedString(item.url, 2048),
+                title: boundedString(item.title, 512),
+                chapter: boundedString(item.chapter, 80),
+                index: boundedNumber(item.index),
+                scanlator: boundedString(item.scanlator, 160),
+                language: boundedString(item.language, 32),
+                rating: boundedNumber(item.rating) ?? boundedString(item.rating, 32),
+                updatedAt: boundedString(item.updatedAt, 80),
+              });
+            } else {
+              projected.push({
+                url: boundedString(item.url, 2048),
+                index: boundedNumber(item.index),
+                headers: projectHeaders(item.headers),
+              });
+            }
+          }
+          return projected;
+        };
+        const operation = $operation;
+        let result;
+        if (operation === 'manga-search') {
+          if (typeof provider.search !== 'function') {
+            throw new Error('Manga provider does not implement search');
+          }
+          const options = {query: $query};
+          const year = ${year ?? 'null'};
+          if (year != null) options.year = year;
+          result = await providerCall(() => provider.search(options));
+        } else if (operation === 'manga-chapters') {
+          if (typeof provider.findChapters !== 'function') {
+            throw new Error('Manga provider does not implement findChapters');
+          }
+          result = await providerCall(() => provider.findChapters($mangaId));
+        } else if (operation === 'manga-pages') {
+          if (typeof provider.findChapterPages !== 'function') {
+            throw new Error('Manga provider does not implement findChapterPages');
+          }
+          result = await providerCall(() => provider.findChapterPages($chapterId));
+        } else {
+          throw new Error('Unsupported manga provider operation');
+        }
+        result = projectResult(operation, result);
+        const payload = JSON.stringify({ok: true, result: result});
+        if (payload.length > 4 * 1024 * 1024) {
+          throw new Error('Manga provider output exceeded its safe size limit');
+        }
+        sendMessage('TetoDone', payload);
+      } catch (error) {
+        const message = String(
+          error && error.message || error || 'Manga provider failed'
+        ).slice(0, 512);
+        sendMessage('TetoDone', JSON.stringify({
+          ok: false,
+          error: message,
+        }));
+      }
+    })();
+  ''';
 }
 
 class AddonRuntimeNetworkBudget {

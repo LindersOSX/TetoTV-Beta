@@ -902,8 +902,92 @@ void main() {
     expect(find.text('Show title style'), findsOneWidget);
     await tester.tap(find.text('Playback'));
     await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('settings-preferred-audio-language')),
+      findsOneWidget,
+    );
+    expect(find.text('Preferred audio language'), findsOneWidget);
     expect(find.byKey(const ValueKey('settings-preferred-cc')), findsOneWidget);
     expect(find.text('Preferred CC'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('settings-preferred-cc-language')),
+      findsOneWidget,
+    );
+    expect(find.text('Preferred subtitle language'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('preferred subtitle language updates and restores', (
+    tester,
+  ) async {
+    FlutterSecureStorage.setMockInitialValues({});
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    Widget buildSettings() => ProviderScope(
+      overrides: [isTelevisionProvider.overrideWithValue(false)],
+      child: const MaterialApp(home: AccountsScreen()),
+    );
+
+    await tester.pumpWidget(buildSettings());
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Playback'));
+    await tester.pumpAndSettle();
+
+    final languageRow = find.byKey(
+      const ValueKey('settings-preferred-cc-language'),
+    );
+    expect(
+      find.descendant(of: languageRow, matching: find.text('English')),
+      findsOneWidget,
+    );
+    await tester.tap(languageRow);
+    await tester.pumpAndSettle();
+    final spanish = find.text('Spanish');
+    await tester.ensureVisible(spanish);
+    await tester.pumpAndSettle();
+    await tester.tap(spanish);
+    await tester.pumpAndSettle();
+
+    var container = ProviderScope.containerOf(
+      tester.element(find.byType(AccountsScreen)),
+    );
+    expect(
+      container.read(settingsPreferencesProvider).preferredCaptionLanguage,
+      'spa',
+    );
+    expect(
+      container.read(settingsPreferencesProvider).preferredCaptionMode,
+      PreferredCaptionMode.automatic,
+    );
+    expect(
+      find.descendant(of: languageRow, matching: find.text('Spanish')),
+      findsOneWidget,
+    );
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pumpAndSettle();
+    await tester.pumpWidget(buildSettings());
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Playback'));
+    await tester.pumpAndSettle();
+
+    container = ProviderScope.containerOf(
+      tester.element(find.byType(AccountsScreen)),
+    );
+    expect(
+      container.read(settingsPreferencesProvider).preferredCaptionLanguage,
+      'spa',
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('settings-preferred-cc-language')),
+        matching: find.text('Spanish'),
+      ),
+      findsOneWidget,
+    );
     expect(tester.takeException(), isNull);
   });
 
@@ -1899,7 +1983,19 @@ void main() {
     await tester.pumpAndSettle();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.captions.language',
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
       'accounts.captions.text-color',
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+    await tester.pumpAndSettle();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.captions.language',
     );
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
     await tester.pumpAndSettle();

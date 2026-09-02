@@ -34,6 +34,41 @@ void main() {
       );
     },
   );
+
+  test(
+    'one-time Essential premium is accepted without recurring billing',
+    () async {
+      FlutterSecureStorage.setMockInitialValues({});
+      final controller = TorBoxSettingsController(
+        storage,
+        (_) => _OneTimeEssentialTorBoxClient(),
+      );
+
+      expect(await controller.saveAndValidate('one-time-token'), isTrue);
+      expect(controller.state.account?.planName, 'Essential');
+      expect(controller.state.account?.isSubscribed, isFalse);
+      expect(controller.state.account?.hasApiStreaming, isTrue);
+      expect(
+        await storage.read(key: DebridService.torBox.tokenStorageKey),
+        'one-time-token',
+      );
+    },
+  );
+
+  test('expired paid-plan time is still rejected', () async {
+    FlutterSecureStorage.setMockInitialValues({});
+    final controller = TorBoxSettingsController(
+      storage,
+      (_) => _ExpiredTorBoxClient(),
+    );
+
+    expect(await controller.saveAndValidate('expired-token'), isFalse);
+    expect(controller.state.hasSavedToken, isFalse);
+    expect(
+      await storage.read(key: DebridService.torBox.tokenStorageKey),
+      isNull,
+    );
+  });
 }
 
 class _PaidTorBoxClient extends TorBoxClient {
@@ -58,5 +93,31 @@ class _FreeTorBoxClient extends TorBoxClient {
     email: 'free@example.test',
     plan: 0,
     isSubscribed: false,
+  );
+}
+
+class _OneTimeEssentialTorBoxClient extends TorBoxClient {
+  _OneTimeEssentialTorBoxClient() : super(token: 'test');
+
+  @override
+  Future<TorBoxAccount> account() async => TorBoxAccount(
+    id: 3,
+    email: 'one-time@example.test',
+    plan: 1,
+    isSubscribed: false,
+    premiumUntil: DateTime.utc(2099),
+  );
+}
+
+class _ExpiredTorBoxClient extends TorBoxClient {
+  _ExpiredTorBoxClient() : super(token: 'test');
+
+  @override
+  Future<TorBoxAccount> account() async => TorBoxAccount(
+    id: 4,
+    email: 'expired@example.test',
+    plan: 1,
+    isSubscribed: true,
+    premiumUntil: DateTime.utc(2020),
   );
 }

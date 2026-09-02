@@ -157,20 +157,27 @@ TetoTV makes network requests only for app features the user uses:
   should install only extensions and catalogs they trust and are authorized to
   use;
 - Manga Preview repository and OPDS URLs are supplied by the user; TetoTV
-  ships no default or recommended manga catalog. Adding, browsing, refreshing,
-  reading, or downloading from a source contacts that source's public HTTPS
-  server and any public HTTPS image or acquisition hosts declared by its OPDS
-  documents. Those hosts receive ordinary connection information such as the
-  device's public IP address, request time, user agent, and the requested
-  catalog, cover, chapter, or page path. These requests do not pass through a
-  TetoTV server. If the viewer supplies Basic, Bearer, or API-key credentials,
+  ships no default or recommended manga catalog or provider. Adding, browsing,
+  refreshing, reading, or downloading from an OPDS source contacts that
+  source's public HTTPS server and any public HTTPS image or acquisition hosts
+  declared by its documents. A viewer can instead install a Seanime-format
+  manga-provider extension from a Marketplace repository they entered. That
+  executable extension receives the viewer's manga search, selected opaque
+  title/chapter identifiers, and the results of its bounded public-HTTPS
+  requests. The extension and contacted hosts can observe the requested path,
+  device public IP address, request time, user agent, and ordinary connection
+  metadata. These requests do not pass through a TetoTV server. If the viewer
+  supplies Basic, Bearer, or API-key credentials for an OPDS source,
   TetoTV uses request headers rather than placing the credential in a URL. An
   authenticated catalog or archive request cannot redirect to a different
   origin. A reader-page redirect may change origin, but TetoTV removes the
   source credential before following it.
-  Credentials, headers, repository URLs, page URLs, and local page paths are
-  excluded from diagnostics. Users should add only manga servers they trust
-  and material they are authorized to read or download;
+  Credentials, search terms, titles, chapter/page identifiers, headers,
+  repository URLs, page URLs, and local page paths are excluded from
+  diagnostics. An extension does not receive tracker, Discord, Debrid, or
+  personal-server credentials. Users should install only manga repositories,
+  extensions, and servers they trust and access only material they are
+  authorized to read or download;
 - every installed, enabled Web-stream extension is subject to an automatic
   compatibility probe when TetoTV starts if its last conclusive probe is
   missing or at least 24 hours old. While TetoTV remains open, a timer runs the
@@ -460,8 +467,12 @@ process cannot use the network. On
 Android versions that expose historical process-exit details, native crashes
 and ANRs can also be recovered on the next launch. TetoTV sends only the app
 version/build, crash category, Android
-version, CPU architecture, TV-or-phone class, time, and a bounded redacted
-technical error/stack trace. It does not intentionally include the show,
+version, CPU architecture, TV-or-phone class, time, bounded process-exit and
+memory-class metadata, a short allowlisted lifecycle timeline, and a bounded
+redacted technical error/stack trace. For native crashes, TetoTV can recover
+only the signal/cause and a limited number of relative program counters,
+library basenames, function names, and native build IDs from Android's
+tombstone format; it never sends the raw tombstone. It does not intentionally include the show,
 episode, account, device or installation identifier, source/provider, URL,
 credential, playback history, or full diagnostics database.
 
@@ -490,9 +501,9 @@ local path, account value, or room identity. The report also compares the most
 recent working and failed sessions using only those technical fields.
 
 Manga Preview diagnostics are limited to bounded technical status and counts;
-they do not include a manga title, chapter, page identity, source or repository
-URL, page/acquisition URL, request header, credential, archive filename, or
-local page path.
+they do not include a manga search, title, chapter, page identity, source or
+repository URL, page/acquisition URL, request header, credential, archive
+filename, or local page path.
 
 These local crash summaries are kept even when anonymous crash reporting is disabled
 so a later user-requested report can explain a restart; they are never queued

@@ -1,3 +1,5 @@
+import 'package:anime_tv/core/preferences/caption_language.dart';
+
 /// The viewer's global preference for automatic anime playback.
 ///
 /// A dubbed preference selects an English audio track when one exists. A
@@ -5,6 +7,26 @@
 /// existing subtitle-selection behavior. Players still fall back to a usable
 /// track when the preferred language is absent.
 enum PlaybackAudioPreference { dub, sub }
+
+/// Resolves the audio language used by MPV without weakening the existing
+/// Dub/Sub source preference. A manual per-series language always wins, an
+/// explicit global language comes next, and `auto` follows Dub/Sub exactly as
+/// older TetoTV versions did.
+String preferredPlaybackAudioLanguage({
+  required PlaybackAudioPreference globalPreference,
+  required String globalLanguage,
+  String seriesLanguage = 'eng',
+  bool seriesPreferenceSet = false,
+}) {
+  if (seriesPreferenceSet) {
+    return canonicalCaptionLanguageCode(
+      seriesLanguage,
+      fallback: globalPreference.audioLanguage,
+    );
+  }
+  final configured = canonicalCaptionLanguageCode(globalLanguage);
+  return configured.isEmpty ? globalPreference.audioLanguage : configured;
+}
 
 PlaybackAudioPreference? playbackAudioPreferenceForLanguage(String? value) {
   final normalized = (value ?? '').trim().toLowerCase().replaceAll('_', '-');

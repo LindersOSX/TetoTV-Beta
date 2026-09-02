@@ -1,3 +1,4 @@
+import 'package:anime_tv/core/preferences/caption_language.dart';
 import 'package:anime_tv/core/preferences/playback_audio_preference.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/features/marketplace/domain/addon_models.dart';
@@ -148,9 +149,18 @@ int compareWebStreamCandidates(
   WebStreamResult right, {
   required WebStreamQualityPreference quality,
   required PlaybackAudioPreference preferredAudio,
+  String preferredAudioLanguage = 'auto',
 }) {
-  final leftAudio = webStreamAudioPreferenceRank(left, preferredAudio);
-  final rightAudio = webStreamAudioPreferenceRank(right, preferredAudio);
+  final leftAudio = webStreamAudioPreferenceRank(
+    left,
+    preferredAudio,
+    preferredLanguage: preferredAudioLanguage,
+  );
+  final rightAudio = webStreamAudioPreferenceRank(
+    right,
+    preferredAudio,
+    preferredLanguage: preferredAudioLanguage,
+  );
   final audio = leftAudio.compareTo(rightAudio);
   if (audio != 0) return audio;
 
@@ -169,6 +179,7 @@ List<WebStreamResult> rankWebStreamCandidates(
   Iterable<WebStreamResult> candidates, {
   required WebStreamQualityPreference quality,
   required PlaybackAudioPreference preferredAudio,
+  String preferredAudioLanguage = 'auto',
 }) => [...candidates]
   ..sort(
     (left, right) => compareWebStreamCandidates(
@@ -176,6 +187,7 @@ List<WebStreamResult> rankWebStreamCandidates(
       right,
       quality: quality,
       preferredAudio: preferredAudio,
+      preferredAudioLanguage: preferredAudioLanguage,
     ),
   );
 
@@ -239,17 +251,31 @@ int _compareReleaseSize(
 /// viewer's source-class preference.
 int webStreamAudioPreferenceRank(
   WebStreamResult stream,
-  PlaybackAudioPreference preference,
-) {
+  PlaybackAudioPreference preference, {
+  String preferredLanguage = 'auto',
+}) {
+  final canonicalLanguage = canonicalCaptionLanguageCode(preferredLanguage);
   final supported = switch (preference) {
     PlaybackAudioPreference.dub => stream.supportsDubAudio,
     PlaybackAudioPreference.sub => stream.supportsSubAudio,
   };
-  if (supported) return 0;
-  // Unknown remains a visible All-filter fallback, but it never outranks a
-  // source whose provider explicitly reported the requested capability.
-  if (!stream.hasKnownAudioCapability) return 1;
-  return 2;
+  final compatibilityRank = supported
+      ? 0
+      : !stream.hasKnownAudioCapability
+      ? 1
+      : 2;
+  if (canonicalLanguage.isEmpty) return compatibilityRank;
+
+  final reportedLanguages = stream.audioLanguages
+      .map(canonicalCaptionLanguageCode)
+      .where((language) => language.isNotEmpty)
+      .toSet();
+  if (reportedLanguages.contains(canonicalLanguage)) return 0;
+  // Structured language metadata is stronger than the broad Dub/Sub class.
+  // Unknown-language sources still fail open through the legacy compatibility
+  // rank; a source that explicitly reports other languages comes after them.
+  if (reportedLanguages.isNotEmpty) return 4 + compatibilityRank;
+  return 1 + compatibilityRank;
 }
 
 int _compareWebQuality(
@@ -486,12 +512,21 @@ int compareAutomaticWebStreamsByQuality(
 int compareAutomaticWebStreamsByAudioAndQuality(
   WebStreamResult left,
   WebStreamResult right,
-  PlaybackAudioPreference preferredAudio,
-) {
-  final audio = webStreamAudioPreferenceRank(
-    left,
-    preferredAudio,
-  ).compareTo(webStreamAudioPreferenceRank(right, preferredAudio));
+  PlaybackAudioPreference preferredAudio, {
+  String preferredAudioLanguage = 'auto',
+}) {
+  final audio =
+      webStreamAudioPreferenceRank(
+        left,
+        preferredAudio,
+        preferredLanguage: preferredAudioLanguage,
+      ).compareTo(
+        webStreamAudioPreferenceRank(
+          right,
+          preferredAudio,
+          preferredLanguage: preferredAudioLanguage,
+        ),
+      );
   return audio != 0 ? audio : compareAutomaticWebStreamsByQuality(left, right);
 }
 
@@ -499,15 +534,24 @@ int compareAutomaticAutoplayWebStreams(
   WebStreamResult left,
   WebStreamResult right, {
   required PlaybackAudioPreference preferredAudio,
+  String preferredAudioLanguage = 'auto',
   String? preferredWebProviderId,
   int? preferredQualityHeight,
   WebStreamQualityPreference qualityPreference =
       WebStreamQualityPreference.bestAvailable,
 }) {
-  final audio = webStreamAudioPreferenceRank(
-    left,
-    preferredAudio,
-  ).compareTo(webStreamAudioPreferenceRank(right, preferredAudio));
+  final audio =
+      webStreamAudioPreferenceRank(
+        left,
+        preferredAudio,
+        preferredLanguage: preferredAudioLanguage,
+      ).compareTo(
+        webStreamAudioPreferenceRank(
+          right,
+          preferredAudio,
+          preferredLanguage: preferredAudioLanguage,
+        ),
+      );
   if (audio != 0) return audio;
   final qualityAffinity =
       automaticQualityAffinityRank(
@@ -535,6 +579,7 @@ int compareAutomaticAutoplayWebStreams(
     right,
     quality: qualityPreference,
     preferredAudio: preferredAudio,
+    preferredAudioLanguage: preferredAudioLanguage,
   );
   if (quality != 0) return quality;
   final providerId = left.providerId.compareTo(right.providerId);
@@ -685,6 +730,7 @@ List<WebStreamResult> rankAutomaticAutoplayWebStreams(
   required String language,
   required String quality,
   required PlaybackAudioPreference preferredAudio,
+  String preferredAudioLanguage = 'auto',
   required WebStreamQualityPreference qualityPreference,
   String? preferredWebProviderId,
   int? preferredQualityHeight,
@@ -709,6 +755,7 @@ List<WebStreamResult> rankAutomaticAutoplayWebStreams(
         left,
         right,
         preferredAudio: preferredAudio,
+        preferredAudioLanguage: preferredAudioLanguage,
         preferredWebProviderId: preferredWebProviderId,
         preferredQualityHeight: preferredQualityHeight,
         qualityPreference: qualityPreference,

@@ -128,6 +128,19 @@ class AddonStore {
     return result;
   }
 
+  /// Installed video providers only. Keeping this filter at the persistence
+  /// boundary prevents a manga extension from ever entering playback search.
+  Future<List<InstalledStreamingAddon>> installedStreamingAddons() async =>
+      (await installedAddons())
+          .where((addon) => addon.manifest.isOnlineStreamProvider)
+          .toList(growable: false);
+
+  /// Installed Seanime manga providers only.
+  Future<List<InstalledStreamingAddon>> installedMangaAddons() async =>
+      (await installedAddons())
+          .where((addon) => addon.manifest.isMangaProvider)
+          .toList(growable: false);
+
   Future<void> install(InstalledStreamingAddon addon) async {
     final db = await database.database;
     await db.transaction((txn) async {

@@ -99,7 +99,22 @@ String offlineDownloadPreparationMessage(Object error) {
 bool shouldRecordResolveCrashReport(Object error) =>
     error is! DebridProviderFailure &&
     error is! DebridCacheMissException &&
-    error is! DebridCleanupFailureException;
+    error is! DebridCleanupFailureException &&
+    error is! WebStreamPreflightFailure;
+
+/// A provider stream that failed the app-owned network/playability preflight.
+///
+/// This is expected source failover, not an application/process crash. Keep the
+/// bounded reason code in provider diagnostics while preventing it from using
+/// the anonymous crash-report quota.
+class WebStreamPreflightFailure implements Exception {
+  const WebStreamPreflightFailure(this.reasonCode);
+
+  final String reasonCode;
+
+  @override
+  String toString() => 'Web stream preflight failed ($reasonCode).';
+}
 
 String offlineDownloadPreparationReasonCode(Object error) {
   if (error is RealDebridException) {
@@ -764,6 +779,13 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
         seriesAudioLanguage: _seriesPreferences.audioLanguage,
         seriesOverride: _seriesPreferences.audioPreferenceSet,
       );
+
+  String get _preferredAudioLanguage => preferredPlaybackAudioLanguage(
+    globalPreference: _preferredAudio,
+    globalLanguage: _streamPreferences.preferredAudioLanguage,
+    seriesLanguage: _seriesPreferences.audioLanguage,
+    seriesPreferenceSet: _seriesPreferences.audioPreferenceSet,
+  );
 
   bool get _offlineDownloadsEnabled =>
       ref.read(settingsPreferencesProvider).offlineDownloadsEnabled;
@@ -1653,7 +1675,12 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
         tier.web.where(
           (stream) =>
               stream.providerId == preferredWebProviderId &&
-              webStreamAudioPreferenceRank(stream, _preferredAudio) == 0,
+              webStreamAudioPreferenceRank(
+                    stream,
+                    _preferredAudio,
+                    preferredLanguage: _preferredAudioLanguage,
+                  ) <=
+                  1,
         ),
       );
       if (exactWebCandidates.isNotEmpty) {
@@ -2192,6 +2219,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
       language: _languageFilter.name,
       quality: _qualityFilter.name,
       preferredAudio: _preferredAudio,
+      preferredAudioLanguage: _preferredAudioLanguage,
       preferredWebProviderId: widget.preferredWebProviderId,
       preferredQualityHeight:
           preferredQualityHeight ?? widget.preferredQualityHeight,
@@ -2895,6 +2923,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
         source,
         watchPartyIdentity: _libraryWatchPartyIdentity,
         preferredSubtitleLanguage: _preferredSubtitleLanguageForPreparation,
+        preferredAudioLanguage: _preferredAudioLanguage,
         requestedAudio: requestedAudio,
       );
       if (!mounted ||
@@ -2931,6 +2960,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
           source,
           watchPartyIdentity: _libraryWatchPartyIdentity,
           preferredSubtitleLanguage: _preferredSubtitleLanguageForPreparation,
+          preferredAudioLanguage: _preferredAudioLanguage,
           requestedAudio: requestedAudio,
           forceCompatibility: true,
         );
@@ -3243,18 +3273,20 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
             : 'validation_failed';
         final safeFailure = error is EpisodeIdentityMismatchException
             ? error
-            : StateError('Web stream preflight failed ($failureReason).');
+            : WebStreamPreflightFailure(failureReason);
         lastError = safeFailure;
         if (automatic) {
           _failedAutoplayWebStreams.add(_webStreamKey(candidate));
         }
-        unawaited(
-          recordAnonymousHandledError(
-            area: AnonymousErrorArea.playback,
-            error: safeFailure,
-            stack: stackTrace,
-          ),
-        );
+        if (shouldRecordResolveCrashReport(safeFailure)) {
+          unawaited(
+            recordAnonymousHandledError(
+              area: AnonymousErrorArea.playback,
+              error: safeFailure,
+              stack: stackTrace,
+            ),
+          );
+        }
         try {
           await addonStore.recordProviderFailure(
             candidate.providerId,

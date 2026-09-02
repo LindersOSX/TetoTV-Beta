@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:anime_tv/core/preferences/caption_language.dart';
+
 /// Stable identity used for add-on ownership, persistence, and updates.
 ///
 /// Seanime repositories in the wild occasionally change only the ASCII
@@ -211,10 +213,12 @@ class MarketplaceAddon {
   final String? lastWorkingVersion;
 
   bool get isOnlineStreamProvider => type == 'onlinestream-provider';
+  bool get isMangaProvider => type == 'manga-provider';
+  bool get isExecutableProvider => isOnlineStreamProvider || isMangaProvider;
   bool get isJavascript => language.toLowerCase() == 'javascript';
   bool get isTypescript => language.toLowerCase() == 'typescript';
   bool get isCompatible =>
-      isOnlineStreamProvider && (isJavascript || isTypescript);
+      isExecutableProvider && (isJavascript || isTypescript);
 
   MarketplaceAddon mergeManifest(MarketplaceAddon manifest) => MarketplaceAddon(
     id: id,
@@ -440,6 +444,7 @@ String _normalizedAddonType(Object? value) {
   final compact = type.replaceAll(RegExp(r'[^a-z0-9]+'), '');
   return switch (compact) {
     'onlinestreamprovider' || 'animestreamprovider' => 'onlinestream-provider',
+    'mangaprovider' => 'manga-provider',
     _ => type,
   };
 }
@@ -728,6 +733,77 @@ int _webStreamAudioSupportFromWire(
   return support;
 }
 
+/// Extracts trustworthy audio-language metadata from the bounded shapes used
+/// by community providers. Subtitle collections and unrelated `language`
+/// fields are deliberately ignored so source ranking never promotes a stream
+/// from caption metadata alone.
+List<String> webStreamAudioLanguagesFromWire(Object? value) {
+  final languages = <String>[];
+  final knownCodes = preferredCaptionLanguageOptions
+      .map((option) => option.code)
+      .toSet();
+
+  void add(Object? candidate) {
+    final canonical = canonicalCaptionLanguageCode(candidate?.toString());
+    if (knownCodes.contains(canonical) && !languages.contains(canonical)) {
+      languages.add(canonical);
+    }
+  }
+
+  void visit(Object? candidate, {int depth = 0, bool insideAudio = false}) {
+    if (candidate == null || depth > 4 || languages.length >= 24) return;
+    if (candidate is Iterable) {
+      for (final item in candidate.take(32)) {
+        if (insideAudio && item is String) {
+          add(item);
+        } else {
+          visit(item, depth: depth + 1, insideAudio: insideAudio);
+        }
+      }
+      return;
+    }
+    if (candidate is! Map) {
+      if (insideAudio) add(candidate);
+      return;
+    }
+    var visited = 0;
+    for (final entry in candidate.entries) {
+      if (++visited > 32) break;
+      final key = entry.key.toString().trim().toLowerCase().replaceAll(
+        RegExp(r'[^a-z]+'),
+        '',
+      );
+      final audioCollection = const {
+        'audiolanguages',
+        'availableaudiolanguages',
+        'audiotracks',
+        'availableaudiotracks',
+        'audiostreams',
+        'audios',
+      }.contains(key);
+      final directAudioLanguage = const {
+        'audiolanguage',
+        'audiolang',
+      }.contains(key);
+      final audioTrackField =
+          insideAudio &&
+          const {'language', 'lang', 'label', 'name'}.contains(key);
+      if (directAudioLanguage || audioTrackField) {
+        if (entry.value is Iterable || entry.value is Map) {
+          visit(entry.value, depth: depth + 1, insideAudio: true);
+        } else {
+          add(entry.value);
+        }
+      } else if (audioCollection) {
+        visit(entry.value, depth: depth + 1, insideAudio: true);
+      }
+    }
+  }
+
+  visit(value);
+  return List.unmodifiable(languages);
+}
+
 class WebStreamResult {
   const WebStreamResult({
     required this.providerId,
@@ -740,6 +816,7 @@ class WebStreamResult {
     this.subtitleLanguage,
     this.isDubbed = false,
     this.audioCapability,
+    this.audioLanguages = const [],
     this.matchedEpisodeNumber,
     this.matchedSeasonNumber,
     this.matchedSeriesTitle,
@@ -761,6 +838,7 @@ class WebStreamResult {
   /// capability is never guessed to be Sub or Dub.
   final bool isDubbed;
   final WebStreamAudioCapability? audioCapability;
+  final List<String> audioLanguages;
 
   /// Bounded public identity selected by the provider before extraction.
   /// These fields contain no URL, server ID, filename, or credential.
@@ -791,6 +869,7 @@ class WebStreamResult {
         subtitleLanguage: subtitleLanguage,
         isDubbed: capability.supportsDub,
         audioCapability: capability,
+        audioLanguages: audioLanguages,
         matchedEpisodeNumber: matchedEpisodeNumber,
         matchedSeasonNumber: matchedSeasonNumber,
         matchedSeriesTitle: matchedSeriesTitle,

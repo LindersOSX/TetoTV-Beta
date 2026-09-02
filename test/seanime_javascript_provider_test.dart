@@ -311,6 +311,29 @@ void main() {
     },
   );
 
+  test('audio language metadata ignores subtitle-only fields', () {
+    expect(
+      webStreamAudioLanguagesFromWire({
+        'audioLanguages': ['es-MX'],
+        'audioTracks': [
+          {'language': 'it', 'kind': 'audio'},
+        ],
+        'subtitles': [
+          {'language': 'en'},
+        ],
+      }),
+      ['spa', 'ita'],
+    );
+    expect(
+      webStreamAudioLanguagesFromWire({
+        'tracks': [
+          {'kind': 'subtitles', 'language': 'en'},
+        ],
+      }),
+      isEmpty,
+    );
+  });
+
   test('HLS inspection detects language tracks used by the master', () {
     const playlist = '''#EXTM3U
 #EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",NAME="Japanese",LANGUAGE="jpn",URI="ja.m3u8"
@@ -324,6 +347,7 @@ video-1080.m3u8
 
     expect(inspection.audioCapability, WebStreamAudioCapability.subAndDub);
     expect(inspection.hasAlternateAudio, isTrue);
+    expect(inspection.audioLanguages, ['jpn', 'eng']);
     expect(inspection.variants.single.quality, '1080p');
 
     final expanded = expandHlsResultVariants(
@@ -339,6 +363,29 @@ video-1080.m3u8
     expect(expanded, hasLength(1));
     expect(expanded.single['url'], master.toString());
     expect(expanded.single['audioCapability'], 'sub_and_dub');
+    expect(expanded.single['audioLanguages'], ['jpn', 'eng']);
+  });
+
+  test('HLS keeps alternate audio masters beyond English and Japanese', () {
+    const playlist = '''#EXTM3U
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",NAME="Español",LANGUAGE="es-MX",URI="es.m3u8"
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",NAME="Italiano",LANGUAGE="it",URI="it.m3u8"
+#EXT-X-STREAM-INF:BANDWIDTH=3000000,RESOLUTION=1920x1080,AUDIO="audio"
+video.m3u8
+''';
+    final master = Uri.parse('https://cdn.example.com/multi.m3u8');
+    final inspection = inspectHlsMasterPlaylist(playlist, master);
+    final expanded = expandHlsResultVariants(
+      {'url': master.toString(), 'title': 'Auto'},
+      playlist,
+      master,
+    );
+
+    expect(inspection.audioCapability, WebStreamAudioCapability.unknown);
+    expect(inspection.audioLanguages, ['spa', 'ita']);
+    expect(expanded, hasLength(1));
+    expect(expanded.single['url'], master.toString());
+    expect(expanded.single['audioLanguages'], ['spa', 'ita']);
   });
 
   test('HLS inspection does not guess from unrelated audio groups', () {
@@ -778,7 +825,8 @@ video-720.m3u8
           async findEpisodeServer(episode, server) {
             return {server, headers: {Referer: 'https://example.com/'}, videoSources: [
               {url: 'https://cdn.example.com/episode-3.m3u8', quality: '1080p', subtitles: [
-                {url: 'https://cdn.example.com/episode-3-en.vtt', language: 'English'}
+                {url: 'https://cdn.example.com/episode-3-en.vtt', language: 'English'},
+                {url: 'https://cdn.example.com/episode-3-es.vtt', language: 'es-MX'}
               ]}
             ]};
           }
@@ -789,20 +837,25 @@ video-720.m3u8
         updatedAt: DateTime.utc(2026),
       );
 
-      final results = await SeanimeJavascriptProvider(addon).streams(
-        const EpisodeReference(
-          anilistMediaId: 1,
-          title: 'Fixture Anime',
-          episode: 3,
-        ),
-      );
+      final results =
+          await SeanimeJavascriptProvider(
+            addon,
+            preferredSubtitleLanguage: 'spa',
+          ).streams(
+            const EpisodeReference(
+              anilistMediaId: 1,
+              title: 'Fixture Anime',
+              episode: 3,
+            ),
+          );
 
       expect(results, hasLength(1));
       expect(results.single.providerName, 'Fixture Provider');
       expect(results.single.uri.host, 'cdn.example.com');
       expect(results.single.quality, '1080p');
       expect(results.single.headers['Referer'], 'https://example.com/');
-      expect(results.single.subtitleLanguage, 'English');
+      expect(results.single.subtitleUri?.path, '/episode-3-es.vtt');
+      expect(results.single.subtitleLanguage, 'es-MX');
     },
     timeout: const Timeout(Duration(seconds: 15)),
     skip: Platform.isWindows

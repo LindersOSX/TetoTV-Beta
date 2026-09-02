@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
+import 'package:anime_tv/core/preferences/caption_language.dart';
 import 'package:anime_tv/core/preferences/title_language_preference.dart';
 import 'package:anime_tv/core/preferences/playback_audio_preference.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
@@ -222,6 +223,9 @@ extension _SettingsSectionMetadata on _SettingsSection {
       'Closed captions',
       'Subtitles',
       'Preferred CC',
+      'Preferred subtitle language',
+      'Default CC language',
+      'Caption language',
       'Caption default',
       'Captions on',
       'Captions off',
@@ -233,6 +237,8 @@ extension _SettingsSectionMetadata on _SettingsSection {
       'Player controls',
       'Default player',
       'Preferred audio',
+      'Preferred audio language',
+      'Default audio language',
       'Open externally',
       'Rewind',
       'Fast-forward',
@@ -540,6 +546,9 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
   );
   final _preferredCaptionsFocus = FocusNode(
     debugLabel: 'accounts.captions.preference',
+  );
+  final _preferredCaptionLanguageFocus = FocusNode(
+    debugLabel: 'accounts.captions.language',
   );
   final _captionTextColorFocus = FocusNode(
     debugLabel: 'accounts.captions.text-color',
@@ -1081,6 +1090,9 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       'caption default' ||
       'captions on' ||
       'captions off' => _preferredCaptionsFocus,
+      'preferred subtitle language' ||
+      'default cc language' ||
+      'caption language' => _preferredCaptionLanguageFocus,
       'text color' => _captionTextColorFocus,
       'text size' => _captionTextSizeFocus,
       'default player' => _playerControlsSectionFocus,
@@ -1298,6 +1310,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     _clickSoundsFocus.dispose();
     _closedCaptionsSectionFocus.dispose();
     _preferredCaptionsFocus.dispose();
+    _preferredCaptionLanguageFocus.dispose();
     _captionTextColorFocus.dispose();
     _captionTextSizeFocus.dispose();
     _playerControlsSectionFocus.dispose();
@@ -1491,6 +1504,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       _clickSoundsFocus,
       _closedCaptionsSectionFocus,
       _preferredCaptionsFocus,
+      _preferredCaptionLanguageFocus,
       _captionTextColorFocus,
       _captionTextSizeFocus,
       _playerControlsSectionFocus,
@@ -1869,11 +1883,18 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
             : _closedCaptionsSectionFocus;
       }
       if (key == LogicalKeyboardKey.arrowDown) {
+        target = _preferredCaptionLanguageFocus;
+      }
+    } else if (current == _preferredCaptionLanguageFocus) {
+      if (key == LogicalKeyboardKey.arrowUp) {
+        target = _preferredCaptionsFocus;
+      }
+      if (key == LogicalKeyboardKey.arrowDown) {
         target = _captionTextColorFocus;
       }
     } else if (current == _captionTextColorFocus) {
       if (key == LogicalKeyboardKey.arrowUp) {
-        target = _preferredCaptionsFocus;
+        target = _preferredCaptionLanguageFocus;
       }
     } else if (current == _captionTextSizeFocus) {
       if (key == LogicalKeyboardKey.arrowDown && tvListLayout) {
@@ -2615,6 +2636,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       inputFeedbackSectionFocusNode: _inputFeedbackSectionFocus,
       closedCaptionsSectionFocusNode: _closedCaptionsSectionFocus,
       preferredCaptionsFocusNode: _preferredCaptionsFocus,
+      preferredCaptionLanguageFocusNode: _preferredCaptionLanguageFocus,
       captionTextColorFocusNode: _captionTextColorFocus,
       captionTextSizeFocusNode: _captionTextSizeFocus,
       playerControlsSectionFocusNode: _playerControlsSectionFocus,
@@ -5368,101 +5390,11 @@ class _AppearanceSelectionRow<T> extends StatelessWidget {
     focusNode: focusNode,
     showDivider: showDivider,
     onPressed: () async {
-      final selected = await showDialog<T>(
+      final selected = await _showSettingsSelectionDialog<T>(
         context: context,
-        barrierDismissible: true,
-        builder: (context) {
-          final tvScale = _usesTvSettingsScale(context);
-          return Dialog(
-            backgroundColor: Colors.transparent,
-            child: Container(
-              width: tvScale ? 430 : 560,
-              padding: EdgeInsets.all(tvScale ? 11 : 22),
-              decoration: BoxDecoration(
-                color: context.appPalette.surface,
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(
-                  color: context.appPalette.accent.withValues(alpha: .7),
-                ),
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    label,
-                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                      fontSize: tvScale ? 18 : null,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                  SizedBox(height: tvScale ? 7 : 14),
-                  for (var index = 0; index < options.length; index++) ...[
-                    TvFocusable(
-                      autofocus: options[index].value == value,
-                      onPressed: () =>
-                          Navigator.of(context).pop(options[index].value),
-                      borderRadius: BorderRadius.circular(9),
-                      child: Container(
-                        width: double.infinity,
-                        padding: EdgeInsets.symmetric(
-                          horizontal: tvScale ? 9 : 16,
-                          vertical: tvScale ? 6 : 13,
-                        ),
-                        decoration: BoxDecoration(
-                          color: options[index].value == value
-                              ? context.appPalette.accent.withValues(alpha: .25)
-                              : context.appPalette.surfaceRaised,
-                          borderRadius: BorderRadius.circular(9),
-                        ),
-                        child: Row(
-                          children: [
-                            Icon(
-                              options[index].value == value
-                                  ? Icons.radio_button_checked_rounded
-                                  : Icons.radio_button_off_rounded,
-                              color: options[index].value == value
-                                  ? context.appPalette.accentBright
-                                  : context.appPalette.mutedText,
-                            ),
-                            SizedBox(width: tvScale ? 7 : 12),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    options[index].label,
-                                    style: TextStyle(
-                                      color: _settingsPrimaryText(context),
-                                      fontWeight: FontWeight.w900,
-                                    ),
-                                  ),
-                                  if (options[index].detail
-                                      case final detail?) ...[
-                                    const SizedBox(height: 2),
-                                    Text(
-                                      detail,
-                                      style: TextStyle(
-                                        color: context.appPalette.mutedText,
-                                        fontSize: tvScale ? 12 : 11,
-                                      ),
-                                    ),
-                                  ],
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                    if (index != options.length - 1)
-                      SizedBox(height: tvScale ? 4 : 8),
-                  ],
-                ],
-              ),
-            ),
-          );
-        },
+        label: label,
+        value: value,
+        options: options,
       );
       if (selected != null) onSelected(selected);
     },
@@ -5868,6 +5800,7 @@ class _CustomizationPanel extends StatelessWidget {
     required this.inputFeedbackSectionFocusNode,
     required this.closedCaptionsSectionFocusNode,
     required this.preferredCaptionsFocusNode,
+    required this.preferredCaptionLanguageFocusNode,
     required this.captionTextColorFocusNode,
     required this.captionTextSizeFocusNode,
     required this.playerControlsSectionFocusNode,
@@ -5901,6 +5834,7 @@ class _CustomizationPanel extends StatelessWidget {
   final FocusNode inputFeedbackSectionFocusNode;
   final FocusNode closedCaptionsSectionFocusNode;
   final FocusNode preferredCaptionsFocusNode;
+  final FocusNode preferredCaptionLanguageFocusNode;
   final FocusNode captionTextColorFocusNode;
   final FocusNode captionTextSizeFocusNode;
   final FocusNode playerControlsSectionFocusNode;
@@ -6235,6 +6169,36 @@ class _CustomizationPanel extends StatelessWidget {
                   showDivider: true,
                   onSelected: controller.setPreferredCaptionMode,
                 ),
+                _AppearanceSelectionRow<String>(
+                  key: const ValueKey('settings-preferred-cc-language'),
+                  label: 'Preferred subtitle language',
+                  icon: Icons.translate_rounded,
+                  value: preferences.preferredCaptionLanguage,
+                  valueLabel: captionLanguageDisplayName(
+                    preferences.preferredCaptionLanguage,
+                  ),
+                  focusNode: preferredCaptionLanguageFocusNode,
+                  options: [
+                    if (!preferredCaptionLanguageOptions.any(
+                      (option) =>
+                          option.code == preferences.preferredCaptionLanguage,
+                    ))
+                      _SettingsOption(
+                        value: preferences.preferredCaptionLanguage,
+                        label: captionLanguageDisplayName(
+                          preferences.preferredCaptionLanguage,
+                        ),
+                      ),
+                    for (final language in preferredCaptionLanguageOptions)
+                      _SettingsOption(
+                        value: language.code,
+                        label: language.label,
+                        detail: language.code.toUpperCase(),
+                      ),
+                  ],
+                  showDivider: true,
+                  onSelected: controller.setPreferredCaptionLanguage,
+                ),
                 _AppearanceSelectionRow<int>(
                   label: 'Text color',
                   icon: Icons.format_color_text_rounded,
@@ -6336,6 +6300,32 @@ class _CustomizationPanel extends StatelessWidget {
                   ],
                   showDivider: true,
                   onSelected: controller.setPreferredAudio,
+                ),
+                _AppearanceSelectionRow<String>(
+                  key: const ValueKey('settings-preferred-audio-language'),
+                  label: 'Preferred audio language',
+                  icon: Icons.language_rounded,
+                  value: preferences.preferredAudioLanguage,
+                  valueLabel: preferences.preferredAudioLanguage == 'auto'
+                      ? 'Follow Dub/Sub'
+                      : captionLanguageDisplayName(
+                          preferences.preferredAudioLanguage,
+                        ),
+                  options: [
+                    const _SettingsOption(
+                      value: 'auto',
+                      label: 'Follow Dub/Sub',
+                      detail: 'English for Dubbed, Japanese for Subtitled',
+                    ),
+                    for (final language in preferredCaptionLanguageOptions)
+                      _SettingsOption(
+                        value: language.code,
+                        label: language.label,
+                        detail: language.code.toUpperCase(),
+                      ),
+                  ],
+                  showDivider: true,
+                  onSelected: controller.setPreferredAudioLanguage,
                 ),
                 _AppearanceToggleRow(
                   label: 'Open externally',

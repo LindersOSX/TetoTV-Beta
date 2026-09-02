@@ -287,6 +287,49 @@ void main() {
     );
   });
 
+  test('preferred audio language extends Dub/Sub without replacing it', () {
+    expect(
+      preferredPlaybackAudioLanguage(
+        globalPreference: PlaybackAudioPreference.sub,
+        globalLanguage: 'auto',
+      ),
+      'jpn',
+    );
+    expect(
+      preferredPlaybackAudioLanguage(
+        globalPreference: PlaybackAudioPreference.dub,
+        globalLanguage: 'es-MX',
+      ),
+      'spa',
+    );
+    expect(
+      preferredPlaybackAudioLanguage(
+        globalPreference: PlaybackAudioPreference.dub,
+        globalLanguage: 'spa',
+        seriesLanguage: 'ita',
+        seriesPreferenceSet: true,
+      ),
+      'ita',
+    );
+  });
+
+  test('preferred audio matching accepts ISO aliases beyond English', () {
+    const tracks = [
+      AudioTrack('1', 'Japanese', 'jpn', isDefault: true),
+      AudioTrack('2', 'Español', 'es-MX'),
+    ];
+
+    expect(
+      preferredAudioTrackForLanguage(
+        tracks,
+        language: 'spa',
+        allowFallback: false,
+      )?.id,
+      '2',
+    );
+    expect(mpvPreferredAudioStartupProperties('Portuguese')['alang'], 'por,pt');
+  });
+
   test('explicit series audio selects the same language next episode', () {
     const tracks = [
       AudioTrack('1', 'Japanese', 'jpn', isDefault: true),
@@ -974,6 +1017,36 @@ void main() {
         reason: language,
       );
     }
+  });
+
+  test('subtitle matching accepts preferred languages beyond English', () {
+    for (final testCase in const [
+      ('de', 'German SDH', 'deu'),
+      ('pt-BR', 'Portuguese', 'por'),
+      ('es-419', 'Spanish (Latin America)', 'spa'),
+      ('zh-Hans', 'Chinese Simplified', 'zho'),
+      ('uk', 'Ukrainian', 'ukr'),
+    ]) {
+      expect(
+        playerTrackLanguageScore(
+          language: testCase.$1,
+          title: testCase.$2,
+          preferredLanguage: testCase.$3,
+          subtitle: true,
+        ),
+        greaterThan(0),
+        reason: testCase.$2,
+      );
+    }
+    expect(
+      playerTrackLanguageScore(
+        language: 'eng',
+        title: 'English',
+        preferredLanguage: 'spa',
+        subtitle: true,
+      ),
+      0,
+    );
   });
 
   test('double Down requires two distinct presses inside the window', () {

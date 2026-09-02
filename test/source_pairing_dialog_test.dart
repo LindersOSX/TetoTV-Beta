@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:collection';
 
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/widgets/copyable_code_interaction.dart';
 import 'package:anime_tv/features/marketplace/application/source_pairing_controller.dart';
 import 'package:anime_tv/features/marketplace/data/source_pairing_client.dart';
 import 'package:anime_tv/features/marketplace/domain/source_pairing.dart';
@@ -33,6 +34,7 @@ void main() {
       'qr code',
     );
     expect(find.text('ABCD-EFGH'), findsOneWidget);
+    expect(find.byType(CopyableCodeInteraction), findsOneWidget);
     expect(
       find.textContaining('https://pair.example/source-pair'),
       findsOneWidget,

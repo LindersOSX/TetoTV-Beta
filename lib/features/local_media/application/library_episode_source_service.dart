@@ -186,6 +186,7 @@ class LibraryEpisodeSourceService {
     LibraryEpisodeSource source, {
     LibraryWatchPartyIdentity? watchPartyIdentity,
     String preferredSubtitleLanguage = 'eng',
+    String preferredAudioLanguage = 'auto',
     PlaybackAudioPreference? requestedAudio,
     bool forceCompatibility = false,
   }) async {
@@ -215,12 +216,14 @@ class LibraryEpisodeSourceService {
               jellyfin,
               playSessionId: sessionId,
               preferredSubtitleLanguage: preferredSubtitleLanguage,
+              preferredAudioLanguage: preferredAudioLanguage,
               requestedAudio: requestedAudio,
             )
           : _localMedia.playbackPlan(
               jellyfin,
               playSessionId: sessionId,
               preferredSubtitleLanguage: preferredSubtitleLanguage,
+              preferredAudioLanguage: preferredAudioLanguage,
               requestedAudio: requestedAudio,
             );
       final identity = _digest(

@@ -1,4 +1,5 @@
 import 'package:anime_tv/features/auth/data/torbox_device_auth_client.dart';
+import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -66,4 +67,92 @@ void main() {
       );
     });
   });
+
+  group('TorBoxDeviceAuthClient', () {
+    TorBoxDeviceSession session() => TorBoxDeviceSession(
+      deviceCode: 'device-secret',
+      userCode: '123456',
+      verificationUrl: Uri.parse('https://torbox.app/oauth/device'),
+      friendlyVerificationUrl: Uri.parse('https://tor.box/link'),
+      expiresAt: DateTime.utc(2099),
+      interval: const Duration(seconds: 5),
+    );
+
+    test('returns null only for TorBox pending-device response', () async {
+      final dio = _responseDio(
+        statusCode: 400,
+        body: const {
+          'success': false,
+          'error': 'DEVICE_CODE_NOT_USED',
+          'detail': 'Waiting for approval.',
+          'data': null,
+        },
+      );
+
+      expect(await TorBoxDeviceAuthClient(dio: dio).poll(session()), isNull);
+    });
+
+    test('returns the API token from the current TorBox response', () async {
+      final dio = _responseDio(
+        statusCode: 200,
+        body: const {
+          'success': true,
+          'error': null,
+          'data': {'access_token': 'approved-token', 'token_type': 'Bearer'},
+        },
+      );
+
+      expect(
+        await TorBoxDeviceAuthClient(dio: dio).poll(session()),
+        'approved-token',
+      );
+    });
+
+    test('surfaces non-pending 400 responses instead of polling forever', () {
+      final dio = _responseDio(
+        statusCode: 400,
+        body: const {
+          'success': false,
+          'error': 'DEVICE_AUTH_NOT_ALLOWED',
+          'detail': 'This account cannot use device authorization.',
+          'data': null,
+        },
+      );
+
+      expect(
+        () => TorBoxDeviceAuthClient(dio: dio).poll(session()),
+        throwsA(
+          isA<TorBoxDeviceAuthException>()
+              .having((error) => error.code, 'code', 'DEVICE_AUTH_NOT_ALLOWED')
+              .having(
+                (error) => error.message,
+                'message',
+                contains('cannot use device authorization'),
+              ),
+        ),
+      );
+    });
+  });
+}
+
+Dio _responseDio({
+  required int statusCode,
+  required Map<String, dynamic> body,
+}) {
+  return Dio(BaseOptions(baseUrl: 'https://torbox.test'))
+    ..interceptors.add(
+      InterceptorsWrapper(
+        onRequest: (options, handler) {
+          expect(options.path, '/user/auth/device/token');
+          expect(options.data, {'device_code': 'device-secret'});
+          handler.resolve(
+            Response<Map<String, dynamic>>(
+              requestOptions: options,
+              statusCode: statusCode,
+              data: body,
+            ),
+          );
+        },
+      ),
+    );
 }

@@ -7,6 +7,20 @@ import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('accepts active one-time Essential premium from TorBox user data', () {
+    final account = TorBoxAccount.fromJson({
+      'id': 42,
+      'email': 'one-time@example.test',
+      'plan': 1,
+      'is_subscribed': false,
+      'premium_expires_at': '2099-08-01T12:00:00Z',
+    });
+
+    expect(account.planName, 'Essential');
+    expect(account.isSubscribed, isFalse);
+    expect(account.hasApiStreaming, isTrue);
+  });
+
   test('parses a ready TorBox torrent and its playable files', () {
     final torrent = TorBoxTorrent.fromJson({
       'id': 42,

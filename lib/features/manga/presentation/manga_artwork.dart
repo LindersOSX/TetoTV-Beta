@@ -6,6 +6,7 @@ import 'package:anime_tv/features/manga/data/manga_catalog_client.dart';
 import 'package:anime_tv/features/manga/data/manga_page_fetch_client.dart';
 import 'package:anime_tv/features/manga/data/manga_uri_policy.dart';
 import 'package:anime_tv/features/manga/domain/manga_reader_models.dart';
+import 'package:flutter/foundation.dart' show mapEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -20,6 +21,7 @@ class MangaArtwork extends ConsumerStatefulWidget {
     required this.uri,
     this.sourceId,
     this.sourceUri,
+    this.headers = const <String, String>{},
     this.fit = BoxFit.cover,
     this.icon = Icons.menu_book_rounded,
     this.cacheWidth,
@@ -29,6 +31,10 @@ class MangaArtwork extends ConsumerStatefulWidget {
   final Uri? uri;
   final String? sourceId;
   final Uri? sourceUri;
+
+  /// Ephemeral request headers supplied by a sandboxed manga extension.
+  /// These are used only for this image request and are never persisted.
+  final Map<String, String> headers;
   final BoxFit fit;
   final IconData icon;
   final int? cacheWidth;
@@ -55,7 +61,8 @@ class _MangaArtworkState extends ConsumerState<MangaArtwork> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.uri != widget.uri ||
         oldWidget.sourceId != widget.sourceId ||
-        oldWidget.sourceUri != widget.sourceUri) {
+        oldWidget.sourceUri != widget.sourceUri ||
+        !mapEquals(oldWidget.headers, widget.headers)) {
       _updateRequest();
     }
   }
@@ -70,7 +77,7 @@ class _MangaArtworkState extends ConsumerState<MangaArtwork> {
       candidate.toString(),
       field: 'Manga artwork URL',
     );
-    var headers = const <String, String>{};
+    var headers = widget.headers;
     final sourceId = widget.sourceId;
     final sourceCandidate = widget.sourceUri;
     if (sourceId != null && sourceCandidate != null) {
@@ -79,7 +86,10 @@ class _MangaArtworkState extends ConsumerState<MangaArtwork> {
         field: 'Manga source URL',
       );
       if (_sameOrigin(sourceUri, uri)) {
-        headers = await _credentials.requestHeaders(sourceId);
+        headers = <String, String>{
+          ...await _credentials.requestHeaders(sourceId),
+          ...headers,
+        };
       }
     }
     return _pageClient.fetch(

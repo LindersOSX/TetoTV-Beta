@@ -1,3 +1,4 @@
+import 'package:anime_tv/core/preferences/caption_language.dart';
 import 'package:anime_tv/core/preferences/playback_audio_preference.dart';
 import 'package:media_kit/media_kit.dart';
 
@@ -8,18 +9,18 @@ import 'package:media_kit/media_kit.dart';
 /// media_kit track pass remains necessary for files whose language tag is
 /// missing and whose useful language exists only in the track title.
 Map<String, String> mpvPreferredAudioStartupProperties(String language) {
-  final normalized = language.trim().toLowerCase().replaceAll('_', '-');
-  final priority = switch (normalized) {
-    'eng' || 'en' || 'english' || 'en-us' || 'en-gb' => 'eng,en',
-    'jpn' || 'ja' || 'jp' || 'japanese' || 'ja-jp' => 'jpn,ja',
-    'spa' || 'es' || 'spanish' => 'spa,es',
-    'fra' || 'fre' || 'fr' || 'french' => 'fra,fre,fr',
-    _ when RegExp(r'^[a-z]{2,3}(?:-[a-z]{2})?$').hasMatch(normalized) =>
-      normalized,
-    _ => null,
-  };
-  if (priority == null) return const {};
-  return {'alang': priority, 'aid': 'auto'};
+  final canonical = canonicalCaptionLanguageCode(language);
+  if (canonical.isEmpty) return const {};
+  final option = preferredCaptionLanguageOptions
+      .where((candidate) => candidate.code == canonical)
+      .firstOrNull;
+  final aliases = <String>[
+    canonical,
+    ...?option?.aliases.where(
+      (alias) => alias != 'jp' && RegExp(r'^[a-z]{2,3}$').hasMatch(alias),
+    ),
+  ];
+  return {'alang': aliases.toSet().join(','), 'aid': 'auto'};
 }
 
 /// Gives a demuxer a short, bounded window to finish publishing its track
@@ -139,7 +140,13 @@ bool playerTrackMatchesAudioLanguage(AudioTrack track, String language) {
     '-',
   );
   final title = (track.title ?? '').trim().toLowerCase();
-  return trackLanguage == normalized ||
+  final preferredCanonical = canonicalCaptionLanguageCode(normalized);
+  final trackCanonical = canonicalCaptionLanguageCode(trackLanguage);
+  final titleCanonical = canonicalCaptionLanguageCode(title);
+  return (preferredCanonical.isNotEmpty &&
+          (trackCanonical == preferredCanonical ||
+              titleCanonical == preferredCanonical)) ||
+      trackLanguage == normalized ||
       trackLanguage.split('-').first == normalized.split('-').first ||
       title.contains(normalized);
 }

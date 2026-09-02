@@ -73,6 +73,7 @@ class MainActivity : FlutterActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         sanitizeIncomingAppLink(intent)
         super.onCreate(savedInstanceState)
+        AnonymousCrashStore.recordBreadcrumb(this, "activity_created")
     }
 
     override fun getInitialRoute(): String? =
@@ -462,11 +463,13 @@ class MainActivity : FlutterActivity() {
 
     override fun onPause() {
         if (externalProxyHandoffActive) externalProxyHandoffBackgrounded = true
+        AnonymousCrashStore.recordBreadcrumb(this, "activity_paused")
         super.onPause()
     }
 
     override fun onResume() {
         super.onResume()
+        AnonymousCrashStore.recordBreadcrumb(this, "activity_resumed")
         if (externalProxyHandoffActive && externalProxyHandoffBackgrounded) {
             finishExternalProxyHandoff(notifyDart = true)
         }
@@ -1558,6 +1561,7 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun onDestroy() {
+        AnonymousCrashStore.recordBreadcrumb(this, "activity_destroyed")
         if (externalProxyHandoffActive) {
             finishExternalProxyHandoff(notifyDart = false)
         }

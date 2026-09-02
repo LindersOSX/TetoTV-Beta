@@ -1,5 +1,15 @@
 import 'package:dio/dio.dart';
 
+class TorBoxDeviceAuthException implements Exception {
+  const TorBoxDeviceAuthException(this.message, {this.code});
+
+  final String message;
+  final String? code;
+
+  @override
+  String toString() => message;
+}
+
 class TorBoxDeviceSession {
   const TorBoxDeviceSession({
     required this.deviceCode,
@@ -71,7 +81,10 @@ class TorBoxDeviceAuthClient {
               receiveTimeout: const Duration(seconds: 20),
               followRedirects: false,
               maxRedirects: 0,
-              headers: const {'Accept': 'application/json'},
+              headers: const {
+                'Accept': 'application/json',
+                'User-Agent': 'TetoTV-Android',
+              },
             ),
           );
 
@@ -118,9 +131,16 @@ class TorBoxDeviceAuthClient {
       }
       return token;
     }
-    if (response.statusCode == 400) return null;
-    throw StateError(
+    final code = body['error']?.toString().trim().toUpperCase();
+    // TorBox documents DEVICE_CODE_NOT_USED as the normal pending response.
+    // Other 400 responses (expired/invalid code, free-plan rejection, etc.)
+    // are terminal and must not be hidden behind ten minutes of polling.
+    if (response.statusCode == 400 && code == 'DEVICE_CODE_NOT_USED') {
+      return null;
+    }
+    throw TorBoxDeviceAuthException(
       body['detail']?.toString() ?? 'TorBox device authorization failed.',
+      code: code,
     );
   }
 }

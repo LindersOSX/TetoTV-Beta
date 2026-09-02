@@ -17,5 +17,6 @@ class TetoTvApplication : FlutterApplication() {
                 Process.killProcess(Process.myPid())
             }
         }
+        AnonymousCrashStore.recordBreadcrumb(this, "app_process_created")
     }
 }

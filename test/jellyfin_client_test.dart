@@ -396,6 +396,7 @@ void main() {
           audioStreams: [
             JellyfinAudioStream(index: 1, language: 'ja-JP', isDefault: true),
             JellyfinAudioStream(index: 2, language: 'en-US'),
+            JellyfinAudioStream(index: 3, language: 'es-MX'),
           ],
         );
 
@@ -416,10 +417,18 @@ void main() {
           item,
           playSessionId: 'session_dual_default_123',
         );
+        final spanishPlan = client.playbackPlan(
+          _connection(),
+          item,
+          playSessionId: 'session_dual_spanish_12',
+          preferredAudioLanguage: 'spa',
+          requestedAudio: PlaybackAudioPreference.dub,
+        );
 
         expect(dubPlan.uri.queryParameters['AudioStreamIndex'], '2');
         expect(subPlan.uri.queryParameters['AudioStreamIndex'], '1');
         expect(defaultPlan.uri.queryParameters['AudioStreamIndex'], '1');
+        expect(spanishPlan.uri.queryParameters['AudioStreamIndex'], '3');
         expect(dubPlan.uri.queryParameters, isNot(contains('api_key')));
       },
     );

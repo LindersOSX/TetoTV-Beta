@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:anime_tv/features/auth/application/pairing_controller.dart';
 import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
+import 'package:anime_tv/core/preferences/caption_language.dart';
 import 'package:anime_tv/core/preferences/playback_audio_preference.dart';
 import 'package:anime_tv/features/settings/application/setup_progress_controller.dart';
 import 'package:anime_tv/features/streaming/domain/debrid_service.dart';
@@ -45,6 +46,7 @@ const _clickSoundsKey = 'audio_click_sounds';
 const _defaultLandingPageKey = 'navigation_default_landing_page';
 const _preferredPlayerKey = 'player_preferred_engine';
 const _preferredAudioKey = 'player_preferred_audio';
+const _preferredAudioLanguageKey = 'player_preferred_audio_language';
 const _preferredCaptionsKey = 'player_preferred_captions';
 const _preferredCaptionLanguageKey = 'player_preferred_caption_language';
 const _anonymousCrashReportingKey = 'privacy_anonymous_crash_reporting';
@@ -279,21 +281,21 @@ extension PreferredPlayerLabel on PreferredPlayer {
 
 /// Controls how captions are initialized when playback starts.
 ///
-/// [automatic] leaves caption selection to the series preference and the
-/// player. [enabled] and [disabled] are explicit global defaults that apply
-/// when a series has no user-selected caption preference yet.
+/// [automatic] keeps TetoTV's audio-aware on/off behavior while selecting the
+/// viewer's preferred subtitle language. [enabled] and [disabled] are explicit
+/// global defaults that apply when a series has no user-selected preference.
 enum PreferredCaptionMode { automatic, enabled, disabled }
 
 /// Selects the language used while a private media server prepares caption
 /// capabilities. A viewer's explicit per-series choice remains authoritative;
-/// otherwise only the global On mode carries its remembered language into
-/// preparation. Automatic and Off preserve the existing series/default value.
+/// otherwise Automatic and On carry the global language into preparation.
+/// Off preserves the existing series/default value without loading captions.
 String preferredCaptionLanguageForPreparation({
   required String seriesLanguage,
   required bool seriesPreferenceSet,
   required PreferredCaptionMode globalMode,
   required String globalLanguage,
-}) => !seriesPreferenceSet && globalMode == PreferredCaptionMode.enabled
+}) => !seriesPreferenceSet && globalMode != PreferredCaptionMode.disabled
     ? globalLanguage
     : seriesLanguage;
 
@@ -306,7 +308,7 @@ extension PreferredCaptionModeLabel on PreferredCaptionMode {
 
   String get description => switch (this) {
     PreferredCaptionMode.automatic =>
-      'Remember each show\'s caption choice when available.',
+      'Use the preferred language when captions are needed.',
     PreferredCaptionMode.enabled =>
       'Start captions on when a matching track is available.',
     PreferredCaptionMode.disabled => 'Start playback with captions off.',
@@ -464,6 +466,7 @@ class SettingsPreferences {
     this.defaultLandingPage = LandingPage.home,
     this.preferredPlayer = PreferredPlayer.mpv,
     this.preferredAudio = PlaybackAudioPreference.dub,
+    this.preferredAudioLanguage = 'auto',
     this.preferredCaptionMode = PreferredCaptionMode.automatic,
     this.preferredCaptionLanguage = 'eng',
     this.debridStreamSort = DebridStreamSort.bestQuality,
@@ -537,6 +540,7 @@ class SettingsPreferences {
   final LandingPage defaultLandingPage;
   final PreferredPlayer preferredPlayer;
   final PlaybackAudioPreference preferredAudio;
+  final String preferredAudioLanguage;
   final PreferredCaptionMode preferredCaptionMode;
   final String preferredCaptionLanguage;
   final DebridStreamSort debridStreamSort;
@@ -620,6 +624,7 @@ class SettingsPreferences {
     LandingPage? defaultLandingPage,
     PreferredPlayer? preferredPlayer,
     PlaybackAudioPreference? preferredAudio,
+    String? preferredAudioLanguage,
     PreferredCaptionMode? preferredCaptionMode,
     String? preferredCaptionLanguage,
     DebridStreamSort? debridStreamSort,
@@ -687,6 +692,9 @@ class SettingsPreferences {
     defaultLandingPage: defaultLandingPage ?? this.defaultLandingPage,
     preferredPlayer: preferredPlayer ?? this.preferredPlayer,
     preferredAudio: preferredAudio ?? this.preferredAudio,
+    preferredAudioLanguage: preferredAudioLanguage == null
+        ? this.preferredAudioLanguage
+        : _normalizePreferredAudioLanguage(preferredAudioLanguage),
     preferredCaptionMode: preferredCaptionMode ?? this.preferredCaptionMode,
     preferredCaptionLanguage: preferredCaptionLanguage == null
         ? this.preferredCaptionLanguage
@@ -972,6 +980,9 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
       // The hidden preferred caption language follows the caption mode and is
       // append-only so older storage positions never shift.
       _safeRead(_preferredCaptionLanguageKey),
+      // Preferred audio language is append-only. `auto` preserves the legacy
+      // Dub/Sub behavior until the viewer explicitly chooses a language.
+      _safeRead(_preferredAudioLanguageKey),
     ]);
 
     bool canRestore(String key, int index) {
@@ -1344,6 +1355,11 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
         ),
       );
     }
+    if (canRestore(_preferredAudioLanguageKey, 60)) {
+      restored = restored.copyWith(
+        preferredAudioLanguage: _normalizePreferredAudioLanguage(valueAt(60)),
+      );
+    }
     if (restored.preferredPlayer == PreferredPlayer.external &&
         (!restored.externalPlayerEnabled ||
             restored.selectedExternalPlayerPackage == null)) {
@@ -1709,16 +1725,30 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
     {_preferredAudioKey: value.name},
   );
 
+  Future<void> setPreferredAudioLanguage(String value) {
+    final normalizedLanguage = _normalizePreferredAudioLanguage(value);
+    return _update(state.copyWith(preferredAudioLanguage: normalizedLanguage), {
+      _preferredAudioLanguageKey: normalizedLanguage,
+    });
+  }
+
   Future<void> setPreferredCaptionMode(PreferredCaptionMode value) => _update(
     state.copyWith(preferredCaptionMode: value),
     {_preferredCaptionsKey: value.name},
   );
 
+  Future<void> setPreferredCaptionLanguage(String value) {
+    final normalizedLanguage = _normalizePreferredCaptionLanguage(value);
+    return _update(
+      state.copyWith(preferredCaptionLanguage: normalizedLanguage),
+      {_preferredCaptionLanguageKey: normalizedLanguage},
+    );
+  }
+
   /// Persists a manual player caption choice as one ordered state mutation.
   ///
-  /// The language is intentionally hidden from Settings UI. It lets private
-  /// and non-catalog playback retain the viewer's most recent safe language
-  /// code while the visible Preferred CC control remains Automatic/On/Off.
+  /// The same language is exposed as the default in Playback settings. This
+  /// combined mutation keeps manual non-catalog choices atomic.
   Future<void> setPreferredCaptionSelection({
     required PreferredCaptionMode mode,
     required String language,
@@ -2032,6 +2062,7 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
       _seekForwardSecondsKey,
       _preferredPlayerKey,
       _preferredAudioKey,
+      _preferredAudioLanguageKey,
       _preferredCaptionsKey,
       _preferredCaptionLanguageKey,
       _showFillerIndicatorsKey,
@@ -2053,6 +2084,7 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
       seekForwardSeconds: defaults.seekForwardSeconds,
       preferredPlayer: defaults.preferredPlayer,
       preferredAudio: defaults.preferredAudio,
+      preferredAudioLanguage: defaults.preferredAudioLanguage,
       preferredCaptionMode: defaults.preferredCaptionMode,
       preferredCaptionLanguage: defaults.preferredCaptionLanguage,
       showFillerIndicators: defaults.showFillerIndicators,
@@ -2124,7 +2156,19 @@ T _enumByName<T extends Enum>(List<T> values, String? name, T fallback) =>
 
 String _normalizePreferredCaptionLanguage(String? value) {
   final normalized = value?.trim().toLowerCase() ?? '';
-  return RegExp(r'^[a-z]{2,3}$').hasMatch(normalized) ? normalized : 'eng';
+  if (RegExp(r'^[a-z]{2,3}$').hasMatch(normalized)) {
+    return normalized;
+  }
+  return canonicalCaptionLanguageCode(value, fallback: 'eng');
+}
+
+String _normalizePreferredAudioLanguage(String? value) {
+  final normalized = value?.trim().toLowerCase() ?? '';
+  if (normalized.isEmpty ||
+      const {'auto', 'follow', 'follow-dub-sub'}.contains(normalized)) {
+    return 'auto';
+  }
+  return canonicalCaptionLanguageCode(value, fallback: 'auto');
 }
 
 String _encodeEnumPriority<T extends Enum>(Iterable<T> values) =>

@@ -406,6 +406,8 @@ bool _isUnexpectedHandledError(Object error) {
   final type = error.runtimeType.toString().toLowerCase();
   if (type == 'debridcachemissexception' ||
       type == 'webprovidersearchcancelled' ||
+      type == 'webstreampreflightfailure' ||
+      type == 'catalogtrackingvalidationerror' ||
       type == '_discordauthenticationabandoned') {
     return false;
   }

@@ -20,9 +20,14 @@ class TorBoxAccount {
     _ => 'Free',
   };
 
+  /// Whether the account currently has paid-plan API access.
+  ///
+  /// TorBox keeps recurring billing status (`is_subscribed`) separate from
+  /// the premium time granted to the account. One-time purchases, vouchers,
+  /// and cancelled renewals can therefore have `is_subscribed == false` while
+  /// the paid plan remains usable until `premium_expires_at`.
   bool get hasApiStreaming =>
       plan > 0 &&
-      isSubscribed &&
       (premiumUntil == null || premiumUntil!.isAfter(DateTime.now()));
 
   factory TorBoxAccount.fromJson(Map<String, dynamic> json) {

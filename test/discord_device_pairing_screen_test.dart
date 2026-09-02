@@ -4,6 +4,7 @@ import 'package:anime_tv/app/router.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_shortcuts.dart';
+import 'package:anime_tv/core/widgets/copyable_code_interaction.dart';
 import 'package:anime_tv/features/discord/application/discord_device_pairing_controller.dart';
 import 'package:anime_tv/features/discord/data/discord_device_pairing_client.dart';
 import 'package:anime_tv/features/discord/domain/discord_device_pairing.dart';
@@ -35,6 +36,7 @@ void main() {
     expect(find.byType(DiscordDevicePairingScreen), findsOneWidget);
     expect(find.byType(QrImageView), findsOneWidget);
     expect(find.text('ABCD-EFGH'), findsOneWidget);
+    expect(find.byType(CopyableCodeInteraction), findsOneWidget);
     expect(find.textContaining('https://discord.com/activate'), findsOneWidget);
     expect(find.textContaining('expires in about'), findsOneWidget);
     expect(

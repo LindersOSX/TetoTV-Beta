@@ -795,7 +795,7 @@ void main() {
       'final preferences = ref.read(settingsPreferencesProvider)',
       'switch (preferences.preferredCaptionMode)',
       'case PreferredCaptionMode.automatic:',
-      '_applyAutomaticSubtitleDefaultForRelease(release)',
+      'preferredLanguage: preferences.preferredCaptionLanguage',
       'case PreferredCaptionMode.enabled:',
       'subtitleLanguage: preferences.preferredCaptionLanguage',
       'subtitleEnabled: true',

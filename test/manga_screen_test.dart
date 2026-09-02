@@ -3,19 +3,24 @@ import 'dart:io';
 
 import 'package:anime_tv/app/router.dart';
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
+import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/widgets/tv_text_input.dart';
 import 'package:anime_tv/features/manga/application/manga_acquisition_controller.dart';
+import 'package:anime_tv/features/manga/application/manga_extension_controller.dart';
 import 'package:anime_tv/features/manga/application/manga_hub_controller.dart';
 import 'package:anime_tv/features/manga/data/manga_acquisition_service.dart';
 import 'package:anime_tv/features/manga/data/manga_catalog_client.dart';
 import 'package:anime_tv/features/manga/data/manga_local_storage.dart';
 import 'package:anime_tv/features/manga/data/manga_store.dart';
 import 'package:anime_tv/features/manga/domain/manga_reader_models.dart';
+import 'package:anime_tv/features/manga/domain/manga_extension_models.dart';
 import 'package:anime_tv/features/manga/domain/manga_source_models.dart';
 import 'package:anime_tv/features/manga/presentation/manga_screen.dart';
 import 'package:anime_tv/features/manga/presentation/manga_reader_screen.dart';
+import 'package:anime_tv/features/marketplace/data/addon_store.dart';
+import 'package:anime_tv/features/marketplace/domain/addon_models.dart';
 import 'package:anime_tv/features/settings/application/app_update_controller.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:flutter/material.dart';
@@ -90,6 +95,15 @@ void main() {
         find.textContaining('never executes manga source code'),
         findsOneWidget,
       );
+      await tester.scrollUntilVisible(
+        find.text('No sources added', skipOffstage: false),
+        180,
+        scrollable: find.descendant(
+          of: find.byKey(const ValueKey('manga-sources-list')),
+          matching: find.byType(Scrollable),
+        ),
+      );
+      await tester.pumpAndSettle();
       expect(find.text('No sources added'), findsOneWidget);
       expect(
         find.textContaining('Nothing is bundled or recommended by TetoTV.'),
@@ -97,6 +111,15 @@ void main() {
       );
       expect(controller.state.sources, isEmpty);
 
+      await tester.scrollUntilVisible(
+        find.text('Add source', skipOffstage: false).first,
+        -180,
+        scrollable: find.descendant(
+          of: find.byKey(const ValueKey('manga-sources-list')),
+          matching: find.byType(Scrollable),
+        ),
+      );
+      await tester.pumpAndSettle();
       await tester.tap(find.text('Add source').first, warnIfMissed: false);
       await tester.pumpAndSettle();
 
@@ -168,6 +191,109 @@ void main() {
       findsOneWidget,
     );
     expect(controller.selectedSourceIds, <String>[source.id]);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'Browse presents enabled extensions and progressive extension results',
+    (tester) async {
+      _setViewport(tester, const Size(1280, 720));
+      addTearDown(() => _resetViewport(tester));
+      final extension = _TestMangaExtensionController(
+        MangaExtensionState(
+          providers: [_mangaExtensionAddon()],
+          query: 'Frieren',
+          searching: true,
+          results: [
+            MangaExtensionTitle(
+              providerId: 'manga.fixture',
+              providerName: 'Fixture Manga',
+              id: 'title.1',
+              title: 'Frieren Test Result',
+              language: 'en',
+            ),
+          ],
+        ),
+        chapterFixtures: const [
+          MangaExtensionChapter(
+            id: 'chapter.1',
+            title: 'Chapter 1: The Journey',
+            chapter: '1',
+            index: 0,
+          ),
+        ],
+      );
+      await _pumpScreen(
+        tester,
+        _TestMangaHubController(MangaHubState()),
+        isTelevision: true,
+        extensions: extension,
+      );
+
+      await tester.tap(
+        find.byKey(const ValueKey('manga-section-browse')),
+        warnIfMissed: false,
+      );
+      await tester.pump(const Duration(milliseconds: 220));
+
+      expect(
+        find.byKey(const ValueKey('manga-extension-results')),
+        findsOneWidget,
+      );
+      expect(find.text('Results for “Frieren”'), findsOneWidget);
+      expect(find.textContaining('result(s) so far'), findsOneWidget);
+      expect(find.text('Frieren Test Result'), findsOneWidget);
+      expect(find.text('Fixture Manga • EN'), findsOneWidget);
+      expect(find.text('Search all'), findsOneWidget);
+      expect(find.text('Manage extensions'), findsOneWidget);
+
+      await tester.tap(find.text('Frieren Test Result'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 240));
+      expect(
+        find.byKey(const ValueKey('manga-extension-chapters')),
+        findsOneWidget,
+      );
+      expect(find.text('Chapter 1: The Journey'), findsOneWidget);
+      expect(find.text('Read'), findsOneWidget);
+      expect(find.byTooltip('Download chapter'), findsOneWidget);
+      expect(find.text('Add to library'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('Sources keeps OPDS and installed manga extensions distinct', (
+    tester,
+  ) async {
+    _setViewport(tester, const Size(1280, 720));
+    addTearDown(() => _resetViewport(tester));
+    final extension = _TestMangaExtensionController(
+      MangaExtensionState(providers: [_mangaExtensionAddon()]),
+    );
+    await _pumpScreen(
+      tester,
+      _TestMangaHubController(
+        MangaHubState(sources: <StoredMangaSource>[_source()]),
+      ),
+      isTelevision: true,
+      extensions: extension,
+    );
+
+    await tester.tap(
+      find.byKey(const ValueKey('manga-section-sources')),
+      warnIfMissed: false,
+    );
+    await tester.pump(const Duration(milliseconds: 220));
+
+    expect(find.text('Manga extensions'), findsOneWidget);
+    expect(find.text('Optional OPDS catalogs'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('manga-installed-extension-manga.fixture')),
+      findsOneWidget,
+    );
+    expect(find.text('Fixture Manga'), findsOneWidget);
+    expect(find.text('Manage extensions'), findsOneWidget);
+    expect(find.text('My added catalog'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -427,6 +553,15 @@ void main() {
       warnIfMissed: false,
     );
     await tester.pump(const Duration(milliseconds: 180));
+    await tester.scrollUntilVisible(
+      find.byTooltip('Remove source', skipOffstage: false),
+      220,
+      scrollable: find.descendant(
+        of: find.byKey(const ValueKey('manga-sources-list')),
+        matching: find.byType(Scrollable),
+      ),
+    );
+    await tester.pumpAndSettle();
     await tester.tap(find.byTooltip('Remove source'), warnIfMissed: false);
     await tester.pumpAndSettle();
     await tester.tap(
@@ -503,8 +638,11 @@ List<Override> _overrides(
   _TestMangaHubController controller, {
   required bool isTelevision,
   MangaAcquisitionController? acquisitions,
+  MangaExtensionController? extensions,
 }) => <Override>[
   mangaHubControllerProvider.overrideWith((_) => controller),
+  if (extensions != null)
+    mangaExtensionControllerProvider.overrideWith((_) => extensions),
   mangaAcquisitionControllerProvider.overrideWith(
     (_) =>
         acquisitions ??
@@ -524,6 +662,7 @@ Future<void> _pumpScreen(
   _TestMangaHubController controller, {
   required bool isTelevision,
   MangaAcquisitionController? acquisitions,
+  MangaExtensionController? extensions,
 }) async {
   await tester.pumpWidget(
     ProviderScope(
@@ -531,6 +670,7 @@ Future<void> _pumpScreen(
         controller,
         isTelevision: isTelevision,
         acquisitions: acquisitions,
+        extensions: extensions,
       ),
       child: MaterialApp(theme: AppTheme.dark, home: const MangaScreen()),
     ),
@@ -556,6 +696,82 @@ StoredMangaSource _source() => StoredMangaSource(
   kind: StoredMangaSourceKind.opds2,
   updatedAt: DateTime.utc(2026, 9, 1),
 );
+
+InstalledStreamingAddon _mangaExtensionAddon() => InstalledStreamingAddon(
+  manifest: MarketplaceAddon(
+    id: 'manga.fixture',
+    name: 'Fixture Manga',
+    description: 'Manga screen fixture',
+    author: 'TetoTV tests',
+    manifestUri: Uri.parse('https://example.test/manga.json'),
+    repositoryUrl: 'https://example.test/marketplace.json',
+    language: 'javascript',
+    type: 'manga-provider',
+    locale: 'en',
+  ),
+  payload: 'class Provider {}',
+  enabled: true,
+  installedAt: DateTime.utc(2026, 9, 1),
+  updatedAt: DateTime.utc(2026, 9, 1),
+);
+
+class _TestMangaExtensionController extends MangaExtensionController {
+  _TestMangaExtensionController(
+    MangaExtensionState initial, {
+    this.chapterFixtures = const [],
+  }) : super(
+         addonStore: AddonStore(TetoTvDatabase.instance),
+         mangaStore: MangaStore(),
+         identityStore: _MemoryMangaExtensionIdentityStore(),
+         ownerKey: () async => 'owner.test',
+       ) {
+    state = initial;
+  }
+
+  final List<MangaExtensionChapter> chapterFixtures;
+
+  @override
+  Future<List<MangaExtensionChapter>> chapters(
+    MangaExtensionTitle title,
+  ) async => chapterFixtures;
+
+  @override
+  Future<bool> isInLibrary(MangaExtensionTitle title) async => false;
+}
+
+class _MemoryMangaExtensionIdentityStore
+    implements MangaExtensionIdentityStore {
+  final Map<String, String> _values = {};
+
+  String _key(String ownerKey, String sourceId, String entryId) =>
+      '$ownerKey\n$sourceId\n$entryId';
+
+  @override
+  Future<void> delete({
+    required String ownerKey,
+    required String sourceId,
+    required String entryId,
+  }) async {
+    _values.remove(_key(ownerKey, sourceId, entryId));
+  }
+
+  @override
+  Future<String?> read({
+    required String ownerKey,
+    required String sourceId,
+    required String entryId,
+  }) async => _values[_key(ownerKey, sourceId, entryId)];
+
+  @override
+  Future<void> write({
+    required String ownerKey,
+    required String sourceId,
+    required String entryId,
+    required String mangaId,
+  }) async {
+    _values[_key(ownerKey, sourceId, entryId)] = mangaId;
+  }
+}
 
 class _TestMangaHubController extends MangaHubController {
   _TestMangaHubController(

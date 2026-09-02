@@ -120,6 +120,46 @@ void main() {
     expect(client.resources.single.headers, isEmpty);
   });
 
+  testWidgets('forwards extension headers and reloads when they change', (
+    tester,
+  ) async {
+    final client = _RecordingPageClient((_) async => _onePixelPng);
+    final uri = Uri.parse('https://images.example/cover.jpg');
+
+    await _pumpArtwork(
+      tester,
+      client: client,
+      child: MangaArtwork(
+        uri: uri,
+        headers: const <String, String>{
+          'Referer': 'https://reader.example/title/one',
+        },
+      ),
+    );
+    await tester.pumpAndSettle();
+    await _pumpArtwork(
+      tester,
+      client: client,
+      child: MangaArtwork(
+        uri: uri,
+        headers: const <String, String>{
+          'Referer': 'https://reader.example/title/two',
+        },
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(client.resources, hasLength(2));
+    expect(
+      client.resources.first.headers['Referer'],
+      'https://reader.example/title/one',
+    );
+    expect(
+      client.resources.last.headers['Referer'],
+      'https://reader.example/title/two',
+    );
+  });
+
   testWidgets('rejects non-HTTPS artwork before invoking the fetch client', (
     tester,
   ) async {

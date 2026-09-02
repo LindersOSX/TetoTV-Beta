@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
+import 'package:anime_tv/core/preferences/playback_audio_preference.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/tv/tv_shelf_focus.dart';
@@ -496,6 +497,10 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
         seriesPreferenceSet: false,
         globalMode: settings.preferredCaptionMode,
         globalLanguage: settings.preferredCaptionLanguage,
+      ),
+      preferredAudioLanguage: preferredPlaybackAudioLanguage(
+        globalPreference: requestedAudio,
+        globalLanguage: settings.preferredAudioLanguage,
       ),
       requestedAudio: requestedAudio,
     );

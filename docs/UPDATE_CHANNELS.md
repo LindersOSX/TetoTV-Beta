@@ -35,11 +35,11 @@ Beta reads completed 2.x releases from:
 https://api.github.com/repos/LindersOSX/TetoTV-Beta/releases/latest
 ```
 
-The current Beta source build is `v2.0.65` with Android build code `410042`.
+The current Beta source build is `v2.0.66` with Android build code `410043`.
 Its release title is:
 
 ```text
-TetoTV 2.0.65 Beta - Android TV / Google TV / Fire TV
+TetoTV 2.0.66 Beta - Android TV / Google TV / Fire TV
 ```
 
 Publish it as a normal, non-draft, non-prerelease GitHub release so
@@ -72,7 +72,7 @@ proxy.
 Release notes must include the exact asset names and this build-code marker:
 
 ```html
-<!-- tetotv-android-version-code: 410042 -->
+<!-- tetotv-android-version-code: 410043 -->
 ```
 
 When build-code metadata is present, the updater rejects a known lower build
@@ -94,10 +94,10 @@ These rules apply equally on phones, Android TV, Google TV, and Fire TV.
 
 ## Switching and rollback
 
-The current Beta uses build code `410042`. No Public counterpart is available.
+The current Beta uses build code `410043`. No Public counterpart is available.
 An older Public install can move to this Beta when Android accepts the higher
 build code, but it cannot move back in place until a future Public build uses
-code `410042` or higher. Uninstalling first permits an older APK but deletes
+code `410043` or higher. Uninstalling first permits an older APK but deletes
 local application data. Developer Mode and in-app settings cannot override
 this Android rule.
 

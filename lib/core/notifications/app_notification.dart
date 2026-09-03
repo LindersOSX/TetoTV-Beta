@@ -34,11 +34,6 @@ class AppNotification {
 
   bool get isRead => readAtUtc != null;
 
-  String get actionRoute => switch (action) {
-    AppNotificationAction.openAppUpdates =>
-      '/settings/accounts?section=app-updates',
-  };
-
   AppNotification copyWith({DateTime? readAtUtc}) => AppNotification(
     id: id,
     kind: kind,

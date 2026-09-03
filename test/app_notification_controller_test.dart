@@ -77,6 +77,19 @@ void main() {
         expect((await store.load()).where((item) => !item.isRead), isEmpty);
       },
     );
+
+    test('reading survives a device clock correction', () async {
+      final createdAt = DateTime.utc(2026, 9, 2);
+      final notice = _notice(createdAt: createdAt);
+      await store.upsert(notice);
+
+      await store.markRead(
+        notice.id,
+        createdAt.subtract(const Duration(days: 1)),
+      );
+
+      expect((await store.load()).single.readAtUtc, createdAt);
+    });
   });
 
   test(
@@ -164,32 +177,29 @@ void main() {
       await database.close();
     });
 
-    test(
-      'available update is durable, deduplicated, and opens updates',
-      () async {
-        final update = _updateState();
+    test('available update is durable, deduplicated, and actionable', () async {
+      final update = _updateState();
 
-        await controller.syncAppUpdate(update);
-        expect(controller.state.unreadCount, 1);
-        expect(
-          controller.state.items.single.actionRoute,
-          '/settings/accounts?section=app-updates',
-        );
+      await controller.syncAppUpdate(update);
+      expect(controller.state.unreadCount, 1);
+      expect(
+        controller.state.items.single.action,
+        AppNotificationAction.openAppUpdates,
+      );
 
-        await controller.markRead(controller.state.items.single.id);
-        expect(controller.state.unreadCount, 0);
-        await controller.syncAppUpdate(update.copyWith(progress: .8));
+      await controller.markRead(controller.state.items.single.id);
+      expect(controller.state.unreadCount, 0);
+      await controller.syncAppUpdate(update.copyWith(progress: .8));
 
-        expect(controller.state.items, hasLength(1));
-        expect(controller.state.items.single.isRead, isTrue);
+      expect(controller.state.items, hasLength(1));
+      expect(controller.state.items.single.isRead, isTrue);
 
-        final restored = AppNotificationController(store, clock: () => clock);
-        addTearDown(restored.dispose);
-        await restored.load();
-        expect(restored.state.items, hasLength(1));
-        expect(restored.state.unreadCount, 0);
-      },
-    );
+      final restored = AppNotificationController(store, clock: () => clock);
+      addTearDown(restored.dispose);
+      await restored.load();
+      expect(restored.state.items, hasLength(1));
+      expect(restored.state.unreadCount, 0);
+    });
 
     test('newer build replaces the stale same-channel item', () async {
       await controller.syncAppUpdate(_updateState());
@@ -215,6 +225,34 @@ void main() {
       expect(body, isNot(contains('https://')));
       expect(body, isNot(contains('**')));
       expect(body.length, lessThanOrEqualTo(480));
+    });
+
+    test('switching update channels removes the unactionable notice', () async {
+      await store.upsert(
+        AppNotification(
+          id: 'app-update:public:420001',
+          kind: AppNotificationKind.appUpdate,
+          title: 'TetoTV 1.0.1 is available',
+          body: 'Public update',
+          action: AppNotificationAction.openAppUpdates,
+          createdAtUtc: clock,
+          targetVersion: '1.0.1',
+          targetVersionCode: 420001,
+          targetChannel: 'public',
+        ),
+      );
+      await controller.load();
+      expect(controller.state.items, hasLength(1));
+
+      await controller.syncAppUpdate(
+        const AppUpdateState(
+          loaded: true,
+          currentVersion: '2.0.64+410041',
+          updateChannel: AppUpdateChannel.beta,
+        ),
+      );
+
+      expect(controller.state.items, isEmpty);
     });
 
     test(

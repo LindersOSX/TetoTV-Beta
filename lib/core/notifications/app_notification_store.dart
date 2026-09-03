@@ -46,19 +46,28 @@ class AppNotificationStore {
 
   Future<void> markRead(String id, DateTime readAtUtc) async {
     final database = await _database.database;
-    await database.update(
-      'app_notifications',
-      {'read_at': readAtUtc.toUtc().millisecondsSinceEpoch},
-      where: 'id = ? AND read_at IS NULL',
-      whereArgs: [id],
+    final timestamp = readAtUtc.toUtc().millisecondsSinceEpoch;
+    await database.rawUpdate(
+      '''
+        UPDATE app_notifications
+        SET read_at = CASE WHEN created_at > ? THEN created_at ELSE ? END
+        WHERE id = ? AND read_at IS NULL
+      ''',
+      [timestamp, timestamp, id],
     );
   }
 
   Future<void> markAllRead(DateTime readAtUtc) async {
     final database = await _database.database;
-    await database.update('app_notifications', {
-      'read_at': readAtUtc.toUtc().millisecondsSinceEpoch,
-    }, where: 'read_at IS NULL');
+    final timestamp = readAtUtc.toUtc().millisecondsSinceEpoch;
+    await database.rawUpdate(
+      '''
+        UPDATE app_notifications
+        SET read_at = CASE WHEN created_at > ? THEN created_at ELSE ? END
+        WHERE read_at IS NULL
+      ''',
+      [timestamp, timestamp],
+    );
   }
 
   Future<void> deleteIds(Iterable<String> ids) async {
@@ -81,6 +90,15 @@ class AppNotificationStore {
     await database.delete(
       'app_notifications',
       where: 'kind = ? AND target_channel = ?',
+      whereArgs: ['app_update', channel],
+    );
+  }
+
+  Future<void> deleteAppUpdatesOutsideChannel(String channel) async {
+    final database = await _database.database;
+    await database.delete(
+      'app_notifications',
+      where: 'kind = ? AND target_channel != ?',
       whereArgs: ['app_update', channel],
     );
   }

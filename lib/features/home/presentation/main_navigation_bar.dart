@@ -1,6 +1,8 @@
 import 'dart:async';
 
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/notifications/app_notification.dart';
+import 'package:anime_tv/core/notifications/app_notification_controller.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/tv/tv_shelf_focus.dart';
 import 'package:anime_tv/core/widgets/network_artwork.dart';
@@ -945,13 +947,16 @@ class HomeTopRightHeader extends ConsumerWidget {
     required this.searchFocusNode,
     required this.searchController,
     required this.onSearchSubmitted,
+    this.notificationFocusNode,
     this.profileFocusNode,
     this.onSearchExitLeft,
     this.onSearchExitRight,
     this.onSearchExitDown,
     this.onProfileKeyEvent,
+    this.onNotificationKeyEvent,
     this.onSearchFocusChanged,
     this.onProfileFocusChanged,
+    this.onNotificationFocusChanged,
     this.compactMobile = false,
     super.key,
   });
@@ -960,13 +965,16 @@ class HomeTopRightHeader extends ConsumerWidget {
   final FocusNode searchFocusNode;
   final TextEditingController searchController;
   final ValueChanged<String> onSearchSubmitted;
+  final FocusNode? notificationFocusNode;
   final FocusNode? profileFocusNode;
   final VoidCallback? onSearchExitLeft;
   final VoidCallback? onSearchExitRight;
   final VoidCallback? onSearchExitDown;
   final FocusOnKeyEventCallback? onProfileKeyEvent;
+  final FocusOnKeyEventCallback? onNotificationKeyEvent;
   final ValueChanged<bool>? onSearchFocusChanged;
   final ValueChanged<bool>? onProfileFocusChanged;
+  final ValueChanged<bool>? onNotificationFocusChanged;
   final bool compactMobile;
 
   @override
@@ -1011,8 +1019,15 @@ class HomeTopRightHeader extends ConsumerWidget {
                 ),
               ),
             ),
+            const SizedBox(width: 10),
+            TetoNotificationBell(
+              key: const ValueKey('home-notification-bell'),
+              focusNode: notificationFocusNode,
+              onKeyEvent: onNotificationKeyEvent,
+              onFocusChanged: onNotificationFocusChanged,
+            ),
             if (hasProfile) ...[
-              const SizedBox(width: 10),
+              const SizedBox(width: 6),
               SizedBox(
                 width: 52,
                 child: TetoProfileSwitcher(
@@ -1053,8 +1068,15 @@ class HomeTopRightHeader extends ConsumerWidget {
             onExitDown: onSearchExitDown,
           ),
         ),
+        const SizedBox(width: 12),
+        TetoNotificationBell(
+          key: const ValueKey('home-notification-bell'),
+          focusNode: notificationFocusNode,
+          onKeyEvent: onNotificationKeyEvent,
+          onFocusChanged: onNotificationFocusChanged,
+        ),
         if (hasProfile) ...[
-          const SizedBox(width: 20),
+          const SizedBox(width: 10),
           TetoProfileSwitcher(
             key: const ValueKey('home-profile-switcher'),
             preferences: preferences,
@@ -1067,6 +1089,687 @@ class HomeTopRightHeader extends ConsumerWidget {
       ],
     );
   }
+}
+
+/// Compact entry point for TetoTV's durable, local notification inbox.
+///
+/// The 52dp target is shared by television and touch layouts. The visible
+/// count is capped for stable header geometry while semantics retain the real
+/// unread total.
+class TetoNotificationBell extends ConsumerWidget {
+  const TetoNotificationBell({
+    this.focusNode,
+    this.onKeyEvent,
+    this.onFocusChanged,
+    super.key,
+  });
+
+  final FocusNode? focusNode;
+  final FocusOnKeyEventCallback? onKeyEvent;
+  final ValueChanged<bool>? onFocusChanged;
+
+  Future<void> _openInbox(BuildContext context, WidgetRef ref) async {
+    final box = context.findRenderObject() as RenderBox?;
+    final overlay =
+        Overlay.of(context).context.findRenderObject() as RenderBox?;
+    if (box == null || overlay == null) return;
+    final notificationState = ref.read(appNotificationControllerProvider);
+    final items = List<AppNotification>.unmodifiable(notificationState.items);
+    final unreadCount = notificationState.unreadCount;
+    final topLeft = box.localToGlobal(Offset.zero, ancestor: overlay);
+    final menuWidth = (overlay.size.width - 24).clamp(296.0, 440.0).toDouble();
+    final preferredTop = topLeft.dy + box.size.height + 8;
+    final menuTop = preferredTop
+        .clamp(12.0, (overlay.size.height - 180).clamp(12.0, double.infinity))
+        .toDouble();
+    final menuRight = (overlay.size.width - topLeft.dx - box.size.width)
+        .clamp(
+          12.0,
+          (overlay.size.width - menuWidth - 12).clamp(12.0, double.infinity),
+        )
+        .toDouble();
+
+    // Everything in this snapshot is visible in the inbox. Clear its badge as
+    // soon as the viewer opens it, while keeping the immutable snapshot on
+    // screen so a provider rebuild cannot close or reorder the dialog.
+    if (unreadCount > 0) {
+      unawaited(
+        ref.read(appNotificationControllerProvider.notifier).markAllRead(),
+      );
+    }
+
+    final result = await showGeneralDialog<String>(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: 'Close notifications',
+      barrierColor: context.appPalette.background.withValues(alpha: .58),
+      transitionDuration: const Duration(milliseconds: 120),
+      pageBuilder: (menuContext, _, _) => _NotificationMenuOverlay(
+        items: items,
+        width: menuWidth,
+        top: menuTop,
+        right: menuRight,
+        maxHeight: (overlay.size.height - menuTop - 12)
+            .clamp(180.0, overlay.size.height - 24)
+            .toDouble(),
+      ),
+      transitionBuilder: (context, animation, _, child) => FadeTransition(
+        opacity: CurvedAnimation(
+          parent: animation,
+          curve: Curves.easeOutCubic,
+          reverseCurve: Curves.easeInCubic,
+        ),
+        child: child,
+      ),
+    );
+    if (!context.mounted || result == null) return;
+    if (result == 'install') {
+      await ref
+          .read(appUpdateControllerProvider.notifier)
+          .installDownloadedUpdate();
+      return;
+    }
+    if (result == 'check') {
+      await ref
+          .read(appUpdateControllerProvider.notifier)
+          .checkForUpdates(automatic: false, launchInstaller: false);
+      return;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final notificationState = ref.watch(appNotificationControllerProvider);
+    final unreadCount = notificationState.unreadCount;
+    final badgeText = unreadCount > 99 ? '99+' : '$unreadCount';
+    final unreadLabel = unreadCount == 1
+        ? '1 unread notification'
+        : '$unreadCount unread notifications';
+    return Semantics(
+      key: const ValueKey('notification-bell-semantics'),
+      button: true,
+      label: 'Notifications, $unreadLabel',
+      excludeSemantics: true,
+      child: SizedBox(
+        width: 52,
+        height: 52,
+        child: Builder(
+          builder: (buttonContext) => TvFocusable(
+            focusNode: focusNode,
+            onKeyEvent: onKeyEvent,
+            onFocusChanged: onFocusChanged,
+            onPressed: () => _openInbox(buttonContext, ref),
+            borderRadius: BorderRadius.circular(13),
+            focusScale: 1.01,
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Positioned.fill(
+                  child: Container(
+                    key: const ValueKey('notification-bell-surface'),
+                    alignment: Alignment.center,
+                    margin: const EdgeInsets.all(4),
+                    decoration: BoxDecoration(
+                      color: context.appPalette.surface.withValues(alpha: .92),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: context.appPalette.primaryText.withValues(
+                          alpha: .11,
+                        ),
+                      ),
+                    ),
+                    child: Icon(
+                      Icons.notifications_rounded,
+                      color: context.appPalette.primaryText,
+                      size: 25,
+                    ),
+                  ),
+                ),
+                if (unreadCount > 0)
+                  Positioned(
+                    key: const ValueKey('notification-unread-badge'),
+                    right: 0,
+                    top: 0,
+                    child: Container(
+                      constraints: const BoxConstraints(
+                        minWidth: 20,
+                        minHeight: 20,
+                      ),
+                      padding: const EdgeInsets.symmetric(horizontal: 5),
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFE53935),
+                        borderRadius: BorderRadius.circular(999),
+                        border: Border.all(color: Colors.black, width: 1.5),
+                      ),
+                      child: Text(
+                        badgeText,
+                        key: const ValueKey('notification-unread-count'),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w900,
+                          height: 1,
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _NotificationMenuOverlay extends ConsumerWidget {
+  const _NotificationMenuOverlay({
+    required this.items,
+    required this.width,
+    required this.top,
+    required this.right,
+    required this.maxHeight,
+  });
+
+  final List<AppNotification> items;
+  final double width;
+  final double top;
+  final double right;
+  final double maxHeight;
+
+  KeyEventResult _handleDismissKey(
+    BuildContext context,
+    FocusNode _,
+    KeyEvent event,
+  ) {
+    final key = event.logicalKey;
+    final isLeft = key == LogicalKeyboardKey.arrowLeft;
+    final isBack =
+        key == LogicalKeyboardKey.escape ||
+        key == LogicalKeyboardKey.goBack ||
+        key == LogicalKeyboardKey.browserBack;
+    if (!isLeft && !isBack) return KeyEventResult.ignored;
+    if (isBack) {
+      if (event is KeyUpEvent) Navigator.of(context).pop();
+      return KeyEventResult.handled;
+    }
+    if (event is KeyDownEvent) Navigator.of(context).pop();
+    return KeyEventResult.handled;
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final updateState = ref.watch(appUpdateControllerProvider);
+    return Stack(
+      children: [
+        Positioned(
+          top: top,
+          right: right,
+          width: width,
+          child: Focus(
+            canRequestFocus: false,
+            onKeyEvent: (node, event) =>
+                _handleDismissKey(context, node, event),
+            child: FocusTraversalGroup(
+              policy: ReadingOrderTraversalPolicy(),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(maxHeight: maxHeight),
+                child: Material(
+                  key: const ValueKey('notification-menu-surface'),
+                  color: Colors.transparent,
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: context.appPalette.surface,
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(
+                        color: context.appPalette.accent.withValues(alpha: .72),
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: .58),
+                          blurRadius: 24,
+                          offset: const Offset(0, 10),
+                        ),
+                        BoxShadow(
+                          color: context.appPalette.focusGlow.withValues(
+                            alpha: .24,
+                          ),
+                          blurRadius: 18,
+                        ),
+                      ],
+                    ),
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.all(12),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  'Notifications',
+                                  style: TextStyle(
+                                    color: context.appPalette.primaryText,
+                                    fontSize: 17,
+                                    fontWeight: FontWeight.w900,
+                                  ),
+                                ),
+                              ),
+                              _NotificationIconAction(
+                                key: const ValueKey('notification-menu-close'),
+                                icon: Icons.close_rounded,
+                                label: 'Close notifications',
+                                onPressed: () => Navigator.of(context).pop(),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 10),
+                          if (items.isEmpty)
+                            _NotificationEmptyState(updateState: updateState)
+                          else
+                            for (
+                              var index = 0;
+                              index < items.length;
+                              index++
+                            ) ...[
+                              _UpdateNotificationCard(
+                                item: items[index],
+                                updateState: updateState,
+                                autofocus: index == 0,
+                              ),
+                              if (index != items.length - 1)
+                                const SizedBox(height: 8),
+                            ],
+                          const SizedBox(height: 8),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(
+                                Icons.keyboard_arrow_left_rounded,
+                                size: 16,
+                                color: context.appPalette.mutedText,
+                              ),
+                              const SizedBox(width: 3),
+                              Flexible(
+                                child: Text(
+                                  'Left or Back closes notifications',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    color: context.appPalette.mutedText,
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _UpdateNotificationCard extends StatelessWidget {
+  const _UpdateNotificationCard({
+    required this.item,
+    required this.updateState,
+    required this.autofocus,
+  });
+
+  final AppNotification item;
+  final AppUpdateState updateState;
+  final bool autofocus;
+
+  @override
+  Widget build(BuildContext context) {
+    final matches = _notificationMatchesUpdate(item, updateState);
+    final busy = matches && updateState.isBusy;
+    final canInstall = matches && updateState.phase == AppUpdatePhase.ready;
+    final actionLabel = canInstall
+        ? 'Install'
+        : updateState.phase == AppUpdatePhase.error && matches
+        ? 'Retry'
+        : 'Check';
+    final visibleActionLabel = busy
+        ? switch (updateState.phase) {
+            AppUpdatePhase.checking => 'Checking…',
+            AppUpdatePhase.downloading => 'Downloading…',
+            AppUpdatePhase.installing => 'Installing…',
+            _ => 'Please wait…',
+          }
+        : actionLabel;
+    return Container(
+      key: ValueKey('notification-item-${item.id}'),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: context.appPalette.surfaceRaised,
+        borderRadius: BorderRadius.circular(11),
+        border: Border.all(
+          color: item.isRead
+              ? context.appPalette.primaryText.withValues(alpha: .09)
+              : context.appPalette.accent.withValues(alpha: .64),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  item.title,
+                  style: TextStyle(
+                    color: context.appPalette.primaryText,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              _NotificationChannelBadge(channel: item.targetChannel),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            item.body,
+            style: TextStyle(
+              color: context.appPalette.mutedText,
+              fontSize: 12,
+              height: 1.35,
+            ),
+          ),
+          const SizedBox(height: 7),
+          Text(
+            _formatNotificationDate(item.createdAtUtc),
+            style: TextStyle(
+              color: context.appPalette.mutedText,
+              fontSize: 10,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          if (matches) ...[
+            const SizedBox(height: 8),
+            Text(
+              _updateStatusLabel(updateState),
+              key: const ValueKey('notification-update-status'),
+              style: TextStyle(
+                color: updateState.phase == AppUpdatePhase.error
+                    ? const Color(0xFFFF8A91)
+                    : context.appPalette.accentBright,
+                fontSize: 11,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            if (updateState.phase == AppUpdatePhase.downloading) ...[
+              const SizedBox(height: 7),
+              LinearProgressIndicator(
+                key: const ValueKey('notification-update-progress'),
+                value: updateState.progress > 0
+                    ? updateState.progress.clamp(0, 1)
+                    : null,
+                minHeight: 4,
+                color: context.appPalette.accentBright,
+                backgroundColor: context.appPalette.primaryText.withValues(
+                  alpha: .10,
+                ),
+              ),
+            ],
+          ],
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: _NotificationTextAction(
+                  key: ValueKey('notification-action-${item.id}'),
+                  label: visibleActionLabel,
+                  autofocus: autofocus,
+                  emphasized: !busy,
+                  onPressed: busy
+                      ? () {}
+                      : () => Navigator.of(
+                          context,
+                        ).pop(canInstall ? 'install' : 'check'),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _NotificationEmptyState extends StatelessWidget {
+  const _NotificationEmptyState({required this.updateState});
+
+  final AppUpdateState updateState;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    key: const ValueKey('notification-empty-state'),
+    padding: const EdgeInsets.all(16),
+    decoration: BoxDecoration(
+      color: context.appPalette.surfaceRaised,
+      borderRadius: BorderRadius.circular(11),
+      border: Border.all(
+        color: context.appPalette.primaryText.withValues(alpha: .09),
+      ),
+    ),
+    child: Column(
+      children: [
+        Icon(
+          Icons.notifications_none_rounded,
+          color: context.appPalette.accentBright,
+          size: 30,
+        ),
+        const SizedBox(height: 8),
+        Text(
+          'You\'re all caught up',
+          style: TextStyle(
+            color: context.appPalette.primaryText,
+            fontWeight: FontWeight.w900,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          _updateStatusLabel(updateState),
+          textAlign: TextAlign.center,
+          style: TextStyle(color: context.appPalette.mutedText, fontSize: 11),
+        ),
+        if (!updateState.isBusy) ...[
+          const SizedBox(height: 12),
+          _NotificationTextAction(
+            key: const ValueKey('notification-empty-check'),
+            label: updateState.phase == AppUpdatePhase.error
+                ? 'Retry'
+                : 'Check',
+            emphasized: true,
+            autofocus: true,
+            onPressed: () => Navigator.of(context).pop('check'),
+          ),
+        ],
+      ],
+    ),
+  );
+}
+
+class _NotificationChannelBadge extends StatelessWidget {
+  const _NotificationChannelBadge({required this.channel});
+
+  final String? channel;
+
+  @override
+  Widget build(BuildContext context) {
+    final value = channel?.trim();
+    final label = value == null || value.isEmpty
+        ? 'UPDATE'
+        : value[0].toUpperCase() + value.substring(1).toLowerCase();
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
+      decoration: BoxDecoration(
+        color: context.appPalette.accent.withValues(alpha: .18),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(
+          color: context.appPalette.accent.withValues(alpha: .42),
+        ),
+      ),
+      child: Text(
+        label,
+        key: const ValueKey('notification-channel'),
+        style: TextStyle(
+          color: context.appPalette.accentBright,
+          fontSize: 9,
+          fontWeight: FontWeight.w900,
+        ),
+      ),
+    );
+  }
+}
+
+class _NotificationTextAction extends StatelessWidget {
+  const _NotificationTextAction({
+    required this.label,
+    required this.onPressed,
+    this.autofocus = false,
+    this.emphasized = false,
+    super.key,
+  });
+
+  final String label;
+  final VoidCallback onPressed;
+  final bool autofocus;
+  final bool emphasized;
+
+  @override
+  Widget build(BuildContext context) => TvFocusable(
+    autofocus: autofocus,
+    onPressed: onPressed,
+    borderRadius: BorderRadius.circular(9),
+    focusScale: 1.01,
+    child: Container(
+      height: 36,
+      padding: const EdgeInsets.symmetric(horizontal: 10),
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: emphasized
+            ? context.appPalette.accent
+            : context.appPalette.surface,
+        borderRadius: BorderRadius.circular(9),
+        border: Border.all(
+          color: emphasized
+              ? context.appPalette.accentBright
+              : context.appPalette.primaryText.withValues(alpha: .12),
+        ),
+      ),
+      child: Text(
+        label,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(
+          color: context.appPalette.primaryText,
+          fontSize: 11,
+          fontWeight: FontWeight.w900,
+        ),
+      ),
+    ),
+  );
+}
+
+class _NotificationIconAction extends StatelessWidget {
+  const _NotificationIconAction({
+    required this.icon,
+    required this.label,
+    required this.onPressed,
+    super.key,
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    label: label,
+    button: true,
+    child: TvFocusable(
+      onPressed: onPressed,
+      borderRadius: BorderRadius.circular(9),
+      focusScale: 1.01,
+      child: Container(
+        width: 36,
+        height: 36,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: context.appPalette.surfaceRaised,
+          borderRadius: BorderRadius.circular(9),
+          border: Border.all(
+            color: context.appPalette.primaryText.withValues(alpha: .12),
+          ),
+        ),
+        child: Icon(icon, size: 21, color: context.appPalette.primaryText),
+      ),
+    ),
+  );
+}
+
+bool _notificationMatchesUpdate(
+  AppNotification notification,
+  AppUpdateState update,
+) {
+  if (notification.kind != AppNotificationKind.appUpdate ||
+      update.release == null ||
+      notification.targetChannel != update.updateChannel.name) {
+    return false;
+  }
+  final notificationCode = notification.targetVersionCode;
+  final releaseCode = update.release!.androidVersionCode;
+  if (notificationCode != null && releaseCode != null) {
+    return notificationCode == releaseCode;
+  }
+  return normalizeAppVersion(notification.targetVersion ?? '') ==
+      normalizeAppVersion(update.release!.version);
+}
+
+String _updateStatusLabel(AppUpdateState update) => switch (update.phase) {
+  AppUpdatePhase.idle => 'Ready to check for updates',
+  AppUpdatePhase.checking => 'Checking for updates…',
+  AppUpdatePhase.upToDate => 'TetoTV is up to date',
+  AppUpdatePhase.available => update.message ?? 'Update available',
+  AppUpdatePhase.downloading =>
+    update.message ?? 'Downloading… ${(update.progress * 100).round()}%',
+  AppUpdatePhase.ready => update.message ?? 'Ready to install',
+  AppUpdatePhase.installing => update.message ?? 'Opening the installer…',
+  AppUpdatePhase.error => update.message ?? 'The update check failed',
+};
+
+String _formatNotificationDate(DateTime utc) {
+  const months = [
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
+  ];
+  final local = utc.toLocal();
+  return '${months[local.month - 1]} ${local.day}, ${local.year}';
 }
 
 /// The shared profile control used by every top-level TetoTV header.

@@ -161,6 +161,10 @@ void main() {
       await tester.pump(const Duration(milliseconds: 120));
 
       expect(find.byKey(const ValueKey('home-header-search')), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('home-notification-bell')),
+        findsOneWidget,
+      );
       expect(find.byKey(const ValueKey('home-profile-switcher')), findsNothing);
 
       final measuredWidths = <double>[];
@@ -1072,7 +1076,11 @@ void main() {
       final switcherFinder = find.byKey(
         const ValueKey('home-profile-switcher'),
       );
+      final notificationFinder = find.byKey(
+        const ValueKey('home-notification-bell'),
+      );
       expect(searchFinder, findsOneWidget);
+      expect(notificationFinder, findsOneWidget);
       expect(switcherFinder, findsOneWidget);
       expect(
         find.descendant(of: searchFinder, matching: find.text('Search')),
@@ -1092,6 +1100,7 @@ void main() {
       expect(find.byKey(const ValueKey('teto-profile-chevron')), findsNothing);
       final searchRect = tester.getRect(searchFinder);
       final switcherRect = tester.getRect(switcherFinder);
+      final notificationRect = tester.getRect(notificationFinder);
       final searchIconRect = tester.getRect(
         find.byKey(const ValueKey('home-header-search-icon')),
       );
@@ -1122,10 +1131,16 @@ void main() {
       );
       final searchDecoration = searchSurface.decoration! as BoxDecoration;
       expect(searchDecoration.borderRadius, BorderRadius.circular(12));
-      expect(searchRect.right, lessThan(switcherRect.left));
+      expect(searchRect.right, lessThan(notificationRect.left));
+      expect(notificationRect.right, lessThan(switcherRect.left));
+      expect(notificationRect.size, const Size.square(52));
       expect(switcherRect.size, const Size(52, 52));
       expect(
         (searchRect.center.dy - switcherRect.center.dy).abs(),
+        lessThan(.5),
+      );
+      expect(
+        (notificationRect.center.dy - switcherRect.center.dy).abs(),
         lessThan(.5),
       );
 
@@ -1166,6 +1181,12 @@ void main() {
       await tester.pump();
       expect(
         FocusManager.instance.primaryFocus?.debugLabel,
+        'home.notifications',
+      );
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+      await tester.pump();
+      expect(
+        FocusManager.instance.primaryFocus?.debugLabel,
         'home.profile-switcher',
       );
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
@@ -1178,7 +1199,19 @@ void main() {
       await tester.pump();
       expect(
         FocusManager.instance.primaryFocus?.debugLabel,
+        'home.notifications',
+      );
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+      await tester.pump();
+      expect(
+        FocusManager.instance.primaryFocus?.debugLabel,
         'home.profile-switcher',
+      );
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+      await tester.pump();
+      expect(
+        FocusManager.instance.primaryFocus?.debugLabel,
+        'home.notifications',
       );
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
       await tester.pump();

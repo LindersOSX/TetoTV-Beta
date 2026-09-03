@@ -14,9 +14,24 @@ final appNotificationControllerProvider =
         AppNotificationStore(ref.watch(tetoTvDatabaseProvider)),
       );
       unawaited(controller.load());
-      ref.listen<AppUpdateState>(
-        appUpdateControllerProvider,
-        (_, next) => unawaited(controller.syncAppUpdate(next)),
+      // Download progress can update the updater state once per percentage.
+      // Reconcile only when notification-relevant identity/state changes so a
+      // large APK does not enqueue a hundred redundant SQLite transactions.
+      ref.listen(
+        appUpdateControllerProvider.select(
+          (state) => (
+            loaded: state.loaded,
+            phase: state.phase,
+            currentVersion: state.currentVersion,
+            releaseVersion: state.release?.version,
+            releaseVersionCode: state.release?.androidVersionCode,
+            releaseNotes: state.release?.notes,
+            channel: state.updateChannel,
+          ),
+        ),
+        (_, _) => unawaited(
+          controller.syncAppUpdate(ref.read(appUpdateControllerProvider)),
+        ),
         fireImmediately: true,
       );
       return controller;
@@ -68,6 +83,11 @@ class AppNotificationController extends StateNotifier<AppNotificationState> {
   Future<void> syncAppUpdate(AppUpdateState update) => _enqueue(() async {
     if (!update.loaded) return;
     if (!state.loaded) await _reload();
+
+    // Only the selected channel can be checked or installed. Keeping a notice
+    // from the previous channel would give it a button that cannot act on the
+    // release it describes, so discard it as soon as the preference changes.
+    await _store.deleteAppUpdatesOutsideChannel(update.updateChannel.name);
 
     final obsolete = state.items
         .where((item) => _isInstalledUpdate(item, update.currentVersion))

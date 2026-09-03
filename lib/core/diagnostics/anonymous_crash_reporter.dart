@@ -413,6 +413,7 @@ bool _isUnexpectedHandledError(Object error) {
       type == 'webprovidersearchcancelled' ||
       type == 'webstreampreflightfailure' ||
       type == 'catalogtrackingvalidationerror' ||
+      type == 'simklbrokernotconfigured' ||
       type == '_discordauthenticationabandoned') {
     return false;
   }

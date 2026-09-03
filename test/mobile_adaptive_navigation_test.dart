@@ -414,6 +414,7 @@ void main() {
       findsOneWidget,
     );
     final switcher = find.byKey(const ValueKey('home-profile-switcher'));
+    final notification = find.byKey(const ValueKey('home-notification-bell'));
     final avatar = find.byKey(
       const ValueKey('main-nav-profile-avatar-anilist'),
     );
@@ -422,12 +423,14 @@ void main() {
       matching: find.byIcon(Icons.keyboard_arrow_down_rounded),
     );
     expect(switcher, findsOneWidget);
+    expect(notification, findsOneWidget);
     expect(avatar, findsOneWidget);
     expect(find.text('LindowsOS'), findsNothing);
     expect(chevron, findsNothing);
     expect(find.byKey(const ValueKey('teto-profile-username')), findsNothing);
     expect(find.byKey(const ValueKey('teto-profile-chevron')), findsNothing);
     expect(tester.getSize(switcher).width, 52);
+    expect(tester.getSize(notification), const Size.square(52));
     final headerRect = tester.getRect(
       find.byKey(const ValueKey('home-top-right-header')),
     );
@@ -435,6 +438,7 @@ void main() {
       find.byKey(const ValueKey('home-header-search')),
     );
     final switcherRect = tester.getRect(switcher);
+    final notificationRect = tester.getRect(notification);
     final searchIconFrameRect = tester.getRect(
       find.byKey(const ValueKey('home-header-search-icon-frame')),
     );
@@ -452,6 +456,12 @@ void main() {
     expect(searchIconRect.top - searchRect.top, greaterThanOrEqualTo(16));
     expect(searchRect.bottom - searchIconRect.bottom, greaterThanOrEqualTo(16));
     expect((searchRect.center.dy - switcherRect.center.dy).abs(), lessThan(.5));
+    expect(
+      (notificationRect.center.dy - switcherRect.center.dy).abs(),
+      lessThan(.5),
+    );
+    expect(searchRect.right, lessThan(notificationRect.left));
+    expect(notificationRect.right, lessThan(switcherRect.left));
     final searchSurface = tester.widget<Container>(
       find.byKey(const ValueKey('tv-text-input-header-search')),
     );

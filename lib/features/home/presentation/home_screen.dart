@@ -55,6 +55,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   final _heroMyListFocus = FocusNode(debugLabel: 'home.hero-my-list');
   final _homeNavFocus = FocusNode(debugLabel: 'home.navigation.home');
   final _searchFocus = FocusNode(debugLabel: 'home.header-search');
+  final _notificationFocus = FocusNode(debugLabel: 'home.notifications');
   final _profileFocus = FocusNode(debugLabel: 'home.profile-switcher');
   final _homeSearchController = TextEditingController();
   final _scrollController = ScrollController();
@@ -139,7 +140,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
   Future<void> _checkForUpdates() async {
     final updater = ref.read(appUpdateControllerProvider.notifier);
-    await updater.checkForUpdates(automatic: true, launchInstaller: true);
+    // Automatic checks may download a verified update in the background, but
+    // opening Android's installer without an explicit user action is jarring
+    // and gives the user no chance to read what changed. The Home notification
+    // bell surfaces the downloaded release and lets the user choose Install.
+    await updater.checkForUpdates(automatic: true, launchInstaller: false);
     if (!mounted) return;
     final notes = await updater.takeInstalledReleaseNotes();
     if (!mounted || notes == null) return;
@@ -183,6 +188,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       _homeNavFocus.requestFocus();
     } else if (_searchFocus.context != null) {
       _searchFocus.requestFocus();
+    } else if (_notificationFocus.context != null) {
+      _notificationFocus.requestFocus();
     } else if (_profileFocus.context != null) {
       _profileFocus.requestFocus();
     } else {
@@ -194,7 +201,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     if (!mounted || !_scrollController.hasClients) return;
     final visibleAtTop = _scrollController.offset <= .5;
     if (visibleAtTop == _headerVisibleAtTop) return;
-    if (!visibleAtTop && (_searchFocus.hasFocus || _profileFocus.hasFocus)) {
+    if (!visibleAtTop &&
+        (_searchFocus.hasFocus ||
+            _notificationFocus.hasFocus ||
+            _profileFocus.hasFocus)) {
       if (_hasVisibleNavigationAction && _homeNavFocus.context != null) {
         // A pointer/remote scroll can hide the fixed header while Search or
         // Profile still owns focus. Move focus somewhere visible without
@@ -222,6 +232,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       if (!mounted) return;
       if (_searchFocus.context != null) {
         _searchFocus.requestFocus();
+      } else if (_notificationFocus.context != null) {
+        _notificationFocus.requestFocus();
       } else if (_profileFocus.context != null) {
         _profileFocus.requestFocus();
       }
@@ -246,7 +258,31 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     if (!directional) return KeyEventResult.ignored;
     if (event is KeyDownEvent || event is KeyRepeatEvent) {
       if (key == LogicalKeyboardKey.arrowLeft) {
+        if (_notificationFocus.context != null) {
+          _notificationFocus.requestFocus();
+        } else if (_searchFocus.context != null) {
+          _searchFocus.requestFocus();
+        }
+      } else if (key == LogicalKeyboardKey.arrowDown) {
+        _restoreContentFocus();
+      }
+    }
+    return KeyEventResult.handled;
+  }
+
+  KeyEventResult _handleHeaderNotificationKey(FocusNode _, KeyEvent event) {
+    final key = event.logicalKey;
+    final directional =
+        key == LogicalKeyboardKey.arrowLeft ||
+        key == LogicalKeyboardKey.arrowRight ||
+        key == LogicalKeyboardKey.arrowUp ||
+        key == LogicalKeyboardKey.arrowDown;
+    if (!directional) return KeyEventResult.ignored;
+    if (event is KeyDownEvent || event is KeyRepeatEvent) {
+      if (key == LogicalKeyboardKey.arrowLeft) {
         if (_searchFocus.context != null) _searchFocus.requestFocus();
+      } else if (key == LogicalKeyboardKey.arrowRight) {
+        if (_profileFocus.context != null) _profileFocus.requestFocus();
       } else if (key == LogicalKeyboardKey.arrowDown) {
         _restoreContentFocus();
       }
@@ -634,6 +670,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     _heroMyListFocus.dispose();
     _homeNavFocus.dispose();
     _searchFocus.dispose();
+    _notificationFocus.dispose();
     _profileFocus.dispose();
     _homeSearchController.dispose();
     _verticalRepeatGate.reset();
@@ -929,18 +966,25 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         preferences: preferences,
         searchFocusNode: _searchFocus,
         searchController: _homeSearchController,
+        notificationFocusNode: _notificationFocus,
         profileFocusNode: _profileFocus,
         onSearchSubmitted: _submitHeaderSearch,
         onSearchExitLeft: _focusNavigationChrome,
         onSearchExitRight: () {
-          if (_profileFocus.context != null) _profileFocus.requestFocus();
+          if (_notificationFocus.context != null) {
+            _notificationFocus.requestFocus();
+          }
         },
         onSearchExitDown: _restoreContentFocus,
         onProfileKeyEvent: _handleHeaderProfileKey,
+        onNotificationKeyEvent: _handleHeaderNotificationKey,
         onSearchFocusChanged: (focused) {
           if (focused) unawaited(_restoreSponsoredHero());
         },
         onProfileFocusChanged: (focused) {
+          if (focused) unawaited(_restoreSponsoredHero());
+        },
+        onNotificationFocusChanged: (focused) {
           if (focused) unawaited(_restoreSponsoredHero());
         },
         compactMobile: true,
@@ -1006,20 +1050,25 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                       preferences: preferences,
                       searchFocusNode: _searchFocus,
                       searchController: _homeSearchController,
+                      notificationFocusNode: _notificationFocus,
                       profileFocusNode: _profileFocus,
                       onSearchSubmitted: _submitHeaderSearch,
                       onSearchExitLeft: _focusNavigationChrome,
                       onSearchExitRight: () {
-                        if (_profileFocus.context != null) {
-                          _profileFocus.requestFocus();
+                        if (_notificationFocus.context != null) {
+                          _notificationFocus.requestFocus();
                         }
                       },
                       onSearchExitDown: _restoreContentFocus,
                       onProfileKeyEvent: _handleHeaderProfileKey,
+                      onNotificationKeyEvent: _handleHeaderNotificationKey,
                       onSearchFocusChanged: (focused) {
                         if (focused) unawaited(_restoreSponsoredHero());
                       },
                       onProfileFocusChanged: (focused) {
+                        if (focused) unawaited(_restoreSponsoredHero());
+                      },
+                      onNotificationFocusChanged: (focused) {
                         if (focused) unawaited(_restoreSponsoredHero());
                       },
                     ),

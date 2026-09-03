@@ -1102,7 +1102,19 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
         await for (final progress in progressStream) {
           if (!mounted || generation != _releaseSearchGeneration) return;
           setState(() {
-            _releases = progress.candidates;
+            // Android's codec list is authoritative only when it is present.
+            // Hide a known unsupported codec (for example AV1 on an AVC-only
+            // Google TV) before it can enter the picker, autoplay, failover,
+            // Watch Party matching, or player alternatives. Unknown codec
+            // labels and an unavailable inventory deliberately remain.
+            _releases = progress.candidates
+                .where(
+                  (release) => releaseCodecIsPlayableOnDevice(
+                    release,
+                    device: _deviceProfile,
+                  ),
+                )
+                .toList(growable: false);
             _releaseFailures = progress.failures;
             _debridSourcesCompleted = progress.completedSources;
             _debridSourcesTotal = progress.totalSources;
@@ -3482,7 +3494,8 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
     bool ignoreOptionalFilters = false,
   }) {
     final filtered = releases.where((release) {
-      return _releaseMatchesEpisodeIdentity(release) &&
+      return releaseCodecIsPlayableOnDevice(release, device: _deviceProfile) &&
+          _releaseMatchesEpisodeIdentity(release) &&
           releaseMatchesStreamFilters(
             release,
             language: ignoreOptionalFilters ? 'all' : _languageFilter.name,

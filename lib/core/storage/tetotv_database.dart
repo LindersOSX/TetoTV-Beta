@@ -9,7 +9,7 @@ import 'package:sqflite/sqflite.dart';
 /// The SQLite table survives process death; it is never uploaded unless the
 /// user presses the diagnostic-report share button.
 const diagnosticHistoryWindow = Duration(hours: 48);
-const tetoTvDatabaseSchemaVersion = 10;
+const tetoTvDatabaseSchemaVersion = 11;
 // Provider searches and playback startup can each emit a burst of events.
 // Retain enough history for a complete search plus the playback which follows
 // it; 240 entries allowed title-artwork noise to evict the evidence needed to
@@ -540,6 +540,7 @@ class TetoTvDatabase {
         await _createReliabilityTables(db);
         await createOfflineDownloadTables(db);
         await createMangaTables(db);
+        await createAppNotificationsTable(db);
       },
       onUpgrade: upgradeTetoTvDatabaseSchema,
     );
@@ -1199,6 +1200,44 @@ Future<void> upgradeTetoTvDatabaseSchema(
   if (oldVersion < 10 && newVersion >= 10) {
     await createMangaTables(db);
   }
+  if (oldVersion < 11 && newVersion >= 11) {
+    await createAppNotificationsTable(db);
+  }
+}
+
+/// Creates the local in-app notification inbox.
+///
+/// Actions are an allowlisted enum rather than arbitrary URLs so a corrupted
+/// database row cannot turn a notification into an unsafe deep link.
+Future<void> createAppNotificationsTable(DatabaseExecutor db) async {
+  await db.execute('''
+    CREATE TABLE IF NOT EXISTS app_notifications (
+      id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL,
+      title TEXT NOT NULL,
+      body TEXT NOT NULL,
+      action TEXT NOT NULL,
+      target_version TEXT,
+      target_version_code INTEGER,
+      target_channel TEXT,
+      created_at INTEGER NOT NULL,
+      read_at INTEGER,
+      CHECK(length(id) BETWEEN 1 AND 192),
+      CHECK(kind IN ('app_update')),
+      CHECK(length(title) BETWEEN 1 AND 256),
+      CHECK(length(body) BETWEEN 1 AND 512),
+      CHECK(action IN ('open_app_updates')),
+      CHECK(target_version IS NULL OR length(target_version) BETWEEN 1 AND 64),
+      CHECK(target_version_code IS NULL OR target_version_code > 0),
+      CHECK(target_channel IS NULL OR target_channel IN ('public', 'beta')),
+      CHECK(created_at >= 0),
+      CHECK(read_at IS NULL OR read_at >= 0)
+    )
+  ''');
+  await db.execute('''
+    CREATE INDEX IF NOT EXISTS app_notifications_unread_created
+    ON app_notifications(read_at, created_at DESC)
+  ''');
 }
 
 /// Creates the developer-only manga catalog, reading-progress, and offline

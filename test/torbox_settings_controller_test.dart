@@ -2,6 +2,7 @@ import 'package:anime_tv/features/settings/application/torbox_settings_controlle
 import 'package:anime_tv/features/streaming/data/torbox_client.dart';
 import 'package:anime_tv/features/streaming/data/torbox_models.dart';
 import 'package:anime_tv/features/streaming/domain/debrid_service.dart';
+import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -64,6 +65,23 @@ void main() {
 
     expect(await controller.saveAndValidate('expired-token'), isFalse);
     expect(controller.state.hasSavedToken, isFalse);
+    expect(controller.state.retryableError, isFalse);
+    expect(
+      await storage.read(key: DebridService.torBox.tokenStorageKey),
+      isNull,
+    );
+  });
+
+  test('temporary TorBox account lookup failures can be retried', () async {
+    FlutterSecureStorage.setMockInitialValues({});
+    final controller = TorBoxSettingsController(
+      storage,
+      (_) => _UnavailableTorBoxClient(),
+    );
+
+    expect(await controller.saveAndValidate('approved-device-token'), isFalse);
+    expect(controller.state.hasSavedToken, isFalse);
+    expect(controller.state.retryableError, isTrue);
     expect(
       await storage.read(key: DebridService.torBox.tokenStorageKey),
       isNull,
@@ -119,5 +137,16 @@ class _ExpiredTorBoxClient extends TorBoxClient {
     plan: 1,
     isSubscribed: true,
     premiumUntil: DateTime.utc(2020),
+  );
+}
+
+class _UnavailableTorBoxClient extends TorBoxClient {
+  _UnavailableTorBoxClient() : super(token: 'test');
+
+  @override
+  Future<TorBoxAccount> account() async => throw const TorBoxException(
+    'Could not reach TorBox.',
+    code: 'NETWORK_ERROR',
+    category: DebridFailureCategory.serviceUnavailable,
   );
 }

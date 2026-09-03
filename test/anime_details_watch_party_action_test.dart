@@ -272,6 +272,15 @@ void main() {
       ),
     );
     expect(nextEpisodeDetector.focusNode?.hasFocus, isTrue);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('episode-browser-dialog')),
+      findsOneWidget,
+    );
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(nextEpisodeDetector.focusNode?.hasFocus, isTrue);
     expect(
       find.descendant(
         of: find.byKey(const ValueKey('episode-actions-panel')),
@@ -306,7 +315,7 @@ void main() {
 
     expect(find.text('23456789'), findsOneWidget);
     expect(find.text('Watch Party Details Test • Episode 4'), findsOneWidget);
-    expect(find.text('Episode 4 of 12'), findsOneWidget);
+    expect(find.text('4 of 12'), findsOneWidget);
     expect(find.byKey(const ValueKey('episode-action-resume')), findsNothing);
     expect(find.byKey(const ValueKey('episode-action-restart')), findsNothing);
     expect(find.byKey(const ValueKey('episode-action-selected')), findsNothing);

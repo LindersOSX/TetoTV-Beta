@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/widgets/copyable_code_interaction.dart';
 import 'package:anime_tv/core/widgets/copyable_qr_interaction.dart';
@@ -11,50 +12,130 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
+typedef TorBoxPairingDiagnosticRecorder =
+    Future<void> Function(Map<String, Object?> details);
+
 class TorBoxPairingScreen extends ConsumerStatefulWidget {
-  const TorBoxPairingScreen({super.key, this.client});
+  const TorBoxPairingScreen({super.key, this.client, this.diagnosticRecorder});
 
   @visibleForTesting
   final TorBoxDeviceAuthClient? client;
+
+  @visibleForTesting
+  final TorBoxPairingDiagnosticRecorder? diagnosticRecorder;
 
   @override
   ConsumerState<TorBoxPairingScreen> createState() =>
       _TorBoxPairingScreenState();
 }
 
-class _TorBoxPairingScreenState extends ConsumerState<TorBoxPairingScreen> {
+class _TorBoxPairingScreenState extends ConsumerState<TorBoxPairingScreen>
+    with WidgetsBindingObserver {
   late final TorBoxDeviceAuthClient _client;
+  late final TorBoxPairingDiagnosticRecorder _diagnosticRecorder;
   TorBoxDeviceSession? _session;
   Timer? _pollTimer;
   bool _polling = false;
   bool _authorized = false;
+  bool _pendingRecorded = false;
   String? _error;
+  String? _temporaryNotice;
+  String? _pendingToken;
+  int _transientFailureCount = 0;
   int _generation = 0;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _client = widget.client ?? TorBoxDeviceAuthClient();
+    _diagnosticRecorder =
+        widget.diagnosticRecorder ??
+        (details) => TetoTvDatabase.instance.recordDiagnosticEvent(
+          category: 'torbox-pairing',
+          message: 'TorBox pairing stage',
+          details: details,
+        );
     _start();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed || !mounted || _authorized) return;
+    final session = _session;
+    if (session == null || _error != null) return;
+    if (_pollTimer?.isActive != true) {
+      _schedulePolling(session, _generation);
+    }
+    // Android can suspend Dart timers while another screen or app is open.
+    // Poll immediately on resume so a TorBox approval is not missed while the
+    // user switches back from the browser.
+    unawaited(_poll(_generation));
+  }
+
+  void _schedulePolling(
+    TorBoxDeviceSession session,
+    int generation, {
+    Duration? delay,
+  }) {
+    _pollTimer?.cancel();
+    _pollTimer = Timer(delay ?? session.interval, () => _poll(generation));
+  }
+
+  void _recordStage(String stage, {String? outcome, int? retry}) {
+    // These values are fixed internal labels. Never add the user/device code,
+    // provider token, authorization URL, exception text, or hostname here.
+    unawaited(
+      _diagnosticRecorder({
+        'flow': 'direct-device',
+        'stage': stage,
+        'outcome': ?outcome,
+        'retry': ?retry?.clamp(1, 99),
+      }),
+    );
+  }
+
+  Duration _transientRetryDelay(Duration providerInterval) {
+    final exponent = (_transientFailureCount - 1).clamp(0, 3);
+    final multiplier = 1 << exponent;
+    final milliseconds = providerInterval.inMilliseconds * multiplier;
+    return Duration(
+      milliseconds: milliseconds.clamp(
+        providerInterval.inMilliseconds,
+        const Duration(seconds: 30).inMilliseconds,
+      ),
+    );
   }
 
   Future<void> _start() async {
     if (!mounted) return;
     final generation = ++_generation;
     _pollTimer?.cancel();
+    _recordStage('start');
     setState(() {
       _session = null;
       _authorized = false;
+      _pendingRecorded = false;
       _error = null;
+      _temporaryNotice = null;
+      _pendingToken = null;
+      _transientFailureCount = 0;
     });
     try {
       final session = await _client.start();
       if (!mounted || generation != _generation) return;
       setState(() => _session = session);
-      _pollTimer = Timer.periodic(session.interval, (_) => _poll(generation));
+      _recordStage('pending');
+      _pendingRecorded = true;
+      _schedulePolling(session, generation);
     } catch (error) {
       if (mounted && generation == _generation) {
-        setState(() => _error = error.toString());
+        _recordStage('terminal', outcome: 'start-failed');
+        setState(
+          () => _error = error is TorBoxDeviceAuthException
+              ? error.message
+              : 'TorBox could not start device authorization. Try again.',
+        );
       }
     }
   }
@@ -68,40 +149,97 @@ class _TorBoxPairingScreenState extends ConsumerState<TorBoxPairingScreen> {
         generation != _generation) {
       return;
     }
-    if (DateTime.now().isAfter(session.expiresAt)) {
+    if (_pendingToken == null && DateTime.now().isAfter(session.expiresAt)) {
       _pollTimer?.cancel();
+      _recordStage('expired', outcome: 'provider-expiry');
       setState(() => _error = 'The TorBox authorization code expired.');
       return;
     }
     _polling = true;
     try {
-      final token = await _client.poll(session);
-      if (token == null || !mounted || generation != _generation) return;
+      final token = _pendingToken ?? await _client.poll(session);
+      if (!mounted || generation != _generation) return;
+      if (token == null) {
+        _transientFailureCount = 0;
+        if (!_pendingRecorded) {
+          _recordStage('pending');
+          _pendingRecorded = true;
+        }
+        if (_temporaryNotice != null) {
+          setState(() => _temporaryNotice = null);
+        }
+        _schedulePolling(session, generation);
+        return;
+      }
+      _pendingToken = token;
       final saved = await ref
           .read(torBoxSettingsControllerProvider.notifier)
           .saveAndValidate(token);
       if (!mounted || generation != _generation) return;
       if (!saved) {
+        final settingsState = ref.read(torBoxSettingsControllerProvider);
+        if (settingsState.retryableError) {
+          throw const TorBoxDeviceAuthException(
+            'TorBox approved this device, but its API is temporarily unreachable. TetoTV will keep retrying.',
+            code: 'provider_temporarily_unavailable',
+            retryable: true,
+          );
+        }
         throw StateError(
-          ref.read(torBoxSettingsControllerProvider).errorMessage ??
+          settingsState.errorMessage ??
               'TorBox could not validate this account.',
         );
       }
       _pollTimer?.cancel();
-      setState(() => _authorized = true);
+      _recordStage('approved');
+      setState(() {
+        _authorized = true;
+        _temporaryNotice = null;
+        _pendingToken = null;
+      });
     } catch (error) {
       if (!mounted || generation != _generation) return;
+      if (error is TorBoxDeviceAuthException && error.retryable) {
+        _transientFailureCount += 1;
+        final retryDelay = _transientRetryDelay(session.interval);
+        _recordStage(
+          'transient-retry',
+          outcome: 'provider-unreachable',
+          retry: _transientFailureCount,
+        );
+        setState(() => _temporaryNotice = error.message);
+        _schedulePolling(session, generation, delay: retryDelay);
+        return;
+      }
       _pollTimer?.cancel();
-      setState(() => _error = error.toString());
+      _recordStage('terminal', outcome: _terminalOutcome(error));
+      setState(
+        () => _error = error is TorBoxDeviceAuthException
+            ? error.message
+            : error.toString(),
+      );
     } finally {
       _polling = false;
     }
+  }
+
+  String _terminalOutcome(Object error) {
+    if (error is TorBoxDeviceAuthException) {
+      return switch (error.code) {
+        'ITEM_NOT_FOUND' || 'AUTHORIZATION_EXPIRED' => 'provider-expired',
+        'PLAN_RESTRICTED_FEATURE' => 'paid-plan-required',
+        _ => 'provider-rejected',
+      };
+    }
+    if (error is FormatException) return 'invalid-provider-response';
+    return 'account-validation-failed';
   }
 
   @override
   void dispose() {
     _generation++;
     _pollTimer?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 
@@ -236,6 +374,21 @@ class _TorBoxPairingScreenState extends ConsumerState<TorBoxPairingScreen> {
                 'Device authorization requires a paid TorBox plan.',
                 style: Theme.of(context).textTheme.bodyMedium,
               ),
+              const SizedBox(height: 10),
+              Text(
+                'If TorBox\'s Continue button does not respond on your phone, '
+                'keep this code open and try Chrome, an incognito tab, another '
+                'browser, or a PC before the code expires. This TV will keep '
+                'retrying. TorBox also recommends disabling VPN, ad blocking, '
+                'and private DNS when its CAPTCHA has trouble.',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: context.appPalette.mutedText,
+                ),
+              ),
+              if (_temporaryNotice case final notice?) ...[
+                const SizedBox(height: 14),
+                _RetryingNotice(message: notice),
+              ],
             ],
           );
           return Container(
@@ -265,6 +418,40 @@ class _TorBoxPairingScreenState extends ConsumerState<TorBoxPairingScreen> {
                   ),
           );
         },
+      ),
+    );
+  }
+}
+
+class _RetryingNotice extends StatelessWidget {
+  const _RetryingNotice({required this.message});
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: context.appPalette.secondaryAccent.withValues(alpha: .10),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+          color: context.appPalette.secondaryAccent.withValues(alpha: .45),
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            Icons.cloud_sync_outlined,
+            size: 18,
+            color: context.appPalette.secondaryAccent,
+          ),
+          const SizedBox(width: 8),
+          Flexible(
+            child: Text(message, style: Theme.of(context).textTheme.bodySmall),
+          ),
+        ],
       ),
     );
   }

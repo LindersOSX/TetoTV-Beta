@@ -74,6 +74,27 @@ void main() {
     expect(releases.map((release) => release.isDubbed), [true, true, false]);
   });
 
+  test('normalizes common AV1 and VP9 torrent codec labels', () {
+    final releases = StremioTorrentReleaseSource.parseStreams({
+      'streams': [
+        {
+          'name': '[Group] Example S01E01 1080p AV01',
+          'infoHash': '1111111111111111111111111111111111111111',
+        },
+        {
+          'name': '[Group] Example S01E01 1080p AV-1',
+          'infoHash': '2222222222222222222222222222222222222222',
+        },
+        {
+          'name': '[Group] Example S01E01 1080p VP-9',
+          'infoHash': '3333333333333333333333333333333333333333',
+        },
+      ],
+    });
+
+    expect(releases.map((release) => release.codec), ['AV1', 'AV1', 'VP9']);
+  });
+
   test('keeps the installed manifest source stable across episode hashes', () {
     const sourceId = 'stremio:example.com/addon/manifest.json';
     final first = StremioTorrentReleaseSource.parseStreams({

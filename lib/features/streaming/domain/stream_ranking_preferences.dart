@@ -197,6 +197,95 @@ int releaseQualityHeight(ReleaseCandidate release) =>
 int webStreamQualityHeight(WebStreamResult stream) =>
     _qualityHeight('${stream.quality ?? ''} ${stream.title}');
 
+/// Whether Android's decoder inventory can safely play a release's video
+/// codec in hardware.
+///
+/// [unknown] is deliberately distinct from [unsupported]. The native bridge
+/// can be unavailable (for example during startup or on a non-Android test
+/// host), and add-ons do not always report a codec. Neither case is evidence
+/// that the release is incompatible, so those results remain available.
+enum ReleaseCodecCompatibility { supported, unsupported, unknown }
+
+/// Resolves the codec advertised by structured metadata, with a conservative
+/// release-name fallback for torrent add-ons that only return display text.
+String? releaseVideoCodecMime(ReleaseCandidate release) {
+  return _videoCodecMime(release.codec) ?? _videoCodecMime(release.releaseName);
+}
+
+ReleaseCodecCompatibility releaseCodecCompatibility(
+  ReleaseCandidate release, {
+  TvDeviceProfile? device,
+}) {
+  final mime = releaseVideoCodecMime(release);
+  if (mime == null || device == null || device.codecs.isEmpty) {
+    return ReleaseCodecCompatibility.unknown;
+  }
+  final matchingDecoders = device.codecs.where(
+    (codec) => codec.hardware && codec.mime.trim().toLowerCase() == mime,
+  );
+  if (matchingDecoders.isEmpty) {
+    return ReleaseCodecCompatibility.unsupported;
+  }
+
+  final requiredHeight = releaseQualityHeight(release);
+  if (requiredHeight <= 0) return ReleaseCodecCompatibility.supported;
+  final requiredWidth = _standardVideoWidth(requiredHeight);
+  var hasUnknownDimensions = false;
+  for (final decoder in matchingDecoders) {
+    if (decoder.maxWidth <= 0 || decoder.maxHeight <= 0) {
+      hasUnknownDimensions = true;
+      continue;
+    }
+    if (decoder.maxWidth >= requiredWidth &&
+        decoder.maxHeight >= requiredHeight) {
+      return ReleaseCodecCompatibility.supported;
+    }
+  }
+  return hasUnknownDimensions
+      ? ReleaseCodecCompatibility.unknown
+      : ReleaseCodecCompatibility.unsupported;
+}
+
+/// Known-incompatible releases are omitted from both the visible picker and
+/// automatic playback. Unknown codec metadata and an unavailable device
+/// inventory fail open so capability detection can never hide every source.
+bool releaseCodecIsPlayableOnDevice(
+  ReleaseCandidate release, {
+  TvDeviceProfile? device,
+}) =>
+    releaseCodecCompatibility(release, device: device) !=
+    ReleaseCodecCompatibility.unsupported;
+
+String? _videoCodecMime(String? source) {
+  final value = source?.trim().toLowerCase();
+  if (value == null || value.isEmpty) return null;
+  if (RegExp(
+    r'(^|[^a-z0-9])(?:av0?1|av[ ._-]1)(?=$|[^a-z0-9])',
+  ).hasMatch(value)) {
+    return 'video/av01';
+  }
+  if (RegExp(
+    r'(^|[^a-z0-9])(?:hevc|x265|h[ ._-]?265)(?=$|[^a-z0-9])',
+  ).hasMatch(value)) {
+    return 'video/hevc';
+  }
+  if (RegExp(
+    r'(^|[^a-z0-9])(?:avc|x264|h[ ._-]?264)(?=$|[^a-z0-9])',
+  ).hasMatch(value)) {
+    return 'video/avc';
+  }
+  if (RegExp(r'(^|[^a-z0-9])(?:vp[ ._-]?9)(?=$|[^a-z0-9])').hasMatch(value)) {
+    return 'video/x-vnd.on2.vp9';
+  }
+  return null;
+}
+
+/// Torrent results normally expose a vertical quality label rather than an
+/// exact raster. Use the standard 16:9 width paired with that height. This is
+/// intentionally only a rejection check when Android reports both decoder
+/// dimensions; unusual/unknown rasters remain available.
+int _standardVideoWidth(int height) => (height * 16 / 9).ceil();
+
 /// Soft affinity for keeping automatic fallback at the current stream's
 /// normalized resolution. Unknown or unavailable quality never filters a
 /// candidate; it only removes the affinity advantage.
@@ -321,12 +410,11 @@ int tvPlaybackCompatibilityScore(
   TvDeviceProfile? device,
   int previousFailures = 0,
 }) {
-  final codec = release.codec?.toUpperCase();
-  final codecRank = switch (codec) {
-    'H.264' => 0,
+  final codecRank = switch (releaseVideoCodecMime(release)) {
+    'video/avc' => 0,
     null => 1,
-    'HEVC' => 2,
-    'AV1' => 3,
+    'video/hevc' => 2,
+    'video/av01' => 3,
     _ => 1,
   };
   final resolutionPenalty = switch (release.quality?.toLowerCase()) {
@@ -335,7 +423,10 @@ int tvPlaybackCompatibilityScore(
     _ => 0,
   };
   final unsupportedCodec =
-      device != null && !device.supportsCodec(release.codec) ? 12 : 0;
+      releaseCodecCompatibility(release, device: device) ==
+          ReleaseCodecCompatibility.unsupported
+      ? 12
+      : 0;
   final unsupportedHdr = release.isHdr && device != null && !device.hasHdr
       ? 8
       : 0;
@@ -359,7 +450,10 @@ int automaticPlaybackSafetyScore(
 }) {
   final hasCapabilityInventory = device?.codecs.isNotEmpty == true;
   final unsupportedCodec =
-      hasCapabilityInventory && !device!.supportsCodec(release.codec) ? 12 : 0;
+      releaseCodecCompatibility(release, device: device) ==
+          ReleaseCodecCompatibility.unsupported
+      ? 12
+      : 0;
   final unsupportedHdr =
       release.isHdr && hasCapabilityInventory && !device!.hasHdr ? 8 : 0;
   final softwareOnlyProfile = releaseRequiresSoftwareDecoder(release) ? 6 : 0;
@@ -691,6 +785,7 @@ List<ReleaseCandidate> rankAutomaticAutoplayReleases(
   final strict = <ReleaseCandidate>[];
   final fallback = <ReleaseCandidate>[];
   for (final release in input) {
+    if (!releaseCodecIsPlayableOnDevice(release, device: device)) continue;
     if (automaticReleaseMatchesFilters(
       release,
       language: language,

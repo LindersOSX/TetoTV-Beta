@@ -17,7 +17,7 @@
 
 <p align="center">
   <a href="https://github.com/LindersOSX/TetoTV-Beta/releases/latest"><strong>Download Beta</strong></a>
-  · <a href="docs/RELEASE_NOTES_2.0.65.md">What's new</a>
+  · <a href="docs/RELEASE_NOTES_2.0.66.md">What's new</a>
   · <a href="https://github.com/LindersOSX/TetoTV-Beta/issues/new">Report an issue</a>
   · <a href="https://discord.gg/juC6k7d4WY">Discord</a>
   · <a href="https://www.youtube.com/@TetoTVApp">YouTube</a>
@@ -96,10 +96,10 @@ TetoTV runs directly on the Android device with no companion server required for
 | Channel | Version | Best for |
 | --- | --- | --- |
 | Public | Not published | Source and release-readiness documents are available, but no Public APK is currently offered |
-| Beta | [2.0.65](docs/RELEASE_NOTES_2.0.65.md) | Smoother playback recovery, dependable Recently released results, safer calendar outage handling, and secure SIMKL account linking |
+| Beta | [2.0.66](docs/RELEASE_NOTES_2.0.66.md) | More reliable TorBox pairing, device-aware stream compatibility, paged episode browsing, and persistent update notifications |
 
 > [!WARNING]
-> Beta 2.0.65 uses the repository's explicit unreviewed-Beta exception. Its native-library and corresponding-source material did not receive independent license review, and automated integrity checks are not a legal compliance determination. Read the [complete Beta disclosure](docs/RELEASE_NOTES_2.0.65.md). This exception does not apply to a future Public release.
+> Beta 2.0.66 uses the repository's explicit unreviewed-Beta exception. Its native-library and corresponding-source material did not receive independent license review, and automated integrity checks are not a legal compliance determination. Read the [complete Beta disclosure](docs/RELEASE_NOTES_2.0.66.md). This exception does not apply to a future Public release.
 
 The Public updater repository intentionally has no release while the Public build is held for review. Existing Beta installations continue to update from the Beta repository. Android never permits an in-place install of an APK with a lower build code; Developer Mode does not bypass that platform rule.
 

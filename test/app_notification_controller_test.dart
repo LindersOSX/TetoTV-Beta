@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:anime_tv/core/notifications/app_notification.dart';
+import 'package:anime_tv/core/notifications/app_announcement_client.dart';
 import 'package:anime_tv/core/notifications/app_notification_controller.dart';
 import 'package:anime_tv/core/notifications/app_notification_store.dart';
 import 'package:anime_tv/core/storage/tetotv_database.dart';
@@ -93,7 +94,7 @@ void main() {
   });
 
   test(
-    'v10 to v11 migration preserves data and creates notification inbox',
+    'v10 to v12 migration preserves data and creates notification inbox',
     () async {
       final temporary = await Directory.systemTemp.createTemp(
         'tetotv-notifications-v11-',
@@ -139,7 +140,7 @@ void main() {
         (await database.query('legacy_fixture')).single['value'],
         'preserved',
       );
-      expect(await database.getVersion(), 11);
+      expect(await database.getVersion(), 12);
       final table = await database.rawQuery(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
         ['app_notifications'],
@@ -152,6 +153,87 @@ void main() {
       expect(indexes, hasLength(1));
     },
   );
+
+  test('v11 notification rows survive the expanded v12 inbox schema', () async {
+    final temporary = await Directory.systemTemp.createTemp(
+      'tetotv-notifications-v12-',
+    );
+    final databasePath = '${temporary.path}${Platform.pathSeparator}tetotv.db';
+    addTearDown(() async {
+      await databaseFactoryFfi.deleteDatabase(databasePath);
+      if (temporary.existsSync()) temporary.deleteSync(recursive: true);
+    });
+
+    var database = await databaseFactoryFfi.openDatabase(
+      databasePath,
+      options: OpenDatabaseOptions(
+        version: 11,
+        onCreate: (database, _) async {
+          await database.execute('''
+            CREATE TABLE app_notifications (
+              id TEXT PRIMARY KEY,
+              kind TEXT NOT NULL,
+              title TEXT NOT NULL,
+              body TEXT NOT NULL,
+              action TEXT NOT NULL,
+              target_version TEXT,
+              target_version_code INTEGER,
+              target_channel TEXT,
+              created_at INTEGER NOT NULL,
+              read_at INTEGER,
+              CHECK(kind IN ('app_update')),
+              CHECK(length(body) BETWEEN 1 AND 512),
+              CHECK(action IN ('open_app_updates'))
+            )
+          ''');
+          await database.execute('''
+            CREATE INDEX app_notifications_unread_created
+            ON app_notifications(read_at, created_at DESC)
+          ''');
+          await database.insert('app_notifications', {
+            'id': 'app-update:beta:410042',
+            'kind': 'app_update',
+            'title': 'Update available',
+            'body': 'Update body',
+            'action': 'open_app_updates',
+            'target_version': '2.0.65',
+            'target_version_code': 410042,
+            'target_channel': 'beta',
+            'created_at': 1,
+          });
+        },
+      ),
+    );
+    await database.close();
+
+    database = await databaseFactoryFfi.openDatabase(
+      databasePath,
+      options: OpenDatabaseOptions(
+        version: tetoTvDatabaseSchemaVersion,
+        onConfigure: configureTetoTvDatabase,
+        onUpgrade: upgradeTetoTvDatabaseSchema,
+      ),
+    );
+    addTearDown(database.close);
+    final store = AppNotificationStore(TetoTvDatabase.forTesting(database));
+    await store.upsert(
+      AppNotification(
+        id: 'app-announcement:${List.filled(64, 'b').join()}',
+        kind: AppNotificationKind.announcement,
+        title: 'TetoTV announcement',
+        body: 'A durable notice',
+        action: AppNotificationAction.none,
+        createdAtUtc: DateTime.utc(2026, 9, 2),
+      ),
+    );
+
+    final rows = await store.load();
+    expect(
+      rows.map((item) => item.kind),
+      containsAll(AppNotificationKind.values),
+    );
+    expect(await database.getVersion(), 12);
+  });
 
   group('AppNotificationController', () {
     late Database database;
@@ -226,6 +308,84 @@ void main() {
       expect(body, isNot(contains('**')));
       expect(body.length, lessThanOrEqualTo(480));
     });
+
+    test(
+      'remote announcements persist, deduplicate, and retain read state',
+      () async {
+        final announcement = AppNotification(
+          id: 'app-announcement:${List.filled(64, 'a').join()}',
+          kind: AppNotificationKind.announcement,
+          title: 'TetoTV announcement',
+          body: 'Maintenance is complete.',
+          action: AppNotificationAction.none,
+          createdAtUtc: clock,
+        );
+        final remoteController = AppNotificationController(
+          store,
+          announcementApi: _StaticAnnouncementApi([announcement]),
+          clock: () => clock,
+        );
+        addTearDown(remoteController.dispose);
+
+        await remoteController.refreshAnnouncements();
+        expect(remoteController.state.items, hasLength(1));
+        expect(remoteController.state.items.single.id, announcement.id);
+        expect(remoteController.state.items.single.body, announcement.body);
+        expect(
+          remoteController.state.items.single.kind,
+          AppNotificationKind.announcement,
+        );
+        await remoteController.markAllRead();
+        await remoteController.refreshAnnouncements();
+
+        expect(remoteController.state.items, hasLength(1));
+        expect(remoteController.state.items.single.isRead, isTrue);
+        final restored = AppNotificationController(store, clock: () => clock);
+        addTearDown(restored.dispose);
+        await restored.load();
+        expect(restored.state.items.single.body, 'Maintenance is complete.');
+        expect(restored.state.items.single.isRead, isTrue);
+      },
+    );
+
+    test(
+      'announcement mirror rolls back completely when one row fails',
+      () async {
+        final original = AppNotification(
+          id: 'app-announcement:${List.filled(64, 'c').join()}',
+          kind: AppNotificationKind.announcement,
+          title: 'TetoTV announcement',
+          body: 'Keep this notice.',
+          action: AppNotificationAction.none,
+          createdAtUtc: clock,
+        );
+        await store.upsert(original);
+
+        final replacement = AppNotification(
+          id: 'app-announcement:${List.filled(64, 'd').join()}',
+          kind: AppNotificationKind.announcement,
+          title: 'TetoTV announcement',
+          body: 'A valid replacement.',
+          action: AppNotificationAction.none,
+          createdAtUtc: clock,
+        );
+        final invalid = AppNotification(
+          id: 'app-announcement:${List.filled(64, 'e').join()}',
+          kind: AppNotificationKind.announcement,
+          title: '',
+          body: 'This row violates the database constraint.',
+          action: AppNotificationAction.none,
+          createdAtUtc: clock,
+        );
+
+        await expectLater(
+          store.syncAnnouncements([replacement, invalid]),
+          throwsA(anything),
+        );
+        expect(await store.load(), hasLength(1));
+        expect((await store.load()).single.id, original.id);
+      },
+    );
 
     test('switching update channels removes the unactionable notice', () async {
       await store.upsert(
@@ -302,6 +462,15 @@ AppNotification _notice({
   targetVersionCode: versionCode,
   targetChannel: 'beta',
 );
+
+class _StaticAnnouncementApi implements AppAnnouncementApi {
+  const _StaticAnnouncementApi(this.items);
+
+  final List<AppNotification> items;
+
+  @override
+  Future<List<AppNotification>> fetch() async => items;
+}
 
 AppUpdateState _updateState({
   String version = '2.0.65',

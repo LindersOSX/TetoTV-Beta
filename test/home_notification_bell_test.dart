@@ -203,7 +203,103 @@ void main() {
     await tester.pumpWidget(const SizedBox());
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('announcement renders as a notice without an update action', (
+    tester,
+  ) async {
+    final notifications = AppNotificationController(
+      _MemoryNotificationStore([
+        AppNotification(
+          id: 'app-announcement:${List.filled(64, 'a').join()}',
+          kind: AppNotificationKind.announcement,
+          title: 'TetoTV announcement',
+          body: 'Maintenance is complete.',
+          action: AppNotificationAction.none,
+          createdAtUtc: DateTime.utc(2026, 9, 2),
+        ),
+      ]),
+    );
+    await notifications.load();
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          appNotificationControllerProvider.overrideWith((_) => notifications),
+        ],
+        child: MaterialApp(
+          theme: AppTheme.dark,
+          home: const Scaffold(body: TetoNotificationBell()),
+        ),
+      ),
+    );
+    await tester.tap(find.byType(TetoNotificationBell));
+    await tester.pumpAndSettle();
+
+    expect(find.text('TetoTV announcement'), findsOneWidget);
+    expect(find.text('Maintenance is complete.'), findsOneWidget);
+    expect(find.text('NOTICE'), findsOneWidget);
+    expect(find.text('Check'), findsNothing);
+    expect(find.text('Install'), findsNothing);
+  });
+
+  testWidgets('announcement cards stay D-pad focusable in a mixed inbox', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(800, 520);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final first = _announcement('a', 'First announcement.');
+    final second = _announcement('b', 'Second announcement.');
+    final notifications = AppNotificationController(
+      _MemoryNotificationStore([first, second, _notice()]),
+    );
+    await notifications.load();
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          appNotificationControllerProvider.overrideWith((_) => notifications),
+        ],
+        child: MaterialApp(
+          theme: AppTheme.dark,
+          home: const Scaffold(
+            body: Align(
+              alignment: Alignment.topRight,
+              child: TetoNotificationBell(),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.byType(TetoNotificationBell));
+    await tester.pumpAndSettle();
+
+    FocusableActionDetector detectorFor(String id) =>
+        tester.widget<FocusableActionDetector>(
+          find.ancestor(
+            of: find.byKey(ValueKey('notification-item-$id')),
+            matching: find.byType(FocusableActionDetector),
+          ),
+        );
+
+    expect(detectorFor(first.id).focusNode?.hasFocus, isTrue);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    expect(detectorFor(second.id).focusNode?.hasFocus, isTrue);
+    expect(tester.takeException(), isNull);
+  });
 }
+
+AppNotification _announcement(String hashCharacter, String body) =>
+    AppNotification(
+      id: 'app-announcement:${List.filled(64, hashCharacter).join()}',
+      kind: AppNotificationKind.announcement,
+      title: 'TetoTV announcement',
+      body: body,
+      action: AppNotificationAction.none,
+      createdAtUtc: DateTime.utc(2026, 9, 2),
+    );
 
 AppNotification _notice() => AppNotification(
   id: 'app-update:beta:410042',

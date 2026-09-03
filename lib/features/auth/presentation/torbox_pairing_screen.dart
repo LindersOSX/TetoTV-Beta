@@ -376,11 +376,10 @@ class _TorBoxPairingScreenState extends ConsumerState<TorBoxPairingScreen>
               ),
               const SizedBox(height: 10),
               Text(
-                'If TorBox\'s Continue button does not respond on your phone, '
-                'keep this code open and try Chrome, an incognito tab, another '
-                'browser, or a PC before the code expires. This TV will keep '
-                'retrying. TorBox also recommends disabling VPN, ad blocking, '
-                'and private DNS when its CAPTCHA has trouble.',
+                'Sign in to torbox.app in the same browser before approving. '
+                'If Continue does nothing, reload TorBox and enter this current '
+                'code again. You can also use Edge or another browser. Keep '
+                'this screen open while approving; TetoTV will keep retrying.',
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
                   color: context.appPalette.mutedText,
                 ),

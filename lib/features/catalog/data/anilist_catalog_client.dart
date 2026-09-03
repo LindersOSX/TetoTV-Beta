@@ -1,9 +1,11 @@
+import 'dart:collection';
 import 'dart:convert';
 
 import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/features/catalog/data/kitsu_catalog_fallback.dart';
 import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
 import 'package:anime_tv/features/catalog/domain/anime_trailer.dart';
+import 'package:anime_tv/features/catalog/domain/catalog_episode_metadata.dart';
 import 'package:anime_tv/features/catalog/domain/catalog_availability_exception.dart';
 import 'package:anime_tv/features/catalog/domain/franchise_watch_order.dart';
 import 'package:dio/dio.dart';
@@ -25,51 +27,213 @@ class AniListCatalogClient {
   static const _jikanMappingConcurrency = 4;
   static const _jikanSchedulePageLimit = 4;
   static const _jikanSchedulePageSize = 25;
+  static const _episodeMetadataCacheLimit = 16;
+  static const _episodeMetadataLimit = 5000;
+  static const _episodeTitleLimit = 180;
+  static const _episodeSynopsisLimit = 1200;
 
-  AniListCatalogClient({Dio? dio, Dio? kitsuDio, Dio? jikanDio, Dio? aniZipDio})
-    : _dio =
-          dio ??
-          Dio(
-            BaseOptions(
-              baseUrl: 'https://graphql.anilist.co',
-              connectTimeout: const Duration(seconds: 10),
-              sendTimeout: const Duration(seconds: 10),
-              receiveTimeout: const Duration(seconds: 15),
-              headers: const {'Accept': 'application/json'},
-            ),
-          ),
-      _kitsu = KitsuCatalogFallback(dio: kitsuDio),
-      _jikanDio =
-          jikanDio ??
-          Dio(
-            BaseOptions(
-              baseUrl: 'https://api.jikan.moe/v4/',
-              connectTimeout: const Duration(seconds: 6),
-              sendTimeout: const Duration(seconds: 8),
-              receiveTimeout: const Duration(seconds: 8),
-              headers: const {'Accept': 'application/json'},
-            ),
-          ),
-      _aniZipDio =
-          aniZipDio ??
-          Dio(
-            BaseOptions(
-              baseUrl: 'https://hayase.ani.zip/v1/',
-              connectTimeout: const Duration(seconds: 6),
-              sendTimeout: const Duration(seconds: 8),
-              receiveTimeout: const Duration(seconds: 8),
-              headers: const {'Accept': 'application/json'},
-            ),
-          );
+  AniListCatalogClient({
+    Dio? dio,
+    Dio? kitsuDio,
+    Dio? jikanDio,
+    Dio? aniZipDio,
+    Dio? episodeMetadataDio,
+  }) : _dio =
+           dio ??
+           Dio(
+             BaseOptions(
+               baseUrl: 'https://graphql.anilist.co',
+               connectTimeout: const Duration(seconds: 10),
+               sendTimeout: const Duration(seconds: 10),
+               receiveTimeout: const Duration(seconds: 15),
+               headers: const {'Accept': 'application/json'},
+             ),
+           ),
+       _kitsu = KitsuCatalogFallback(dio: kitsuDio),
+       _jikanDio =
+           jikanDio ??
+           Dio(
+             BaseOptions(
+               baseUrl: 'https://api.jikan.moe/v4/',
+               connectTimeout: const Duration(seconds: 6),
+               sendTimeout: const Duration(seconds: 8),
+               receiveTimeout: const Duration(seconds: 8),
+               headers: const {'Accept': 'application/json'},
+             ),
+           ),
+       _aniZipDio =
+           aniZipDio ??
+           Dio(
+             BaseOptions(
+               baseUrl: 'https://hayase.ani.zip/v1/',
+               connectTimeout: const Duration(seconds: 6),
+               sendTimeout: const Duration(seconds: 8),
+               receiveTimeout: const Duration(seconds: 8),
+               headers: const {'Accept': 'application/json'},
+             ),
+           ),
+       _episodeMetadataDio =
+           episodeMetadataDio ??
+           Dio(
+             BaseOptions(
+               baseUrl: 'https://api.ani.zip/',
+               connectTimeout: const Duration(seconds: 6),
+               sendTimeout: const Duration(seconds: 8),
+               receiveTimeout: const Duration(seconds: 8),
+               headers: const {'Accept': 'application/json'},
+             ),
+           );
 
   final Dio _dio;
   final KitsuCatalogFallback _kitsu;
   final Dio _jikanDio;
   final Dio _aniZipDio;
+  final Dio _episodeMetadataDio;
   final Map<int, String> _knownStudioNames = <int, String>{};
   final Map<int, String> _knownStaffNames = <int, String>{};
   final Map<int, int> _knownAniListIdByMalId = <int, int>{};
   final Map<int, int> _knownMalIdByAniListId = <int, int>{};
+  final LinkedHashMap<int, Map<int, CatalogEpisodeMetadata>>
+  _episodeMetadataCache =
+      LinkedHashMap<int, Map<int, CatalogEpisodeMetadata>>();
+  final Map<int, Future<Map<int, CatalogEpisodeMetadata>>>
+  _episodeMetadataInFlight = <int, Future<Map<int, CatalogEpisodeMetadata>>>{};
+
+  /// Loads optional episode titles, artwork, summaries, and runtimes from the
+  /// same AniZip integration already used for canonical AniList/MAL mapping.
+  ///
+  /// The result is bounded, identity checked, cached with a small LRU, and
+  /// intentionally partial. Missing metadata never blocks the episode UI.
+  Future<Map<int, CatalogEpisodeMetadata>> episodeMetadata(
+    int aniListId,
+  ) async {
+    if (aniListId <= 0) return const <int, CatalogEpisodeMetadata>{};
+    final cached = _episodeMetadataCache.remove(aniListId);
+    if (cached != null) {
+      _episodeMetadataCache[aniListId] = cached;
+      return cached;
+    }
+    final pending = _episodeMetadataInFlight[aniListId];
+    if (pending != null) return pending;
+
+    final request = _fetchEpisodeMetadataSafely(aniListId);
+    _episodeMetadataInFlight[aniListId] = request;
+    try {
+      final result = await request;
+      _episodeMetadataCache[aniListId] = result;
+      while (_episodeMetadataCache.length > _episodeMetadataCacheLimit) {
+        _episodeMetadataCache.remove(_episodeMetadataCache.keys.first);
+      }
+      return result;
+    } finally {
+      if (identical(_episodeMetadataInFlight[aniListId], request)) {
+        _episodeMetadataInFlight.remove(aniListId);
+      }
+    }
+  }
+
+  Future<Map<int, CatalogEpisodeMetadata>> _fetchEpisodeMetadataSafely(
+    int aniListId,
+  ) async {
+    try {
+      return await _fetchEpisodeMetadata(aniListId);
+    } catch (_) {
+      return const <int, CatalogEpisodeMetadata>{};
+    }
+  }
+
+  Future<Map<int, CatalogEpisodeMetadata>> _fetchEpisodeMetadata(
+    int aniListId,
+  ) async {
+    final response = await _episodeMetadataDio.get<Map<String, dynamic>>(
+      'mappings',
+      queryParameters: <String, dynamic>{'anilist_id': aniListId},
+      options: Options(
+        followRedirects: false,
+        maxRedirects: 0,
+        receiveDataWhenStatusError: false,
+      ),
+    );
+    final body = response.data;
+    if (body == null) return const <int, CatalogEpisodeMetadata>{};
+
+    final mappings = body['mappings'];
+    if (mappings is! Map || _integer(mappings['anilist_id']) != aniListId) {
+      return const <int, CatalogEpisodeMetadata>{};
+    }
+    final episodes = body['episodes'];
+    if (episodes is! Map || episodes.length > _episodeMetadataLimit) {
+      return const <int, CatalogEpisodeMetadata>{};
+    }
+
+    final result = <int, CatalogEpisodeMetadata>{};
+    for (final entry in episodes.entries) {
+      final key = entry.key?.toString() ?? '';
+      if (!RegExp(r'^\d{1,5}$').hasMatch(key)) continue;
+      final episode = int.tryParse(key);
+      final raw = entry.value;
+      if (episode == null ||
+          episode <= 0 ||
+          episode > _episodeMetadataLimit ||
+          raw is! Map) {
+        continue;
+      }
+      final declaredEpisode = raw['episode']?.toString();
+      if (declaredEpisode != null &&
+          declaredEpisode.isNotEmpty &&
+          int.tryParse(declaredEpisode) != episode) {
+        continue;
+      }
+      final titles = raw['title'];
+      final title = titles is Map
+          ? _boundedEpisodeText(
+              titles['en'] ?? titles['x-jat'] ?? titles['ja'],
+              _episodeTitleLimit,
+            )
+          : null;
+      final synopsis = _boundedEpisodeText(
+        raw['summary'] ?? raw['overview'],
+        _episodeSynopsisLimit,
+      );
+      final duration = _integer(raw['runtime'] ?? raw['length']);
+      result[episode] = CatalogEpisodeMetadata(
+        episode: episode,
+        title: title,
+        thumbnailUrl: _safeEpisodeArtworkUrl(raw['image']),
+        synopsis: synopsis,
+        durationMinutes: duration != null && duration > 0 && duration <= 360
+            ? duration
+            : null,
+      );
+    }
+    return Map<int, CatalogEpisodeMetadata>.unmodifiable(result);
+  }
+
+  String? _boundedEpisodeText(Object? value, int maximumLength) {
+    final raw = value?.toString().trim();
+    if (raw == null || raw.isEmpty) return null;
+    final plain = raw
+        .replaceAll(RegExp(r'<[^>]*>'), ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    if (plain.isEmpty) return null;
+    return plain.length <= maximumLength
+        ? plain
+        : '${plain.substring(0, maximumLength - 1).trimRight()}…';
+  }
+
+  String? _safeEpisodeArtworkUrl(Object? value) {
+    final raw = value?.toString().trim();
+    final uri = raw == null ? null : Uri.tryParse(raw);
+    if (uri == null ||
+        uri.scheme.toLowerCase() != 'https' ||
+        uri.host.isEmpty ||
+        uri.userInfo.isNotEmpty ||
+        uri.hasFragment) {
+      return null;
+    }
+    return uri.toString();
+  }
 
   Future<List<AnimeSummary>> trending({int page = 1}) async {
     const query = r'''

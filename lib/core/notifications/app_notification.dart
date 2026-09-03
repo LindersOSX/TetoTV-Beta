@@ -1,8 +1,8 @@
-enum AppNotificationKind { appUpdate }
+enum AppNotificationKind { appUpdate, announcement }
 
-enum AppNotificationAction { openAppUpdates }
+enum AppNotificationAction { openAppUpdates, none }
 
-/// A durable, local-only notification shown by TetoTV's in-app inbox.
+/// A durable notification shown by TetoTV's in-app inbox.
 ///
 /// Update notices deliberately store a constrained action instead of an
 /// arbitrary URL. This keeps persisted data from becoming a navigation or

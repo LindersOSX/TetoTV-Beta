@@ -1,19 +1,41 @@
 import 'dart:async';
 
 import 'package:anime_tv/core/notifications/app_notification.dart';
+import 'package:anime_tv/core/notifications/app_announcement_client.dart';
 import 'package:anime_tv/core/notifications/app_notification_store.dart';
+import 'package:anime_tv/core/config/app_config.dart';
 import 'package:anime_tv/core/storage/storage_providers.dart';
 import 'package:anime_tv/features/settings/application/app_update_controller.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 final appNotificationControllerProvider =
     StateNotifierProvider<AppNotificationController, AppNotificationState>((
       ref,
     ) {
+      // Widget tests and source-development builds must never contact the
+      // production announcement authority. Installed APKs are release builds;
+      // parser/controller tests inject their own client explicitly.
+      final announcementClient = kReleaseMode
+          ? AppAnnouncementClient(baseUrl: AppConfig.appAnnouncementBaseUrl)
+          : null;
       final controller = AppNotificationController(
         AppNotificationStore(ref.watch(tetoTvDatabaseProvider)),
+        announcementApi: announcementClient,
       );
       unawaited(controller.load());
+      Timer? announcementTimer;
+      if (announcementClient != null) {
+        unawaited(controller.refreshAnnouncements());
+        announcementTimer = Timer.periodic(
+          const Duration(minutes: 15),
+          (_) => unawaited(controller.refreshAnnouncements()),
+        );
+      }
+      ref.onDispose(() {
+        announcementTimer?.cancel();
+        announcementClient?.close();
+      });
       // Download progress can update the updater state once per percentage.
       // Reconcile only when notification-relevant identity/state changes so a
       // large APK does not enqueue a hundred redundant SQLite transactions.
@@ -65,16 +87,30 @@ class AppNotificationState {
 typedef AppNotificationClock = DateTime Function();
 
 class AppNotificationController extends StateNotifier<AppNotificationState> {
-  AppNotificationController(this._store, {this._clock = _utcNow})
-    : super(const AppNotificationState());
+  AppNotificationController(
+    this._store, {
+    this.announcementApi,
+    this._clock = _utcNow,
+  }) : super(const AppNotificationState());
 
   final AppNotificationStore _store;
+  final AppAnnouncementApi? announcementApi;
   final AppNotificationClock _clock;
   Future<void> _pendingMutation = Future.value();
 
   Future<void> load() => _enqueue(() async {
     await _reload();
   });
+
+  Future<void> refreshAnnouncements() {
+    final api = announcementApi;
+    if (api == null) return Future.value();
+    return _enqueue(() async {
+      final announcements = await api.fetch();
+      await _store.syncAnnouncements(announcements);
+      await _reload();
+    }, exposeError: false);
+  }
 
   /// Reconciles the inbox with the validated state produced by the updater.
   ///
@@ -129,12 +165,15 @@ class AppNotificationController extends StateNotifier<AppNotificationState> {
     state = state.copyWith(loaded: true, items: items, clearError: true);
   }
 
-  Future<void> _enqueue(Future<void> Function() operation) {
+  Future<void> _enqueue(
+    Future<void> Function() operation, {
+    bool exposeError = true,
+  }) {
     final next = _pendingMutation.then((_) async {
       try {
         await operation();
       } catch (_) {
-        if (mounted) {
+        if (mounted && exposeError) {
           state = state.copyWith(
             loaded: true,
             errorMessage: 'Could not update notifications.',

@@ -102,6 +102,63 @@ class AppNotificationStore {
       whereArgs: ['app_update', channel],
     );
   }
+
+  /// Replaces the remote announcement mirror in one transaction while
+  /// preserving the read state of records already seen on this device.
+  Future<void> syncAnnouncements(
+    Iterable<AppNotification> announcements,
+  ) async {
+    final items = announcements.toList(growable: false);
+    final retained = <String>{};
+    for (final item in items) {
+      if (item.kind != AppNotificationKind.announcement ||
+          item.action != AppNotificationAction.none ||
+          !retained.add(item.id)) {
+        throw const FormatException('Invalid announcement mirror.');
+      }
+    }
+    final database = await _database.database;
+    await database.transaction((transaction) async {
+      if (retained.isEmpty) {
+        await transaction.delete(
+          'app_notifications',
+          where: 'kind = ?',
+          whereArgs: ['announcement'],
+        );
+      } else {
+        final placeholders = List.filled(retained.length, '?').join(', ');
+        await transaction.delete(
+          'app_notifications',
+          where: 'kind = ? AND id NOT IN ($placeholders)',
+          whereArgs: ['announcement', ...retained],
+        );
+      }
+
+      for (final item in items) {
+        final existing = await transaction.query(
+          'app_notifications',
+          columns: const ['id'],
+          where: 'id = ?',
+          whereArgs: [item.id],
+          limit: 1,
+        );
+        final values = _notificationToRow(item);
+        if (existing.isEmpty) {
+          await transaction.insert('app_notifications', values);
+        } else {
+          values
+            ..remove('created_at')
+            ..remove('read_at');
+          await transaction.update(
+            'app_notifications',
+            values,
+            where: 'id = ?',
+            whereArgs: [item.id],
+          );
+        }
+      }
+    });
+  }
 }
 
 Map<String, Object?> _notificationToRow(AppNotification notification) => {
@@ -120,10 +177,12 @@ Map<String, Object?> _notificationToRow(AppNotification notification) => {
 AppNotification _notificationFromRow(Map<String, Object?> row) {
   final kind = switch (row['kind']) {
     'app_update' => AppNotificationKind.appUpdate,
+    'announcement' => AppNotificationKind.announcement,
     _ => throw const FormatException('Unknown app notification kind.'),
   };
   final action = switch (row['action']) {
     'open_app_updates' => AppNotificationAction.openAppUpdates,
+    'none' => AppNotificationAction.none,
     _ => throw const FormatException('Unknown app notification action.'),
   };
   return AppNotification(
@@ -151,8 +210,10 @@ AppNotification _notificationFromRow(Map<String, Object?> row) {
 
 String _kindName(AppNotificationKind kind) => switch (kind) {
   AppNotificationKind.appUpdate => 'app_update',
+  AppNotificationKind.announcement => 'announcement',
 };
 
 String _actionName(AppNotificationAction action) => switch (action) {
   AppNotificationAction.openAppUpdates => 'open_app_updates',
+  AppNotificationAction.none => 'none',
 };

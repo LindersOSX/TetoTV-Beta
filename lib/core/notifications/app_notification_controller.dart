@@ -7,7 +7,11 @@ import 'package:anime_tv/core/config/app_config.dart';
 import 'package:anime_tv/core/storage/storage_providers.dart';
 import 'package:anime_tv/features/settings/application/app_update_controller.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+const foregroundAnnouncementRefreshInterval = Duration(minutes: 1);
+const foregroundUpdateRefreshInterval = Duration(minutes: 5);
 
 final appNotificationControllerProvider =
     StateNotifierProvider<AppNotificationController, AppNotificationState>((
@@ -24,16 +28,26 @@ final appNotificationControllerProvider =
         announcementApi: announcementClient,
       );
       unawaited(controller.load());
-      Timer? announcementTimer;
+      AppNotificationRefreshScheduler? refreshScheduler;
       if (announcementClient != null) {
         unawaited(controller.refreshAnnouncements());
-        announcementTimer = Timer.periodic(
-          const Duration(minutes: 15),
-          (_) => unawaited(controller.refreshAnnouncements()),
+        refreshScheduler = AppNotificationRefreshScheduler(
+          refreshAnnouncements: controller.refreshAnnouncements,
+          refreshAppUpdate: () => ref
+              .read(appUpdateControllerProvider.notifier)
+              .checkForUpdates(
+                automatic: true,
+                launchInstaller: false,
+                // Automatic-download consent is enforced by the updater. This
+                // foreground check still discovers release metadata when the
+                // preference is off, and downloads when it is on.
+                downloadAvailable: true,
+              ),
         );
+        refreshScheduler.start();
       }
       ref.onDispose(() {
-        announcementTimer?.cancel();
+        refreshScheduler?.dispose();
         announcementClient?.close();
       });
       // Download progress can update the updater state once per percentage.
@@ -93,6 +107,128 @@ class AppNotificationState {
 }
 
 typedef AppNotificationClock = DateTime Function();
+
+/// Keeps the inbox current while TetoTV is visible without waking a suspended
+/// TV or stacking network calls when a slow request outlives its interval.
+///
+/// The first announcement fetch and first update check remain owned by their
+/// existing startup paths. Resuming the app refreshes both immediately, while
+/// normal foreground use follows the bounded polling intervals below.
+class AppNotificationRefreshScheduler with WidgetsBindingObserver {
+  AppNotificationRefreshScheduler({
+    required this.refreshAnnouncements,
+    required this.refreshAppUpdate,
+    this.announcementInterval = foregroundAnnouncementRefreshInterval,
+    this.updateInterval = foregroundUpdateRefreshInterval,
+  });
+
+  final Future<void> Function() refreshAnnouncements;
+  final Future<void> Function() refreshAppUpdate;
+  final Duration announcementInterval;
+  final Duration updateInterval;
+
+  Timer? _announcementTimer;
+  Timer? _updateTimer;
+  bool _announcementRefreshInFlight = false;
+  bool _updateRefreshInFlight = false;
+  bool _foreground = false;
+  bool _started = false;
+  bool _disposed = false;
+
+  void start() {
+    if (_started || _disposed) return;
+    _started = true;
+    WidgetsBinding.instance.addObserver(this);
+    final lifecycle = WidgetsBinding.instance.lifecycleState;
+    if (lifecycle == null || lifecycle == AppLifecycleState.resumed) {
+      _startForegroundTimers();
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (_disposed) return;
+    if (state == AppLifecycleState.resumed) {
+      _startForegroundTimers();
+      _runAnnouncementRefresh();
+      _runUpdateRefresh();
+    } else {
+      _stopForegroundTimers();
+    }
+  }
+
+  void _startForegroundTimers() {
+    _foreground = true;
+    _announcementTimer ??= Timer.periodic(
+      announcementInterval,
+      (_) => _runAnnouncementRefresh(),
+    );
+    _scheduleNextUpdateRefresh();
+  }
+
+  void _stopForegroundTimers() {
+    _foreground = false;
+    _announcementTimer?.cancel();
+    _announcementTimer = null;
+    _updateTimer?.cancel();
+    _updateTimer = null;
+  }
+
+  void _scheduleNextUpdateRefresh({bool reset = false}) {
+    if (_disposed || !_foreground) return;
+    if (reset) {
+      _updateTimer?.cancel();
+      _updateTimer = null;
+    }
+    _updateTimer ??= Timer(updateInterval, () {
+      _updateTimer = null;
+      _runUpdateRefresh();
+    });
+  }
+
+  void _runAnnouncementRefresh() {
+    if (_disposed || _announcementRefreshInFlight) return;
+    _announcementRefreshInFlight = true;
+    unawaited(_guardAnnouncementRefresh());
+  }
+
+  Future<void> _guardAnnouncementRefresh() async {
+    try {
+      await refreshAnnouncements();
+    } catch (_) {
+      // Foreground refresh is best-effort and must never disrupt the app.
+    } finally {
+      _announcementRefreshInFlight = false;
+    }
+  }
+
+  void _runUpdateRefresh() {
+    if (_disposed || _updateRefreshInFlight) return;
+    _updateRefreshInFlight = true;
+    unawaited(_guardUpdateRefresh());
+  }
+
+  Future<void> _guardUpdateRefresh() async {
+    try {
+      await refreshAppUpdate();
+    } catch (_) {
+      // A failed background check can retry on the next interval or resume.
+    } finally {
+      _updateRefreshInFlight = false;
+      // Measure the throttle-compatible interval from completion, rather than
+      // from scheduler startup. Network latency must not make the next tick
+      // arrive just before the updater's own five-minute check window.
+      _scheduleNextUpdateRefresh(reset: true);
+    }
+  }
+
+  void dispose() {
+    if (_disposed) return;
+    _disposed = true;
+    _stopForegroundTimers();
+    if (_started) WidgetsBinding.instance.removeObserver(this);
+  }
+}
 
 class AppNotificationController extends StateNotifier<AppNotificationState> {
   AppNotificationController(

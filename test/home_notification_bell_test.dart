@@ -456,6 +456,7 @@ class _TestAppUpdateController extends AppUpdateController {
   Future<void> checkForUpdates({
     bool automatic = false,
     bool launchInstaller = false,
+    bool downloadAvailable = true,
   }) async {
     checkCalls++;
     lastAutomatic = automatic;

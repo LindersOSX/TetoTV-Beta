@@ -13,8 +13,10 @@ import org.libtorrent4j.TorrentInfo
 import org.libtorrent4j.alerts.AddTorrentAlert
 import org.libtorrent4j.alerts.Alert
 import org.libtorrent4j.alerts.AlertType
+import org.libtorrent4j.alerts.TorrentAlert
 import org.libtorrent4j.swig.session_handle
 import org.libtorrent4j.swig.settings_pack
+import org.libtorrent4j.swig.torrent_handle
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.File
@@ -164,6 +166,54 @@ internal object DirectTorrentEngine {
         }.getOrDefault(false)
     }
 
+    /**
+     * Copies the alert's borrowed torrent handle through the live session.
+     *
+     * libtorrent4j's TorrentAlert.handle() points inside the native alert and
+     * becomes dangling as soon as SessionManager pops the next alert. A
+     * session find returns an owning torrent_handle value that remains safe to
+     * retain for playback and timeout cleanup. Resolve it while the callback's
+     * alert is still alive and support both v1 and v2-only magnets.
+     */
+    fun retainAlertHandle(alert: TorrentAlert<*>): TorrentHandle? = synchronized(monitor) {
+        if (!state.leased || state.poisoned) return@synchronized null
+        val borrowed = runCatching { alert.handle() }.getOrNull()
+            ?: return@synchronized null
+        val hashes = runCatching { borrowed.swig().info_hashes() }.getOrNull()
+            ?: return@synchronized null
+        try {
+            if (hashes.has_v1()) {
+                val hash = hashes.v1
+                val retained = try {
+                    session.swig().find_torrent(hash)
+                } finally {
+                    hash.delete()
+                }
+                ownedHandleOrNull(retained)?.let { return@synchronized it }
+            }
+            if (hashes.has_v2()) {
+                val hash = hashes.v2
+                val retained = try {
+                    session.swig().find_torrent(hash)
+                } finally {
+                    hash.delete()
+                }
+                ownedHandleOrNull(retained)?.let { return@synchronized it }
+            }
+            null
+        } finally {
+            hashes.delete()
+        }
+    }
+
+    private fun ownedHandleOrNull(handle: torrent_handle): TorrentHandle? {
+        if (runCatching { handle.is_valid() }.getOrDefault(false)) {
+            return TorrentHandle(handle)
+        }
+        runCatching { handle.delete() }
+        return null
+    }
+
     fun release(listener: AlertListener) {
         synchronized(monitor) {
             if (!state.release()) return
@@ -265,13 +315,27 @@ internal class DirectTorrentManager(
                         metadataFailure.compareAndSet(null, "DIRECT_TORRENT_ADD_FAILED")
                         metadataReady.countDown()
                     } else {
-                        torrentHandle.set(added.handle())
-                        if (added.handle().torrentFile() != null) metadataReady.countDown()
+                        val retained = DirectTorrentEngine.retainAlertHandle(added)
+                        if (retained == null) {
+                            metadataFailure.compareAndSet(null, "DIRECT_TORRENT_ADD_FAILED")
+                            metadataReady.countDown()
+                        } else {
+                            torrentHandle.set(retained)
+                            if (retained.torrentFile() != null) metadataReady.countDown()
+                        }
                     }
                     torrentAdded.countDown()
                 }
                 AlertType.METADATA_RECEIVED -> {
-                    torrentHandle.compareAndSet(null, alert.handleOrNull())
+                    if (torrentHandle.get() == null && !stopped.get()) {
+                        val torrentAlert = alert as? TorrentAlert<*>
+                        val retained = torrentAlert?.let(DirectTorrentEngine::retainAlertHandle)
+                        if (retained == null) {
+                            metadataFailure.compareAndSet(null, "DIRECT_TORRENT_METADATA_FAILED")
+                        } else if (!torrentHandle.compareAndSet(null, retained)) {
+                            runCatching { retained.swig().delete() }
+                        }
+                    }
                     metadataReady.countDown()
                 }
                 AlertType.METADATA_FAILED -> {
@@ -712,9 +776,6 @@ internal class DirectTorrentManager(
             )
         }
     }
-
-    private fun Alert<*>.handleOrNull(): TorrentHandle? =
-        (this as? org.libtorrent4j.alerts.TorrentAlert<*>)?.handle()
 
     private data class HttpRequest(
         val method: String,

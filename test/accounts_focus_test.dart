@@ -318,6 +318,9 @@ void main() {
         const ValueKey('settings-toggle-all-sections'),
       );
       final profile = find.byKey(const ValueKey('top-level-fixed-profile'));
+      final notification = find.byKey(
+        const ValueKey('top-level-fixed-notification'),
+      );
       final appearance = find.byKey(const ValueKey('settings-area-appearance'));
       final themeHeader = find.byKey(
         const ValueKey('settings-section-toggle-theme-display'),
@@ -330,6 +333,7 @@ void main() {
       final searchFocus = focusFor(search);
       final toggleAllFocus = focusFor(toggleAll);
       final profileFocus = focusFor(profile);
+      final notificationFocus = focusFor(notification);
       final appearanceFocus = focusFor(appearance);
       final themeHeaderFocus = focusFor(themeHeader);
       final homeHeaderFocus = focusFor(homeHeader);
@@ -380,7 +384,13 @@ void main() {
       await tester.pump();
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
       await tester.pump();
+      expect(notificationFocus.hasFocus, isTrue);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+      await tester.pump();
       expect(profileFocus.hasFocus, isTrue);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+      await tester.pump();
+      expect(notificationFocus.hasFocus, isTrue);
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
       await tester.pump();
       expect(toggleAllFocus.hasFocus, isTrue);
@@ -1142,11 +1152,6 @@ void main() {
         find.byKey(const ValueKey('settings-toggle-all-sections')),
         findsOneWidget,
       );
-      expect(
-        find.byKey(const ValueKey('top-level-fixed-profile')),
-        findsOneWidget,
-      );
-
       // UP from the selected area focuses Search after the active Settings
       // action has restored the list and its fixed tools.
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);

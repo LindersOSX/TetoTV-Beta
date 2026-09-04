@@ -577,6 +577,25 @@ class LocalMediaController extends StateNotifier<LocalMediaState> {
     );
   }
 
+  JellyfinPlaybackPlan compatibilityPlaybackPlanForAudioStream(
+    JellyfinMediaItem item, {
+    required String playSessionId,
+    required int audioStreamIndex,
+    String preferredSubtitleLanguage = 'eng',
+  }) {
+    final connection = state.connection;
+    if (connection == null) {
+      throw const JellyfinException('Connect Jellyfin before playing media.');
+    }
+    return _client.compatibilityPlaybackPlanForAudioStream(
+      connection,
+      item,
+      playSessionId: playSessionId,
+      audioStreamIndex: audioStreamIndex,
+      preferredSubtitleLanguage: preferredSubtitleLanguage,
+    );
+  }
+
   Uri? imageUri(JellyfinMediaItem item) {
     final connection = state.connection;
     return connection == null ? null : _client.imageUri(connection, item);

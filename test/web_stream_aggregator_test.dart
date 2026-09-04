@@ -994,6 +994,31 @@ void main() {
     },
   );
 
+  test(
+    'generic provider failures use failure-only diagnostic labels',
+    () async {
+      WebProviderExecutionOutcome? recorded;
+      await aggregateWebStreamingProvidersIncrementally(
+        [
+          _FakeProvider(
+            'generic-failure',
+            'Generic failure',
+            () => throw StateError('offline'),
+          ),
+        ],
+        const EpisodeReference(anilistMediaId: 1, title: 'Test', episode: 1),
+        onOutcome: (_, outcome) => recorded = outcome,
+      ).last;
+
+      expect(recorded, isNotNull);
+      expect(recorded!.status, WebProviderFailureStatus.failed.name);
+      expect(recorded!.stage, 'runtime');
+      expect(recorded!.reason, 'provider_error');
+      expect(recorded!.resultCount, 0);
+      expect(recorded!.reason, isNot('streams_returned'));
+    },
+  );
+
   test('healthy providers are queued ahead of repeatedly failing ones', () {
     final addons = [
       _installedAddon('never-used'),

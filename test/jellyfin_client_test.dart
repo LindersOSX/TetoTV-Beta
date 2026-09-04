@@ -509,6 +509,13 @@ void main() {
         videoCodec: 'h264',
         videoBitDepth: 8,
         supportsDirectPlay: true,
+        subtitleStreams: [
+          JellyfinSubtitleStream(
+            index: 4,
+            label: 'English captions',
+            language: 'eng',
+          ),
+        ],
       );
 
       final plan = client.playbackPlan(
@@ -523,7 +530,48 @@ void main() {
       expect(plan.uri.queryParameters['static'], 'true');
       expect(plan.uri.queryParameters, isNot(contains('AudioStreamIndex')));
       expect(plan.mediaContentType, 'video/x-matroska');
+      expect(plan.externalSubtitleTracks, hasLength(1));
+      expect(
+        plan.externalSubtitleTracks.single.uri.path,
+        '/jellyfin/Videos/episode-id-12345678/source-id-12345678/'
+        'Subtitles/4/0/Stream.vtt',
+      );
       expect(plan.uri.toString(), isNot(contains('access-token')));
+    });
+
+    test('switches a compatibility stream by exact audio index', () {
+      final client = JellyfinClient();
+      const item = JellyfinMediaItem(
+        id: 'episode-dual-12345678',
+        name: 'Dual audio',
+        type: 'Episode',
+        mediaSourceId: 'source-dual-12345678',
+        videoCodec: 'av1',
+        audioStreams: [
+          JellyfinAudioStream(index: 1, label: 'Japanese', language: 'jpn'),
+          JellyfinAudioStream(index: 2, label: 'English', language: 'eng'),
+        ],
+      );
+
+      final plan = client.compatibilityPlaybackPlanForAudioStream(
+        _connection(),
+        item,
+        playSessionId: 'session_exact_audio_1234',
+        audioStreamIndex: 2,
+      );
+
+      expect(plan.uri.queryParameters['AudioStreamIndex'], '2');
+      expect(plan.selectedAudioStreamIndex, 2);
+      expect(plan.uri.toString(), isNot(contains('access-token')));
+      expect(
+        () => client.compatibilityPlaybackPlanForAudioStream(
+          _connection(),
+          item,
+          playSessionId: 'session_missing_audio_12',
+          audioStreamIndex: 9,
+        ),
+        throwsA(isA<JellyfinException>()),
+      );
     });
 
     test('prefers an H.264/AAC transcode for TrueHD audio', () {

@@ -349,6 +349,36 @@ void main() {
     );
 
     test(
+      'dismissed announcements stay out of the inbox after refresh',
+      () async {
+        final announcement = AppNotification(
+          id: 'app-announcement:${List.filled(64, 'f').join()}',
+          kind: AppNotificationKind.announcement,
+          title: 'TetoTV announcement',
+          body: 'A message the viewer can dismiss.',
+          action: AppNotificationAction.none,
+          createdAtUtc: clock,
+        );
+        final remoteController = AppNotificationController(
+          store,
+          announcementApi: _StaticAnnouncementApi([announcement]),
+          clock: () => clock,
+        );
+        addTearDown(remoteController.dispose);
+
+        await remoteController.refreshAnnouncements();
+        expect(remoteController.state.inboxItems, hasLength(1));
+
+        await remoteController.dismiss(announcement.id);
+        expect(remoteController.state.inboxItems, isEmpty);
+
+        await remoteController.refreshAnnouncements();
+        expect(remoteController.state.items.single.isRead, isTrue);
+        expect(remoteController.state.inboxItems, isEmpty);
+      },
+    );
+
+    test(
       'announcement mirror rolls back completely when one row fails',
       () async {
         final original = AppNotification(

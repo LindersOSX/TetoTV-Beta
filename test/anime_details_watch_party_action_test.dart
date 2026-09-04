@@ -274,10 +274,7 @@ void main() {
     expect(nextEpisodeDetector.focusNode?.hasFocus, isTrue);
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pumpAndSettle();
-    expect(
-      find.byKey(const ValueKey('episode-browser-dialog')),
-      findsOneWidget,
-    );
+    expect(find.byKey(const ValueKey('episode-browser-page')), findsOneWidget);
     await tester.binding.handlePopRoute();
     await tester.pumpAndSettle();
     expect(nextEpisodeDetector.focusNode?.hasFocus, isTrue);

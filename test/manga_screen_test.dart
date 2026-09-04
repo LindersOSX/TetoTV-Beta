@@ -19,7 +19,9 @@ import 'package:anime_tv/features/manga/domain/manga_extension_models.dart';
 import 'package:anime_tv/features/manga/domain/manga_source_models.dart';
 import 'package:anime_tv/features/manga/presentation/manga_screen.dart';
 import 'package:anime_tv/features/manga/presentation/manga_reader_screen.dart';
+import 'package:anime_tv/features/marketplace/application/marketplace_controller.dart';
 import 'package:anime_tv/features/marketplace/data/addon_store.dart';
+import 'package:anime_tv/features/marketplace/data/marketplace_client.dart';
 import 'package:anime_tv/features/marketplace/domain/addon_models.dart';
 import 'package:anime_tv/features/settings/application/app_update_controller.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
@@ -90,13 +92,29 @@ void main() {
       await tester.pump(const Duration(milliseconds: 220));
 
       expect(find.byKey(const ValueKey('manga-sources')), findsOneWidget);
-      expect(find.text('Your sources, your library'), findsOneWidget);
       expect(
-        find.textContaining('never executes manga source code'),
+        find.text('Add a repository. Install a source. Start reading.'),
         findsOneWidget,
       );
+      expect(
+        find.textContaining('bundles, prefills, and recommends no source'),
+        findsOneWidget,
+      );
+      await tester.tap(
+        find.byKey(const ValueKey('manga-add-extension-repository')).first,
+        warnIfMissed: false,
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Add manga extension repository'), findsOneWidget);
+      final repositoryInput = tester.widget<TvTextInput>(
+        find.byKey(const ValueKey('manga-extension-repository-input')),
+      );
+      expect(repositoryInput.controller.text, isEmpty);
+      await tester.tap(find.text('Cancel').last, warnIfMissed: false);
+      await tester.pumpAndSettle();
+
       await tester.scrollUntilVisible(
-        find.text('No sources added', skipOffstage: false),
+        find.text('No data catalogs added', skipOffstage: false),
         180,
         scrollable: find.descendant(
           of: find.byKey(const ValueKey('manga-sources-list')),
@@ -104,7 +122,7 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      expect(find.text('No sources added'), findsOneWidget);
+      expect(find.text('No data catalogs added'), findsOneWidget);
       expect(
         find.textContaining('Nothing is bundled or recommended by TetoTV.'),
         findsOneWidget,
@@ -112,18 +130,24 @@ void main() {
       expect(controller.state.sources, isEmpty);
 
       await tester.scrollUntilVisible(
-        find.text('Add source', skipOffstage: false).first,
-        -180,
+        find.byKey(
+          const ValueKey('manga-add-data-catalog'),
+          skipOffstage: false,
+        ),
+        180,
         scrollable: find.descendant(
           of: find.byKey(const ValueKey('manga-sources-list')),
           matching: find.byType(Scrollable),
         ),
       );
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Add source').first, warnIfMissed: false);
+      await tester.tap(
+        find.byKey(const ValueKey('manga-add-data-catalog')),
+        warnIfMissed: false,
+      );
       await tester.pumpAndSettle();
 
-      expect(find.text('Add manga source'), findsOneWidget);
+      expect(find.text('Add OPDS or data catalog'), findsOneWidget);
       expect(
         find.textContaining('TetoTV does not provide a source list.'),
         findsOneWidget,
@@ -133,6 +157,152 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets('Manga repositories reject native Mihon indexes before install', (
+    tester,
+  ) async {
+    _setViewport(tester, const Size(1280, 720));
+    addTearDown(() => _resetViewport(tester));
+    final marketplace = _TestMarketplaceController(
+      const MarketplaceState(loading: false),
+    );
+    await _pumpScreen(
+      tester,
+      _TestMangaHubController(MangaHubState()),
+      isTelevision: true,
+      marketplace: marketplace,
+    );
+
+    await tester.tap(
+      find.byKey(const ValueKey('manga-section-sources')),
+      warnIfMissed: false,
+    );
+    await tester.pump(const Duration(milliseconds: 220));
+    await tester.tap(
+      find.byKey(const ValueKey('manga-add-extension-repository')).first,
+      warnIfMissed: false,
+    );
+    await tester.pumpAndSettle();
+    final input = tester.widget<TvTextInput>(
+      find.byKey(const ValueKey('manga-extension-repository-input')),
+    );
+    input.controller.text =
+        'https://github.com/example/extensions/raw/repo/index.pb?example=1';
+    await tester.tap(
+      find.widgetWithText(FilledButton, 'Add repository'),
+      warnIfMissed: false,
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.textContaining('Mihon/Tachiyomi Android extension store'),
+      findsOneWidget,
+    );
+    expect(marketplace.addedRepositoryInputs, isEmpty);
+    expect(find.text('Add manga extension repository'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Manga source catalog requires explicit extension install', (
+    tester,
+  ) async {
+    _setViewport(tester, const Size(1280, 720));
+    addTearDown(() => _resetViewport(tester));
+    final addon = _mangaExtensionAddon().manifest;
+    final marketplace = _TestMarketplaceController(
+      MarketplaceState(
+        repositories: [_mangaRepository()],
+        catalog: [addon],
+        loading: false,
+      ),
+    );
+    await _pumpScreen(
+      tester,
+      _TestMangaHubController(MangaHubState()),
+      isTelevision: true,
+      marketplace: marketplace,
+    );
+
+    await tester.tap(
+      find.byKey(const ValueKey('manga-section-sources')),
+      warnIfMissed: false,
+    );
+    await tester.pump(const Duration(milliseconds: 220));
+    await tester.scrollUntilVisible(
+      find.byKey(
+        const ValueKey('manga-extension-install-manga.fixture'),
+        skipOffstage: false,
+      ),
+      180,
+      scrollable: find.descendant(
+        of: find.byKey(const ValueKey('manga-sources-list')),
+        matching: find.byType(Scrollable),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey('manga-extension-install-manga.fixture')),
+      warnIfMissed: false,
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Install Fixture Manga?'), findsOneWidget);
+    expect(marketplace.installedAddonIds, isEmpty);
+    await tester.tap(
+      find.widgetWithText(FilledButton, 'Install'),
+      warnIfMissed: false,
+    );
+    await tester.pumpAndSettle();
+    expect(marketplace.installedAddonIds, ['manga.fixture']);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('large manga extension catalogs build lazily while scrolling', (
+    tester,
+  ) async {
+    _setViewport(tester, const Size(1280, 720));
+    addTearDown(() => _resetViewport(tester));
+    final catalog = List<MarketplaceAddon>.generate(
+      240,
+      _mangaCatalogAddon,
+      growable: false,
+    );
+    final marketplace = _TestMarketplaceController(
+      MarketplaceState(
+        repositories: [_mangaRepository()],
+        catalog: catalog,
+        loading: false,
+      ),
+    );
+    await _pumpScreen(
+      tester,
+      _TestMangaHubController(MangaHubState()),
+      isTelevision: true,
+      marketplace: marketplace,
+    );
+
+    await tester.tap(
+      find.byKey(const ValueKey('manga-section-sources')),
+      warnIfMissed: false,
+    );
+    await tester.pump(const Duration(milliseconds: 220));
+
+    const lastKey = ValueKey('manga-extension-catalog-manga.fixture.239');
+    expect(find.byKey(lastKey), findsNothing);
+    await tester.scrollUntilVisible(
+      find.byKey(lastKey, skipOffstage: false),
+      900,
+      maxScrolls: 80,
+      scrollable: find.descendant(
+        of: find.byKey(const ValueKey('manga-sources-list')),
+        matching: find.byType(Scrollable),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(lastKey), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets('Browse chooses an added catalog then shows publication cards', (
     tester,
@@ -267,8 +437,17 @@ void main() {
   ) async {
     _setViewport(tester, const Size(1280, 720));
     addTearDown(() => _resetViewport(tester));
+    final installedAddon = _mangaExtensionAddon();
     final extension = _TestMangaExtensionController(
-      MangaExtensionState(providers: [_mangaExtensionAddon()]),
+      MangaExtensionState(providers: [installedAddon]),
+    );
+    final marketplace = _TestMarketplaceController(
+      MarketplaceState(
+        repositories: [_mangaRepository()],
+        catalog: [installedAddon.manifest],
+        installed: [installedAddon],
+        loading: false,
+      ),
     );
     await _pumpScreen(
       tester,
@@ -277,6 +456,7 @@ void main() {
       ),
       isTelevision: true,
       extensions: extension,
+      marketplace: marketplace,
     );
 
     await tester.tap(
@@ -285,14 +465,37 @@ void main() {
     );
     await tester.pump(const Duration(milliseconds: 220));
 
+    await tester.scrollUntilVisible(
+      find.byKey(
+        const ValueKey('manga-extension-catalog-manga.fixture'),
+        skipOffstage: false,
+      ),
+      180,
+      scrollable: find.descendant(
+        of: find.byKey(const ValueKey('manga-sources-list')),
+        matching: find.byType(Scrollable),
+      ),
+    );
+    await tester.pumpAndSettle();
     expect(find.text('Manga extensions'), findsOneWidget);
-    expect(find.text('Optional OPDS catalogs'), findsOneWidget);
     expect(
-      find.byKey(const ValueKey('manga-installed-extension-manga.fixture')),
+      find.byKey(const ValueKey('manga-extension-catalog-manga.fixture')),
       findsOneWidget,
     );
     expect(find.text('Fixture Manga'), findsOneWidget);
-    expect(find.text('Manage extensions'), findsOneWidget);
+    expect(find.text('All add-ons'), findsOneWidget);
+    expect(find.text('ENABLED'), findsOneWidget);
+
+    await tester.scrollUntilVisible(
+      find.text('My added catalog', skipOffstage: false),
+      180,
+      scrollable: find.descendant(
+        of: find.byKey(const ValueKey('manga-sources-list')),
+        matching: find.byType(Scrollable),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Optional OPDS & data catalogs'), findsOneWidget);
     expect(find.text('My added catalog'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
@@ -639,6 +842,7 @@ List<Override> _overrides(
   required bool isTelevision,
   MangaAcquisitionController? acquisitions,
   MangaExtensionController? extensions,
+  MarketplaceController? marketplace,
 }) => <Override>[
   mangaHubControllerProvider.overrideWith((_) => controller),
   if (extensions != null)
@@ -649,6 +853,11 @@ List<Override> _overrides(
         _RecordingMangaAcquisitionController(
           MangaAcquisitionState(isInitializing: false),
         ),
+  ),
+  marketplaceControllerProvider.overrideWith(
+    (_) =>
+        marketplace ??
+        _TestMarketplaceController(const MarketplaceState(loading: false)),
   ),
   settingsPreferencesProvider.overrideWith(
     (_) => _TestSettingsController(isTelevision: isTelevision),
@@ -663,6 +872,7 @@ Future<void> _pumpScreen(
   required bool isTelevision,
   MangaAcquisitionController? acquisitions,
   MangaExtensionController? extensions,
+  MarketplaceController? marketplace,
 }) async {
   await tester.pumpWidget(
     ProviderScope(
@@ -671,6 +881,7 @@ Future<void> _pumpScreen(
         isTelevision: isTelevision,
         acquisitions: acquisitions,
         extensions: extensions,
+        marketplace: marketplace,
       ),
       child: MaterialApp(theme: AppTheme.dark, home: const MangaScreen()),
     ),
@@ -714,6 +925,69 @@ InstalledStreamingAddon _mangaExtensionAddon() => InstalledStreamingAddon(
   installedAt: DateTime.utc(2026, 9, 1),
   updatedAt: DateTime.utc(2026, 9, 1),
 );
+
+AddonRepository _mangaRepository() => AddonRepository(
+  url: 'https://example.test/marketplace.json',
+  updatedAt: DateTime.utc(2026, 9, 1),
+);
+
+MarketplaceAddon _mangaCatalogAddon(int index) => MarketplaceAddon(
+  id: 'manga.fixture.$index',
+  name: 'Manga source ${index.toString().padLeft(3, '0')}',
+  description: 'Fixture catalog source',
+  author: 'TetoTV tests',
+  manifestUri: Uri.parse('https://example.test/manga-$index.json'),
+  repositoryUrl: _mangaRepository().url,
+  language: 'javascript',
+  type: 'manga-provider',
+  locale: index.isEven ? 'en' : 'es',
+);
+
+class _TestMarketplaceController extends MarketplaceController {
+  factory _TestMarketplaceController(MarketplaceState initial) {
+    final store = AddonStore(TetoTvDatabase.instance);
+    return _TestMarketplaceController._(store, initial);
+  }
+
+  _TestMarketplaceController._(AddonStore store, MarketplaceState initial)
+    : super(store, MarketplaceClient(store)) {
+    state = initial;
+  }
+
+  final List<String> addedRepositoryInputs = [];
+  final List<String> installedAddonIds = [];
+
+  @override
+  Future<void> load() async {}
+
+  @override
+  Future<void> refresh({bool refreshNetwork = true}) async {}
+
+  @override
+  Future<BulkSourceAddResult> addRepositories(String input) async {
+    addedRepositoryInputs.add(input);
+    return const BulkSourceAddResult(added: 1, duplicates: 0, rejected: []);
+  }
+
+  @override
+  Future<void> install(MarketplaceAddon addon) async {
+    installedAddonIds.add(addon.id);
+    state = state.copyWith(
+      installed: [
+        ...state.installed.where(
+          (item) => !marketplaceAddonIdsMatch(item.manifest.id, addon.id),
+        ),
+        InstalledStreamingAddon(
+          manifest: addon,
+          payload: 'class Provider {}',
+          enabled: true,
+          installedAt: DateTime.utc(2026, 9, 1),
+          updatedAt: DateTime.utc(2026, 9, 1),
+        ),
+      ],
+    );
+  }
+}
 
 class _TestMangaExtensionController extends MangaExtensionController {
   _TestMangaExtensionController(

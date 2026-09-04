@@ -72,6 +72,14 @@ class AppNotificationState {
 
   int get unreadCount => items.where((item) => !item.isRead).length;
 
+  /// Notifications that still belong in the visible inbox.
+  ///
+  /// A read timestamp doubles as a durable dismissal tombstone. Remote
+  /// announcement refreshes and update reconciliation preserve that timestamp,
+  /// so a dismissed message cannot reappear on the next poll or app launch.
+  List<AppNotification> get inboxItems =>
+      List.unmodifiable(items.where((item) => !item.isRead));
+
   AppNotificationState copyWith({
     bool? loaded,
     List<AppNotification>? items,
@@ -153,6 +161,10 @@ class AppNotificationController extends StateNotifier<AppNotificationState> {
     await _store.markRead(id, _clock().toUtc());
     await _reload();
   });
+
+  /// Removes one message from the visible inbox without deleting the durable
+  /// record that prevents a provider refresh from recreating it.
+  Future<void> dismiss(String id) => markRead(id);
 
   Future<void> markAllRead() => _enqueue(() async {
     await _store.markAllRead(_clock().toUtc());

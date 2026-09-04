@@ -1130,6 +1130,16 @@ void main() {
 
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
     await tester.pump();
+    final notificationDetector = tester.widget<FocusableActionDetector>(
+      find.descendant(
+        of: find.byKey(const ValueKey('main-nav-notification-bell')),
+        matching: find.byType(FocusableActionDetector),
+      ),
+    );
+    expect(notificationDetector.focusNode!.hasFocus, isTrue);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    await tester.pump();
     final profileDetector = tester.widget<FocusableActionDetector>(
       find.descendant(
         of: profileSummary,
@@ -1137,6 +1147,10 @@ void main() {
       ),
     );
     expect(profileDetector.focusNode!.hasFocus, isTrue);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+    await tester.pump();
+    expect(notificationDetector.focusNode!.hasFocus, isTrue);
 
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
     await tester.pump();

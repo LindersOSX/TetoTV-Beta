@@ -10,6 +10,8 @@ typedef LibraryPlaybackStartedCallback =
     FutureOr<void> Function(Duration position);
 typedef LibraryPlaybackFinishedCallback =
     FutureOr<void> Function(LibraryPlaybackResult result);
+typedef LibraryServerAudioSelectionCallback =
+    Future<LibraryPlaybackRequest> Function(String trackId, Duration position);
 
 /// The anime-only effects available to private-library media.
 ///
@@ -108,6 +110,21 @@ class LibraryExternalSubtitleTrack {
   final String contentType;
 }
 
+@immutable
+class LibraryServerAudioTrack {
+  LibraryServerAudioTrack({
+    required String id,
+    required String label,
+    String? language,
+  }) : id = _trackId(id),
+       label = _boundedLabel(label, 'Audio track'),
+       language = _optionalBoundedLabel(language);
+
+  final String id;
+  final String label;
+  final String? language;
+}
+
 /// A capability kept entirely inside the app's playback route.
 ///
 /// [source], [headers], and [timelineIdentity] are never copied into Watch
@@ -133,6 +150,9 @@ class LibraryPlaybackRequest {
     this.subtitleContentType,
     this.initialPosition = Duration.zero,
     this.requestedAudio,
+    List<LibraryServerAudioTrack> serverAudioTracks = const [],
+    this.selectedServerAudioTrackId,
+    this.onServerAudioTrackSelected,
     this.onStarted,
     this.onProgress,
     this.onFinished,
@@ -150,7 +170,8 @@ class LibraryPlaybackRequest {
        headers = Map.unmodifiable(headers),
        externalSubtitleTracks = List.unmodifiable(
          externalSubtitleTracks.take(32),
-       ) {
+       ),
+       serverAudioTracks = List.unmodifiable(serverAudioTracks.take(32)) {
     if (!isSupportedLibraryPlaybackUri(source)) {
       throw ArgumentError.value(
         source,
@@ -189,6 +210,22 @@ class LibraryPlaybackRequest {
         );
       }
     }
+    if (selectedServerAudioTrackId != null &&
+        !this.serverAudioTracks.any(
+          (track) => track.id == selectedServerAudioTrackId,
+        )) {
+      throw ArgumentError.value(
+        selectedServerAudioTrackId,
+        'selectedServerAudioTrackId',
+        'must identify a supplied server audio track',
+      );
+    }
+    if (this.serverAudioTracks.length > 1 &&
+        onServerAudioTrackSelected == null) {
+      throw ArgumentError(
+        'Selectable server audio tracks require a preparation callback.',
+      );
+    }
   }
 
   final Uri source;
@@ -211,6 +248,9 @@ class LibraryPlaybackRequest {
   final String? subtitleContentType;
   final Duration initialPosition;
   final PlaybackAudioPreference? requestedAudio;
+  final List<LibraryServerAudioTrack> serverAudioTracks;
+  final String? selectedServerAudioTrackId;
+  final LibraryServerAudioSelectionCallback? onServerAudioTrackSelected;
   final LibraryPlaybackStartedCallback? onStarted;
   final LibraryPlaybackProgressCallback? onProgress;
   final LibraryPlaybackFinishedCallback? onFinished;
@@ -324,6 +364,14 @@ String _providerId(String value) {
   final normalized = value.trim().toLowerCase();
   if (!RegExp(r'^[a-z0-9][a-z0-9._-]{0,79}$').hasMatch(normalized)) {
     throw ArgumentError.value(value, 'sourceProviderId', 'is invalid');
+  }
+  return normalized;
+}
+
+String _trackId(String value) {
+  final normalized = value.trim();
+  if (!RegExp(r'^[A-Za-z0-9._-]{1,80}$').hasMatch(normalized)) {
+    throw ArgumentError.value(value, 'id', 'is not a bounded track identity');
   }
   return normalized;
 }

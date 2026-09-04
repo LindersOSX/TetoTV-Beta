@@ -1237,8 +1237,12 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(
-        find.byKey(const ValueKey('episode-browser-dialog')),
+        find.byKey(const ValueKey('episode-browser-page')),
         findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('episode-browser-dialog')),
+        findsNothing,
       );
       expect(find.byType(TvKeyboardDialog), findsNothing);
 
@@ -1260,7 +1264,7 @@ void main() {
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
       await tester.pumpAndSettle();
       expect(
-        find.byKey(const ValueKey('episode-browser-dialog')),
+        find.byKey(const ValueKey('episode-browser-page')),
         findsOneWidget,
       );
       await tester.binding.handlePopRoute();
@@ -1328,14 +1332,11 @@ void main() {
     await tester.pump();
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pumpAndSettle();
-    expect(
-      find.byKey(const ValueKey('episode-browser-dialog')),
-      findsOneWidget,
-    );
+    expect(find.byKey(const ValueKey('episode-browser-page')), findsOneWidget);
 
     await tester.binding.handlePopRoute();
     await tester.pumpAndSettle();
-    expect(find.byKey(const ValueKey('episode-browser-dialog')), findsNothing);
+    expect(find.byKey(const ValueKey('episode-browser-page')), findsNothing);
     expect(selector.focusNode!.hasFocus, isTrue);
     expect(find.text('1 of 12'), findsOneWidget);
     expect(tester.takeException(), isNull);
@@ -1867,6 +1868,20 @@ void main() {
                 .dy,
           ),
         );
+        final browserPrompt = find.byKey(
+          const ValueKey('episode-browser-prompt'),
+        );
+        expect(browserPrompt, findsOneWidget);
+        if (size == const Size(390, 844)) {
+          await tester.ensureVisible(browserPrompt);
+          await tester.pumpAndSettle();
+          await tester.fling(browserPrompt, const Offset(0, -80), 800);
+          await tester.pumpAndSettle();
+          expect(
+            find.byKey(const ValueKey('episode-browser-page')),
+            findsOneWidget,
+          );
+        }
         expect(tester.takeException(), isNull);
       },
     );

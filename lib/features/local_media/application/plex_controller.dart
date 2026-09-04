@@ -503,20 +503,35 @@ class PlexController extends StateNotifier<PlexState> {
         item.type != PlexMediaType.episode) {
       throw const PlexException('Choose a Plex movie or episode to play.');
     }
+    PlexMediaItem? validatedFallback;
     if (item.isPlayable) {
       try {
         // This validates the same-origin part identity in addition to merely
         // checking that Plex returned a non-empty Part list.
         _client.playbackUri(connection, item);
-        return item;
+        validatedFallback = item;
+        final part = item.preferredPart;
+        if (part != null &&
+            (part.audioStreams.isNotEmpty || part.subtitleStreams.isNotEmpty)) {
+          return item;
+        }
       } catch (_) {
         // Search metadata can be stale. Rehydrate it once before rejecting it.
       }
     }
-    final hydrated = (await _client.metadata(
-      connection,
-      item,
-    )).withSeriesProviderIds(item.seriesProviderIds, year: item.seriesYear);
+    late final PlexMediaItem hydrated;
+    try {
+      hydrated = (await _client.metadata(
+        connection,
+        item,
+      )).withSeriesProviderIds(item.seriesProviderIds, year: item.seriesYear);
+    } catch (_) {
+      // Some Plex server/library combinations omit stream metadata from both
+      // browse and metadata responses. Keep an already validated direct-play
+      // item usable; MPV can still discover muxed tracks from the file itself.
+      if (validatedFallback != null) return validatedFallback;
+      rethrow;
+    }
     if (!hydrated.isPlayable) {
       throw const PlexException('Plex did not provide a playable media part.');
     }
@@ -535,6 +550,7 @@ class PlexController extends StateNotifier<PlexState> {
   Uri compatibilityPlaybackUri(
     PlexMediaItem item, {
     required String sessionId,
+    String? selectedAudioStreamId,
   }) {
     final connection = state.connection;
     if (connection == null) {
@@ -544,6 +560,20 @@ class PlexController extends StateNotifier<PlexState> {
       connection,
       item,
       sessionId: sessionId,
+      selectedAudioStreamId: selectedAudioStreamId,
+    );
+  }
+
+  List<PlexPlaybackSubtitleTrack> playbackSubtitleTracks(
+    PlexMediaItem item, {
+    String preferredLanguage = 'eng',
+  }) {
+    final connection = state.connection;
+    if (connection == null) return const [];
+    return _client.playbackSubtitleTracks(
+      connection,
+      item,
+      preferredLanguage: preferredLanguage,
     );
   }
 

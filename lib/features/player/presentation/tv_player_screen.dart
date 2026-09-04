@@ -478,6 +478,47 @@ Duration? playerSeekOffsetForKey(
   return null;
 }
 
+/// Whether a compatibility stream needs the media server's audio picker.
+///
+/// A transcoded stream normally exposes only the selected audio stream to MPV,
+/// so the server capability is the only way to reach the other tracks. Direct
+/// play continues to use MPV's embedded-track picker.
+@visibleForTesting
+bool shouldUseLibraryServerAudioPicker({
+  required LibraryPlaybackRequest? request,
+  required int embeddedTrackCount,
+}) {
+  if (request == null ||
+      !request.isCompatibilityStream ||
+      request.serverAudioTracks.length < 2 ||
+      request.onServerAudioTrackSelected == null) {
+    return false;
+  }
+  return embeddedTrackCount < request.serverAudioTracks.length;
+}
+
+/// Re-prepares a compatibility stream with an exact server audio track and
+/// gives the replacement capability to the owning library player route.
+@visibleForTesting
+Future<bool> handoffLibraryServerAudioTrack({
+  required LibraryPlaybackRequest request,
+  required String trackId,
+  required Duration position,
+  required Future<bool> Function(LibraryPlaybackRequest request) handoff,
+}) async {
+  final prepare = request.onServerAudioTrackSelected;
+  if (prepare == null ||
+      trackId == request.selectedServerAudioTrackId ||
+      !request.serverAudioTracks.any((track) => track.id == trackId)) {
+    return false;
+  }
+  final replacement = await prepare(
+    trackId,
+    position.isNegative ? Duration.zero : position,
+  );
+  return handoff(replacement);
+}
+
 String _formatPlayerDuration(Duration value) {
   final hours = value.inHours;
   final minutes = value.inMinutes.remainder(60).toString().padLeft(2, '0');
@@ -5791,6 +5832,87 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     }
     if (_blockGuestLocalControl()) {
       _showControls(focusControls: true);
+      return;
+    }
+    final libraryRequest = widget.libraryPlayback?.request;
+    final List<LibraryServerAudioTrack> serverTracks =
+        libraryRequest?.serverAudioTracks ?? const <LibraryServerAudioTrack>[];
+    if (libraryRequest != null &&
+        shouldUseLibraryServerAudioPicker(
+          request: libraryRequest,
+          embeddedTrackCount: tracks.length,
+        )) {
+      final String selectedValue =
+          libraryRequest.selectedServerAudioTrackId ?? serverTracks.first.id;
+      final selectedId = await _withHudAutoHideSuspended(
+        () => showPlayerTrackPicker<String>(
+          context: context,
+          title: 'Audio tracks (${serverTracks.length} found)',
+          icon: Icons.audiotrack_rounded,
+          selectedValue: selectedValue,
+          options: serverTracks
+              .map(
+                (track) => PlayerTrackOption<String>(
+                  value: track.id,
+                  label: track.label,
+                  detail: track.language == null
+                      ? null
+                      : captionLanguageDisplayName(
+                          canonicalPlayerLanguage(track.language),
+                        ),
+                  icon: Icons.surround_sound_rounded,
+                ),
+              )
+              .toList(growable: false),
+        ),
+      );
+      if (!mounted || selectedId == null) {
+        if (mounted) _showControls();
+        return;
+      }
+      if (selectedId == libraryRequest.selectedServerAudioTrackId) {
+        _showControls();
+        return;
+      }
+      final selected = serverTracks.firstWhere(
+        (track) => track.id == selectedId,
+      );
+      final handoff = widget.onLibraryEpisodeHandoff;
+      if (handoff == null) {
+        _showTrackMessage('This server audio track could not be selected');
+        return;
+      }
+      _showTrackMessage('Switching audio track…');
+      try {
+        final adopted = await handoffLibraryServerAudioTrack(
+          request: libraryRequest,
+          trackId: selectedId,
+          position: _effectiveHandoffPosition(),
+          handoff: (replacement) async {
+            if (!mounted || mediaRevision != _mediaOpenRevision) return false;
+            return handoff(replacement);
+          },
+        );
+        if (!mounted || mediaRevision != _mediaOpenRevision) return;
+        if (!adopted && mounted) {
+          _showTrackMessage('This server audio track could not be selected');
+        }
+        if (adopted) {
+          final language = canonicalPlayerLanguage(selected.language);
+          if (language.isNotEmpty) {
+            _seriesPreferences = _seriesPreferences.copyWith(
+              audioLanguage: language,
+              audioPreferenceSet: true,
+            );
+            await _saveSeriesPreferences();
+          }
+        }
+      } catch (_) {
+        if (mounted) {
+          _showTrackMessage('This server audio track could not be selected');
+          _showControls();
+        }
+      }
       return;
     }
     if (tracks.isEmpty) {

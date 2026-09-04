@@ -8,7 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  testWidgets('large TV browser presents four columns and two rows per page', (
+  testWidgets('episode browser presents two columns and three rows per page', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(1920, 1080);
@@ -53,25 +53,30 @@ void main() {
       find.byKey(const ValueKey('episode-browser-dialog')),
       findsOneWidget,
     );
-    for (var episode = 1; episode <= 8; episode++) {
+    for (var episode = 1; episode <= 6; episode++) {
       expect(
         find.byKey(ValueKey('episode-browser-card-$episode')),
         findsOneWidget,
       );
     }
-    expect(find.byKey(const ValueKey('episode-browser-card-9')), findsNothing);
+    expect(find.byKey(const ValueKey('episode-browser-card-7')), findsNothing);
     final first = tester.getRect(
       find.byKey(const ValueKey('episode-browser-card-1')),
     );
-    final fourth = tester.getRect(
-      find.byKey(const ValueKey('episode-browser-card-4')),
+    final second = tester.getRect(
+      find.byKey(const ValueKey('episode-browser-card-2')),
+    );
+    final third = tester.getRect(
+      find.byKey(const ValueKey('episode-browser-card-3')),
     );
     final fifth = tester.getRect(
       find.byKey(const ValueKey('episode-browser-card-5')),
     );
-    expect(fourth.top, closeTo(first.top, .01));
-    expect(fourth.left, greaterThan(first.left));
-    expect(fifth.top, greaterThan(first.top));
+    expect(second.top, closeTo(first.top, .01));
+    expect(second.left, greaterThan(first.left));
+    expect(third.top, greaterThan(first.top));
+    expect(third.left, closeTo(first.left, .01));
+    expect(fifth.top, greaterThan(third.top));
     expect(fifth.left, closeTo(first.left, .01));
     expect(find.text('Episode details unavailable.'), findsWidgets);
     expect(find.textContaining('24 min'), findsWidgets);
@@ -79,17 +84,17 @@ void main() {
       find.byKey(const ValueKey('episode-browser-page-ellipsis-4')),
       findsOneWidget,
     );
-    expect(find.text('148'), findsOneWidget);
+    expect(find.text('198'), findsOneWidget);
 
     await tester.tap(find.byKey(const ValueKey('episode-browser-next-page')));
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('episode-browser-card-1')), findsNothing);
     expect(
-      find.byKey(const ValueKey('episode-browser-card-9')),
+      find.byKey(const ValueKey('episode-browser-card-7')),
       findsOneWidget,
     );
     expect(
-      find.byKey(const ValueKey('episode-browser-card-16')),
+      find.byKey(const ValueKey('episode-browser-card-12')),
       findsOneWidget,
     );
 
@@ -127,35 +132,35 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    for (var press = 0; press < 4; press++) {
+    for (var press = 0; press < 2; press++) {
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
       await tester.pumpAndSettle();
     }
 
     expect(
-      find.byKey(const ValueKey('episode-browser-card-9')),
+      find.byKey(const ValueKey('episode-browser-card-7')),
       findsOneWidget,
     );
-    expect(_cardHasFocus(tester, 9), isTrue);
+    expect(_cardHasFocus(tester, 7), isTrue);
 
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
     await tester.pumpAndSettle();
     expect(
-      find.byKey(const ValueKey('episode-browser-card-4')),
+      find.byKey(const ValueKey('episode-browser-card-2')),
       findsOneWidget,
     );
-    expect(_cardHasFocus(tester, 4), isTrue);
+    expect(_cardHasFocus(tester, 2), isTrue);
 
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pumpAndSettle();
-    expect(_cardHasFocus(tester, 8), isTrue);
+    expect(_cardHasFocus(tester, 4), isTrue);
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
     await tester.pumpAndSettle();
     expect(
-      find.byKey(const ValueKey('episode-browser-card-13')),
+      find.byKey(const ValueKey('episode-browser-card-9')),
       findsOneWidget,
     );
-    expect(_cardHasFocus(tester, 13), isTrue);
+    expect(_cardHasFocus(tester, 9), isTrue);
     expect(tester.takeException(), isNull);
   });
 
@@ -207,6 +212,7 @@ void main() {
       ),
     );
     expect(firstArtwork.url, 'https://images.example/episode-1.jpg');
+    expect(firstArtwork.fit, BoxFit.contain);
     final secondArtwork = tester.widget<NetworkArtwork>(
       find.descendant(
         of: find.byKey(const ValueKey('episode-browser-card-2')),
@@ -220,6 +226,45 @@ void main() {
       find.text('Series text must never be shown as episode text.'),
       findsNothing,
     );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('embedded browser exits upward from its first visible row', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1920, 1080);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    var closed = false;
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.dark,
+        home: EpisodeBrowserDialog(
+          anime: const AnimeSummary(
+            id: 907,
+            title: 'Integrated Episodes',
+            description: '',
+            episodes: 12,
+            score: null,
+          ),
+          selectedEpisode: 1,
+          totalEpisodes: 12,
+          isTelevision: true,
+          embedded: true,
+          onClose: () => closed = true,
+          onEpisodeSelected: (_) {},
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(_cardHasFocus(tester, 1), isTrue);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+    await tester.pump();
+
+    expect(closed, isTrue);
     expect(tester.takeException(), isNull);
   });
 
@@ -242,7 +287,7 @@ void main() {
             episodes: 10,
             score: null,
           ),
-          selectedEpisode: 8,
+          selectedEpisode: 6,
           totalEpisodes: 10,
           isTelevision: true,
         ),
@@ -250,7 +295,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(_cardHasFocus(tester, 8), isTrue);
+    expect(_cardHasFocus(tester, 6), isTrue);
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
     await tester.pumpAndSettle();
 

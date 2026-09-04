@@ -1655,17 +1655,25 @@ void _invokeWebProviderOutcome(
 }) {
   if (callback == null) return;
   final failure = outcome.failure;
-  final status = outcome.streams.isNotEmpty
+  final hasStreams = outcome.streams.isNotEmpty;
+  final status = hasStreams
       ? 'success'
-      : failure?.status.name ?? 'failed';
+      : failure?.status.name ?? WebProviderFailureStatus.noMatch.name;
+  final stage = hasStreams
+      ? 'complete'
+      : failure?.stage ?? (failure == null ? 'complete' : 'runtime');
+  final reason = hasStreams
+      ? 'streams_returned'
+      : failure?.reason ??
+            (failure == null ? 'empty_result' : 'provider_error');
   unawaited(
     Future<void>.sync(
       () => callback(
         provider,
         WebProviderExecutionOutcome(
           status: status,
-          stage: failure?.stage ?? 'complete',
-          reason: failure?.reason ?? 'streams_returned',
+          stage: stage,
+          reason: reason,
           resultCount: outcome.streams.length,
           queuedFor: queuedFor,
           elapsed: elapsed,

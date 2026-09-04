@@ -812,12 +812,19 @@ class _HomeRailWordmark extends StatelessWidget {
         child: Stack(
           alignment: Alignment.center,
           children: [
-            Image.asset(
-              'assets/branding/tetotv_icon.png',
-              width: metrics.logoSize,
-              height: metrics.logoSize,
-              fit: BoxFit.contain,
-              filterQuality: FilterQuality.medium,
+            ColorFiltered(
+              colorFilter: ColorFilter.mode(
+                context.appPalette.accentBright,
+                BlendMode.srcIn,
+              ),
+              child: Image.asset(
+                'assets/branding/tetotv_in_app_mark.png',
+                width: metrics.logoSize,
+                height: metrics.logoSize,
+                fit: BoxFit.contain,
+                cacheWidth: 192,
+                filterQuality: FilterQuality.medium,
+              ),
             ),
             const Positioned(
               left: 0,
@@ -1025,6 +1032,7 @@ class HomeTopRightHeader extends ConsumerWidget {
               focusNode: notificationFocusNode,
               onKeyEvent: onNotificationKeyEvent,
               onFocusChanged: onNotificationFocusChanged,
+              menuTrailingOffset: hasProfile ? 58 : 0,
             ),
             if (hasProfile) ...[
               const SizedBox(width: 6),
@@ -1074,6 +1082,7 @@ class HomeTopRightHeader extends ConsumerWidget {
           focusNode: notificationFocusNode,
           onKeyEvent: onNotificationKeyEvent,
           onFocusChanged: onNotificationFocusChanged,
+          menuTrailingOffset: hasProfile ? 62 : 0,
         ),
         if (hasProfile) ...[
           const SizedBox(width: 10),
@@ -1101,6 +1110,7 @@ class TetoNotificationBell extends ConsumerWidget {
     this.focusNode,
     this.onKeyEvent,
     this.onFocusChanged,
+    this.menuTrailingOffset = 0,
     super.key,
   });
 
@@ -1108,35 +1118,34 @@ class TetoNotificationBell extends ConsumerWidget {
   final FocusOnKeyEventCallback? onKeyEvent;
   final ValueChanged<bool>? onFocusChanged;
 
+  /// Horizontal space occupied by profile chrome to the right of this bell.
+  /// The inbox follows the profile's outside edge instead of appearing offset
+  /// beneath the bell when both controls are shown as one identity cluster.
+  final double menuTrailingOffset;
+
   Future<void> _openInbox(BuildContext context, WidgetRef ref) async {
     final box = context.findRenderObject() as RenderBox?;
     final overlay =
         Overlay.of(context).context.findRenderObject() as RenderBox?;
     if (box == null || overlay == null) return;
     final notificationState = ref.read(appNotificationControllerProvider);
-    final items = List<AppNotification>.unmodifiable(notificationState.items);
-    final unreadCount = notificationState.unreadCount;
+    final items = notificationState.inboxItems;
     final topLeft = box.localToGlobal(Offset.zero, ancestor: overlay);
     final menuWidth = (overlay.size.width - 24).clamp(296.0, 440.0).toDouble();
     final preferredTop = topLeft.dy + box.size.height + 8;
     final menuTop = preferredTop
         .clamp(12.0, (overlay.size.height - 180).clamp(12.0, double.infinity))
         .toDouble();
-    final menuRight = (overlay.size.width - topLeft.dx - box.size.width)
-        .clamp(
-          12.0,
-          (overlay.size.width - menuWidth - 12).clamp(12.0, double.infinity),
-        )
-        .toDouble();
-
-    // Everything in this snapshot is visible in the inbox. Clear its badge as
-    // soon as the viewer opens it, while keeping the immutable snapshot on
-    // screen so a provider rebuild cannot close or reorder the dialog.
-    if (unreadCount > 0) {
-      unawaited(
-        ref.read(appNotificationControllerProvider.notifier).markAllRead(),
-      );
-    }
+    final menuRight =
+        (overlay.size.width - topLeft.dx - box.size.width - menuTrailingOffset)
+            .clamp(
+              12.0,
+              (overlay.size.width - menuWidth - 12).clamp(
+                12.0,
+                double.infinity,
+              ),
+            )
+            .toDouble();
 
     final result = await showGeneralDialog<String>(
       context: context,
@@ -1163,6 +1172,13 @@ class TetoNotificationBell extends ConsumerWidget {
       ),
     );
     if (!context.mounted || result == null) return;
+    const dismissPrefix = 'dismiss:';
+    if (result.startsWith(dismissPrefix)) {
+      await ref
+          .read(appNotificationControllerProvider.notifier)
+          .dismiss(result.substring(dismissPrefix.length));
+      return;
+    }
     if (result == 'install') {
       await ref
           .read(appUpdateControllerProvider.notifier)
@@ -1378,6 +1394,9 @@ class _NotificationMenuOverlay extends ConsumerWidget {
                                 item: items[index],
                                 updateState: updateState,
                                 autofocus: index == 0,
+                                onDismiss: () => Navigator.of(
+                                  context,
+                                ).pop('dismiss:${items[index].id}'),
                               ),
                               if (index != items.length - 1)
                                 const SizedBox(height: 8),
@@ -1425,16 +1444,22 @@ class _UpdateNotificationCard extends StatelessWidget {
     required this.item,
     required this.updateState,
     required this.autofocus,
+    required this.onDismiss,
   });
 
   final AppNotification item;
   final AppUpdateState updateState;
   final bool autofocus;
+  final VoidCallback onDismiss;
 
   @override
   Widget build(BuildContext context) {
     if (item.kind == AppNotificationKind.announcement) {
-      return _AnnouncementNotificationCard(item: item, autofocus: autofocus);
+      return _AnnouncementNotificationCard(
+        item: item,
+        autofocus: autofocus,
+        onDismiss: onDismiss,
+      );
     }
     final matches = _notificationMatchesUpdate(item, updateState);
     final busy = matches && updateState.isBusy;
@@ -1452,102 +1477,113 @@ class _UpdateNotificationCard extends StatelessWidget {
             _ => 'Please wait…',
           }
         : actionLabel;
-    return Container(
-      key: ValueKey('notification-item-${item.id}'),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: context.appPalette.surfaceRaised,
-        borderRadius: BorderRadius.circular(11),
-        border: Border.all(
-          color: item.isRead
-              ? context.appPalette.primaryText.withValues(alpha: .09)
-              : context.appPalette.accent.withValues(alpha: .64),
+    return GestureDetector(
+      key: ValueKey('notification-message-${item.id}'),
+      behavior: HitTestBehavior.opaque,
+      onTap: onDismiss,
+      child: Container(
+        key: ValueKey('notification-item-${item.id}'),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: context.appPalette.surfaceRaised,
+          borderRadius: BorderRadius.circular(11),
+          border: Border.all(
+            color: context.appPalette.accent.withValues(alpha: .64),
+          ),
         ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  item.title,
-                  style: TextStyle(
-                    color: context.appPalette.primaryText,
-                    fontSize: 14,
-                    fontWeight: FontWeight.w900,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    item.title,
+                    style: TextStyle(
+                      color: context.appPalette.primaryText,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w900,
+                    ),
                   ),
                 ),
-              ),
-              const SizedBox(width: 8),
-              _NotificationChannelBadge(channel: item.targetChannel),
-            ],
-          ),
-          const SizedBox(height: 6),
-          Text(
-            item.body,
-            style: TextStyle(
-              color: context.appPalette.mutedText,
-              fontSize: 12,
-              height: 1.35,
+                const SizedBox(width: 8),
+                _NotificationChannelBadge(channel: item.targetChannel),
+              ],
             ),
-          ),
-          const SizedBox(height: 7),
-          Text(
-            _formatNotificationDate(item.createdAtUtc),
-            style: TextStyle(
-              color: context.appPalette.mutedText,
-              fontSize: 10,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-          if (matches) ...[
-            const SizedBox(height: 8),
+            const SizedBox(height: 6),
             Text(
-              _updateStatusLabel(updateState),
-              key: const ValueKey('notification-update-status'),
+              item.body,
               style: TextStyle(
-                color: updateState.phase == AppUpdatePhase.error
-                    ? const Color(0xFFFF8A91)
-                    : context.appPalette.accentBright,
-                fontSize: 11,
-                fontWeight: FontWeight.w800,
+                color: context.appPalette.mutedText,
+                fontSize: 12,
+                height: 1.35,
               ),
             ),
-            if (updateState.phase == AppUpdatePhase.downloading) ...[
-              const SizedBox(height: 7),
-              LinearProgressIndicator(
-                key: const ValueKey('notification-update-progress'),
-                value: updateState.progress > 0
-                    ? updateState.progress.clamp(0, 1)
-                    : null,
-                minHeight: 4,
-                color: context.appPalette.accentBright,
-                backgroundColor: context.appPalette.primaryText.withValues(
-                  alpha: .10,
+            const SizedBox(height: 7),
+            Text(
+              _formatNotificationDate(item.createdAtUtc),
+              style: TextStyle(
+                color: context.appPalette.mutedText,
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            if (matches) ...[
+              const SizedBox(height: 8),
+              Text(
+                _updateStatusLabel(updateState),
+                key: const ValueKey('notification-update-status'),
+                style: TextStyle(
+                  color: updateState.phase == AppUpdatePhase.error
+                      ? const Color(0xFFFF8A91)
+                      : context.appPalette.accentBright,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w800,
                 ),
               ),
+              if (updateState.phase == AppUpdatePhase.downloading) ...[
+                const SizedBox(height: 7),
+                LinearProgressIndicator(
+                  key: const ValueKey('notification-update-progress'),
+                  value: updateState.progress > 0
+                      ? updateState.progress.clamp(0, 1)
+                      : null,
+                  minHeight: 4,
+                  color: context.appPalette.accentBright,
+                  backgroundColor: context.appPalette.primaryText.withValues(
+                    alpha: .10,
+                  ),
+                ),
+              ],
             ],
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: _NotificationTextAction(
+                    key: ValueKey('notification-action-${item.id}'),
+                    label: visibleActionLabel,
+                    autofocus: autofocus,
+                    emphasized: !busy,
+                    onPressed: busy
+                        ? () {}
+                        : () => Navigator.of(
+                            context,
+                          ).pop(canInstall ? 'install' : 'check'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _NotificationTextAction(
+                    key: ValueKey('notification-dismiss-${item.id}'),
+                    label: 'Dismiss',
+                    onPressed: onDismiss,
+                  ),
+                ),
+              ],
+            ),
           ],
-          const SizedBox(height: 10),
-          Row(
-            children: [
-              Expanded(
-                child: _NotificationTextAction(
-                  key: ValueKey('notification-action-${item.id}'),
-                  label: visibleActionLabel,
-                  autofocus: autofocus,
-                  emphasized: !busy,
-                  onPressed: busy
-                      ? () {}
-                      : () => Navigator.of(
-                          context,
-                        ).pop(canInstall ? 'install' : 'check'),
-                ),
-              ),
-            ],
-          ),
-        ],
+        ),
       ),
     );
   }
@@ -1557,18 +1593,20 @@ class _AnnouncementNotificationCard extends StatelessWidget {
   const _AnnouncementNotificationCard({
     required this.item,
     required this.autofocus,
+    required this.onDismiss,
   });
 
   final AppNotification item;
   final bool autofocus;
+  final VoidCallback onDismiss;
 
   @override
   Widget build(BuildContext context) => TvFocusable(
+    key: ValueKey('notification-dismiss-${item.id}'),
     autofocus: autofocus,
-    enabled: false,
     focusScale: 1.005,
     borderRadius: BorderRadius.circular(11),
-    onPressed: () {},
+    onPressed: onDismiss,
     child: Container(
       key: ValueKey('notification-item-${item.id}'),
       padding: const EdgeInsets.all(12),
@@ -1576,9 +1614,7 @@ class _AnnouncementNotificationCard extends StatelessWidget {
         color: context.appPalette.surfaceRaised,
         borderRadius: BorderRadius.circular(11),
         border: Border.all(
-          color: item.isRead
-              ? context.appPalette.primaryText.withValues(alpha: .09)
-              : context.appPalette.accent.withValues(alpha: .64),
+          color: context.appPalette.accent.withValues(alpha: .64),
         ),
       ),
       child: Column(
@@ -2064,6 +2100,13 @@ class MainNavigationBar extends ConsumerWidget {
                 ),
               ],
               const Spacer(),
+              if (normalTvLayout) ...[
+                SizedBox(width: normalTvLayout ? 8 : 4),
+                TetoNotificationBell(
+                  key: const ValueKey('main-nav-notification-bell'),
+                  menuTrailingOffset: showProfile ? 60 : 0,
+                ),
+              ],
               if (showProfile) ...[
                 SizedBox(width: normalTvLayout ? 8 : 4),
                 TetoProfileSwitcher(

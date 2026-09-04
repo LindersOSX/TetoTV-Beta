@@ -233,6 +233,10 @@ void main() {
       find.byKey(const ValueKey('main-nav-profile-local')),
       findsOneWidget,
     );
+    expect(
+      find.byKey(const ValueKey('main-nav-notification-bell')),
+      findsOneWidget,
+    );
     expect(find.text('Living Room'), findsNothing);
     await tester.tap(find.byKey(const ValueKey('main-nav-profile-summary')));
     await tester.pumpAndSettle();

@@ -59,6 +59,60 @@ class PlexServerIdentity {
   final String version;
 }
 
+class PlexAudioStream {
+  const PlexAudioStream({
+    required this.id,
+    required this.label,
+    this.language,
+    this.isDefault = false,
+    this.isSelected = false,
+  });
+
+  final String id;
+  final String label;
+  final String? language;
+  final bool isDefault;
+  final bool isSelected;
+}
+
+class PlexSubtitleStream {
+  const PlexSubtitleStream({
+    required this.id,
+    required this.label,
+    this.language,
+    this.codec,
+    this.key,
+    this.isDefault = false,
+    this.isForced = false,
+    this.isSelected = false,
+  });
+
+  final String id;
+  final String label;
+  final String? language;
+  final String? codec;
+
+  /// A server-relative, token-free sidecar identity when Plex exposes one.
+  final String? key;
+  final bool isDefault;
+  final bool isForced;
+  final bool isSelected;
+}
+
+class PlexPlaybackSubtitleTrack {
+  const PlexPlaybackSubtitleTrack({
+    required this.uri,
+    required this.label,
+    required this.contentType,
+    this.language,
+  });
+
+  final Uri uri;
+  final String label;
+  final String? language;
+  final String contentType;
+}
+
 class PlexLibrary {
   const PlexLibrary({
     required this.key,
@@ -92,6 +146,8 @@ class PlexMediaPart {
     this.audioCodec,
     this.videoWidth,
     this.videoHeight,
+    this.audioStreams = const [],
+    this.subtitleStreams = const [],
   });
 
   final String key;
@@ -104,6 +160,8 @@ class PlexMediaPart {
   final String? audioCodec;
   final int? videoWidth;
   final int? videoHeight;
+  final List<PlexAudioStream> audioStreams;
+  final List<PlexSubtitleStream> subtitleStreams;
 }
 
 class PlexMediaItem {

@@ -204,6 +204,12 @@ void main() {
       );
       await reporter.record(
         kind: 'flutter',
+        error: Exception(
+          "ClientException: Failed host lookup: 'media.kitsu.app'",
+        ),
+      );
+      await reporter.record(
+        kind: 'flutter',
         error: HttpException(
           'Connection reset by peer',
           uri: Uri.https('artworks.thetvdb.com', '/logo.png'),

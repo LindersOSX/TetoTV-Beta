@@ -17,7 +17,7 @@
 
 <p align="center">
   <a href="https://github.com/LindersOSX/TetoTV-Beta/releases/latest"><strong>Download Beta</strong></a>
-  · <a href="docs/RELEASE_NOTES_2.0.67.md">What's new</a>
+  · <a href="docs/RELEASE_NOTES_2.0.68.md">What's new</a>
   · <a href="https://github.com/LindersOSX/TetoTV-Beta/issues/new">Report an issue</a>
   · <a href="https://discord.gg/juC6k7d4WY">Discord</a>
   · <a href="https://www.youtube.com/@TetoTVApp">YouTube</a>
@@ -96,10 +96,10 @@ TetoTV runs directly on the Android device with no companion server required for
 | Channel | Version | Best for |
 | --- | --- | --- |
 | Public | Not published | Source and release-readiness documents are available, but no Public APK is currently offered |
-| Beta | [2.0.67](docs/RELEASE_NOTES_2.0.67.md) | Complete SIMKL tracking, reliable paged episode browsing and update notifications, and TV freeze hardening |
+| Beta | [2.0.68](docs/RELEASE_NOTES_2.0.68.md) | User-added manga sources, richer personal-library tracks, and polished TV navigation |
 
 > [!WARNING]
-> Beta 2.0.67 uses the repository's explicit unreviewed-Beta exception. Its native-library and corresponding-source material did not receive independent license review, and automated integrity checks are not a legal compliance determination. Read the [complete Beta disclosure](docs/RELEASE_NOTES_2.0.67.md). This exception does not apply to a future Public release.
+> Beta 2.0.68 uses the repository's explicit unreviewed-Beta exception. Its native-library and corresponding-source material did not receive independent license review, and automated integrity checks are not a legal compliance determination. Read the [complete Beta disclosure](docs/RELEASE_NOTES_2.0.68.md). This exception does not apply to a future Public release.
 
 The Public updater repository intentionally has no release while the Public build is held for review. Existing Beta installations continue to update from the Beta repository. Android never permits an in-place install of an APK with a lower build code; Developer Mode does not bypass that platform rule.
 
@@ -142,6 +142,15 @@ entered themselves. Manga extensions provide a source-search, chapter-list,
 and page-resolution flow similar to a dedicated source-based reader; they do
 not require a personal server. TetoTV does not ship, suggest, rank, or remotely
 install a manga catalog, repository URL, provider, or title.
+
+The in-app **Manga > Sources** manager now presents that flow directly as
+**repositories → extensions → browse**. Repository entry is blank by default;
+the extension catalog supports name/author and language filters, explicit
+install/update confirmation, enable/disable, and uninstall controls. It accepts
+compatible Seanime/Teto Marketplace JSON containing `manga-provider` entries.
+Mihon/Tachiyomi `index.pb` stores contain native Android extension APKs and are
+explicitly rejected as incompatible rather than saved or treated as working
+TetoTV repositories.
 
 The preview includes paged, vertical, and webtoon reading; right-to-left and
 left-to-right navigation; single, double, and automatic spreads; page-fit,

@@ -161,6 +161,103 @@ void main() {
     );
   });
 
+  test('rejects a manga catalog entry whose manifest changes to online', () {
+    final summary = parseMarketplaceCatalog(
+      jsonEncode([
+        {
+          'id': 'kind-pinned-provider',
+          'name': 'Kind-pinned Provider',
+          'manifestURI': 'https://example.com/provider/manifest.json',
+          'type': 'manga-provider',
+          'language': 'javascript',
+        },
+      ]),
+      repositoryUrl: repository,
+    ).single;
+
+    expect(
+      () => validateAndMergeMarketplaceManifest(summary, {
+        'id': 'kind-pinned-provider',
+        'name': 'Kind-pinned Provider',
+        'manifestURI': 'https://example.com/provider/manifest.json',
+        'payloadURI': 'https://example.com/provider/provider.js',
+        'type': 'onlinestream-provider',
+        'language': 'javascript',
+      }),
+      throwsA(
+        isA<FormatException>().having(
+          (error) => error.message,
+          'message',
+          contains('changed its provider type'),
+        ),
+      ),
+    );
+  });
+
+  test('rejects an online catalog entry whose manifest changes to manga', () {
+    final summary = parseMarketplaceCatalog(
+      jsonEncode([
+        {
+          'id': 'kind-pinned-provider',
+          'name': 'Kind-pinned Provider',
+          'manifestURI': 'https://example.com/provider/manifest.json',
+          'type': 'onlinestream-provider',
+          'language': 'javascript',
+        },
+      ]),
+      repositoryUrl: repository,
+    ).single;
+
+    expect(
+      () => validateAndMergeMarketplaceManifest(summary, {
+        'id': 'kind-pinned-provider',
+        'name': 'Kind-pinned Provider',
+        'manifestURI': 'https://example.com/provider/manifest.json',
+        'payloadURI': 'https://example.com/provider/provider.js',
+        'type': 'manga-provider',
+        'language': 'javascript',
+      }),
+      throwsA(
+        isA<FormatException>().having(
+          (error) => error.message,
+          'message',
+          contains('changed its provider type'),
+        ),
+      ),
+    );
+  });
+
+  test('keeps valid same-kind manga metadata merging', () {
+    final summary = parseMarketplaceCatalog(
+      jsonEncode([
+        {
+          'id': 'manga-provider',
+          'name': 'Catalog name',
+          'description': 'Catalog description',
+          'manifestURI': 'https://example.com/manga/manifest.json',
+          'type': 'manga-provider',
+          'language': 'javascript',
+        },
+      ]),
+      repositoryUrl: repository,
+    ).single;
+
+    final merged = validateAndMergeMarketplaceManifest(summary, {
+      'id': 'manga-provider',
+      'name': 'Manifest name',
+      'manifestURI': 'https://example.com/manga/manifest.json',
+      'payloadURI': 'https://example.com/manga/provider.ts',
+      'type': 'manga-provider',
+      'language': 'typescript',
+    });
+
+    expect(merged.name, 'Manifest name');
+    expect(merged.description, 'Catalog description');
+    expect(merged.type, 'manga-provider');
+    expect(merged.language, 'typescript');
+    expect(merged.isCompatible, isTrue);
+  });
+
   test('adapts common wrapped catalogs and URI/language aliases', () {
     final catalog = parseMarketplaceCatalog(
       jsonEncode({

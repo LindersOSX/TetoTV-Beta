@@ -156,7 +156,16 @@ void main() {
     <Media id="media-1" container="mkv" videoCodec="hevc"
         audioCodec="aac" width="1920" videoResolution="1080">
       <Part id="part-1" key="/library/parts/500/file.mkv"
-          file="/media/example.mkv" duration="1440000" size="1234567" />
+          file="/media/example.mkv" duration="1440000" size="1234567">
+        <Stream id="11" streamType="2" languageCode="jpn"
+            displayTitle="Japanese AAC" default="1" selected="1" />
+        <Stream id="12" streamType="2" languageCode="eng"
+            displayTitle="English AAC" />
+        <Stream id="21" streamType="3" languageCode="eng" codec="srt"
+            displayTitle="English CC" key="/library/streams/21" />
+        <Stream id="22" streamType="3" languageCode="jpn" codec="pgs"
+            displayTitle="Japanese PGS" key="/library/streams/22" />
+      </Part>
     </Media>
   </Video>
 </MediaContainer>
@@ -206,6 +215,20 @@ void main() {
       expect(episode.parts.single.audioCodec, 'aac');
       expect(episode.parts.single.videoWidth, 1920);
       expect(episode.parts.single.videoHeight, 1080);
+      expect(episode.parts.single.audioStreams, hasLength(2));
+      expect(episode.parts.single.audioStreams.first.label, 'Japanese AAC');
+      expect(episode.parts.single.audioStreams.first.isSelected, isTrue);
+      expect(episode.parts.single.subtitleStreams, hasLength(2));
+      final subtitleTracks = client.playbackSubtitleTracks(
+        _connection(),
+        episode,
+        preferredLanguage: 'eng',
+      );
+      expect(subtitleTracks, hasLength(1));
+      expect(subtitleTracks.single.label, 'English CC');
+      expect(subtitleTracks.single.uri.path, '/plex/library/streams/21');
+      expect(subtitleTracks.single.uri.queryParameters['encoding'], 'utf-8');
+      expect(subtitleTracks.single.uri.toString(), isNot(contains(_token)));
       expect(requests[0].headers['X-Plex-Container-Start'], '5');
       expect(requests[0].headers['X-Plex-Container-Size'], '100');
       expect(requests[1].uri.path, '/plex/library/metadata/100/children');
@@ -234,7 +257,15 @@ void main() {
         key: '/library/metadata/episode-123',
         title: 'Episode',
         type: PlexMediaType.episode,
-        parts: [PlexMediaPart(key: '/library/parts/episode-123/file.mkv')],
+        parts: [
+          PlexMediaPart(
+            key: '/library/parts/episode-123/file.mkv',
+            audioStreams: [
+              PlexAudioStream(id: '11', label: 'Japanese', language: 'jpn'),
+              PlexAudioStream(id: '12', label: 'English', language: 'eng'),
+            ],
+          ),
+        ],
       );
       final client = PlexClient();
 
@@ -242,6 +273,7 @@ void main() {
         _connection(),
         item,
         sessionId: 'session_1234567890abcdef',
+        selectedAudioStreamId: '12',
       );
 
       expect(uri.path, '/plex/video/:/transcode/universal/start.m3u8');
@@ -250,11 +282,21 @@ void main() {
       expect(uri.queryParameters['directStream'], '0');
       expect(uri.queryParameters['videoCodec'], 'h264');
       expect(uri.queryParameters['audioCodec'], 'aac');
+      expect(uri.queryParameters['audioStreamID'], '12');
       expect(uri.queryParameters, isNot(contains('X-Plex-Token')));
       expect(uri.toString(), isNot(contains(_token)));
       expect(
         client.authenticatedHeaders(_connection())['X-Plex-Token'],
         _token,
+      );
+      expect(
+        () => client.compatibilityPlaybackUri(
+          _connection(),
+          item,
+          sessionId: 'session_1234567890abcdef',
+          selectedAudioStreamId: '99',
+        ),
+        throwsA(isA<PlexException>()),
       );
     });
 

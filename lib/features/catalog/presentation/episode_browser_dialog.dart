@@ -46,6 +46,9 @@ class EpisodeBrowserDialog extends StatefulWidget {
     this.episodeMetadata = const <int, CatalogEpisodeMetadata>{},
     this.episodeMetadataFuture,
     this.now,
+    this.embedded = false,
+    this.onClose,
+    this.onEpisodeSelected,
     super.key,
   }) : assert(totalEpisodes > 0),
        assert(selectedEpisode > 0 && selectedEpisode <= totalEpisodes);
@@ -57,6 +60,9 @@ class EpisodeBrowserDialog extends StatefulWidget {
   final Map<int, CatalogEpisodeMetadata> episodeMetadata;
   final Future<Map<int, CatalogEpisodeMetadata>>? episodeMetadataFuture;
   final DateTime? now;
+  final bool embedded;
+  final VoidCallback? onClose;
+  final ValueChanged<int>? onEpisodeSelected;
 
   @override
   State<EpisodeBrowserDialog> createState() => _EpisodeBrowserDialogState();
@@ -147,6 +153,24 @@ class _EpisodeBrowserDialogState extends State<EpisodeBrowserDialog> {
     });
   }
 
+  void _close() {
+    final onClose = widget.onClose;
+    if (onClose != null) {
+      onClose();
+      return;
+    }
+    Navigator.pop(context);
+  }
+
+  void _selectEpisode(int episode) {
+    final onEpisodeSelected = widget.onEpisodeSelected;
+    if (onEpisodeSelected != null) {
+      onEpisodeSelected(episode);
+      return;
+    }
+    Navigator.pop(context, episode);
+  }
+
   KeyEventResult _handleEpisodeNavigation({
     required int episode,
     required int firstEpisode,
@@ -156,13 +180,19 @@ class _EpisodeBrowserDialogState extends State<EpisodeBrowserDialog> {
     required int pageCount,
     required KeyEvent event,
   }) {
+    final isUp = event.logicalKey == LogicalKeyboardKey.arrowUp;
     final isLeft = event.logicalKey == LogicalKeyboardKey.arrowLeft;
     final isRight = event.logicalKey == LogicalKeyboardKey.arrowRight;
-    if (!isLeft && !isRight) return KeyEventResult.ignored;
+    if (!isUp && !isLeft && !isRight) return KeyEventResult.ignored;
 
     final localIndex = episode - firstEpisode;
     final row = localIndex ~/ columns;
     final column = localIndex % columns;
+    if (isUp && row == 0) {
+      if (event is KeyDownEvent) _close();
+      return KeyEventResult.handled;
+    }
+    if (isUp) return KeyEventResult.ignored;
     final crossesPreviousPage = isLeft && column == 0 && _pageIndex > 0;
     final crossesNextPage =
         isRight &&
@@ -198,18 +228,16 @@ class _EpisodeBrowserDialogState extends State<EpisodeBrowserDialog> {
   @override
   Widget build(BuildContext context) {
     final screen = MediaQuery.sizeOf(context);
-    final width = math.min(screen.width * .94, 1800.0);
-    final height = math.min(screen.height * .88, 900.0);
+    final width = widget.embedded
+        ? screen.width
+        : math.min(screen.width * .94, 1800.0);
+    final height = widget.embedded
+        ? screen.height
+        : math.min(screen.height * .96, 900.0);
     final compact = width < 700 || height < 450;
     final palette = context.appPalette;
-    final columns = widget.isTelevision || width >= 1450
-        ? 4
-        : width >= 1050
-        ? 3
-        : width >= 650
-        ? 2
-        : 1;
-    final rows = widget.isTelevision || height >= 430 ? 2 : 1;
+    final columns = width < 600 ? 1 : 2;
+    const rows = 3;
     final pageSize = columns * rows;
     final pageCount = (widget.totalEpisodes / pageSize).ceil();
     if (_pageSize != pageSize) {
@@ -220,11 +248,15 @@ class _EpisodeBrowserDialogState extends State<EpisodeBrowserDialog> {
     }
 
     return Dialog(
-      key: const ValueKey('episode-browser-dialog'),
-      insetPadding: EdgeInsets.symmetric(
-        horizontal: screen.width < 600 ? 10 : 24,
-        vertical: screen.height < 500 ? 10 : 22,
+      key: ValueKey(
+        widget.embedded ? 'episode-browser-page' : 'episode-browser-dialog',
       ),
+      insetPadding: widget.embedded
+          ? EdgeInsets.zero
+          : EdgeInsets.symmetric(
+              horizontal: screen.width < 600 ? 10 : 24,
+              vertical: screen.height < 500 ? 10 : 22,
+            ),
       backgroundColor: Colors.transparent,
       child: Container(
         width: width,
@@ -236,19 +268,31 @@ class _EpisodeBrowserDialogState extends State<EpisodeBrowserDialog> {
           compact ? 12 : 16,
         ),
         decoration: BoxDecoration(
-          color: palette.surface.withValues(alpha: .98),
-          borderRadius: BorderRadius.circular(compact ? 16 : 22),
-          border: Border.all(
-            color: palette.accentBright.withValues(alpha: .70),
-            width: 1.4,
+          color: widget.embedded
+              ? palette.background.withValues(alpha: .94)
+              : palette.surface.withValues(alpha: .98),
+          borderRadius: BorderRadius.circular(
+            widget.embedded
+                ? 0
+                : compact
+                ? 16
+                : 22,
           ),
-          boxShadow: [
-            BoxShadow(
-              color: palette.focusGlow.withValues(alpha: .32),
-              blurRadius: 32,
-              spreadRadius: 2,
-            ),
-          ],
+          border: widget.embedded
+              ? null
+              : Border.all(
+                  color: palette.accentBright.withValues(alpha: .70),
+                  width: 1.4,
+                ),
+          boxShadow: widget.embedded
+              ? null
+              : [
+                  BoxShadow(
+                    color: palette.focusGlow.withValues(alpha: .32),
+                    blurRadius: 32,
+                    spreadRadius: 2,
+                  ),
+                ],
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -259,7 +303,8 @@ class _EpisodeBrowserDialogState extends State<EpisodeBrowserDialog> {
               totalEpisodes: widget.totalEpisodes,
               compact: compact,
               now: widget.now,
-              onClose: () => Navigator.pop(context),
+              embedded: widget.embedded,
+              onClose: _close,
             ),
             SizedBox(height: compact ? 10 : 16),
             Expanded(
@@ -305,6 +350,10 @@ class _EpisodeBrowserDialogState extends State<EpisodeBrowserDialog> {
                         autofocus: episode == widget.selectedEpisode,
                         focusNode: _focusNodeForEpisode(episode),
                         compact: cardWidth < 300 || cardHeight < 175,
+                        artworkWidth: math.min(
+                          cardWidth * .46,
+                          cardHeight * 16 / 9,
+                        ),
                         onKeyEvent: (_, event) => _handleEpisodeNavigation(
                           episode: episode,
                           firstEpisode: firstEpisode,
@@ -314,7 +363,7 @@ class _EpisodeBrowserDialogState extends State<EpisodeBrowserDialog> {
                           pageCount: pageCount,
                           event: event,
                         ),
-                        onPressed: () => Navigator.pop(context, episode),
+                        onPressed: () => _selectEpisode(episode),
                       );
                     },
                   );
@@ -343,6 +392,7 @@ class _EpisodeBrowserHeader extends StatelessWidget {
     required this.selectedEpisode,
     required this.totalEpisodes,
     required this.compact,
+    required this.embedded,
     required this.now,
     required this.onClose,
   });
@@ -351,6 +401,7 @@ class _EpisodeBrowserHeader extends StatelessWidget {
   final int selectedEpisode;
   final int totalEpisodes;
   final bool compact;
+  final bool embedded;
   final DateTime? now;
   final VoidCallback onClose;
 
@@ -426,7 +477,10 @@ class _EpisodeBrowserHeader extends StatelessWidget {
                 color: palette.primaryText.withValues(alpha: .14),
               ),
             ),
-            child: Icon(Icons.close_rounded, size: compact ? 20 : 24),
+            child: Icon(
+              embedded ? Icons.arrow_upward_rounded : Icons.close_rounded,
+              size: compact ? 20 : 24,
+            ),
           ),
         ),
       ],
@@ -444,6 +498,7 @@ class _EpisodeBrowserCard extends StatelessWidget {
     required this.autofocus,
     required this.focusNode,
     required this.compact,
+    required this.artworkWidth,
     required this.onKeyEvent,
     required this.onPressed,
     super.key,
@@ -457,6 +512,7 @@ class _EpisodeBrowserCard extends StatelessWidget {
   final bool autofocus;
   final FocusNode focusNode;
   final bool compact;
+  final double artworkWidth;
   final FocusOnKeyEventCallback onKeyEvent;
   final VoidCallback onPressed;
 
@@ -511,14 +567,15 @@ class _EpisodeBrowserCard extends StatelessWidget {
             child: Row(
               children: [
                 SizedBox(
-                  width: compact ? 84 : 154,
+                  width: artworkWidth,
                   height: double.infinity,
                   child: Stack(
                     fit: StackFit.expand,
                     children: [
                       NetworkArtwork(
                         url: artwork,
-                        cacheWidth: compact ? 260 : 380,
+                        fit: BoxFit.contain,
+                        cacheWidth: compact ? 320 : 640,
                         icon: Icons.video_library_outlined,
                       ),
                       const DecoratedBox(
@@ -572,7 +629,7 @@ class _EpisodeBrowserCard extends StatelessWidget {
                 ),
                 Expanded(
                   child: Padding(
-                    padding: EdgeInsets.all(compact ? 9 : 13),
+                    padding: EdgeInsets.all(compact ? 5 : 13),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       mainAxisAlignment: MainAxisAlignment.center,
@@ -603,7 +660,11 @@ class _EpisodeBrowserCard extends StatelessWidget {
                           availability.isAvailable
                               ? synopsis ?? 'Episode details unavailable.'
                               : 'This episode has not aired yet.',
-                          maxLines: compact ? 2 : 3,
+                          maxLines: compact && statusLabel != null
+                              ? 1
+                              : compact
+                              ? 2
+                              : 3,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                             color: palette.mutedText,
@@ -693,7 +754,8 @@ class _EpisodeBrowserPagination extends StatelessWidget {
       children: [
         _EpisodePageButton(
           key: const ValueKey('episode-browser-previous-page'),
-          label: 'Previous',
+          label: compact ? '' : 'Previous',
+          semanticLabel: 'Previous page',
           icon: Icons.chevron_left_rounded,
           enabled: pageIndex > 0,
           compact: compact,
@@ -727,7 +789,8 @@ class _EpisodeBrowserPagination extends StatelessWidget {
         SizedBox(width: compact ? 6 : 10),
         _EpisodePageButton(
           key: const ValueKey('episode-browser-next-page'),
-          label: 'Next',
+          label: compact ? '' : 'Next',
+          semanticLabel: 'Next page',
           icon: Icons.chevron_right_rounded,
           iconAfter: true,
           enabled: pageIndex < pageCount - 1,
@@ -780,6 +843,7 @@ class _EpisodePageButton extends StatelessWidget {
     required this.compact,
     required this.onPressed,
     this.icon,
+    this.semanticLabel,
     this.iconAfter = false,
     this.enabled = true,
     this.selected = false,
@@ -788,6 +852,7 @@ class _EpisodePageButton extends StatelessWidget {
 
   final String label;
   final IconData? icon;
+  final String? semanticLabel;
   final bool iconAfter;
   final bool compact;
   final bool enabled;
@@ -831,12 +896,21 @@ class _EpisodePageButton extends StatelessWidget {
         ],
       ),
     );
-    if (!enabled) return Opacity(opacity: .34, child: content);
-    return TvFocusable(
-      onPressed: onPressed,
-      focusScale: 1.025,
-      borderRadius: BorderRadius.circular(9),
-      child: content,
+    final control = !enabled
+        ? Opacity(opacity: .34, child: content)
+        : TvFocusable(
+            onPressed: onPressed,
+            focusScale: 1.025,
+            borderRadius: BorderRadius.circular(9),
+            child: content,
+          );
+    if (semanticLabel == null) return control;
+    return Semantics(
+      label: semanticLabel,
+      button: true,
+      enabled: enabled,
+      excludeSemantics: true,
+      child: control,
     );
   }
 }

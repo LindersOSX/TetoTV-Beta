@@ -32,6 +32,37 @@ add only services and material they are authorized to use.
   URLs, catalog caches, diagnostics, or Discord activity.
 - No source is bundled, suggested, endorsed, or remotely enabled by TetoTV.
 
+## In-app repository flow
+
+The Manga **Sources** page keeps extension repositories separate from OPDS
+and declarative data catalogs:
+
+1. **Manga repositories** accepts public HTTPS Seanime/Teto Marketplace JSON
+   URLs that the viewer enters. The field always starts blank.
+2. **Manga extensions** lists `manga-provider` entries from those repositories.
+   Supported JavaScript and TypeScript entries can be installed; entries that
+   declare another runtime remain visible as unsupported. The viewer must
+   explicitly confirm each install or update and can enable, disable, or
+   uninstall it independently.
+3. **Browse installed sources** searches enabled extensions and can open a
+   title, save it to the local library, read chapters, or start a compatible
+   chapter download.
+
+The extension catalog can be filtered by name, author, and declared language.
+Its list is built lazily so repositories containing hundreds of entries do
+not create hundreds of off-screen controls at once. This page manages the same
+user-added Marketplace repository list used by the main Marketplace. Disabling
+or removing a repository therefore hides its catalog and future updates for
+both manga and anime providers. It does not silently uninstall extensions that
+were already installed.
+
+Mihon/Tachiyomi `index.pb` URLs are detected and rejected before they are
+saved or fetched as Marketplace JSON. Their entries point to native Android
+extension APKs, which are not compatible with TetoTV's restricted
+JavaScript/TypeScript manga-provider runtime. The provided URL format is
+therefore an example of a different repository family, not a supported or
+bundled TetoTV source.
+
 ## Seanime-format manga-provider extensions
 
 A viewer can add a compatible Marketplace repository and explicitly install

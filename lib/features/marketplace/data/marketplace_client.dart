@@ -5,6 +5,7 @@ import 'package:anime_tv/features/marketplace/data/addon_store.dart';
 import 'package:anime_tv/features/marketplace/data/public_https_dio.dart';
 import 'package:anime_tv/features/marketplace/data/typescript_compiler.dart';
 import 'package:anime_tv/features/marketplace/domain/addon_models.dart';
+import 'package:anime_tv/features/marketplace/domain/repository_format.dart';
 import 'package:dio/dio.dart';
 
 class MarketplaceClient {
@@ -46,6 +47,10 @@ class MarketplaceClient {
     final uri = safePublicHttpsUri(repository.url);
     if (uri == null) {
       throw const FormatException('Repository must use a public HTTPS URL.');
+    }
+    final compatibility = inspectExtensionRepositoryUri(uri);
+    if (compatibility.isRejected) {
+      throw FormatException(compatibility.rejectionMessage!);
     }
     try {
       final payload = await _getText(uri, maximumBytes: _maxCatalogBytes);
@@ -151,6 +156,10 @@ List<MarketplaceAddon> parseMarketplaceCatalog(
     throw const FormatException('Repository catalog is too large.');
   }
   final decoded = jsonDecode(payload);
+  final compatibility = inspectExtensionRepositoryJson(decoded);
+  if (compatibility.isRejected) {
+    throw FormatException(compatibility.rejectionMessage!);
+  }
   final entries = switch (decoded) {
     final List<dynamic> values => values,
     final Map<dynamic, dynamic> wrapper => _catalogEntriesFromWrapper(wrapper),
@@ -245,6 +254,11 @@ MarketplaceAddon validateAndMergeMarketplaceManifest(
   if (manifest == null || !marketplaceAddonIdsMatch(manifest.id, summary.id)) {
     throw const FormatException(
       'The addon manifest is invalid or its ID changed.',
+    );
+  }
+  if (manifest.type.isNotEmpty && manifest.type != summary.type) {
+    throw const FormatException(
+      'The addon manifest changed its provider type.',
     );
   }
   return summary.mergeManifest(manifest);

@@ -11,6 +11,7 @@ import 'package:anime_tv/features/settings/application/display_preferences_contr
 import 'package:anime_tv/features/settings/application/premiumize_settings_controller.dart';
 import 'package:anime_tv/features/settings/application/real_debrid_settings_controller.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
+import 'package:anime_tv/features/settings/application/simkl_account_controller.dart';
 import 'package:anime_tv/features/settings/application/torbox_settings_controller.dart';
 import 'package:anime_tv/features/settings/application/tracking_accounts_controller.dart';
 import 'package:anime_tv/features/settings/domain/phone_setup_pairing.dart';
@@ -54,6 +55,7 @@ final phoneSetupBundleImporterProvider = Provider<PhoneSetupBundleImporter>((
     settings: ref.read(settingsPreferencesProvider.notifier),
     titleLanguage: ref.read(titleLanguagePreferenceProvider.notifier),
     tracking: tracking,
+    simkl: ref.read(simklAccountControllerProvider.notifier),
     realDebrid: ref.read(realDebridSettingsControllerProvider.notifier),
     torBox: ref.read(torBoxSettingsControllerProvider.notifier),
     allDebrid: ref.read(allDebridSettingsControllerProvider.notifier),
@@ -160,11 +162,13 @@ class PhoneSetupBundleImporter {
     this.snapshotDiscord,
     this.restoreDiscord,
     this.commitDiscord,
+    this.simkl,
   });
 
   final SettingsPreferencesController settings;
   final TitleLanguagePreferenceController titleLanguage;
   final TrackingAccountsController tracking;
+  final SimklAccountController? simkl;
   final RealDebridSettingsController realDebrid;
   final TorBoxSettingsController torBox;
   final AllDebridSettingsController allDebrid;
@@ -191,6 +195,7 @@ class PhoneSetupBundleImporter {
     );
     final trackingToken =
         structuredTracking?.accessToken ?? bundle.credentials.trackingToken;
+    final isSimkl = trackingProvider == TrackingProvider.simkl;
     final debridCredential =
         structuredDebrid?.validationCredential ??
         bundle.credentials.debridCredential;
@@ -199,7 +204,12 @@ class PhoneSetupBundleImporter {
     // is never included in the returned message or controller state.
     if (trackingToken != null &&
         (trackingProvider == null ||
-            !await tracking.validateToken(trackingProvider, trackingToken))) {
+            (isSimkl
+                ? simkl == null || !await simkl!.validateToken(trackingToken)
+                : !await tracking.validateToken(
+                    trackingProvider,
+                    trackingToken,
+                  )))) {
       return const PhoneSetupApplyResult(
         applied: false,
         preferenceCount: 0,
@@ -241,22 +251,28 @@ class PhoneSetupBundleImporter {
     final rollbacks = <PhoneSetupRollback>[];
     try {
       if (trackingToken != null && trackingProvider != null) {
-        final snapshot = await tracking.snapshotForImport(trackingProvider);
-        rollbacks.add(() => tracking.restoreImportSnapshot(snapshot));
-        if (structuredTracking != null) {
-          await tracking.saveTokenSet(
-            trackingProvider,
-            accessToken: structuredTracking.accessToken,
-            refreshToken: structuredTracking.refreshToken,
-            expiresAt: structuredTracking.expiresAt,
-            refreshState: false,
-          );
+        if (isSimkl) {
+          final snapshot = await simkl!.snapshotForImport();
+          rollbacks.add(() => simkl!.restoreImportSnapshot(snapshot));
+          await simkl!.saveImportedToken(trackingToken, refreshState: false);
         } else {
-          await tracking.save(
-            trackingProvider,
-            trackingToken,
-            refreshState: false,
-          );
+          final snapshot = await tracking.snapshotForImport(trackingProvider);
+          rollbacks.add(() => tracking.restoreImportSnapshot(snapshot));
+          if (structuredTracking != null) {
+            await tracking.saveTokenSet(
+              trackingProvider,
+              accessToken: structuredTracking.accessToken,
+              refreshToken: structuredTracking.refreshToken,
+              expiresAt: structuredTracking.expiresAt,
+              refreshState: false,
+            );
+          } else {
+            await tracking.save(
+              trackingProvider,
+              trackingToken,
+              refreshState: false,
+            );
+          }
         }
       }
 
@@ -332,6 +348,11 @@ class PhoneSetupBundleImporter {
         try {
           await tracking.refreshAfterImport();
         } catch (_) {}
+        if (isSimkl) {
+          try {
+            await simkl!.refreshAfterImport();
+          } catch (_) {}
+        }
       }
       if (discordCredentials != null && commitDiscord != null) {
         await commitDiscord!();
@@ -494,6 +515,7 @@ class PhoneSetupBundleImporter {
 TrackingProvider? _trackingProvider(String? value) => switch (value) {
   'anilist' => TrackingProvider.anilist,
   'myanimelist' => TrackingProvider.myAnimeList,
+  'simkl' => TrackingProvider.simkl,
   _ => null,
 };
 

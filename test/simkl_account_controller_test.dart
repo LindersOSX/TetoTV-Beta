@@ -99,6 +99,44 @@ void main() {
     },
   );
 
+  test(
+    'phone setup validation bypasses the persistent account profile loader',
+    () async {
+      FlutterSecureStorage.setMockInitialValues({
+        authBrokerUrlStorageKey: 'https://auth.example.test',
+      });
+      var persistentProfileLoads = 0;
+      var validationProfileLoads = 0;
+      final controller = SimklAccountController(
+        storage,
+        capabilityProbe: (_) async => SimklBrokerCapability(
+          clientId: 'public-client-id',
+          callbackUri: Uri.parse(
+            'https://auth.example.test/oauth/simkl/callback',
+          ),
+        ),
+        profileLoader: ({required accessToken, required clientId}) async {
+          persistentProfileLoads++;
+          throw StateError('Persistent session must not validate setup.');
+        },
+        validationProfileLoader:
+            ({required accessToken, required clientId}) async {
+              validationProfileLoads++;
+              expect(accessToken, 'private-simkl-token');
+              expect(clientId, 'public-client-id');
+              return const SimklUserProfile(
+                username: 'Validated User',
+                plan: SimklAccountPlan.free,
+              );
+            },
+      );
+
+      expect(await controller.validateToken(' private-simkl-token '), isTrue);
+      expect(validationProfileLoads, 1);
+      expect(persistentProfileLoads, 0);
+    },
+  );
+
   test('disconnect removes the complete SIMKL credential pair', () async {
     FlutterSecureStorage.setMockInitialValues({
       authBrokerUrlStorageKey: 'https://auth.example.test',

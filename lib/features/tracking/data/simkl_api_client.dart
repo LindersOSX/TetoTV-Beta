@@ -71,13 +71,178 @@ class SimklUserProfile {
   final int? accountId;
   final String? timezone;
   final SimklAccountPlan plan;
+
+  Map<String, Object?> toJson() => {
+    'username': username,
+    'avatarUrl': avatarUrl,
+    'accountId': accountId,
+    'timezone': timezone,
+    'plan': plan.name,
+  };
+
+  static SimklUserProfile? fromJson(Object? value) {
+    final data = _map(value);
+    final username = _nonEmpty(data?['username']);
+    if (username == null || username.length > 80) return null;
+    return SimklUserProfile(
+      username: username,
+      avatarUrl: _safeAvatar(data?['avatarUrl']),
+      accountId: _optionalPositive(data?['accountId']),
+      timezone: _nonEmpty(data?['timezone']),
+      plan:
+          SimklAccountPlan.values
+              .where((item) => item.name == data?['plan'])
+              .firstOrNull ??
+          SimklAccountPlan.unknown,
+    );
+  }
+}
+
+class SimklMediaIds {
+  SimklMediaIds({this.simkl, this.anilist, this.mal}) {
+    if (toJson().isEmpty) {
+      throw ArgumentError(
+        'At least one SIMKL-compatible media ID is required.',
+      );
+    }
+  }
+
+  final int? simkl;
+  final int? anilist;
+  final int? mal;
+
+  Map<String, dynamic> toJson() => {
+    if (simkl != null) 'simkl': _positive(simkl!, 'simkl'),
+    if (anilist != null) 'anilist': '${_positive(anilist!, 'anilist')}',
+    if (mal != null) 'mal': '${_positive(mal!, 'mal')}',
+  };
+}
+
+class SimklAnimeListEntry {
+  const SimklAnimeListEntry({
+    required this.simklId,
+    required this.title,
+    required this.status,
+    required this.progress,
+    this.anilistId,
+    this.malId,
+    this.totalEpisodes,
+    this.posterPath,
+    this.slug,
+    this.score,
+    this.updatedAt,
+    this.watchedEpisodeNumbers = const <int>{},
+  });
+
+  final int simklId;
+  final int? anilistId;
+  final int? malId;
+  final String title;
+  final String status;
+  final int progress;
+  final int? totalEpisodes;
+  final String? posterPath;
+  final String? slug;
+  final double? score;
+  final DateTime? updatedAt;
+  final Set<int> watchedEpisodeNumbers;
+
+  int get contiguousProgress {
+    if (watchedEpisodeNumbers.isEmpty) return progress;
+    var value = 0;
+    while (watchedEpisodeNumbers.contains(value + 1)) {
+      value++;
+    }
+    return value;
+  }
+
+  Map<String, Object?> toJson() => {
+    'simklId': simklId,
+    'anilistId': anilistId,
+    'malId': malId,
+    'title': title,
+    'status': status,
+    'progress': progress,
+    'totalEpisodes': totalEpisodes,
+    'posterPath': posterPath,
+    'slug': slug,
+    'score': score,
+    'updatedAt': updatedAt?.toUtc().toIso8601String(),
+    'watchedEpisodeNumbers': watchedEpisodeNumbers.toList()..sort(),
+  };
+
+  static SimklAnimeListEntry? fromJson(Object? value) {
+    final data = _map(value);
+    final simklId = _flexiblePositive(data?['simklId']);
+    final title = _nonEmpty(data?['title']);
+    final status = _optionalListStatus(data?['status']);
+    final progress = _nonNegative(data?['progress']);
+    final watchedEpisodeNumbers = _positiveIntegerSet(
+      data?['watchedEpisodeNumbers'],
+    );
+    if (simklId == null ||
+        title == null ||
+        title.length > 500 ||
+        status == null ||
+        progress == null) {
+      return null;
+    }
+    return SimklAnimeListEntry(
+      simklId: simklId,
+      anilistId: _flexiblePositive(data?['anilistId']),
+      malId: _flexiblePositive(data?['malId']),
+      title: title,
+      status: status,
+      progress: progress,
+      totalEpisodes: _nonNegative(data?['totalEpisodes']),
+      posterPath: _safePosterPath(data?['posterPath']),
+      slug: _safeSlug(data?['slug']),
+      score: _score(data?['score']),
+      updatedAt: _date(data?['updatedAt']),
+      watchedEpisodeNumbers: watchedEpisodeNumbers,
+    );
+  }
+}
+
+class SimklActivitySnapshot {
+  const SimklActivitySnapshot({
+    this.all,
+    this.animeAll,
+    this.animeRemovedFromList,
+    this.settingsAll,
+  });
+
+  final String? all;
+  final String? animeAll;
+  final String? animeRemovedFromList;
+  final String? settingsAll;
+
+  Map<String, Object?> toJson() => {
+    'all': all,
+    'animeAll': animeAll,
+    'animeRemovedFromList': animeRemovedFromList,
+    'settingsAll': settingsAll,
+  };
+
+  factory SimklActivitySnapshot.fromJson(Map<String, dynamic> value) =>
+      SimklActivitySnapshot(
+        all: _timestamp(value['all']),
+        animeAll: _timestamp(value['animeAll']),
+        animeRemovedFromList: _timestamp(value['animeRemovedFromList']),
+        settingsAll: _timestamp(value['settingsAll']),
+      );
 }
 
 class SimklApiException implements Exception {
-  const SimklApiException({required this.statusCode, required this.code});
+  const SimklApiException({
+    required this.statusCode,
+    required this.code,
+    this.retryable = false,
+  });
 
   final int? statusCode;
   final String code;
+  final bool retryable;
 
   @override
   String toString() => 'SIMKL request failed ($code).';
@@ -85,7 +250,7 @@ class SimklApiException implements Exception {
 
 class SimklRateLimitException extends SimklApiException {
   const SimklRateLimitException({required this.retryAfter})
-    : super(statusCode: 429, code: 'rate_limited');
+    : super(statusCode: 429, code: 'rate_limited', retryable: true);
 
   final Duration? retryAfter;
 }
@@ -158,79 +323,383 @@ class SimklApiClient {
     );
   });
 
-  /// Marks one sequential anime episode using an explicit canonical SIMKL ID.
-  Future<void> markAnimeEpisodeWatched({
-    required SimklAnimeId animeId,
-    required int episodeNumber,
-    DateTime? watchedAt,
-  }) => _postScheduler.schedule(() async {
-    final episode = <String, dynamic>{
-      'number': _positive(episodeNumber, 'episodeNumber'),
-      if (watchedAt != null) 'watched_at': watchedAt.toUtc().toIso8601String(),
-    };
-    final response = await _post<Map<String, dynamic>>(
-      '/sync/history',
-      data: {
-        'anime': [
-          {
-            'ids': {'simkl': animeId.value},
-            // SIMKL documents this flat shorthand for sequential anime.
-            'episodes': [episode],
-          },
-        ],
+  /// Returns the small activity watermark used to gate later sync reads.
+  Future<SimklActivitySnapshot> activities() async {
+    final response = await _get<Map<String, dynamic>>('/sync/activities');
+    final data = response.data;
+    final anime = _map(data?['anime']);
+    final settings = _map(data?['settings']);
+    final all = _timestamp(data?['all']);
+    if (data == null ||
+        anime == null ||
+        settings == null ||
+        !data.containsKey('all') ||
+        !anime.containsKey('all') ||
+        !anime.containsKey('removed_from_list') ||
+        !settings.containsKey('all') ||
+        !_nullableTimestamp(data['all']) ||
+        !_nullableTimestamp(anime['all']) ||
+        !_nullableTimestamp(anime['removed_from_list']) ||
+        !_nullableTimestamp(settings['all'])) {
+      throw const SimklApiException(
+        statusCode: 200,
+        code: 'invalid_activities_response',
+      );
+    }
+    return SimklActivitySnapshot(
+      all: all,
+      animeAll: _timestamp(anime['all']),
+      animeRemovedFromList: _timestamp(anime['removed_from_list']),
+      settingsAll: _timestamp(settings['all']),
+    );
+  }
+
+  /// Loads every anime status in one request. Continuous refreshes must be
+  /// gated by [activities]; [SimklAccountSession] owns that policy.
+  Future<List<SimklAnimeListEntry>> animeLibrary({String? dateFrom}) async {
+    final since = dateFrom == null ? null : _requiredTimestamp(dateFrom);
+    final response = await _get<Map<String, dynamic>>(
+      '/sync/all-items/anime',
+      queryParameters: {
+        'language': 'en',
+        'extended': 'full',
+        'episode_watched_at': 'yes',
+        'include_all_episodes': 'yes',
+        'date_from': ?since,
       },
     );
     final data = response.data;
-    final added = _map(data?['added']);
-    final notFound = _map(data?['not_found']);
-    if (added == null || notFound == null) {
+    final rows = data?['anime'];
+    if (since != null && data != null && !data.containsKey('anime')) {
+      return const [];
+    }
+    if (data == null || !data.containsKey('anime') || rows is! List) {
       throw const SimklApiException(
-        statusCode: 201,
-        code: 'invalid_history_response',
+        statusCode: 200,
+        code: 'invalid_list_response',
       );
     }
-    if (_nonEmptyList(notFound['movies']) ||
-        _nonEmptyList(notFound['shows']) ||
-        _nonEmptyList(notFound['episodes'])) {
-      throw const SimklUnresolvedIdentityException();
+    final result = <SimklAnimeListEntry>[];
+    for (final value in rows) {
+      final row = _map(value);
+      final show = _map(row?['show']);
+      final ids = _map(show?['ids']);
+      final simklId = _flexiblePositive(ids?['simkl']);
+      final title = _nonEmpty(show?['title']);
+      final returnedStatus = _optionalListStatus(row?['status']);
+      final watchedEpisodeNumbers = _watchedEpisodes(row?['seasons']);
+      if (simklId == null || title == null || returnedStatus == null) {
+        throw const SimklApiException(
+          statusCode: 200,
+          code: 'invalid_list_response',
+        );
+      }
+      result.add(
+        SimklAnimeListEntry(
+          simklId: simklId,
+          anilistId: _flexiblePositive(ids?['anilist']),
+          malId: _flexiblePositive(ids?['mal']),
+          title: title,
+          status: returnedStatus,
+          progress: _nonNegative(row?['watched_episodes_count']) ?? 0,
+          totalEpisodes: _nonNegative(row?['total_episodes_count']),
+          posterPath: _safePosterPath(show?['poster']),
+          slug: _safeSlug(ids?['slug']),
+          score: _score(row?['user_rating']),
+          updatedAt:
+              _date(row?['last_watched_at']) ??
+              _date(row?['added_to_watchlist_at']),
+          watchedEpisodeNumbers: watchedEpisodeNumbers,
+        ),
+      );
     }
+    return List.unmodifiable(result);
+  }
+
+  /// Loads the authoritative current SIMKL IDs for deletion reconciliation.
+  Future<Set<int>> animeLibraryIds() async {
+    final response = await _get<Map<String, dynamic>>(
+      '/sync/all-items/anime',
+      queryParameters: const {'language': 'en', 'extended': 'simkl_ids_only'},
+    );
+    final data = response.data;
+    final rows = data?['anime'];
+    if (data == null || !data.containsKey('anime') || rows is! List) {
+      throw const SimklApiException(
+        statusCode: 200,
+        code: 'invalid_ids_response',
+      );
+    }
+    final result = <int>{};
+    for (final value in rows) {
+      final row = _map(value);
+      final show = _map(row?['show']);
+      final ids = _map(show?['ids']) ?? _map(row?['ids']);
+      final simklId = _flexiblePositive(ids?['simkl']);
+      if (simklId == null) {
+        throw const SimklApiException(
+          statusCode: 200,
+          code: 'invalid_ids_response',
+        );
+      }
+      result.add(simklId);
+    }
+    return Set.unmodifiable(result);
+  }
+
+  /// Marks one sequential anime episode using an explicit canonical SIMKL ID.
+  Future<String> markAnimeEpisodeWatched({
+    required SimklAnimeId animeId,
+    required int episodeNumber,
+    DateTime? watchedAt,
+  }) => markAnimeEpisodeWatchedByIds(
+    ids: SimklMediaIds(simkl: animeId.value),
+    episodeNumber: episodeNumber,
+    watchedAt: watchedAt,
+  );
+
+  Future<String> markAnimeEpisodeWatchedByIds({
+    required SimklMediaIds ids,
+    required int episodeNumber,
+    DateTime? watchedAt,
+  }) => markAnimeEpisodesWatchedByIds(
+    ids: ids,
+    episodeNumbers: [episodeNumber],
+    watchedAt: watchedAt,
+  );
+
+  Future<String> markAnimeEpisodesWatchedByIds({
+    required SimklMediaIds ids,
+    required List<int> episodeNumbers,
+    DateTime? watchedAt,
+  }) => _postScheduler.schedule(() async {
+    if (episodeNumbers.isEmpty || episodeNumbers.length > 250) {
+      throw ArgumentError.value(
+        episodeNumbers.length,
+        'episodeNumbers',
+        'Send between 1 and 250 episodes per request.',
+      );
+    }
+    final episodes = [
+      for (final number in episodeNumbers)
+        <String, dynamic>{
+          'number': _positive(number, 'episodeNumber'),
+          if (watchedAt != null)
+            'watched_at': watchedAt.toUtc().toIso8601String(),
+        },
+    ];
+    final response = await _post<Map<String, dynamic>>(
+      '/sync/history',
+      data: {
+        // Anime-native AniList/MAL identities belong in SIMKL's anime bucket.
+        // The history-removal endpoint is the exception and uses `shows`.
+        'anime': [
+          {'ids': ids.toJson(), 'episodes': episodes},
+        ],
+      },
+    );
+    _validateMutation(
+      response.data,
+      successKey: 'added',
+      code: 'invalid_history_response',
+    );
+    return _actualHistoryStatus(
+      response.data,
+      code: 'invalid_history_response',
+    );
   });
 
-  Future<Response<T>> _post<T>(String path, {Object? data}) async {
+  Future<String> setAnimeStatus({
+    required SimklMediaIds ids,
+    required String status,
+  }) => _postScheduler.schedule(() async {
+    const allowed = {'watching', 'plantowatch', 'completed', 'dropped', 'hold'};
+    if (!allowed.contains(status)) {
+      throw ArgumentError.value(status, 'status', 'Unknown SIMKL list status.');
+    }
+    final response = await _post<Map<String, dynamic>>(
+      '/sync/add-to-list',
+      data: {
+        'anime': [
+          {'to': status, 'ids': ids.toJson()},
+        ],
+      },
+    );
+    return _actualAddedStatus(
+      response.data,
+      code: 'invalid_list_update_response',
+    );
+  });
+
+  Future<void> removeAnime(SimklMediaIds ids) =>
+      _postScheduler.schedule(() async {
+        final response = await _post<Map<String, dynamic>>(
+          '/sync/history/remove',
+          data: {
+            // Whole-title removal is normalized through the shows bucket,
+            // including anime, by SIMKL's history removal API.
+            'shows': [
+              {'ids': ids.toJson()},
+            ],
+          },
+        );
+        _validateMutation(
+          response.data,
+          successKey: 'deleted',
+          code: 'invalid_list_remove_response',
+        );
+      });
+
+  Future<Response<T>> _get<T>(
+    String path, {
+    Map<String, dynamic>? queryParameters,
+  }) async {
+    try {
+      return await _dio.get<T>(
+        path,
+        queryParameters: {
+          ...?queryParameters,
+          'client_id': _clientId,
+          'app-name': _appName,
+          'app-version': _appVersion,
+        },
+        options: _requestOptions((status) => status == 200),
+      );
+    } on DioException catch (error) {
+      throw _requestException(error);
+    }
+  }
+
+  Future<Response<T>> _post<T>(
+    String path, {
+    Object? data,
+    Map<String, dynamic>? queryParameters,
+  }) async {
     try {
       return await _dio.post<T>(
         path,
         data: data,
         queryParameters: {
+          ...?queryParameters,
           'client_id': _clientId,
           'app-name': _appName,
           'app-version': _appVersion,
         },
-        options: Options(
-          followRedirects: false,
-          maxRedirects: 0,
-          validateStatus: (status) => status == 200 || status == 201,
-          headers: {
-            'Accept': 'application/json',
-            'Content-Type': 'application/json',
-            'User-Agent': '$_appName/$_appVersion',
-            'Authorization': 'Bearer $_accessToken',
-          },
+        options: _requestOptions(
+          (status) => status == 200 || status == 201,
+          contentType: true,
         ),
       );
     } on DioException catch (error) {
-      final status = error.response?.statusCode;
-      if (status == 429) {
-        throw SimklRateLimitException(
-          retryAfter: _retryAfter(error.response?.headers.value('retry-after')),
-        );
-      }
-      throw SimklApiException(
-        statusCode: status,
-        code: _errorCode(error.response?.data),
-      );
+      throw _requestException(error);
     }
   }
+
+  Options _requestOptions(
+    bool Function(int?) validateStatus, {
+    bool contentType = false,
+  }) => Options(
+    followRedirects: false,
+    maxRedirects: 0,
+    validateStatus: validateStatus,
+    headers: {
+      'Accept': 'application/json',
+      if (contentType) 'Content-Type': 'application/json',
+      'User-Agent': '$_appName/$_appVersion',
+      'Authorization': 'Bearer $_accessToken',
+    },
+  );
+
+  SimklApiException _requestException(DioException error) {
+    final status = error.response?.statusCode;
+    if (status == 429) {
+      return SimklRateLimitException(
+        retryAfter: _retryAfter(error.response?.headers.value('retry-after')),
+      );
+    }
+    return SimklApiException(
+      statusCode: status,
+      code: _errorCode(error.response?.data),
+      retryable:
+          status == null &&
+          switch (error.type) {
+            DioExceptionType.connectionTimeout ||
+            DioExceptionType.sendTimeout ||
+            DioExceptionType.receiveTimeout ||
+            DioExceptionType.connectionError ||
+            DioExceptionType.unknown => true,
+            DioExceptionType.badCertificate ||
+            DioExceptionType.badResponse ||
+            DioExceptionType.cancel ||
+            DioExceptionType.transformTimeout => false,
+          },
+    );
+  }
+}
+
+void _validateMutation(
+  Object? value, {
+  required String successKey,
+  required String code,
+}) {
+  final data = _map(value);
+  final result = _map(data?[successKey]);
+  final notFound = _map(data?['not_found']);
+  if (result == null || notFound == null) {
+    throw SimklApiException(statusCode: 201, code: code);
+  }
+  if (_nonEmptyList(notFound['movies']) ||
+      _nonEmptyList(notFound['shows']) ||
+      _nonEmptyList(notFound['anime']) ||
+      _nonEmptyList(notFound['episodes'])) {
+    throw const SimklUnresolvedIdentityException();
+  }
+}
+
+String _actualAddedStatus(Object? value, {required String code}) {
+  final data = _map(value);
+  final added = _map(data?['added']);
+  final notFound = _map(data?['not_found']);
+  if (added == null || notFound == null) {
+    throw SimklApiException(statusCode: 201, code: code);
+  }
+  if (_nonEmptyList(notFound['movies']) ||
+      _nonEmptyList(notFound['shows']) ||
+      _nonEmptyList(notFound['anime'])) {
+    throw const SimklUnresolvedIdentityException();
+  }
+
+  final rows = <Object?>[];
+  for (final key in const ['movies', 'shows', 'anime']) {
+    final bucket = added[key];
+    if (bucket == null) continue;
+    if (bucket is! List) {
+      throw SimklApiException(statusCode: 201, code: code);
+    }
+    rows.addAll(bucket);
+  }
+  if (rows.length != 1) {
+    throw SimklApiException(statusCode: 201, code: code);
+  }
+  final actual = _optionalListStatus(_map(rows.single)?['to']);
+  if (actual == null) {
+    throw SimklApiException(statusCode: 201, code: code);
+  }
+  return actual;
+}
+
+String _actualHistoryStatus(Object? value, {required String code}) {
+  final added = _map(_map(value)?['added']);
+  final statuses = added?['statuses'];
+  if (statuses is! List || statuses.length != 1) {
+    throw SimklApiException(statusCode: 201, code: code);
+  }
+  final response = _map(_map(statuses.single)?['response']);
+  final actual = _optionalListStatus(response?['status']);
+  if (actual == null) {
+    throw SimklApiException(statusCode: 201, code: code);
+  }
+  return actual;
 }
 
 int _positive(int value, String name) {
@@ -241,6 +710,126 @@ int _positive(int value, String name) {
 int? _optionalPositive(Object? value) {
   if (value is! num || !value.isFinite || value.toInt() <= 0) return null;
   return value.toInt();
+}
+
+int? _flexiblePositive(Object? value) {
+  if (value is num && value.isFinite && value.toInt() > 0) {
+    return value.toInt();
+  }
+  if (value is String) {
+    final parsed = int.tryParse(value.trim());
+    if (parsed != null && parsed > 0) return parsed;
+  }
+  return null;
+}
+
+int? _nonNegative(Object? value) {
+  if (value is! num || !value.isFinite || value.toInt() < 0) return null;
+  return value.toInt();
+}
+
+Set<int> _positiveIntegerSet(Object? value) {
+  if (value is! List) return const <int>{};
+  final result = <int>{};
+  for (final item in value) {
+    final number = _optionalPositive(item);
+    if (number != null) result.add(number);
+  }
+  return Set.unmodifiable(result);
+}
+
+Set<int> _watchedEpisodes(Object? value) {
+  if (value == null) return const <int>{};
+  if (value is! List) {
+    throw const SimklApiException(
+      statusCode: 200,
+      code: 'invalid_list_response',
+    );
+  }
+  final result = <int>{};
+  for (final seasonValue in value) {
+    final season = _map(seasonValue);
+    final episodes = season?['episodes'];
+    if (season == null || episodes is! List) {
+      throw const SimklApiException(
+        statusCode: 200,
+        code: 'invalid_list_response',
+      );
+    }
+    for (final episodeValue in episodes) {
+      final number = _optionalPositive(_map(episodeValue)?['number']);
+      if (number == null) {
+        throw const SimklApiException(
+          statusCode: 200,
+          code: 'invalid_list_response',
+        );
+      }
+      result.add(number);
+    }
+  }
+  return Set.unmodifiable(result);
+}
+
+double? _score(Object? value) {
+  if (value is! num || !value.isFinite) return null;
+  final score = value.toDouble();
+  return score >= 0 && score <= 10 ? score : null;
+}
+
+DateTime? _date(Object? value) {
+  if (value is! String || value.length > 64) return null;
+  return DateTime.tryParse(value)?.toLocal();
+}
+
+String? _timestamp(Object? value) {
+  final source = _nonEmpty(value);
+  if (source == null || source.length > 64) return null;
+  return DateTime.tryParse(source) == null ? null : source;
+}
+
+String _requiredTimestamp(String value) {
+  final timestamp = _timestamp(value);
+  if (timestamp == null) {
+    throw ArgumentError.value(value, 'dateFrom', 'Use an ISO 8601 timestamp.');
+  }
+  return timestamp;
+}
+
+bool _nullableTimestamp(Object? value) =>
+    value == null || _timestamp(value) != null;
+
+String? _optionalListStatus(Object? value) {
+  if (value == null) return null;
+  final status = _nonEmpty(value);
+  return const {
+        'watching',
+        'plantowatch',
+        'completed',
+        'dropped',
+        'hold',
+      }.contains(status)
+      ? status
+      : null;
+}
+
+String? _safePosterPath(Object? value) {
+  final path = _nonEmpty(value);
+  if (path == null ||
+      path.length > 128 ||
+      !RegExp(r'^[0-9A-Za-z_-]+/[0-9A-Za-z_-]+$').hasMatch(path)) {
+    return null;
+  }
+  return path;
+}
+
+String? _safeSlug(Object? value) {
+  final slug = _nonEmpty(value);
+  if (slug == null ||
+      slug.length > 160 ||
+      !RegExp(r'^[0-9A-Za-z]+(?:-[0-9A-Za-z]+)*$').hasMatch(slug)) {
+    return null;
+  }
+  return slug;
 }
 
 String _credential(String value, String name, {required int maximum}) {

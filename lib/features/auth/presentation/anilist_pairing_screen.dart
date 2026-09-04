@@ -238,6 +238,9 @@ class _SimklPairingScreenState extends ConsumerState<SimklPairingScreen> {
       if (nextStatus == PairingStatus.authorized &&
           previousStatus != PairingStatus.authorized) {
         ref.invalidate(simklAccountControllerProvider);
+        ref.invalidate(trackingAccountsControllerProvider);
+        ref.invalidate(trackingHomeProvider);
+        ref.invalidate(trackingOutboxFlushProvider);
       }
     });
     final pairing = ref.watch(simklPairingControllerProvider);

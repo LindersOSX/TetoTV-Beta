@@ -26,6 +26,9 @@ class TrackedAnime {
     this.updatedAt,
     this.startDate,
     this.airingStatus,
+    this.anilistId,
+    this.malId,
+    this.sourceUrl,
   });
 
   final int mediaId;
@@ -40,6 +43,9 @@ class TrackedAnime {
   final DateTime? updatedAt;
   final DateTime? startDate;
   final String? airingStatus;
+  final int? anilistId;
+  final int? malId;
+  final String? sourceUrl;
 
   String displayTitle(TitleLanguagePreference preference) =>
       preferredAnimeTitle(
@@ -48,6 +54,17 @@ class TrackedAnime {
         english: titleEnglish,
         romaji: titleRomaji,
       );
+}
+
+/// Catalog identifiers that SIMKL can resolve without a separate crosswalk.
+class TrackingMediaIds {
+  const TrackingMediaIds({this.simklId, this.anilistId, this.malId});
+
+  final int? simklId;
+  final int? anilistId;
+  final int? malId;
+
+  bool get isEmpty => simklId == null && anilistId == null && malId == null;
 }
 
 abstract interface class TrackingRepository {
@@ -66,4 +83,33 @@ abstract interface class TrackingRepository {
   });
 
   Future<void> removeFromList({required int mediaId});
+}
+
+/// Optional repository surface for providers that accept multiple catalog IDs.
+///
+/// SIMKL accepts AniList and MAL IDs directly, so callers must not perform a
+/// lossy or network-heavy ID crosswalk before updating a title.
+abstract interface class ExternalIdTrackingRepository {
+  Future<int?> currentProgressByIds(TrackingMediaIds ids);
+
+  Future<void> updateProgressByIds({
+    required TrackingMediaIds ids,
+    required int completedEpisodes,
+  });
+
+  Future<void> updateStatusByIds({
+    required TrackingMediaIds ids,
+    required TrackingListStatus status,
+  });
+
+  Future<void> removeFromListByIds(TrackingMediaIds ids);
+}
+
+/// Optional mutation surface for trackers that may normalize the requested
+/// watchlist status and return the authoritative value they stored.
+abstract interface class ResolvedStatusTrackingRepository {
+  Future<TrackingListStatus> updateStatusResolved({
+    required int mediaId,
+    required TrackingListStatus status,
+  });
 }

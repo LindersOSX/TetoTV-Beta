@@ -33,6 +33,13 @@ the same as legal, store, or codec certification.
 - Obtain any required AniList authorization for a client that also integrates
   MAL, and confirm the current terms for every metadata, tracking, skip-time,
   and debrid service.
+- Register the TetoTV application with SIMKL and obtain any API or
+  commercial-use approval required for the intended distribution. Configure
+  only the registered public `SIMKL_CLIENT_ID` for the current PIN flow, deploy
+  the matching companion revision, and verify `/health` reports
+  `provider_device_flows.simkl: true` with that public ID. A SIMKL client secret
+  and callback are not required for current builds; do not block a release on a
+  secret that the normal flow does not use.
 - Confirm that the intended Teto name/artwork use and monetization comply with
   the official character guidelines and obtain permission where required.
 - Archive the exact third-party notices, native binary provenance, and
@@ -91,24 +98,33 @@ the same as legal, store, or codec certification.
   conservative engineering inventory, not as a completed Google Play form.
   Record the reviewer, APK digest, companion deployment revision, policy
   effective date, and date of this comparison in the release evidence.
-- Verify the deployed `/privacy` page is the September 1, 2026 disclosure, is
-  readable without an account, matches the in-app summary, and provides a
-  working contact route for access/deletion questions. Do not claim a shorter
-  retention period than the Wispbyte host, reverse proxy, Discord channels, or
-  provider services actually enforce.
+- Verify the deployed `/privacy` page has the same effective date and content
+  as the repository disclosure, is readable without an account, matches the
+  in-app summary, and provides a working contact route for access/deletion
+  questions. Do not claim a shorter retention period than the Wispbyte host,
+  reverse proxy, Discord channels, or provider services actually enforce.
 - Document the Wispbyte host and reverse proxy's real IP/request-log fields,
   rate-limit metadata, access controls, backup behavior, and deletion/retention
   schedule. Confirm the privacy policy names the relevant controller/processor
   relationships before accepting public setup, Watch Party, live-count, crash,
   or diagnostic traffic.
-- Exercise unified phone setup end to end with a test AniList/MAL account, each
-  supported debrid service, and Discord. Confirm provider-returned access,
-  refresh, API, and client credentials are readable by the broker only during
-  the transient handoff; are removed when the bound browser claims them or
-  within one hour; are encrypted in the browser before submission; and never
-  appear in URLs, browser persistent storage, application logs, crash reports,
-  or diagnostics. Confirm the device private key remains local and nonsecret
-  setup state expires within seven days.
+- Exercise unified phone setup end to end with a test AniList, MAL, and SIMKL
+  account, each supported debrid service, and Discord. Confirm
+  provider-returned access, refresh, API, and client credentials are readable
+  by the broker only during the transient handoff; are removed when the bound
+  browser claims them or within one hour; are encrypted in the browser before
+  submission; and never appear in URLs, browser persistent storage,
+  application logs, crash reports, or diagnostics. Confirm the device private
+  key remains local and nonsecret setup state expires within seven days.
+- Exercise standalone SIMKL linking separately. Confirm the app obtains only
+  the public client ID from companion `/health`, requests and polls the official
+  PIN endpoints directly at the returned interval, receives the token directly
+  from SIMKL, and stores it in Keystore-backed storage without sending it to
+  the companion. Verify profile/list/status/progress operations, the
+  one-POST-per-second lane, no automatic mutation retry, activity-gated cache
+  refresh, 90-day stale-cache ceiling, validated poster handling, visible
+  **View on SIMKL** links, and full cache/credential removal on disconnect.
+  Keep SIMKL unavailable until all checks pass.
 - Confirm enabled installed extensions are the only extensions automatically
   health-probed, a missing or at-least-24-hour-old result can trigger a probe at
   startup, and only due extensions can be retried by the 24-hour in-app timer.

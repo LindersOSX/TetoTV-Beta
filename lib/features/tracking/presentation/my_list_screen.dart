@@ -1,3 +1,4 @@
+import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/core/preferences/title_language_preference.dart';
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/layout/poster_card_geometry.dart';
@@ -195,6 +196,9 @@ class _MyListScreenState extends ConsumerState<MyListScreen> {
           Navigator.of(dialogContext).pop();
           _open(item);
         },
+        onViewSource: item.tracked.sourceUrl == null
+            ? null
+            : () => _openTrackingSource(item.tracked.sourceUrl!),
       ),
     );
     if (selected == null || !mounted) return;
@@ -202,10 +206,11 @@ class _MyListScreenState extends ConsumerState<MyListScreen> {
     setState(() => _updating = true);
     try {
       final controller = ref.read(trackingStatusControllerProvider.notifier);
+      TrackingListStatus? actualStatus;
       if (selected.remove) {
         await controller.remove(item);
       } else {
-        await controller.update(item, selected.status!);
+        actualStatus = await controller.update(item, selected.status!);
       }
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -215,7 +220,7 @@ class _MyListScreenState extends ConsumerState<MyListScreen> {
                 ? '${item.tracked.displayTitle(titlePreference)} removed from '
                       '${item.provider.displayName}.'
                 : '${item.tracked.displayTitle(titlePreference)} moved to '
-                      '${selected.status!.displayName}.',
+                      '${(actualStatus ?? selected.status!).displayName}.',
           ),
           backgroundColor: context.appPalette.accent,
         ),
@@ -230,6 +235,25 @@ class _MyListScreenState extends ConsumerState<MyListScreen> {
       );
     } finally {
       if (mounted) setState(() => _updating = false);
+    }
+  }
+
+  Future<void> _openTrackingSource(String source) async {
+    final uri = Uri.tryParse(source);
+    if (uri == null ||
+        uri.scheme != 'https' ||
+        uri.host.toLowerCase() != 'simkl.com' ||
+        uri.userInfo.isNotEmpty ||
+        uri.hasPort ||
+        uri.hasQuery ||
+        uri.hasFragment) {
+      return;
+    }
+    final opened = await AndroidTvBridge.instance.openExternalWebPage(uri);
+    if (!opened && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not open SIMKL on this device.')),
+      );
     }
   }
 
@@ -978,11 +1002,13 @@ class _StatusDialog extends StatelessWidget {
     required this.item,
     required this.titlePreference,
     required this.onOpen,
+    this.onViewSource,
   });
 
   final HomeTrackedAnime item;
   final TitleLanguagePreference titlePreference;
   final VoidCallback onOpen;
+  final VoidCallback? onViewSource;
 
   @override
   Widget build(BuildContext context) {
@@ -1043,6 +1069,10 @@ class _StatusDialog extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(width: 14),
+                if (onViewSource != null) ...[
+                  _SourceButton(onPressed: onViewSource!),
+                  const SizedBox(width: 14),
+                ],
                 _OpenButton(onPressed: onOpen),
               ],
             ),
@@ -1053,6 +1083,49 @@ class _StatusDialog extends StatelessWidget {
               style: TextStyle(
                 color: context.appPalette.mutedText,
                 fontSize: 12,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SourceButton extends StatelessWidget {
+  const _SourceButton({required this.onPressed});
+
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return TvFocusable(
+      onPressed: onPressed,
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        color: context.appPalette.surfaceRaised,
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 11),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox.square(
+              dimension: 18,
+              child: Image.network(
+                'https://us.simkl.in/img_favicon/v2/favicon-192x192.png',
+                fit: BoxFit.cover,
+                errorBuilder: (_, _, _) => const Icon(
+                  Icons.open_in_new_rounded,
+                  color: Colors.white,
+                  size: 16,
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            const Text(
+              'View on SIMKL',
+              style: TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w900,
               ),
             ),
           ],

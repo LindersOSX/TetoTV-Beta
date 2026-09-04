@@ -1,5 +1,4 @@
 import 'package:anime_tv/core/theme/app_theme.dart';
-import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
 import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
 import 'package:anime_tv/features/settings/application/display_preferences_controller.dart';
 import 'package:anime_tv/features/tracking/application/my_list_controller.dart';
@@ -54,12 +53,11 @@ TrackingListStatus? _matchingStatus(
   Iterable<HomeTrackedAnime> items,
 ) {
   for (final item in items) {
-    final matches = switch (item.provider) {
-      TrackingProvider.anilist =>
-        (item.anilistId ?? item.tracked.mediaId) == anime.id,
-      TrackingProvider.myAnimeList =>
-        anime.idMal != null && item.tracked.mediaId == anime.idMal,
-    };
+    final matches = matchesTrackingIds(
+      item,
+      anilistId: anime.id,
+      malId: anime.idMal,
+    );
     if (matches) return item.tracked.status;
   }
   return null;

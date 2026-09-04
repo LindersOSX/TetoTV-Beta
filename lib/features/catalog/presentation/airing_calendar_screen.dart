@@ -13,7 +13,6 @@ import 'package:anime_tv/features/home/presentation/main_navigation_bar.dart';
 import 'package:anime_tv/features/settings/application/display_preferences_controller.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:anime_tv/features/tracking/application/tracking_home_provider.dart';
-import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -650,12 +649,7 @@ void _returnToPreviousOrHome(BuildContext context) {
 bool _isFollowed(AnimeSummary anime, List<HomeTrackedAnime> followed) {
   final normalized = _normalizedTitle(anime.title);
   return followed.any((item) {
-    if (item.provider == TrackingProvider.anilist &&
-        (item.anilistId ?? item.tracked.mediaId) == anime.id) {
-      return true;
-    }
-    if (item.provider == TrackingProvider.myAnimeList &&
-        anime.idMal == item.tracked.mediaId) {
+    if (matchesTrackingIds(item, anilistId: anime.id, malId: anime.idMal)) {
       return true;
     }
     return _normalizedTitle(item.tracked.title) == normalized;

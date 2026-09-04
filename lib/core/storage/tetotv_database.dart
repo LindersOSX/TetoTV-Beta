@@ -1020,6 +1020,11 @@ class TetoTvDatabase {
     maxStaleAge: maxStaleAge,
   );
 
+  Future<void> removeCachedJson(String key) async {
+    final db = await database;
+    await db.delete('catalog_cache', where: 'cache_key = ?', whereArgs: [key]);
+  }
+
   Future<Map<String, Object?>> diagnosticsSnapshot({DateTime? now}) async {
     final db = await database;
     final snapshotEnd = (now ?? DateTime.now()).toUtc();

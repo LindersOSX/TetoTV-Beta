@@ -749,6 +749,7 @@ String _stageTitle(PhoneSetupViewStage stage) => switch (stage) {
 String _trackingName(String value) => switch (value) {
   'anilist' => 'AniList',
   'myanimelist' => 'MyAnimeList',
+  'simkl' => 'SIMKL',
   _ => 'Selected account',
 };
 

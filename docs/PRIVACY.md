@@ -1,6 +1,6 @@
 # TetoTV privacy disclosure
 
-Effective date: September 1, 2026
+Effective date: September 3, 2026
 
 The stable public copy is available without an account or authentication at
 <https://tetotv-bot.wisp.uno/privacy>.
@@ -34,7 +34,8 @@ TetoTV stores the following data locally:
 - an optional Plex server address, X-Plex-Token, and random client identifier
   in Keystore-backed secure storage;
 - playback history, resume positions, per-series preferences, tracker-sync
-  outbox entries, installed source definitions, and app preferences;
+  outbox entries, an account-scoped SIMKL profile/list/activity cache, installed
+  source definitions, and app preferences;
 - when the Developer Mode Manga Preview is used, user-added OPDS or declarative
   repository definitions, bounded catalog cache data, local library entries,
   reading progress, chapter/page counts, reader preferences, and download-job
@@ -75,8 +76,9 @@ catalog snapshot remain until the user chooses **Delete** in the Download
 Manager, resets or clears TetoTV, or uninstalls the app. Cancelling a download
 removes its partial media, but its cancelled job record remains until it is
 deleted. Artwork and catalog rows are pruned when the last related download is
-deleted. Disconnecting a service deletes that service's saved credentials.
-Removing local history does not modify AniList or MAL. TetoTV's **Settings >
+deleted. Disconnecting a service deletes that service's saved credentials;
+disconnecting SIMKL also removes that account's profile/list/activity cache.
+Removing local history does not modify AniList, MAL, or SIMKL. TetoTV's **Settings >
 System > Reset TetoTV** action and Android's **Settings > Apps > TetoTV >
 Storage > Clear storage** both remove all TetoTV local data. The separate
 **Clear cache** action removes only temporary files and retains accounts,
@@ -94,13 +96,24 @@ persistent manga settings, source definitions, progress, and downloads.
 
 TetoTV makes network requests only for app features the user uses:
 
-- AniList and MAL receive the catalog, search, list, and progress requests
-  needed for the tracker features the user chooses. SIMKL receives an account
-  profile-verification request when the user links or rechecks SIMKL; TetoTV
-  does not currently send list or progress updates to SIMKL. When AniList is
+- AniList, MAL, and SIMKL receive the profile, list, status, and progress
+  requests needed for the tracker features the user chooses. SIMKL can receive
+  its supported AniList or MAL title identifier, list request, status,
+  watched-episode number and time, and activity timestamps used to avoid
+  unnecessary cache refreshes. TetoTV does not timer-poll a full SIMKL library.
+  A user-driven Home/My List load uses a profile-scoped local cache and checks
+  activities no more than once per 20 minutes. Reported changes are fetched as
+  a timestamped delta and merged locally; a reported removal also triggers a
+  compact current-ID diff. A SIMKL cache snapshot is not used after 90 days
+  without a successful refresh. When AniList is
   unavailable, Kitsu can receive bounded read-only title or identifier lookups
   for search/details and for mapping backup catalog results back to real
   AniList and MAL identifiers;
+- SIMKL list cards can load a poster through `wsrv.nl` using a validated
+  `simkl.in` poster path and expose a user-invoked **View on SIMKL** link to the
+  corresponding `simkl.com` title page. Those hosts receive the ordinary IP,
+  user-agent, requested image/title path, and connection metadata needed to
+  serve the request. TetoTV does not add a tracker token to either public URL;
 - the selected debrid provider receives account validation, torrent/magnet,
   file-selection, and streaming requests;
 - Direct torrent is off by default and requires a separate warning/confirmation.
@@ -344,17 +357,22 @@ credential database, but it necessarily handles the following transient data:
   address.
 - In unified phone setup, the browser can select app preferences, marketplace
   repository URLs, torrent-manifest URLs, and linked services. When an
-  official AniList, MyAnimeList, debrid, or Discord flow returns to the broker,
+  official AniList, MyAnimeList, SIMKL PIN, debrid, or Discord flow completes,
   the resulting access token, refresh token, API key, provider-issued client
   credentials, expiry, and scopes are temporarily readable by the broker
   process. They are not end-to-end encrypted while the broker is receiving and
-  holding them. This short plaintext interval is required to receive the
-  provider callback and deliver the result to the already-bound browser.
-- Standalone SIMKL linking uses the same companion origin but is not included
-  in the unified setup bundle. The companion receives the official OAuth
-  callback, holds the resulting token only in volatile memory, and delivers it
-  once to the requesting device through a short-lived random pairing
-  capability. The SIMKL password and client secret never enter the APK.
+  holding them. This short plaintext interval is required to receive a provider
+  callback or poll a device/PIN flow and deliver the result to the already-bound
+  browser.
+- Standalone SIMKL linking obtains the registered application's public client
+  ID from the companion capability response, then requests and polls SIMKL's
+  official PIN endpoints directly. SIMKL returns the access token directly to
+  the app; the companion does not receive it in this path. The public client ID
+  is not a user API key, and no SIMKL client secret or TetoTV callback is used.
+  In unified phone setup, the companion runs the same PIN flow, holds the token
+  only in volatile link state until the bound browser claims it, and then the
+  browser includes it in the encrypted setup bundle. A SIMKL password never
+  enters TetoTV.
 - Linked-service credentials are held only in volatile server memory and are
   removed after the browser claims them or when their one-hour maximum expiry
   is reached. The bound browser assembles the selected credentials, source

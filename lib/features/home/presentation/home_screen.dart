@@ -11,7 +11,6 @@ import 'package:anime_tv/core/widgets/network_artwork.dart';
 import 'package:anime_tv/core/widgets/poster_metadata_overlay.dart';
 import 'package:anime_tv/core/storage/storage_providers.dart';
 import 'package:anime_tv/core/storage/tetotv_database.dart';
-import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
 import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
 import 'package:anime_tv/features/home/application/top_navigation_availability.dart';
@@ -23,6 +22,7 @@ import 'package:anime_tv/features/settings/application/home_shelf_preferences_co
 import 'package:anime_tv/features/settings/application/local_profiles_controller.dart';
 import 'package:anime_tv/features/settings/application/tracking_accounts_controller.dart';
 import 'package:anime_tv/features/home/presentation/main_navigation_bar.dart';
+import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
 import 'package:anime_tv/features/tracking/application/tracking_home_provider.dart';
 import 'package:anime_tv/features/tracking/application/my_list_controller.dart';
 import 'package:anime_tv/features/tracking/domain/tracking_repository.dart';
@@ -595,6 +595,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       if (mounted) await context.push(route);
       return;
     }
+    if (action == _HomeShowAction.viewSource && item.sourceUrl != null) {
+      await _openSimklSource(item.sourceUrl!);
+      return;
+    }
     if (action is! TrackingListStatus) return;
 
     if (item.animeId == null && item.trackingItems.isNotEmpty) {
@@ -660,6 +664,26 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           content: Text(message),
           backgroundColor: const Color(0xFF7D1E32),
         ),
+      );
+    }
+  }
+
+  Future<void> _openSimklSource(String source) async {
+    final uri = Uri.tryParse(source);
+    if (uri == null ||
+        uri.scheme != 'https' ||
+        uri.host.toLowerCase() != 'simkl.com' ||
+        uri.userInfo.isNotEmpty ||
+        uri.hasPort ||
+        uri.hasQuery ||
+        uri.hasFragment ||
+        !uri.path.startsWith('/anime/')) {
+      return;
+    }
+    final opened = await AndroidTvBridge.instance.openExternalWebPage(uri);
+    if (!opened && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not open SIMKL on this device.')),
       );
     }
   }
@@ -1994,6 +2018,32 @@ class _PosterCard extends StatelessWidget {
                             status: item.airingStatus,
                           ),
                         ),
+                      if (item.sourceUrl != null)
+                        Positioned(
+                          right: 5,
+                          top: 5,
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              color: const Color(0xE6101720),
+                              border: Border.all(color: Colors.white38),
+                              borderRadius: BorderRadius.circular(5),
+                            ),
+                            child: const Padding(
+                              padding: EdgeInsets.symmetric(
+                                horizontal: 6,
+                                vertical: 3,
+                              ),
+                              child: Text(
+                                'SIMKL',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 8,
+                                  fontWeight: FontWeight.w900,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
                       if (preferences.showPosterMetadata &&
                           item.hasPosterMetadata)
                         Positioned(
@@ -2254,27 +2304,29 @@ List<_ShelfItem> _mergeContinueWatching({
 
   final seenTrackerIds = <String>{};
   for (final tracked in trackedWatching ?? const <HomeTrackedAnime>[]) {
-    final aniListId = tracked.anilistId;
+    final aniListId =
+        tracked.anilistId ??
+        (tracked.provider == TrackingProvider.anilist
+            ? tracked.tracked.mediaId
+            : null);
+    final malId =
+        tracked.malId ??
+        (tracked.provider == TrackingProvider.myAnimeList
+            ? tracked.tracked.mediaId
+            : null);
     if (aniListId != null && dismissedIds.contains(aniListId)) continue;
 
-    final matchesLocal = switch (tracked.provider) {
-      TrackingProvider.anilist => localAniListIds.contains(
-        aniListId ?? tracked.tracked.mediaId,
-      ),
-      TrackingProvider.myAnimeList => localMalIds.contains(
-        tracked.tracked.mediaId,
-      ),
-    };
+    final matchesLocal =
+        (aniListId != null && localAniListIds.contains(aniListId)) ||
+        (malId != null && localMalIds.contains(malId));
     if (matchesLocal) {
-      final index = switch (tracked.provider) {
-        TrackingProvider.anilist =>
-          localAniListIndexes[aniListId ?? tracked.tracked.mediaId],
-        TrackingProvider.myAnimeList =>
-          localMalIndexes[tracked.tracked.mediaId],
-      };
+      final index = aniListId == null
+          ? localMalIndexes[malId]
+          : localAniListIndexes[aniListId] ?? localMalIndexes[malId];
       if (index != null) {
         merged[index] = merged[index].copyWith(
           trackingItems: [...merged[index].trackingItems, tracked],
+          sourceUrl: merged[index].sourceUrl ?? tracked.effectiveSimklSourceUrl,
         );
       }
       continue;
@@ -2302,6 +2354,7 @@ class _ShelfItem {
     this.historyMediaId,
     this.airingStatus,
     this.malMediaId,
+    this.sourceUrl,
     this.trackingItems = const [],
   });
 
@@ -2317,6 +2370,7 @@ class _ShelfItem {
   final int? historyMediaId;
   final String? airingStatus;
   final int? malMediaId;
+  final String? sourceUrl;
   final List<HomeTrackedAnime> trackingItems;
 
   bool get hasPosterMetadata =>
@@ -2353,6 +2407,7 @@ class _ShelfItem {
 
   _ShelfItem copyWith({
     String? subtitle,
+    String? sourceUrl,
     List<HomeTrackedAnime>? trackingItems,
   }) => _ShelfItem(
     title,
@@ -2367,6 +2422,7 @@ class _ShelfItem {
     historyMediaId: historyMediaId,
     airingStatus: airingStatus,
     malMediaId: malMediaId,
+    sourceUrl: sourceUrl ?? this.sourceUrl,
     trackingItems: trackingItems ?? this.trackingItems,
   );
 
@@ -2394,9 +2450,7 @@ class _ShelfItem {
           ? null
           : (tracked.progress / tracked.totalEpisodes!).clamp(0, 1),
       animeId: item.anilistId,
-      malMediaId: item.provider == TrackingProvider.myAnimeList
-          ? tracked.mediaId
-          : null,
+      malMediaId: item.malId,
       coverImageUrl: item.coverImageUrl,
       route: item.anilistId == null
           ? Uri(
@@ -2405,12 +2459,13 @@ class _ShelfItem {
             ).toString()
           : null,
       airingStatus: tracked.airingStatus,
+      sourceUrl: item.effectiveSimklSourceUrl,
       trackingItems: [item],
     );
   }
 }
 
-enum _HomeShowAction { open, removeLocal }
+enum _HomeShowAction { open, viewSource, removeLocal }
 
 class _HomeShowActionsDialog extends StatelessWidget {
   const _HomeShowActionsDialog({required this.item});
@@ -2452,6 +2507,12 @@ class _HomeShowActionsDialog extends StatelessWidget {
         ),
       ),
       actions: [
+        if (item.sourceUrl != null)
+          TextButton(
+            onPressed: () =>
+                Navigator.of(context).pop(_HomeShowAction.viewSource),
+            child: const Text('View on SIMKL'),
+          ),
         TextButton(
           autofocus: item.animeId == null && item.trackingItems.isEmpty,
           onPressed: () => Navigator.of(context).pop(_HomeShowAction.open),
@@ -2480,29 +2541,36 @@ List<_ShelfItem>? _historyShelfItems({
   ];
   return [
     for (final checkpoint in localHistory)
-      _ShelfItem.fromCheckpoint(checkpoint).copyWith(
-        trackingItems: [
-          for (final item in tracked)
-            if ((item.provider == TrackingProvider.anilist &&
-                    (item.anilistId ?? item.tracked.mediaId) ==
-                        checkpoint.anilistMediaId) ||
-                (item.provider == TrackingProvider.myAnimeList &&
-                    checkpoint.malMediaId == item.tracked.mediaId))
-              item,
-        ],
-      ),
+      _historyShelfItem(checkpoint: checkpoint, tracked: tracked),
   ];
+}
+
+_ShelfItem _historyShelfItem({
+  required PlaybackCheckpoint checkpoint,
+  required List<HomeTrackedAnime> tracked,
+}) {
+  final matches = [
+    for (final item in tracked)
+      if (matchesTrackingIds(
+        item,
+        anilistId: checkpoint.anilistMediaId,
+        malId: checkpoint.malMediaId,
+      ))
+        item,
+  ];
+  String? simklSourceUrl;
+  for (final item in matches) {
+    simklSourceUrl ??= item.effectiveSimklSourceUrl;
+  }
+  return _ShelfItem.fromCheckpoint(
+    checkpoint,
+  ).copyWith(trackingItems: matches, sourceUrl: simklSourceUrl);
 }
 
 bool _isTrackedAnime(AnimeSummary anime, List<HomeTrackedAnime> tracked) {
   final normalized = _normalizedAnimeTitle(anime.title);
   return tracked.any((item) {
-    if (item.provider == TrackingProvider.anilist &&
-        (item.anilistId ?? item.tracked.mediaId) == anime.id) {
-      return true;
-    }
-    if (item.provider == TrackingProvider.myAnimeList &&
-        anime.idMal == item.tracked.mediaId) {
+    if (matchesTrackingIds(item, anilistId: anime.id, malId: anime.idMal)) {
       return true;
     }
     return _normalizedAnimeTitle(item.tracked.title) == normalized;

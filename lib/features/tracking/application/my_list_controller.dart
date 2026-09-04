@@ -2,11 +2,16 @@ import 'package:anime_tv/features/auth/application/tracking_token_service.dart';
 import 'package:anime_tv/features/auth/application/pairing_controller.dart';
 import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
 import 'package:anime_tv/features/tracking/application/tracking_home_provider.dart';
-import 'package:anime_tv/features/tracking/data/anilist_tracking_repository.dart';
-import 'package:anime_tv/features/tracking/data/myanimelist_tracking_repository.dart';
+import 'package:anime_tv/features/tracking/application/tracking_repository_factory.dart';
 import 'package:anime_tv/features/tracking/domain/tracking_repository.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+
+export 'package:anime_tv/features/tracking/application/tracking_repository_factory.dart'
+    show
+        TrackingRepositoryFactory,
+        trackingRepositoryFactoryProvider,
+        trackingRepository;
 
 enum MyListSort { title, score, lastUpdated, startDate }
 
@@ -18,7 +23,7 @@ enum MyListSort { title, score, lastUpdated, startDate }
 final class CatalogTrackingValidationError extends StateError {
   CatalogTrackingValidationError.connectionRequired()
     : super(
-        'Connect AniList or MAL in Settings before changing a show status.',
+        'Connect AniList, MAL, or SIMKL in Settings before changing a show status.',
       );
 
   CatalogTrackingValidationError.missingMediaId()
@@ -26,13 +31,6 @@ final class CatalogTrackingValidationError extends StateError {
         'This title is missing the media ID required by the connected tracker.',
       );
 }
-
-typedef TrackingRepositoryFactory =
-    TrackingRepository Function(TrackingProvider provider, String accessToken);
-
-final trackingRepositoryFactoryProvider = Provider<TrackingRepositoryFactory>(
-  (_) => trackingRepository,
-);
 
 extension MyListSortLabel on MyListSort {
   String get displayName => switch (this) {
@@ -145,9 +143,16 @@ final trackingListProvider = FutureProvider.autoDispose
                       (tracked) => HomeTrackedAnime(
                         tracked: tracked,
                         provider: provider,
-                        anilistId: provider == TrackingProvider.anilist
-                            ? tracked.mediaId
-                            : null,
+                        anilistId:
+                            tracked.anilistId ??
+                            (provider == TrackingProvider.anilist
+                                ? tracked.mediaId
+                                : null),
+                        malId:
+                            tracked.malId ??
+                            (provider == TrackingProvider.myAnimeList
+                                ? tracked.mediaId
+                                : null),
                         coverImageUrl: tracked.coverImageUrl,
                       ),
                     )
@@ -250,25 +255,43 @@ class TrackingStatusController extends StateNotifier<AsyncValue<void>> {
 
   final Ref _ref;
 
-  Future<void> update(HomeTrackedAnime item, TrackingListStatus status) async {
-    if (status == item.tracked.status) return;
+  Future<TrackingListStatus?> update(
+    HomeTrackedAnime item,
+    TrackingListStatus status,
+  ) async {
+    if (status == item.tracked.status) return status;
     state = const AsyncLoading();
     try {
       final token = await _ref
           .read(trackingTokenServiceProvider)
           .accessToken(item.provider);
-      if (!mounted) return;
+      if (!mounted) return null;
       if (token == null || token.isEmpty) {
         throw StateError('${item.provider.displayName} is not connected.');
       }
-      await _ref
-          .read(trackingRepositoryFactoryProvider)(item.provider, token)
-          .updateStatus(mediaId: item.tracked.mediaId, status: status);
-      if (!mounted) return;
+      final repository = _ref.read(trackingRepositoryFactoryProvider)(
+        item.provider,
+        token,
+      );
+      final TrackingListStatus actualStatus;
+      if (repository case final ResolvedStatusTrackingRepository resolved) {
+        actualStatus = await resolved.updateStatusResolved(
+          mediaId: item.tracked.mediaId,
+          status: status,
+        );
+      } else {
+        await repository.updateStatus(
+          mediaId: item.tracked.mediaId,
+          status: status,
+        );
+        actualStatus = status;
+      }
+      if (!mounted) return null;
       _ref.invalidate(trackingListProvider(item.tracked.status));
-      _ref.invalidate(trackingListProvider(status));
+      _ref.invalidate(trackingListProvider(actualStatus));
       _ref.invalidate(trackingHomeProvider);
       state = const AsyncData(null);
+      return actualStatus;
     } catch (error, stackTrace) {
       if (mounted) state = AsyncError(error, stackTrace);
       rethrow;
@@ -341,25 +364,51 @@ class TrackingStatusController extends StateNotifier<AsyncValue<void>> {
         if (token == null || token.isEmpty) continue;
         connectedProviders++;
 
-        final mediaId = switch (provider) {
-          TrackingProvider.anilist => anilistId > 0 ? anilistId : null,
-          TrackingProvider.myAnimeList =>
-            malId != null && malId > 0 ? malId : null,
-        };
-        if (mediaId == null) {
-          missingMediaId.add(provider);
-          continue;
-        }
-
         try {
           final repository = _ref.read(trackingRepositoryFactoryProvider)(
             provider,
             token,
           );
-          if (status == null) {
-            await repository.removeFromList(mediaId: mediaId);
+          if (provider == TrackingProvider.simkl) {
+            final externalRepository = switch (repository) {
+              ExternalIdTrackingRepository value => value,
+              _ => null,
+            };
+            if (externalRepository == null) {
+              throw StateError('SIMKL repository cannot resolve catalog IDs.');
+            }
+            final ids = TrackingMediaIds(
+              anilistId: anilistId > 0 ? anilistId : null,
+              malId: malId != null && malId > 0 ? malId : null,
+            );
+            if (ids.isEmpty) {
+              missingMediaId.add(provider);
+              continue;
+            }
+            if (status == null) {
+              await externalRepository.removeFromListByIds(ids);
+            } else {
+              await externalRepository.updateStatusByIds(
+                ids: ids,
+                status: status,
+              );
+            }
           } else {
-            await repository.updateStatus(mediaId: mediaId, status: status);
+            final mediaId = switch (provider) {
+              TrackingProvider.anilist => anilistId > 0 ? anilistId : null,
+              TrackingProvider.myAnimeList =>
+                malId != null && malId > 0 ? malId : null,
+              TrackingProvider.simkl => null,
+            };
+            if (mediaId == null) {
+              missingMediaId.add(provider);
+              continue;
+            }
+            if (status == null) {
+              await repository.removeFromList(mediaId: mediaId);
+            } else {
+              await repository.updateStatus(mediaId: mediaId, status: status);
+            }
           }
           updated.add(provider);
         } catch (error) {
@@ -424,15 +473,3 @@ class CatalogTrackingUpdateResult {
       .map((provider) => provider.displayName)
       .join(updated.length == 2 ? ' and ' : ', ');
 }
-
-TrackingRepository trackingRepository(
-  TrackingProvider provider,
-  String accessToken,
-) => switch (provider) {
-  TrackingProvider.anilist => AniListTrackingRepository(
-    accessToken: accessToken,
-  ),
-  TrackingProvider.myAnimeList => MyAnimeListTrackingRepository(
-    accessToken: accessToken,
-  ),
-};

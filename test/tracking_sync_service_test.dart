@@ -115,6 +115,7 @@ class _TestSyncService extends TrackingSyncService {
     required this.anilistRepo,
     required this.malRepo,
     super.profileLookup,
+    super.verifiedProfileLookup,
     super.resumeDebounce = const Duration(milliseconds: 400),
     super.retryDelays = const [],
     super.timerFactory = _testTimer,
@@ -128,6 +129,7 @@ class _TestSyncService extends TrackingSyncService {
     return switch (provider) {
       TrackingProvider.anilist => anilistRepo,
       TrackingProvider.myAnimeList => malRepo,
+      TrackingProvider.simkl => anilistRepo,
     };
   }
 }
@@ -166,6 +168,7 @@ void main() {
       TrackingProvider.myAnimeList: 'mal-tok',
     },
     Map<TrackingProvider, String?> profiles = const {},
+    TrackingVerifiedProfileLookup? verifiedProfileLookup,
     List<Duration> retryDelays = const [],
     TrackingTimerFactory timerFactory = _testTimer,
     Duration resumeDebounce = const Duration(milliseconds: 400),
@@ -174,6 +177,7 @@ void main() {
       storage,
       (provider) async => tokens[provider],
       profileLookup: (provider) async => profiles[provider],
+      verifiedProfileLookup: verifiedProfileLookup,
       retryDelays: retryDelays,
       timerFactory: timerFactory,
       resumeDebounce: resumeDebounce,
@@ -199,7 +203,7 @@ void main() {
           expect(outbox, hasLength(1));
           expect(outbox.single['media_id'], 101);
           expect(outbox.single['completed_episodes'], 5);
-          return 'token';
+          return provider == TrackingProvider.simkl ? null : 'token';
         },
         anilistRepo: anilistRepo,
         malRepo: malRepo,
@@ -209,7 +213,7 @@ void main() {
         await service.syncEpisode(completedEpisodes: 5, anilistMediaId: 101),
         isTrue,
       );
-      expect(tokenLookups, 1);
+      expect(tokenLookups, 2);
       expect(_readOutbox(storage), isEmpty);
     });
 
@@ -261,6 +265,31 @@ void main() {
       expect(anilistRepo.updates, isEmpty);
       expect(_readOutbox(storage).single['completed_episodes'], 6);
     });
+
+    test(
+      'an unverified SIMKL token does not block primary tracker flushing',
+      () async {
+        final service = buildService(
+          tokens: const {
+            TrackingProvider.anilist: 'al-token',
+            TrackingProvider.myAnimeList: null,
+            TrackingProvider.simkl: 'replacement-simkl-token',
+          },
+          profiles: const {
+            TrackingProvider.anilist: 'anilist-profile',
+            TrackingProvider.simkl: 'old-simkl-profile',
+          },
+          verifiedProfileLookup: (_, _) async => null,
+        );
+
+        expect(
+          await service.syncEpisode(completedEpisodes: 6, anilistMediaId: 101),
+          isTrue,
+        );
+        expect(anilistRepo.updates, [(mediaId: 101, episodes: 6)]);
+        expect(_readOutbox(storage), isEmpty);
+      },
+    );
 
     test('is a no-op when no media IDs are supplied', () async {
       final synced = await buildService().syncEpisode(completedEpisodes: 7);
@@ -435,6 +464,41 @@ void main() {
       expect(anilistRepo.updates, isEmpty);
       expect(_readOutbox(storage), hasLength(1));
     });
+
+    test(
+      'never flushes SIMKL progress through an unverified token slot',
+      () async {
+        _writeOutbox(storage, [
+          {
+            'provider': 'simkl',
+            'profile_id': 'old-simkl-profile',
+            'media_id': 101,
+            'anilist_media_id': 101,
+            'completed_episodes': 4,
+          },
+        ]);
+        var verifiedLookups = 0;
+        final service = _TestSyncService(
+          storage,
+          (provider) async => 'replacement-simkl-token',
+          profileLookup: (provider) async => 'old-simkl-profile',
+          verifiedProfileLookup: (provider, token) async {
+            verifiedLookups++;
+            expect(provider, TrackingProvider.simkl);
+            expect(token, 'replacement-simkl-token');
+            return null;
+          },
+          anilistRepo: anilistRepo,
+          malRepo: malRepo,
+        );
+
+        await service.flush();
+
+        expect(verifiedLookups, 1);
+        expect(anilistRepo.updates, isEmpty);
+        expect(_readOutbox(storage), hasLength(1));
+      },
+    );
 
     test(
       'deduplicates within a profile but keeps another profile separate',

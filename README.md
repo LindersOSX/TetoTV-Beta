@@ -17,7 +17,7 @@
 
 <p align="center">
   <a href="https://github.com/LindersOSX/TetoTV-Beta/releases/latest"><strong>Download Beta</strong></a>
-  · <a href="docs/RELEASE_NOTES_2.0.66.md">What's new</a>
+  · <a href="docs/RELEASE_NOTES_2.0.67.md">What's new</a>
   · <a href="https://github.com/LindersOSX/TetoTV-Beta/issues/new">Report an issue</a>
   · <a href="https://discord.gg/juC6k7d4WY">Discord</a>
   · <a href="https://www.youtube.com/@TetoTVApp">YouTube</a>
@@ -68,7 +68,7 @@ TetoTV runs directly on the Android device with no companion server required for
 | --- | --- |
 | Predictable D-pad movement, visible focus, TV-scale layouts, and a persistent navigation path. | The same theme and features adapt to bottom navigation in portrait and a left rail in landscape. |
 | **Bring your own services** | **Profiles and tracking** |
-| Clean installs contain no source catalog. Viewers connect only accounts, personal libraries, and HTTPS extensions they choose. | Local profiles work without an account; optional AniList and MyAnimeList connections can sync lists and progress, and SIMKL can be linked as an account profile. |
+| Clean installs contain no source catalog. Viewers connect only accounts, personal libraries, and HTTPS extensions they choose. | Local profiles work without an account; optional AniList, MyAnimeList, and SIMKL connections can sync lists, status, and episode progress. |
 | **Integrated playback** | **Downloads and Watch Party** |
 | MPV playback includes audio and subtitle selection, speed controls, TV-friendly seeking, and optional skip timing. | Authorized media can be saved for offline playback, while synchronized rooms provide host-controlled viewing. |
 
@@ -82,7 +82,7 @@ TetoTV runs directly on the Android device with no companion server required for
 | Standalone use | Supported | No PC app or companion server is required for normal browsing and playback. |
 | User-supplied extensions | Optional | No extension or catalog is bundled, recommended, or endorsed. Compatibility depends on the service the user configures. |
 | AniList / MyAnimeList | Optional | Sync lists and progress, or use a local-only profile. |
-| SIMKL | Optional | Securely link and verify a SIMKL profile. List and progress sync remain disabled until TetoTV can map canonical SIMKL title IDs safely. |
+| SIMKL | Optional | Uses SIMKL's official TV PIN flow and supports profile, list, status, and episode-progress integration. Each imported SIMKL entry links back to its SIMKL page. |
 | MPV playback | Supported | Integrated audio/caption selection remembers explicit choices between episodes; Playback settings include Preferred CC Automatic, On, and Off. |
 | Offline downloads | Beta | Individual episodes, whole-season queues, and offline playback. |
 | Manga reader | Developer preview | Hidden unless Developer Mode is enabled. Reads user-added OPDS catalogs and user-installed Seanime-format manga extensions; no manga catalog is bundled or recommended, and no repository or provider is bundled. |
@@ -96,10 +96,10 @@ TetoTV runs directly on the Android device with no companion server required for
 | Channel | Version | Best for |
 | --- | --- | --- |
 | Public | Not published | Source and release-readiness documents are available, but no Public APK is currently offered |
-| Beta | [2.0.66](docs/RELEASE_NOTES_2.0.66.md) | More reliable TorBox pairing, device-aware stream compatibility, paged episode browsing, and persistent update notifications |
+| Beta | [2.0.67](docs/RELEASE_NOTES_2.0.67.md) | Complete SIMKL tracking, reliable paged episode browsing and update notifications, and TV freeze hardening |
 
 > [!WARNING]
-> Beta 2.0.66 uses the repository's explicit unreviewed-Beta exception. Its native-library and corresponding-source material did not receive independent license review, and automated integrity checks are not a legal compliance determination. Read the [complete Beta disclosure](docs/RELEASE_NOTES_2.0.66.md). This exception does not apply to a future Public release.
+> Beta 2.0.67 uses the repository's explicit unreviewed-Beta exception. Its native-library and corresponding-source material did not receive independent license review, and automated integrity checks are not a legal compliance determination. Read the [complete Beta disclosure](docs/RELEASE_NOTES_2.0.67.md). This exception does not apply to a future Public release.
 
 The Public updater repository intentionally has no release while the Public build is held for review. Existing Beta installations continue to update from the Beta repository. Android never permits an in-place install of an APK with a lower build code; Developer Mode does not bypass that platform rule.
 
@@ -199,7 +199,20 @@ Users are responsible for the services and sources they configure and for follow
 
 AniList and MyAnimeList connections are optional. Either tracker can sync lists and watch progress, while a local profile keeps the app usable without a tracker account. Catalog metadata uses mapped backup services when AniList is temporarily unavailable.
 
-SIMKL linking is also optional and uses its official authorization page. TetoTV can verify the linked profile, but does not currently read SIMKL lists or write SIMKL progress because it will not guess title mappings.
+SIMKL is also optional. Current builds use SIMKL's official TV PIN flow: the
+configured TetoTV companion advertises only the registered application's public
+client ID, then the app requests and polls the short-lived PIN directly with
+SIMKL. No SIMKL client secret or TetoTV callback is used in this normal path.
+The linked account can supply the profile, lists, list status, and episode
+progress used by TetoTV. Anime writes use the AniList or MyAnimeList IDs that
+SIMKL accepts directly, while list results retain their canonical SIMKL ID and
+include a visible **View on SIMKL** link instead of guessing identifiers.
+
+The source integration remains deployment-gated: the operator must
+register the TetoTV application with SIMKL, obtain any API or commercial-use
+approval required for the intended distribution, configure `SIMKL_CLIENT_ID`,
+and deploy the matching companion capability before users can connect. The
+client ID is public application metadata; it is not a user API key.
 
 Calendar notifications can alert viewers when followed Sub/simulcast episodes reach their scheduled airtime. Dub alerts are separate and remain idle unless TetoTV has a verified Dub schedule; the app does not guess a Dub release from the Japanese broadcast time.
 

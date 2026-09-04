@@ -7,13 +7,10 @@ import 'package:dio/dio.dart';
 /// The client ID is public OAuth application metadata. The client secret is
 /// deliberately not part of this model or the companion health response.
 class SimklBrokerCapability {
-  const SimklBrokerCapability({
-    required this.clientId,
-    required this.callbackUri,
-  });
+  const SimklBrokerCapability({required this.clientId, this.callbackUri});
 
   final String clientId;
-  final Uri callbackUri;
+  final Uri? callbackUri;
 }
 
 /// Fail-closed readiness probe used before SIMKL can become a visible option.
@@ -48,13 +45,20 @@ class SimklBrokerCapabilityClient {
       final data = _stringMap(response.data);
       if (data == null || data['status'] != 'ok') return null;
       final providers = _stringMap(data['providers']);
-      if (providers?['simkl'] != true) return null;
+      final deviceFlows = _stringMap(data['provider_device_flows']);
+      final directPinReady = deviceFlows?['simkl'] == true;
+      final legacyBrokerReady = providers?['simkl'] == true;
+      if (!directPinReady && !legacyBrokerReady) return null;
 
       final callbackValue = _stringMap(data['callbacks'])?['simkl'];
       final callback = callbackValue is String
           ? Uri.tryParse(callbackValue.trim())
           : null;
-      if (!_trustedCallback(callback, _brokerOrigin)) return null;
+      if (legacyBrokerReady &&
+          !directPinReady &&
+          !_trustedCallback(callback, _brokerOrigin)) {
+        return null;
+      }
 
       final rawClientId = _stringMap(data['provider_client_ids'])?['simkl'];
       final clientId = rawClientId is String ? rawClientId.trim() : '';
@@ -63,7 +67,12 @@ class SimklBrokerCapabilityClient {
           RegExp(r'[\x00-\x1f\x7f]').hasMatch(clientId)) {
         return null;
       }
-      return SimklBrokerCapability(clientId: clientId, callbackUri: callback!);
+      return SimklBrokerCapability(
+        clientId: clientId,
+        callbackUri: _trustedCallback(callback, _brokerOrigin)
+            ? callback
+            : null,
+      );
     } on DioException {
       return null;
     } on FormatException {
@@ -73,7 +82,7 @@ class SimklBrokerCapabilityClient {
 
   /// Creates a hidden SIMKL pairing only after [probe] returned a capability.
   Future<PairingSession> createPairing(SimklBrokerCapability capability) async {
-    if (!_validCapability(capability, _brokerOrigin)) {
+    if (!_validLegacyCapability(capability, _brokerOrigin)) {
       throw StateError('SIMKL is not ready on this broker.');
     }
     late final Response<Object?> response;
@@ -218,7 +227,7 @@ bool _trustedCallback(Uri? callback, Uri origin) =>
     !callback.hasQuery &&
     !callback.hasFragment;
 
-bool _validCapability(SimklBrokerCapability value, Uri origin) =>
+bool _validLegacyCapability(SimklBrokerCapability value, Uri origin) =>
     value.clientId.trim().isNotEmpty &&
     value.clientId.length <= 512 &&
     !RegExp(r'[\x00-\x1f\x7f]').hasMatch(value.clientId) &&

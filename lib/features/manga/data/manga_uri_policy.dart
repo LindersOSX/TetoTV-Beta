@@ -56,6 +56,46 @@ Uri resolveMangaPublicHttpsReference(
   return requireMangaPublicHttpsUri(resolved.toString(), field: field);
 }
 
+/// Returns a canonical, origin-only value suitable for an HTTP `Origin`
+/// header, or `null` when [value] is not a public HTTPS URL.
+///
+/// Origin headers never carry paths, queries, fragments, or user info. A
+/// provider occasionally supplies a full page URL here; canonicalizing it to
+/// its origin is safe and prevents path/query capabilities from being sent.
+/// Keeping this rule in the URI policy prevents the reader and downloader from
+/// gradually developing different handling for extension-supplied metadata.
+String? canonicalMangaPageOriginHeader(Object? value) {
+  final uri = _safeMangaPageHeaderUri(value);
+  return uri?.origin;
+}
+
+/// Returns a canonical value suitable for an HTTP `Referer` header.
+///
+/// A same-origin request may retain the public HTTPS path/query because some
+/// manga hosts use it for hotlink checks. Across an origin boundary only the
+/// origin is retained, matching modern browser referrer behavior and ensuring
+/// chapter capabilities in a path or query never reach another host.
+String? canonicalMangaPageRefererHeader(
+  Object? value, {
+  bool originOnly = false,
+}) {
+  final uri = _safeMangaPageHeaderUri(value);
+  if (uri == null) return null;
+  return originOnly ? '${uri.origin}/' : uri.toString();
+}
+
+Uri? _safeMangaPageHeaderUri(Object? value) {
+  if (value is! String) return null;
+  final normalized = value.trim();
+  if (normalized.isEmpty ||
+      normalized.codeUnits.any((unit) => unit < 0x20 || unit == 0x7f)) {
+    return null;
+  }
+  final parsed = Uri.tryParse(normalized);
+  if (parsed == null || parsed.hasFragment) return null;
+  return safePublicHttpsUri(normalized);
+}
+
 bool _isCredentialQueryKey(String normalized) {
   if (_credentialQueryKeys.contains(normalized)) return true;
   return normalized.endsWith('token') ||

@@ -1665,20 +1665,30 @@ Map<String, String> _validatedEphemeralHeaderMap(
     final name = entry.key.trim();
     final lowerName = name.toLowerCase();
     final value = entry.value;
+    final canonicalPageMetadata = allowPageMetadata
+        ? switch (lowerName) {
+            'origin' => canonicalMangaPageOriginHeader(value),
+            'referer' => canonicalMangaPageRefererHeader(value),
+            _ => value,
+          }
+        : value;
     if (!_acquisitionHeaderNamePattern.hasMatch(name) ||
         !(allowPageMetadata
-            ? _allowedMangaPageHeader(lowerName, value)
+            ? _allowedMangaPageHeader(lowerName)
             : _allowedAcquisitionCredentialHeader(lowerName)) ||
+        canonicalPageMetadata == null ||
         !normalizedNames.add(lowerName) ||
-        value.length > 8192 ||
-        value.codeUnits.any((unit) => unit < 0x20 || unit == 0x7f)) {
+        canonicalPageMetadata.length > 8192 ||
+        canonicalPageMetadata.codeUnits.any(
+          (unit) => unit < 0x20 || unit == 0x7f,
+        )) {
       throw const FormatException('Invalid manga acquisition header.');
     }
-    totalLength += name.length + value.length;
+    totalLength += name.length + canonicalPageMetadata.length;
     if (totalLength > 16 * 1024) {
       throw const FormatException('Manga acquisition headers are too large.');
     }
-    safe[name] = value;
+    safe[name] = canonicalPageMetadata;
   }
   return Map<String, String>.unmodifiable(safe);
 }
@@ -1688,30 +1698,13 @@ bool _allowedAcquisitionCredentialHeader(String name) =>
     !name.startsWith('proxy-') &&
     !name.startsWith('sec-');
 
-bool _allowedMangaPageHeader(String name, String value) {
+bool _allowedMangaPageHeader(String name) {
   if (_blockedMangaPageHeaders.contains(name) ||
       name.startsWith('proxy-') ||
       name.startsWith('sec-')) {
     return false;
   }
-  if (name == 'origin') return _isSafeMangaMediaOrigin(value);
-  if (name == 'referer') {
-    final parsed = Uri.tryParse(value.trim());
-    return parsed != null &&
-        !parsed.hasFragment &&
-        safePublicHttpsUri(value) != null;
-  }
   return true;
-}
-
-bool _isSafeMangaMediaOrigin(String value) {
-  final parsed = Uri.tryParse(value.trim());
-  final uri = safePublicHttpsUri(value);
-  return parsed != null &&
-      uri != null &&
-      !parsed.hasQuery &&
-      !parsed.hasFragment &&
-      (parsed.path.isEmpty || parsed.path == '/');
 }
 
 Future<Map<String, String>> _noCredentialHeaders(String _) async =>

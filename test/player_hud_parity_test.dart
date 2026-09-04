@@ -74,6 +74,19 @@ void main() {
     expect(player, contains('_handleProgressScrubInteraction'));
   });
 
+  test('paused episode metadata follows the shared HUD lifecycle', () {
+    expect(player, contains('PlayerPausedMetadataOverlay('));
+    expect(player, contains('_controlsVisible &&'));
+    expect(player, contains('_playerHasStartedPlayback &&'));
+    expect(player, contains('paused &&'));
+    expect(player, contains('episodeTitle: _pausedHudEpisodeTitle'));
+    expect(player, contains('description: _pausedHudDescription'));
+    expect(
+      player,
+      contains('(_playerHasStartedPlayback && !_player.state.playing)'),
+    );
+  });
+
   test('every HUD interaction and picker suspends idle auto-hide', () {
     expect(chrome, contains('onInteraction?.call();'));
     expect(chrome, contains('event is! KeyRepeatEvent'));

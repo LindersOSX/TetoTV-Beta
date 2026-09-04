@@ -3,6 +3,7 @@ import 'dart:collection';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/features/manga/data/manga_image_safety.dart';
 import 'package:anime_tv/features/manga/data/manga_uri_policy.dart';
 import 'package:anime_tv/features/manga/domain/manga_reader_models.dart';
@@ -17,15 +18,57 @@ const int maximumMangaRemotePageBytes = 20 * 1024 * 1024;
 typedef MangaPageTargetValidator = Future<void> Function(Uri uri);
 
 final mangaPageFetchClientProvider = Provider<MangaPageFetchClient>((ref) {
-  final client = MangaPageFetchClient();
+  final client = MangaPageFetchClient(
+    reportFailure: (failure) => TetoTvDatabase.instance.recordDiagnosticEvent(
+      category: 'manga-reader',
+      severity: 'warning',
+      message: 'Manga page fetch failed',
+      details: <String, Object?>{
+        'reason_code': failure.reasonCode,
+        'status': ?failure.statusCode,
+        'redirect_count': failure.redirectCount,
+        'cross_origin': failure.crossOriginRedirect,
+      },
+    ),
+  );
   ref.onDispose(client.close);
   return client;
 });
 
+typedef MangaPageFailureReporter =
+    FutureOr<void> Function(MangaPageFetchException failure);
+
 class MangaPageFetchException implements Exception {
-  const MangaPageFetchException(this.message);
+  const MangaPageFetchException(
+    this.message, {
+    this.reasonCode = 'unknown',
+    this.statusCode,
+    this.redirectCount = 0,
+    this.crossOriginRedirect = false,
+  });
 
   final String message;
+  final String reasonCode;
+  final int? statusCode;
+  final int redirectCount;
+  final bool crossOriginRedirect;
+
+  MangaPageFetchException withRedirectContext({
+    required int redirectCount,
+    required bool crossOriginRedirect,
+  }) {
+    if (this.redirectCount == redirectCount &&
+        this.crossOriginRedirect == crossOriginRedirect) {
+      return this;
+    }
+    return MangaPageFetchException(
+      message,
+      reasonCode: reasonCode,
+      statusCode: statusCode,
+      redirectCount: redirectCount,
+      crossOriginRedirect: crossOriginRedirect,
+    );
+  }
 
   @override
   String toString() => message;
@@ -51,6 +94,7 @@ class MangaPageFetchClient {
     this.maximumCachedBytes = 48 * 1024 * 1024,
     this.maximumConcurrentRequests = 8,
     this.maximumCacheEntries = 64,
+    this.reportFailure,
   }) : _validateTarget = validateTarget ?? validatePublicNetworkTarget,
        _dio =
            dio ??
@@ -81,6 +125,7 @@ class MangaPageFetchClient {
 
   final Dio _dio;
   final MangaPageTargetValidator _validateTarget;
+  final MangaPageFailureReporter? reportFailure;
   final Duration connectTimeout;
   final Duration receiveTimeout;
   final Duration requestDeadline;
@@ -100,7 +145,10 @@ class MangaPageFetchClient {
   Future<Uint8List> fetch(MangaRemotePageResource resource) {
     if (_closed) {
       return Future<Uint8List>.error(
-        const MangaPageFetchException('The manga page loader is closed.'),
+        const MangaPageFetchException(
+          'The manga page loader is closed.',
+          reasonCode: 'loader_closed',
+        ),
       );
     }
     final key = _cacheKey(resource);
@@ -114,23 +162,17 @@ class MangaPageFetchClient {
       return Future<Uint8List>.error(
         const MangaPageFetchException(
           'Too many manga pages are already loading. Try again shortly.',
+          reasonCode: 'queue_saturated',
         ),
       );
     }
 
     final token = CancelToken();
     _activeTokens.add(token);
-    final future = _fetchWithPermit(resource, token)
-        .timeout(
-          requestDeadline,
-          onTimeout: () {
-            token.cancel('Manga page exceeded its total request deadline.');
-            throw const MangaPageFetchException(
-              'The manga page took too long to load.',
-            );
-          },
-        )
-        .whenComplete(() => _activeTokens.remove(token));
+    final future = _fetchWithDiagnostics(
+      resource,
+      token,
+    ).whenComplete(() => _activeTokens.remove(token));
     final entry = _MangaPageCacheEntry(future);
     _cache[key] = entry;
     unawaited(
@@ -150,16 +192,89 @@ class MangaPageFetchClient {
     return future;
   }
 
+  Future<Uint8List> _fetchWithDiagnostics(
+    MangaRemotePageResource resource,
+    CancelToken token,
+  ) async {
+    final context = _MangaPageFetchContext();
+    try {
+      return await _fetchWithPermit(resource, token, context).timeout(
+        requestDeadline,
+        onTimeout: () {
+          token.cancel('Manga page exceeded its total request deadline.');
+          throw const MangaPageFetchException(
+            'The manga page took too long to load.',
+            reasonCode: 'request_timeout',
+          );
+        },
+      );
+    } catch (error, stackTrace) {
+      final failure = _normalizeFailure(error).withRedirectContext(
+        redirectCount: context.redirectCount,
+        crossOriginRedirect: context.crossOriginRedirect,
+      );
+      _recordFailure(failure);
+      Error.throwWithStackTrace(failure, stackTrace);
+    }
+  }
+
+  MangaPageFetchException _normalizeFailure(Object error) {
+    if (error is MangaPageFetchException) return error;
+    if (error is DioException) {
+      if (_closed) {
+        return const MangaPageFetchException(
+          'The manga page loader is closed.',
+          reasonCode: 'loader_closed',
+        );
+      }
+      if (error.type == DioExceptionType.cancel) {
+        return const MangaPageFetchException(
+          'The manga page loader was interrupted.',
+          reasonCode: 'request_cancelled',
+        );
+      }
+      if (error.type == DioExceptionType.connectionTimeout ||
+          error.type == DioExceptionType.receiveTimeout ||
+          error.type == DioExceptionType.sendTimeout) {
+        return const MangaPageFetchException(
+          'The manga page took too long to load.',
+          reasonCode: 'transport_timeout',
+        );
+      }
+      return const MangaPageFetchException(
+        'The manga page host could not be reached. Check the connection and try again.',
+        reasonCode: 'transport_failure',
+      );
+    }
+    return const MangaPageFetchException(
+      'The manga page could not be loaded.',
+      reasonCode: 'unexpected_failure',
+    );
+  }
+
+  void _recordFailure(MangaPageFetchException failure) {
+    final reporter = reportFailure;
+    if (reporter == null ||
+        failure.reasonCode == 'loader_closed' ||
+        failure.reasonCode == 'request_cancelled') {
+      return;
+    }
+    unawaited(
+      Future<void>.sync(() async => reporter(failure)).catchError((_) {}),
+    );
+  }
+
   Future<Uint8List> _fetchWithPermit(
     MangaRemotePageResource resource,
     CancelToken lifetimeToken,
+    _MangaPageFetchContext context,
   ) async {
     var acquired = false;
     try {
       await _acquirePermit(lifetimeToken);
       acquired = true;
       if (lifetimeToken.isCancelled) throw lifetimeToken.cancelError!;
-      return await _fetchValidated(resource, lifetimeToken);
+      return await _fetchValidated(resource, lifetimeToken, context);
     } finally {
       if (acquired) _releasePermit();
     }
@@ -168,7 +283,10 @@ class MangaPageFetchClient {
   Future<void> _acquirePermit(CancelToken token) {
     if (_closed) {
       return Future<void>.error(
-        const MangaPageFetchException('The manga page loader is closed.'),
+        const MangaPageFetchException(
+          'The manga page loader is closed.',
+          reasonCode: 'loader_closed',
+        ),
       );
     }
     if (token.isCancelled) return Future<void>.error(token.cancelError!);
@@ -228,6 +346,7 @@ class MangaPageFetchClient {
   Future<Uint8List> _fetchValidated(
     MangaRemotePageResource resource,
     CancelToken lifetimeToken,
+    _MangaPageFetchContext context,
   ) async {
     final originalOrigin = _origin(resource.uri);
     var target = requireMangaPublicHttpsUri(
@@ -238,9 +357,10 @@ class MangaPageFetchClient {
       if (lifetimeToken.isCancelled) throw lifetimeToken.cancelError!;
       await _validateTarget(target);
       if (lifetimeToken.isCancelled) throw lifetimeToken.cancelError!;
-      final headers = _origin(target) == originalOrigin
-          ? resource.headers
-          : const <String, String>{};
+      final headers = _pageRequestHeaders(
+        resource.headers,
+        sameOrigin: _origin(target) == originalOrigin,
+      );
       final requestToken = CancelToken();
       unawaited(
         lifetimeToken.whenCancel.then((error) {
@@ -264,28 +384,28 @@ class MangaPageFetchClient {
         if (redirect == maximumRedirects) {
           throw const MangaPageFetchException(
             'The manga page redirected too many times.',
+            reasonCode: 'redirect_limit',
           );
         }
         final location = response.headers.value(HttpHeaders.locationHeader);
         if (location == null || location.trim().isEmpty) {
           throw const MangaPageFetchException(
             'The manga page returned an invalid redirect.',
+            reasonCode: 'invalid_redirect',
           );
         }
-        target = resolveMangaPublicHttpsReference(
+        final redirected = resolveMangaPublicHttpsReference(
           target,
           location,
           field: 'Manga page redirect',
         );
+        context.recordRedirect(from: target, to: redirected);
+        target = redirected;
         continue;
       }
       if (status != HttpStatus.ok) {
         await _discardResponse(response.data, requestToken);
-        throw MangaPageFetchException(
-          status == HttpStatus.unauthorized || status == HttpStatus.forbidden
-              ? 'This manga page rejected the source credential.'
-              : 'This manga page could not be loaded.',
-        );
+        throw _httpPageFailure(status);
       }
       final declared = int.tryParse(
         response.headers.value(HttpHeaders.contentLengthHeader) ?? '',
@@ -294,12 +414,16 @@ class MangaPageFetchClient {
         await _discardResponse(response.data, requestToken);
         throw const MangaPageFetchException(
           'This manga page is larger than the safe limit.',
+          reasonCode: 'size_limit',
         );
       }
       final body = response.data;
       if (body == null) {
         await _discardResponse(null, requestToken);
-        throw const MangaPageFetchException('The manga page was empty.');
+        throw const MangaPageFetchException(
+          'The manga page was empty.',
+          reasonCode: 'empty_response',
+        );
       }
       final builder = BytesBuilder(copy: false);
       var received = 0;
@@ -309,22 +433,37 @@ class MangaPageFetchClient {
           requestToken.cancel('Manga page exceeded its byte limit.');
           throw const MangaPageFetchException(
             'This manga page is larger than the safe limit.',
+            reasonCode: 'size_limit',
           );
         }
         builder.add(chunk);
       }
       final bytes = builder.takeBytes();
       if (bytes.isEmpty) {
-        throw const MangaPageFetchException('The manga page was empty.');
+        throw const MangaPageFetchException(
+          'The manga page was empty.',
+          reasonCode: 'empty_response',
+        );
       }
       try {
         inspectMangaImage(bytes);
       } on MangaImageValidationException catch (error) {
-        throw MangaPageFetchException(error.message);
+        throw MangaPageFetchException(
+          error.message,
+          reasonCode: switch (error.failure) {
+            MangaImageValidationFailure.unsupported => 'unsupported_image',
+            MangaImageValidationFailure.malformed => 'malformed_image',
+            MangaImageValidationFailure.dimensionsExceeded =>
+              'image_dimensions_exceeded',
+          },
+        );
       }
       return bytes;
     }
-    throw const MangaPageFetchException('The manga page could not be loaded.');
+    throw const MangaPageFetchException(
+      'The manga page could not be loaded.',
+      reasonCode: 'redirect_failure',
+    );
   }
 
   void _trimCache({required String protectedKey}) {
@@ -345,18 +484,24 @@ class MangaPageFetchClient {
   void close() {
     if (_closed) return;
     _closed = true;
-    for (final token in _activeTokens.toList(growable: false)) {
-      token.cancel('Manga page loader closed.');
-    }
-    _activeTokens.clear();
+    // Complete permit waiters explicitly before cancelling their lifetime
+    // tokens. Otherwise the cancellation callback can race this loop and turn
+    // a deliberate loader shutdown into a misleading request_cancelled error.
     while (_permitWaiters.isNotEmpty) {
       final waiter = _permitWaiters.removeFirst();
       if (!waiter.completer.isCompleted) {
         waiter.completer.completeError(
-          const MangaPageFetchException('The manga page loader is closed.'),
+          const MangaPageFetchException(
+            'The manga page loader is closed.',
+            reasonCode: 'loader_closed',
+          ),
         );
       }
     }
+    for (final token in _activeTokens.toList(growable: false)) {
+      token.cancel('Manga page loader closed.');
+    }
+    _activeTokens.clear();
     _cache.clear();
     _cachedBytes = 0;
     _dio.close(force: true);
@@ -402,6 +547,16 @@ class _MangaPagePermitWaiter {
   final Completer<void> completer = Completer<void>();
 }
 
+class _MangaPageFetchContext {
+  int redirectCount = 0;
+  bool crossOriginRedirect = false;
+
+  void recordRedirect({required Uri from, required Uri to}) {
+    redirectCount++;
+    if (_origin(from) != _origin(to)) crossOriginRedirect = true;
+  }
+}
+
 String _cacheKey(MangaRemotePageResource resource) {
   final values = <int>[...resource.uri.toString().codeUnits];
   final keys = resource.headers.keys.toList()..sort();
@@ -417,5 +572,91 @@ String _cacheKey(MangaRemotePageResource resource) {
 
 String _origin(Uri uri) =>
     '${uri.scheme.toLowerCase()}://${uri.host.toLowerCase()}:${uri.port}';
+
+/// Cross-origin image redirects are common for manga CDNs. Preserve only the
+/// ordinary media-request metadata needed by hotlink-protected hosts while
+/// continuing to strip credentials and arbitrary provider headers.
+Map<String, String> _pageRequestHeaders(
+  Map<String, String> headers, {
+  required bool sameOrigin,
+}) {
+  final safe = <String, String>{};
+  for (final header in headers.entries) {
+    final name = header.key.toLowerCase();
+    if (sameOrigin) {
+      final value = switch (name) {
+        'origin' => canonicalMangaPageOriginHeader(header.value),
+        'referer' => canonicalMangaPageRefererHeader(header.value),
+        _ => header.value,
+      };
+      if (value != null) safe[header.key] = value;
+      continue;
+    }
+    if (_crossOriginSafePageHeaders.contains(name)) {
+      final value = _safeCrossOriginHeaderValue(name, header.value);
+      if (value != null) safe[header.key] = value;
+    }
+  }
+  final present = safe.keys.map((key) => key.toLowerCase()).toSet();
+  if (!present.contains('accept')) {
+    safe['Accept'] =
+        'image/jpeg,image/png,image/webp,image/gif;q=0.9,*/*;q=0.1';
+  }
+  if (!present.contains('user-agent')) {
+    safe['User-Agent'] = 'TetoTV/2 Android manga';
+  }
+  return Map<String, String>.unmodifiable(safe);
+}
+
+String? _safeCrossOriginHeaderValue(String name, String value) {
+  return switch (name) {
+    'origin' => canonicalMangaPageOriginHeader(value),
+    'referer' => canonicalMangaPageRefererHeader(value, originOnly: true),
+    _ => value,
+  };
+}
+
+MangaPageFetchException _httpPageFailure(int status) => switch (status) {
+  HttpStatus.unauthorized => MangaPageFetchException(
+    'The manga source rejected its access credential.',
+    reasonCode: 'http_unauthorized',
+    statusCode: status,
+  ),
+  HttpStatus.forbidden => MangaPageFetchException(
+    'The manga source refused this page request.',
+    reasonCode: 'http_forbidden',
+    statusCode: status,
+  ),
+  HttpStatus.notFound => MangaPageFetchException(
+    'This manga page is no longer available from the source.',
+    reasonCode: 'http_not_found',
+    statusCode: status,
+  ),
+  HttpStatus.tooManyRequests => MangaPageFetchException(
+    'The manga source is temporarily limiting requests. Try again shortly.',
+    reasonCode: 'http_rate_limited',
+    statusCode: status,
+  ),
+  >= 500 && <= 599 => MangaPageFetchException(
+    'The manga source is temporarily unavailable. Try again shortly.',
+    reasonCode: 'http_server_failure',
+    statusCode: status,
+  ),
+  _ => MangaPageFetchException(
+    'This manga page could not be loaded.',
+    reasonCode: 'http_failure',
+    statusCode: status,
+  ),
+};
+
+const Set<String> _crossOriginSafePageHeaders = <String>{
+  'accept',
+  'accept-language',
+  'content-type',
+  'origin',
+  'range',
+  'referer',
+  'user-agent',
+};
 
 const Set<int> _redirectStatuses = <int>{301, 302, 303, 307, 308};

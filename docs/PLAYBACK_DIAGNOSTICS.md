@@ -1,6 +1,6 @@
 # Playback diagnostics: investigating stutter
 
-Implementation status: included in TetoTV Beta 2.0.71, including the MPV player
+Implementation status: included in TetoTV Beta 2.0.72, including the MPV player
 integration, bounded local storage, and explicit report export.
 There has not yet been a real Android TV device validation run. Automated tests
 do not establish native property availability, device overhead, or that the

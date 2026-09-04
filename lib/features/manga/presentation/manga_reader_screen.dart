@@ -821,8 +821,11 @@ class _MangaPageView extends ConsumerWidget {
               future: ref.read(mangaPageFetchClientProvider).fetch(resource),
               builder: (context, snapshot) {
                 if (snapshot.hasError) {
-                  return const _PageFailure(
-                    message: 'This page could not be loaded securely.',
+                  final error = snapshot.error;
+                  return _PageFailure(
+                    message: error is MangaPageFetchException
+                        ? error.message
+                        : 'This manga page could not be loaded. Try again.',
                   );
                 }
                 final bytes = snapshot.data;

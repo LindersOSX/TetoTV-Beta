@@ -75,6 +75,42 @@ void main() {
     expect(provider.width, inInclusiveRange(1, 4096));
   });
 
+  testWidgets('shows the safe manga page failure reason', (tester) async {
+    final roots = _temporaryRoots();
+    final request = MangaReaderRequest(
+      sourceId: 'remote-source',
+      publicationId: 'remote-publication',
+      chapterId: 'chapter-1',
+      seriesTitle: 'Remote series',
+      chapterTitle: 'Chapter 1',
+      pages: [
+        MangaReaderPage(
+          id: 'remote-0',
+          index: 0,
+          resource: MangaRemotePageResource(
+            uri: Uri.parse('https://reader.example.test/page-1.png'),
+          ),
+        ),
+      ],
+    );
+
+    await tester.pumpWidget(
+      _readerHarness(
+        request: request,
+        roots: roots,
+        pageFetchClient: _FailingMangaPageFetchClient(),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(
+      find.text('The manga source refused this page request.'),
+      findsOneWidget,
+    );
+    expect(find.text('This page could not be loaded securely.'), findsNothing);
+  });
+
   testWidgets('resolves a trusted local page through app-owned roots', (
     tester,
   ) async {
@@ -897,6 +933,18 @@ class _MemoryMangaPageFetchClient extends MangaPageFetchClient {
     lastResource = resource;
     return _transparentPng;
   }
+}
+
+class _FailingMangaPageFetchClient extends MangaPageFetchClient {
+  @override
+  Future<Uint8List> fetch(MangaRemotePageResource resource) =>
+      Future<Uint8List>.error(
+        const MangaPageFetchException(
+          'The manga source refused this page request.',
+          reasonCode: 'http_forbidden',
+          statusCode: HttpStatus.forbidden,
+        ),
+      );
 }
 
 class _SilentMangaHubController extends MangaHubController {

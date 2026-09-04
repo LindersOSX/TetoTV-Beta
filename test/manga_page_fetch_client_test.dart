@@ -42,6 +42,12 @@ void main() {
           uri: Uri.parse('https://pages.example/start'),
           headers: const <String, String>{
             HttpHeaders.authorizationHeader: 'Bearer protected',
+            HttpHeaders.cookieHeader: 'session=private',
+            'X-Api-Key': 'private-key',
+            HttpHeaders.refererHeader:
+                'https://reader.example/chapter/1?capability=private',
+            'Origin': 'https://reader.example/private?capability=private',
+            HttpHeaders.userAgentHeader: 'Manga extension agent',
           },
         ),
       );
@@ -59,12 +65,222 @@ void main() {
         adapter.requests.last.headers[HttpHeaders.authorizationHeader],
         isNull,
       );
+      expect(adapter.requests.last.headers[HttpHeaders.cookieHeader], isNull);
+      expect(adapter.requests.last.headers['X-Api-Key'], isNull);
+      expect(
+        adapter.requests.last.headers[HttpHeaders.refererHeader],
+        'https://reader.example/',
+      );
+      expect(adapter.requests.last.headers['Origin'], 'https://reader.example');
+      expect(
+        adapter.requests.last.headers[HttpHeaders.userAgentHeader],
+        'Manga extension agent',
+      );
+      expect(
+        adapter.requests.last.headers[HttpHeaders.acceptHeader],
+        isNotNull,
+      );
       expect(
         adapter.requests.every((request) => !request.followRedirects),
         isTrue,
       );
     },
   );
+
+  test(
+    'adds bounded image request defaults without replacing provider values',
+    () async {
+      final adapter = _PageRoutingAdapter(<String, _PageResponseFactory>{
+        'https://pages.example/page.png': (_) =>
+            ResponseBody.fromBytes(_pngBytes, HttpStatus.ok),
+        'https://pages.example/custom.png': (_) =>
+            ResponseBody.fromBytes(_pngBytes, HttpStatus.ok),
+      });
+      final client = _client(adapter);
+      addTearDown(client.close);
+
+      await client.fetch(
+        MangaRemotePageResource(
+          uri: Uri.parse('https://pages.example/page.png'),
+        ),
+      );
+      await client.fetch(
+        MangaRemotePageResource(
+          uri: Uri.parse('https://pages.example/custom.png'),
+          headers: const <String, String>{
+            HttpHeaders.acceptHeader: 'image/png',
+            HttpHeaders.userAgentHeader: 'Provider agent',
+          },
+        ),
+      );
+
+      expect(
+        adapter.requests.first.headers[HttpHeaders.acceptHeader],
+        contains('image/webp'),
+      );
+      expect(
+        adapter.requests.first.headers[HttpHeaders.userAgentHeader],
+        'TetoTV/2 Android manga',
+      );
+      expect(
+        adapter.requests.last.headers[HttpHeaders.acceptHeader],
+        'image/png',
+      );
+      expect(
+        adapter.requests.last.headers[HttpHeaders.userAgentHeader],
+        'Provider agent',
+      );
+    },
+  );
+
+  test('same-origin redirects retain provider credentials', () async {
+    final adapter = _PageRoutingAdapter(<String, _PageResponseFactory>{
+      'https://pages.example/start': (_) => ResponseBody.fromBytes(
+        const <int>[],
+        HttpStatus.found,
+        headers: <String, List<String>>{
+          HttpHeaders.locationHeader: <String>['/page.png'],
+        },
+      ),
+      'https://pages.example/page.png': (_) =>
+          ResponseBody.fromBytes(_pngBytes, HttpStatus.ok),
+    });
+    final client = _client(adapter);
+    addTearDown(client.close);
+
+    await client.fetch(
+      MangaRemotePageResource(
+        uri: Uri.parse('https://pages.example/start'),
+        headers: const <String, String>{
+          HttpHeaders.authorizationHeader: 'Bearer same-origin',
+          'X-Provider-Key': 'same-origin-key',
+        },
+      ),
+    );
+
+    expect(
+      adapter.requests.last.headers[HttpHeaders.authorizationHeader],
+      'Bearer same-origin',
+    );
+    expect(adapter.requests.last.headers['X-Provider-Key'], 'same-origin-key');
+  });
+
+  test('reports a bounded reason without request details', () async {
+    final reported = Completer<MangaPageFetchException>();
+    final adapter = _PageRoutingAdapter(<String, _PageResponseFactory>{
+      'https://pages.example/forbidden': (_) =>
+          ResponseBody.fromBytes(const <int>[], HttpStatus.forbidden),
+    });
+    final client = _client(
+      adapter,
+      reportFailure: (failure) {
+        if (!reported.isCompleted) reported.complete(failure);
+      },
+    );
+    addTearDown(client.close);
+
+    await expectLater(
+      client.fetch(
+        MangaRemotePageResource(
+          uri: Uri.parse('https://pages.example/forbidden'),
+          headers: const <String, String>{
+            HttpHeaders.authorizationHeader: 'Bearer private',
+          },
+        ),
+      ),
+      throwsA(isA<MangaPageFetchException>()),
+    );
+    final failure = await reported.future;
+
+    expect(failure.reasonCode, 'http_forbidden');
+    expect(failure.statusCode, HttpStatus.forbidden);
+    expect(failure.toString(), isNot(contains('pages.example')));
+    expect(failure.toString(), isNot(contains('private')));
+  });
+
+  test('classifies common HTTP failures accurately', () async {
+    final cases = <(int, String, String)>[
+      (HttpStatus.unauthorized, 'http_unauthorized', 'access credential'),
+      (HttpStatus.forbidden, 'http_forbidden', 'refused'),
+      (HttpStatus.notFound, 'http_not_found', 'no longer available'),
+      (HttpStatus.tooManyRequests, 'http_rate_limited', 'limiting requests'),
+      (HttpStatus.serviceUnavailable, 'http_server_failure', 'unavailable'),
+    ];
+    final adapter = _PageRoutingAdapter(<String, _PageResponseFactory>{
+      for (final (status, _, _) in cases)
+        'https://pages.example/$status': (_) =>
+            ResponseBody.fromBytes(const <int>[], status),
+    });
+    final client = _client(adapter);
+    addTearDown(client.close);
+
+    for (final (status, reasonCode, message) in cases) {
+      await expectLater(
+        client.fetch(
+          MangaRemotePageResource(
+            uri: Uri.parse('https://pages.example/$status'),
+          ),
+        ),
+        throwsA(
+          isA<MangaPageFetchException>()
+              .having((failure) => failure.reasonCode, 'reason', reasonCode)
+              .having(
+                (failure) => failure.message,
+                'message',
+                contains(message),
+              )
+              .having((failure) => failure.statusCode, 'status', status),
+        ),
+      );
+    }
+  });
+
+  test('drops unsafe cross-origin Referer and Origin values', () async {
+    final adapter = _PageRoutingAdapter(<String, _PageResponseFactory>{
+      'https://pages.example/start': (_) => ResponseBody.fromBytes(
+        const <int>[],
+        HttpStatus.found,
+        headers: <String, List<String>>{
+          HttpHeaders.locationHeader: <String>['https://cdn.example/page.png'],
+        },
+      ),
+      'https://cdn.example/page.png': (_) =>
+          ResponseBody.fromBytes(_pngBytes, HttpStatus.ok),
+    });
+    final client = _client(adapter);
+    addTearDown(client.close);
+
+    await client.fetch(
+      MangaRemotePageResource(
+        uri: Uri.parse('https://pages.example/start'),
+        headers: const <String, String>{
+          HttpHeaders.refererHeader: 'https://127.0.0.1/private?token=secret',
+          'Origin': 'http://reader.example',
+        },
+      ),
+    );
+
+    expect(adapter.requests.last.headers[HttpHeaders.refererHeader], isNull);
+    expect(adapter.requests.last.headers['Origin'], isNull);
+  });
+
+  test('does not report an expected cancellation', () async {
+    final failures = <MangaPageFetchException>[];
+    final adapter = _CancellationPageAdapter();
+    final client = _client(adapter, reportFailure: failures.add);
+
+    final future = client.fetch(
+      MangaRemotePageResource(
+        uri: Uri.parse('https://pages.example/cancelled.png'),
+      ),
+    );
+    await adapter.started.future;
+    client.close();
+
+    await expectLater(future, throwsA(isA<MangaPageFetchException>()));
+    await Future<void>.delayed(Duration.zero);
+    expect(failures, isEmpty);
+  });
 
   test(
     'bounds streamed bytes and rejects a fake image without retrying',
@@ -318,6 +534,7 @@ MangaPageFetchClient _client(
   int maximumConcurrentRequests = 8,
   int maximumCacheEntries = 64,
   Duration requestDeadline = const Duration(seconds: 45),
+  MangaPageFailureReporter? reportFailure,
 }) {
   final dio = Dio()..httpClientAdapter = adapter;
   return MangaPageFetchClient(
@@ -328,6 +545,7 @@ MangaPageFetchClient _client(
     maximumConcurrentRequests: maximumConcurrentRequests,
     maximumCacheEntries: maximumCacheEntries,
     requestDeadline: requestDeadline,
+    reportFailure: reportFailure,
   );
 }
 
@@ -387,6 +605,28 @@ class _GatePageAdapter implements HttpClientAdapter {
 
   @override
   void close({bool force = false}) => release();
+}
+
+class _CancellationPageAdapter implements HttpClientAdapter {
+  final Completer<void> started = Completer<void>();
+
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async {
+    if (!started.isCompleted) started.complete();
+    await cancelFuture;
+    throw DioException(
+      requestOptions: options,
+      type: DioExceptionType.cancel,
+      message: 'cancelled',
+    );
+  }
+
+  @override
+  void close({bool force = false}) {}
 }
 
 class _DripPageAdapter implements HttpClientAdapter {

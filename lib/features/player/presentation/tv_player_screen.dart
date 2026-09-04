@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:anime_tv/core/diagnostics/anonymous_crash_reporter.dart';
 import 'package:anime_tv/core/telemetry/anonymous_usage_reporter.dart';
 import 'package:anime_tv/core/diagnostics/playback_diagnostic_recorder.dart';
+import 'package:anime_tv/core/diagnostics/playback_performance_monitor.dart';
 import 'package:anime_tv/core/diagnostics/playback_session_diagnostics.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/core/preferences/caption_language.dart';
@@ -799,12 +800,18 @@ class MpvTvPlayerScreen extends ConsumerStatefulWidget {
   ConsumerState<MpvTvPlayerScreen> createState() => _MpvTvPlayerScreenState();
 }
 
-class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
+class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
+    with WidgetsBindingObserver {
   late final Player _player;
   late final VideoController _controller;
   late final TetoTvDatabase _database;
   late final AniSkipClient _aniSkipClient;
   late final PlaybackDiagnosticSessionRecorder _playbackDiagnostics;
+  late final PlaybackPerformanceMonitor _playbackPerformance;
+  int? _performanceOpenAttempt;
+  int _performanceSeekDepth = 0;
+  bool _performanceInForeground = true;
+  double? _performanceAndroidDisplayFps;
   late final NextEpisodePreparationController _nextEpisodePreparation;
   late final WatchPartyPlaybackEngineHandle _watchPartyHandle;
   late final WatchPartyPlaybackCoordinator _watchPartyPlayback;
@@ -904,6 +911,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   DateTime _lastCheckpointSave = DateTime.fromMillisecondsSinceEpoch(0);
   DateTime _lastMediaSessionUpdate = DateTime.fromMillisecondsSinceEpoch(0);
   StreamSubscription<bool>? _playingSubscription;
+  StreamSubscription<bool>? _bufferingSubscription;
   bool _playerHasStartedPlayback = false;
   bool _lastPlayerPlaying = false;
   CatalogEpisodeMetadata? _pausedHudEpisodeMetadata;
@@ -1186,6 +1194,12 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     String? reasonCode,
   }) {
     _diagnosticLastOutcome = outcome;
+    if (outcome == PlaybackDiagnosticOutcome.failed) {
+      _playbackPerformance.failed();
+    } else if (outcome == PlaybackDiagnosticOutcome.completed) {
+      _playbackPerformance.endAttempt();
+      _performanceOpenAttempt = null;
+    }
     final currentPosition = _player.state.position;
     final currentDuration = _player.state.duration;
     final diagnosticPosition = currentPosition > Duration.zero
@@ -1219,6 +1233,9 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     required bool succeeded,
     String? reasonCode,
   }) {
+    if (!succeeded && attempt == _performanceOpenAttempt) {
+      _playbackPerformance.failed();
+    }
     unawaited(
       _playbackDiagnostics.streamOpened(
         sourceKind: _diagnosticSourceKind,
@@ -1479,6 +1496,26 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       _player,
       configuration: tetoTvVideoControllerConfiguration,
     );
+    _performanceInForeground =
+        WidgetsBinding.instance.lifecycleState == null ||
+        WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
+    _playbackPerformance = PlaybackPerformanceMonitor(
+      sessionId: _playbackDiagnostics.sessionId,
+      readProperty: _readPlaybackPerformanceProperty,
+      context: () => PlaybackPerformanceContext(
+        position: _player.state.position,
+        duration: _player.state.duration,
+        playing: _player.state.playing,
+        buffering: _player.state.buffering,
+        seeking: _performanceSeekDepth > 0,
+        hudVisible: _controlsVisible,
+        inForeground: _performanceInForeground && !_engineHandoffInProgress,
+        playbackSpeed: _player.state.rate,
+        androidDisplayFps: _performanceAndroidDisplayFps,
+      ),
+      persist: _database.savePlaybackPerformanceSnapshot,
+    );
+    WidgetsBinding.instance.addObserver(this);
     _watchPartyHandle = _watchPartyPlayback.bindEngine(
       engine: 'mpv',
       play: () => _trackPlayerMutation(() async {
@@ -1493,7 +1530,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
         if (_playerReleasedForHandoff) return;
         _pendingInheritedResume = null;
         _trickplayGeneration++;
-        await _player.seek(position);
+        await _seekWithPerformanceDiagnostics(position, userInitiated: false);
         _recordCommittedSeek(position);
       }),
     );
@@ -1567,6 +1604,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     });
     _videoParamsSubscription = _player.stream.videoParams.listen((params) {
       if (params.w == null || params.h == null) return;
+      _playbackPerformance.markVideoParametersAvailable();
       _videoFrameSeen = true;
       if (!_reportedPlaybackSuccess) {
         _reportedPlaybackSuccess = true;
@@ -1577,7 +1615,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
         _diagnosticDecodedVideoSignature = diagnosticSignature;
         _recordDiagnosticDecoderSelected(
           automatic: true,
-          reasonCode: 'decoded_video_observed',
+          reasonCode: 'video_parameters_available',
           includeCurrentCodec: true,
         );
       }
@@ -1617,9 +1655,13 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       } else if (mounted && !wasPlaying && playing && _controlsVisible) {
         _scheduleControlsHide();
       }
+      _playbackPerformance.stateChanged();
       _reportLibraryPlayback(force: true);
       _publishWatchPartyPlayback();
       unawaited(_updateMediaSession(force: true));
+    });
+    _bufferingSubscription = _player.stream.buffering.listen((_) {
+      _playbackPerformance.stateChanged();
     });
     _mediaActionSubscription = AndroidTvBridge.instance.mediaActions.listen(
       _handleMediaAction,
@@ -1645,6 +1687,55 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
 
   bool get _canApplyTrackSelection =>
       mounted && !_engineHandoffInProgress && !_playerReleasedForHandoff;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _updatePerformanceDisplayRate();
+  }
+
+  @override
+  void didChangeMetrics() => _updatePerformanceDisplayRate();
+
+  void _updatePerformanceDisplayRate() {
+    if (!mounted || kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
+      return;
+    }
+    // Cached while the context is live; persistence during dispose must not
+    // perform an inherited-widget lookup. This is display Hz, not source FPS.
+    _performanceAndroidDisplayFps = View.maybeOf(context)?.display.refreshRate;
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _performanceInForeground = state == AppLifecycleState.resumed;
+    _playbackPerformance.stateChanged();
+    if (!_performanceInForeground) unawaited(_playbackPerformance.flush());
+  }
+
+  Future<String?> _readPlaybackPerformanceProperty(String property) async {
+    if (!_canApplyTrackSelection || _mediaOpenInProgress) return null;
+    final platform = _player.platform;
+    if (platform is! NativePlayer) return null;
+    // The monitor probes only after Player.open has completed. Skipping the
+    // initialization awaits prevents a delayed read from crossing disposal.
+    // All properties are fixed, optional scalar counters; never dump metadata.
+    return platform.getProperty(property, waitForInitialization: false);
+  }
+
+  Future<void> _seekWithPerformanceDiagnostics(
+    Duration position, {
+    bool userInitiated = true,
+  }) async {
+    _performanceSeekDepth++;
+    _playbackPerformance.noteSeek(userInitiated: userInitiated);
+    try {
+      await _player.seek(position);
+    } finally {
+      _performanceSeekDepth--;
+      _playbackPerformance.stateChanged();
+    }
+  }
 
   void _onTracksChanged(int mediaRevision) {
     unawaited(_runTrackedTrackSelection(mediaRevision));
@@ -2955,6 +3046,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   }
 
   Future<int?> _openCurrentMedia({
+    required int diagnosticAttempt,
     required bool play,
     required StreamReady expectedStream,
     required String expectedSource,
@@ -2976,11 +3068,20 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       if (revision == _mediaOpenRevision) _mediaOpenInProgress = false;
       return null;
     }
+    _performanceOpenAttempt = diagnosticAttempt;
+    _playbackPerformance.beginAttempt(
+      attempt: diagnosticAttempt,
+      sourceKind: _diagnosticSourceKind.wireValue,
+      requestedDecoder: _diagnosticDecoder.wireValue,
+    );
     try {
       await _player.open(
         Media(expectedSource, httpHeaders: expectedHeaders),
         play: play,
       );
+    } catch (_) {
+      _playbackPerformance.failed();
+      rethrow;
     } finally {
       if (revision == _mediaOpenRevision) {
         _mediaOpenInProgress = false;
@@ -2993,8 +3094,13 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
           activeStream: _currentStream,
         ) ||
         !_canApplyTrackSelection) {
+      _playbackPerformance.endAttempt();
+      _performanceOpenAttempt = null;
       return null;
     }
+    // Native open completion is distinct from video parameters and from
+    // natural timeline advancement. None alone proves smooth rendering.
+    _playbackPerformance.opened();
     _tracksSubscription = _player.stream.tracks.listen(
       (_) => _onTracksChanged(revision),
     );
@@ -3046,6 +3152,8 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
         _libraryCompletionThresholdHandled = false;
         _resetCompletionObservation(resume ?? Duration.zero);
         final diagnosticOpenAttempt = ++_diagnosticStreamOpenAttempt;
+        _playbackPerformance.endAttempt();
+        _performanceOpenAttempt = null;
         final persistenceWasReady = _playbackPersistenceReady;
         if (resume != null) _playbackPersistenceReady = false;
         // Watchdogs from the previous candidate must not inspect or mutate a
@@ -3061,6 +3169,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
           await _configureNativePlayback();
           if (!attemptIsActive()) return;
           mediaRevision = await _openCurrentMedia(
+            diagnosticAttempt: diagnosticOpenAttempt,
             play: true,
             expectedStream: expectedStream,
             expectedSource: expectedSource,
@@ -3254,7 +3363,10 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
           _trickplayGeneration++;
           final result = await performVerifiedSkipSeek(
             target: target,
-            seek: _player.seek,
+            seek: (position) => _seekWithPerformanceDiagnostics(
+              position,
+              userInitiated: supersedeInheritedResume,
+            ),
             currentPosition: () => _player.state.position,
             isCanceled: () =>
                 _engineHandoffInProgress ||
@@ -3294,7 +3406,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     for (var attempt = 0; attempt < 3; attempt++) {
       if (_engineHandoffInProgress) return false;
       try {
-        await _player.seek(resume);
+        await _seekWithPerformanceDiagnostics(resume, userInitiated: false);
       } catch (_) {
         // Network demuxers can reject seeks until their index is available.
       }
@@ -4435,6 +4547,8 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
 
   Future<bool> _prepareForEngineHandoff(Duration position) async {
     if (_handoffAttemptActive) return false;
+    _playbackPerformance.endAttempt();
+    _performanceOpenAttempt = null;
     _handoffAttemptActive = true;
     _handoffReleaseFailed = false;
     _pendingHandoffPosition ??= position;
@@ -4487,6 +4601,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       await _completedSubscription?.cancel();
       await _videoParamsSubscription?.cancel();
       await _playingSubscription?.cancel();
+      await _bufferingSubscription?.cancel();
       await _mediaActionSubscription?.cancel();
       await _sourceDiscoverySubscription?.cancel();
     } catch (_) {
@@ -4913,6 +5028,8 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       final position = _effectiveHandoffPosition();
       final wasPlaying = _player.state.playing;
       final diagnosticOpenAttempt = ++_diagnosticStreamOpenAttempt;
+      _playbackPerformance.endAttempt();
+      _performanceOpenAttempt = null;
       final persistenceWasReady = _playbackPersistenceReady;
       _playbackPersistenceReady = false;
       try {
@@ -4928,6 +5045,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
         _videoFrameSeen = false;
         final expectedStream = _currentStream;
         final mediaRevision = await _openCurrentMedia(
+          diagnosticAttempt: diagnosticOpenAttempt,
           play: automatic || wasPlaying,
           expectedStream: expectedStream,
           expectedSource: _source,
@@ -5006,6 +5124,8 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
         ),
       );
       final diagnosticOpenAttempt = ++_diagnosticStreamOpenAttempt;
+      _playbackPerformance.endAttempt();
+      _performanceOpenAttempt = null;
       final persistenceWasReady = _playbackPersistenceReady;
       _playbackPersistenceReady = false;
       setState(() => _playbackError = null);
@@ -5015,6 +5135,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
         await _configureNativePlayback();
         final expectedStream = _currentStream;
         final mediaRevision = await _openCurrentMedia(
+          diagnosticAttempt: diagnosticOpenAttempt,
           play: wasPlaying,
           expectedStream: expectedStream,
           expectedSource: _source,
@@ -5811,7 +5932,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
         _queuedSeekCapturePreview = false;
         _queuedSeekGeneration = 0;
         _pendingInheritedResume = null;
-        await _player.seek(target);
+        await _seekWithPerformanceDiagnostics(target);
         _recordCommittedSeek(target);
         if (!_engineHandoffInProgress && capturePreview) {
           final operation = _captureTrickplay(target, seekGeneration);
@@ -6558,6 +6679,9 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
             : PlaybackDiagnosticOutcome.exitedBeforeStart,
       );
     }
+    WidgetsBinding.instance.removeObserver(this);
+    _playbackPerformance.dispose();
+    _bufferingSubscription?.cancel();
     _watchPartyRouteHandoff.unbind(_watchPartyRouteHandoffOwner);
     _watchPartyPlayback.unbindEngine(_watchPartyHandle);
     if (_ownsWatchPartyPlayback) unawaited(_watchPartyPlayback.dispose());

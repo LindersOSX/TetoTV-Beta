@@ -117,7 +117,7 @@ void main() {
     expectInOrder(hostBinding, [
       'seekTo: (position) => _trackPlayerMutation',
       '_pendingInheritedResume = null',
-      'await _player.seek(position)',
+      'await _seekWithPerformanceDiagnostics(position, userInitiated: false)',
     ]);
 
     final userSeek = method(
@@ -127,7 +127,7 @@ void main() {
     expectInOrder(userSeek, [
       'final target = _queuedSeekTarget!',
       '_pendingInheritedResume = null',
-      'await _player.seek(target)',
+      'await _seekWithPerformanceDiagnostics(target)',
     ]);
   });
 

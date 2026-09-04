@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:anime_tv/core/diagnostics/playback_performance_diagnostics.dart';
 import 'package:anime_tv/core/diagnostics/playback_session_diagnostics.dart';
 import 'package:path/path.dart' as path;
 import 'package:sqflite/sqflite.dart';
@@ -9,7 +10,8 @@ import 'package:sqflite/sqflite.dart';
 /// The SQLite table survives process death; it is never uploaded unless the
 /// user presses the diagnostic-report share button.
 const diagnosticHistoryWindow = Duration(hours: 48);
-const tetoTvDatabaseSchemaVersion = 12;
+const tetoTvDatabaseSchemaVersion = 13;
+const maximumPersistedPlaybackPerformanceAttempts = 24;
 // Provider searches and playback startup can each emit a burst of events.
 // Retain enough history for a complete search plus the playback which follows
 // it; 240 entries allowed title-artwork noise to evict the evidence needed to
@@ -23,6 +25,10 @@ const diagnosticEventSchema = 'tetotv-diagnostic-events-v3';
 
 const _diagnosticDroppedAgeKey = 'dropped_age';
 const _diagnosticDroppedCapacityKey = 'dropped_capacity';
+const _playbackPerformanceDroppedWindowKey =
+    'playback_performance_dropped_window';
+const _playbackPerformanceDroppedCapacityKey =
+    'playback_performance_dropped_capacity';
 
 Future<void> configureTetoTvDatabase(Database db) async {
   // journal_mode returns a result row on Android, so sqflite requires
@@ -541,6 +547,7 @@ class TetoTvDatabase {
         await createOfflineDownloadTables(db);
         await createMangaTables(db);
         await createAppNotificationsTable(db);
+        await createPlaybackPerformanceTable(db);
       },
       onUpgrade: upgradeTetoTvDatabaseSchema,
     );
@@ -994,6 +1001,22 @@ class TetoTvDatabase {
     }
   }
 
+  /// Performance samples use an independent, upserted attempt history so
+  /// periodic sampling can never evict startup/failure diagnostic events.
+  Future<void> savePlaybackPerformanceSnapshot(
+    Map<String, Object?> snapshot,
+  ) async {
+    try {
+      final db = await database;
+      await db.transaction(
+        (transaction) =>
+            persistPlaybackPerformanceSnapshot(transaction, snapshot),
+      );
+    } catch (_) {
+      // Diagnostics-only storage failure must not interrupt playback.
+    }
+  }
+
   Future<void> cacheJson(
     String key,
     Map<String, dynamic> payload, {
@@ -1042,6 +1065,10 @@ class TetoTvDatabase {
     final playbackSessionDiagnostics = derivePlaybackSessionDiagnostics(
       diagnosticHistory['diagnosticEvents'],
     );
+    final playbackPerformance = await loadPlaybackPerformanceHistory(
+      db,
+      now: snapshotEnd,
+    );
     final providers = await db.rawQuery('''
       SELECT provider_id, consecutive_failures, total_failures,
              last_success_at, last_failure_at, last_error, quarantined_until,
@@ -1074,6 +1101,7 @@ class TetoTvDatabase {
       ...operationalHistory,
       ...diagnosticHistory,
       ...playbackSessionDiagnostics,
+      ...playbackPerformance,
       'providerHealth': [
         for (final row in providers)
           {
@@ -1211,6 +1239,191 @@ Future<void> upgradeTetoTvDatabaseSchema(
   if (oldVersion >= 11 && oldVersion < 12 && newVersion >= 12) {
     await _upgradeAppNotificationsToV12(db);
   }
+  if (oldVersion < 13 && newVersion >= 13) {
+    await createPlaybackPerformanceTable(db);
+  }
+}
+
+/// Durable performance history is independent from the diagnostic event ring.
+/// Only the strict performance allowlist is ever serialized into this table.
+Future<void> createPlaybackPerformanceTable(DatabaseExecutor database) async {
+  await _createDiagnosticMetadataTable(database);
+  await database.execute('''
+    CREATE TABLE IF NOT EXISTS playback_performance_snapshots (
+      session_id TEXT NOT NULL,
+      attempt INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      snapshot_json TEXT NOT NULL,
+      PRIMARY KEY (session_id, attempt)
+    )
+  ''');
+  await database.execute('''
+    CREATE INDEX IF NOT EXISTS playback_performance_updated_at
+    ON playback_performance_snapshots(updated_at DESC)
+  ''');
+}
+
+/// Public for deterministic SQLite tests; normal callers use the failure-safe
+/// [TetoTvDatabase.savePlaybackPerformanceSnapshot] transaction wrapper.
+Future<void> persistPlaybackPerformanceSnapshot(
+  DatabaseExecutor database,
+  Map<String, Object?> snapshot, {
+  DateTime? now,
+}) async {
+  final safe = sanitizePlaybackPerformanceSnapshot(snapshot);
+  if (safe.isEmpty) return;
+  final updatedAt = DateTime.parse(safe['updatedAt']! as String);
+  final end = (now ?? DateTime.now()).toUtc();
+  if (updatedAt.isAfter(end) ||
+      updatedAt.isBefore(end.subtract(diagnosticHistoryWindow))) {
+    await prunePlaybackPerformanceHistory(database, now: end);
+    return;
+  }
+  // Conditional replacement is atomic and uses the older SQLite syntax
+  // available on supported Android TVs. Late saves cannot restore old data.
+  await database.rawInsert(
+    '''
+      INSERT OR REPLACE INTO playback_performance_snapshots
+        (session_id, attempt, updated_at, snapshot_json)
+      SELECT ?, ?, ?, ?
+      WHERE NOT EXISTS (
+        SELECT 1 FROM playback_performance_snapshots
+        WHERE session_id = ? AND attempt = ? AND updated_at > ?
+      )
+    ''',
+    [
+      safe['sessionId'],
+      safe['attempt'],
+      updatedAt.millisecondsSinceEpoch,
+      jsonEncode(safe),
+      safe['sessionId'],
+      safe['attempt'],
+      updatedAt.millisecondsSinceEpoch,
+    ],
+  );
+  await prunePlaybackPerformanceHistory(database, now: end);
+}
+
+Future<void> prunePlaybackPerformanceHistory(
+  DatabaseExecutor database, {
+  DateTime? now,
+}) async {
+  final end = (now ?? DateTime.now()).toUtc();
+  final droppedOutsideWindow = await database.delete(
+    'playback_performance_snapshots',
+    where: 'updated_at < ? OR updated_at > ?',
+    whereArgs: [
+      end.subtract(diagnosticHistoryWindow).millisecondsSinceEpoch,
+      end.millisecondsSinceEpoch,
+    ],
+  );
+  final droppedForCapacity = await database.delete(
+    'playback_performance_snapshots',
+    where: '''
+      rowid NOT IN (
+        SELECT rowid FROM playback_performance_snapshots
+        ORDER BY updated_at DESC, session_id DESC, attempt DESC LIMIT ?
+      )
+    ''',
+    whereArgs: const [maximumPersistedPlaybackPerformanceAttempts],
+  );
+  if (droppedOutsideWindow > 0) {
+    await _incrementDiagnosticMetadata(
+      database,
+      _playbackPerformanceDroppedWindowKey,
+      droppedOutsideWindow,
+    );
+  }
+  if (droppedForCapacity > 0) {
+    await _incrementDiagnosticMetadata(
+      database,
+      _playbackPerformanceDroppedCapacityKey,
+      droppedForCapacity,
+    );
+  }
+}
+
+/// Revalidates historical/corrupt rows at the export boundary. A damaged
+/// diagnostics-only table must not prevent the rest of an explicit report.
+Future<Map<String, Object?>> loadPlaybackPerformanceHistory(
+  DatabaseExecutor database, {
+  DateTime? now,
+}) async {
+  final end = (now ?? DateTime.now()).toUtc();
+  final snapshots = <Map<String, Object?>>[];
+  var invalidSnapshots = 0;
+  var storageUnavailable = false;
+  final dropped = <String, int>{};
+  try {
+    await prunePlaybackPerformanceHistory(database, now: end);
+    final metadata = await database.query(
+      'diagnostic_metadata',
+      where: 'key IN (?, ?)',
+      whereArgs: const [
+        _playbackPerformanceDroppedWindowKey,
+        _playbackPerformanceDroppedCapacityKey,
+      ],
+    );
+    for (final row in metadata) {
+      if (row['key'] is String && row['value'] is int) {
+        dropped[row['key']! as String] = (row['value']! as int).clamp(
+          0,
+          1000000000,
+        );
+      }
+    }
+    final rows = await database.query(
+      'playback_performance_snapshots',
+      columns: ['session_id', 'attempt', 'updated_at', 'snapshot_json'],
+      orderBy: 'updated_at DESC, session_id DESC, attempt DESC',
+      limit: maximumPersistedPlaybackPerformanceAttempts,
+    );
+    for (final row in rows) {
+      try {
+        final safe = sanitizePlaybackPerformanceSnapshot(
+          jsonDecode(row['snapshot_json']! as String),
+        );
+        if (safe.isEmpty ||
+            safe['sessionId'] != row['session_id'] ||
+            safe['attempt'] != row['attempt'] ||
+            DateTime.parse(
+                  safe['updatedAt']! as String,
+                ).millisecondsSinceEpoch !=
+                row['updated_at']) {
+          invalidSnapshots++;
+          continue;
+        }
+        snapshots.add(safe);
+      } catch (_) {
+        invalidSnapshots++;
+      }
+    }
+  } catch (_) {
+    storageUnavailable = true;
+  }
+  return {
+    'playbackPerformanceSchema': playbackPerformanceSchema,
+    'playbackPerformanceWindow': {
+      'hours': diagnosticHistoryWindow.inHours,
+      'startsAt': end.subtract(diagnosticHistoryWindow).toIso8601String(),
+      'endsAt': end.toIso8601String(),
+      'ordering': 'newest-first',
+      'capacity': maximumPersistedPlaybackPerformanceAttempts,
+      'retainedCount': snapshots.length,
+      'droppedOutsideWindow':
+          dropped[_playbackPerformanceDroppedWindowKey] ?? 0,
+      'droppedForCapacity':
+          dropped[_playbackPerformanceDroppedCapacityKey] ?? 0,
+      'dropCountScope': 'since-diagnostics-storage-created',
+      if (snapshots.isNotEmpty) ...{
+        'newestRetainedAt': snapshots.first['updatedAt'],
+        'oldestRetainedAt': snapshots.last['updatedAt'],
+      },
+      'invalidSnapshotCount': invalidSnapshots,
+      if (storageUnavailable) 'storageUnavailable': true,
+    },
+    'playbackPerformance': snapshots,
+  };
 }
 
 /// Creates the local in-app notification inbox.
@@ -1642,6 +1855,14 @@ Future<Map<String, Object?>> loadRecentDiagnosticOperationalHistory(
       ),
     },
     'recentFrameTimings': timings,
+    'recentFrameTimingMeaning': {
+      'metric': 'flutter_frame_timing_total_span',
+      'scope': 'flutter_ui_not_video',
+      'thresholdMsExclusive': 20,
+      'selection': 'slowest_pending_callback_sample',
+      'minimumSampleIntervalMs': 5000,
+      'includesAllFrames': false,
+    },
   };
 }
 
@@ -1846,10 +2067,12 @@ Future<void> _incrementDiagnosticMetadata(
   int amount,
 ) => database.rawInsert(
   '''
-    INSERT INTO diagnostic_metadata (key, value) VALUES (?, ?)
-    ON CONFLICT(key) DO UPDATE SET value = value + excluded.value
+    INSERT OR REPLACE INTO diagnostic_metadata (key, value)
+    SELECT ?, ? + COALESCE(
+      (SELECT value FROM diagnostic_metadata WHERE key = ?), 0
+    )
   ''',
-  [key, amount],
+  [key, amount, key],
 );
 
 /// Loads a redacted, chronological diagnostic window. This reads rows written

@@ -15,6 +15,8 @@ import 'package:anime_tv/features/manga/data/manga_page_fetch_client.dart';
 import 'package:anime_tv/features/manga/data/manga_store.dart';
 import 'package:anime_tv/features/manga/domain/manga_reader_models.dart';
 import 'package:anime_tv/features/manga/presentation/manga_reader_screen.dart';
+import 'package:anime_tv/features/manga/presentation/manga_reader_page_surface.dart';
+import 'package:anime_tv/features/manga/presentation/manga_reader_settings_sheet.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -198,6 +200,7 @@ void main() {
     expect(find.text('1 / 3'), findsOneWidget);
 
     await tester.tapAt(Offset(size.width * .5, size.height * .5));
+    await tester.pump(const Duration(milliseconds: 350));
     await tester.pump(const Duration(milliseconds: 180));
     expect(
       tester.widget<AnimatedOpacity>(find.byType(AnimatedOpacity)).opacity,
@@ -239,12 +242,12 @@ void main() {
     final size = tester.getSize(find.byType(MangaReaderScreen));
 
     await tester.tapAt(Offset(size.width * .9, size.height * .5));
-    await tester.pump(const Duration(milliseconds: 16));
+    await tester.pump(const Duration(milliseconds: 350));
     await tester.pump(const Duration(milliseconds: 260));
     expect(find.text('2 / 3'), findsOneWidget);
 
     await tester.tapAt(Offset(size.width * .1, size.height * .5));
-    await tester.pump(const Duration(milliseconds: 16));
+    await tester.pump(const Duration(milliseconds: 350));
     await tester.pump(const Duration(milliseconds: 260));
     expect(find.text('1 / 3'), findsOneWidget);
   });
@@ -755,13 +758,450 @@ void main() {
     expect(platform.titles, <String>['Reading manga', 'Local series']);
     expect(platform.chapterLabels, <String>['Private chapter', 'Chapter 1']);
   });
+
+  testWidgets('reader settings opens and Back closes only the settings sheet', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _readerHarness(request: _remoteRequest(2), roots: _temporaryRoots()),
+    );
+    await _pumpReader(tester);
+    await tester.tap(find.byKey(const ValueKey('manga-reader-settings')));
+    await _pumpReader(tester);
+    expect(find.byType(MangaReaderSettingsSheet), findsOneWidget);
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await _pumpReader(tester);
+    expect(find.byType(MangaReaderSettingsSheet), findsNothing);
+    expect(find.byType(MangaReaderScreen), findsOneWidget);
+    expect(FocusManager.instance.primaryFocus?.debugLabel, 'manga.reader');
+  });
+
+  testWidgets(
+    'page counter can be hidden and disabled tap zones still open controls',
+    (tester) async {
+      final prefs = _FixedMangaPreferencesController(
+        const MangaReaderPreferences(
+          loaded: true,
+          tapZonesEnabled: false,
+          doubleTapZoom: false,
+          spreadMode: MangaSpreadMode.single,
+          keepScreenAwake: false,
+          preloadPages: 0,
+        ),
+      );
+      await tester.pumpWidget(
+        _readerHarness(
+          request: _remoteRequest(3),
+          roots: _temporaryRoots(),
+          preferencesController: prefs,
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 6));
+      expect(
+        find.byKey(const ValueKey('manga-reader-page-counter')),
+        findsOneWidget,
+      );
+      prefs.replace(prefs.state.copyWith(showPageNumber: false));
+      await tester.pump();
+      expect(
+        find.byKey(const ValueKey('manga-reader-page-counter')),
+        findsNothing,
+      );
+      final size = tester.getSize(find.byType(MangaReaderScreen));
+      await tester.tapAt(Offset(size.width * .1, size.height * .5));
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(
+        tester.widget<AnimatedOpacity>(find.byType(AnimatedOpacity)).opacity,
+        1,
+      );
+      expect(find.text('1 / 3'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'appearance changes filter images without re-fetching the page or filtering controls',
+    (tester) async {
+      final client = _MemoryMangaPageFetchClient();
+      final prefs = _FixedMangaPreferencesController(
+        const MangaReaderPreferences(
+          loaded: true,
+          spreadMode: MangaSpreadMode.single,
+          keepScreenAwake: false,
+          bookAnimationEnabled: false,
+          preloadPages: 0,
+        ),
+      );
+      await tester.pumpWidget(
+        _readerHarness(
+          request: _remoteRequest(1),
+          roots: _temporaryRoots(),
+          preferencesController: prefs,
+          pageFetchClient: client,
+        ),
+      );
+      await _pumpReader(tester);
+      await _allowImageWorkers(tester);
+      final requestsBefore = client.fetchCount;
+      prefs.replace(
+        prefs.state.copyWith(
+          sidePadding: 40,
+          dimAmount: .4,
+          warmth: .8,
+          grayscale: true,
+          background: MangaReaderBackground.sepia,
+        ),
+      );
+      await _pumpReader(tester);
+      expect(client.fetchCount, requestsBefore);
+      expect(find.byType(MangaReaderImageFilter), findsWidgets);
+      expect(
+        find.ancestor(
+          of: find.byKey(const ValueKey('manga-reader-settings')),
+          matching: find.byType(ColorFiltered),
+        ),
+        findsNothing,
+      );
+      expect(find.text('1 / 1'), findsOneWidget);
+      expect(
+        tester.widget<Scaffold>(find.byType(Scaffold)).backgroundColor,
+        Color(MangaReaderBackground.sepia.colorValue),
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'long strip uses real image dimensions, margins and gaps and keeps progress',
+    (tester) async {
+      final prefs = _FixedMangaPreferencesController(
+        const MangaReaderPreferences(
+          loaded: true,
+          mode: MangaReadingMode.webtoon,
+          sidePadding: 50,
+          webtoonGap: 20,
+          bookAnimationEnabled: false,
+          keepScreenAwake: false,
+          preloadPages: 0,
+        ),
+      );
+      await tester.pumpWidget(
+        _readerHarness(
+          request: _remoteRequest(3),
+          roots: _temporaryRoots(),
+          preferencesController: prefs,
+        ),
+      );
+      await _pumpReader(tester);
+      final screenWidth = tester.getSize(find.byType(MangaReaderScreen)).width;
+      final pageSize = tester.getSize(
+        find.byKey(const ValueKey('manga-webtoon-page-0')),
+      );
+      expect(pageSize.width, screenWidth - 100);
+      // The sample PNG is square; an omitted provider ratio must not stretch it.
+      expect(pageSize.height, pageSize.width);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+      await _pumpReader(tester);
+      expect(find.text('2 / 3'), findsOneWidget);
+      var strip = tester.widget<ListView>(
+        find.byKey(const ValueKey('manga-reader-webtoon')),
+      );
+      expect(strip.controller!.offset, closeTo(6 + pageSize.height + 20, .1));
+      prefs.replace(prefs.state.copyWith(sidePadding: 20, webtoonGap: 40));
+      await _pumpReader(tester);
+      expect(find.text('2 / 3'), findsOneWidget);
+      strip = tester.widget<ListView>(
+        find.byKey(const ValueKey('manga-reader-webtoon')),
+      );
+      expect(strip.controller!.offset, closeTo(6 + screenWidth - 40 + 40, .1));
+      await tester.sendKeyEvent(LogicalKeyboardKey.end);
+      await _pumpReader(tester);
+      expect(find.text('3 / 3'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('disabled page animation changes page immediately', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _readerHarness(request: _remoteRequest(3), roots: _temporaryRoots()),
+    );
+    await _pumpReader(tester);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+    await tester.pump();
+    expect(find.text('2 / 3'), findsOneWidget);
+    final view = tester.widget<PageView>(
+      find.byKey(const ValueKey('manga-reader-paged')),
+    );
+    expect(view.controller!.page, 1);
+  });
+
+  testWidgets(
+    'animation toggle retains zoomed page and image fetch, then reset restores swipes',
+    (tester) async {
+      final client = _MemoryMangaPageFetchClient();
+      final prefs = _FixedMangaPreferencesController(
+        const MangaReaderPreferences(
+          loaded: true,
+          spreadMode: MangaSpreadMode.single,
+          bookAnimationEnabled: true,
+          keepScreenAwake: false,
+          preloadPages: 0,
+        ),
+      );
+      await tester.pumpWidget(
+        _readerHarness(
+          request: _remoteRequest(3),
+          roots: _temporaryRoots(),
+          preferencesController: prefs,
+          pageFetchClient: client,
+        ),
+      );
+      await _pumpReader(tester);
+      final surface = find.byKey(const ValueKey('manga-surface-spread-0'));
+      final stateBefore = tester.state(surface);
+      await _doubleTapReaderAt(tester, tester.getCenter(surface));
+      expect(_readerSurfaceScale(tester, surface), 2.5);
+      final requestsBefore = client.fetchCount;
+
+      prefs.replace(prefs.state.copyWith(bookAnimationEnabled: false));
+      await _pumpReader(tester);
+      expect(tester.state(surface), same(stateBefore));
+      expect(_readerSurfaceScale(tester, surface), 2.5);
+      expect(client.fetchCount, requestsBefore);
+      expect(
+        tester.widget<PageView>(find.byType(PageView)).physics,
+        isA<NeverScrollableScrollPhysics>(),
+      );
+
+      await _doubleTapReaderAt(tester, tester.getCenter(surface));
+      expect(_readerSurfaceScale(tester, surface), 1);
+      expect(
+        tester.widget<PageView>(find.byType(PageView)).physics,
+        isNot(isA<NeverScrollableScrollPhysics>()),
+      );
+      await tester.drag(surface, const Offset(600, 0));
+      await _pumpReader(tester);
+      expect(find.text('2 / 3'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('each zoomed webtoon page retains its own scroll lock', (
+    tester,
+  ) async {
+    final prefs = _FixedMangaPreferencesController(
+      const MangaReaderPreferences(
+        loaded: true,
+        mode: MangaReadingMode.webtoon,
+        webtoonGap: 0,
+        bookAnimationEnabled: false,
+        keepScreenAwake: false,
+        preloadPages: 0,
+      ),
+    );
+    await tester.pumpWidget(
+      _readerHarness(
+        request: _sizedRemoteRequest(List<int>.filled(5, 200)),
+        roots: _temporaryRoots(),
+        preferencesController: prefs,
+        pageFetchClient: _PendingMangaPageFetchClient(),
+      ),
+    );
+    await _pumpReader(tester);
+    final first = find.byKey(const ValueKey('manga-surface-webtoon-0'));
+    final second = find.byKey(const ValueKey('manga-surface-webtoon-1'));
+    final firstTap = tester.getTopLeft(first) + const Offset(400, 150);
+    final secondTap = tester.getCenter(second);
+    final originalOffset = _webtoonView(tester).controller!.offset;
+
+    await _doubleTapReaderAt(tester, firstTap);
+    await _doubleTapReaderAt(tester, secondTap);
+    expect(_readerSurfaceScale(tester, first), 2.5);
+    expect(_readerSurfaceScale(tester, second), 2.5);
+    await _doubleTapReaderAt(tester, secondTap);
+    expect(_readerSurfaceScale(tester, second), 1);
+    expect(_readerSurfaceScale(tester, first), 2.5);
+    expect(_webtoonView(tester).physics, isA<NeverScrollableScrollPhysics>());
+
+    await tester.dragFrom(secondTap, const Offset(0, -80));
+    await tester.pump(const Duration(milliseconds: 350));
+    expect(_webtoonView(tester).controller!.offset, originalOffset);
+
+    await _doubleTapReaderAt(tester, firstTap);
+    expect(_readerSurfaceScale(tester, first), 1);
+    expect(
+      _webtoonView(tester).physics,
+      isNot(isA<NeverScrollableScrollPhysics>()),
+    );
+    await tester.dragFrom(secondTap, const Offset(0, -150));
+    await tester.pump(const Duration(milliseconds: 350));
+    expect(
+      _webtoonView(tester).controller!.offset,
+      greaterThan(originalOffset),
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('concurrent decoded heights preserve resumed page and fraction', (
+    tester,
+  ) async {
+    final client = _PendingMangaPageFetchClient();
+    final prefs = _FixedMangaPreferencesController(
+      const MangaReaderPreferences(
+        loaded: true,
+        mode: MangaReadingMode.webtoon,
+        webtoonGap: 0,
+        bookAnimationEnabled: false,
+        keepScreenAwake: false,
+        preloadPages: 0,
+      ),
+    );
+    await tester.pumpWidget(
+      _readerHarness(
+        request: _sizedRemoteRequest(
+          List<int>.filled(6, 1200),
+          initialPageIndex: 2,
+        ),
+        roots: _temporaryRoots(),
+        preferencesController: prefs,
+        pageFetchClient: client,
+      ),
+    );
+    await _pumpReader(tester);
+    expect(find.text('3 / 6'), findsOneWidget);
+    expect(_webtoonView(tester).controller!.offset, closeTo(2406, .1));
+    _webtoonView(tester).controller!.jumpTo(2506);
+    await tester.pump();
+    expect(client.pending.keys, containsAll(<int>[1, 2]));
+
+    // Both page dimensions become known in the same frame. The preceding page
+    // and active page each shrink from 1200px to the square PNG's 800px height.
+    client.complete(1);
+    client.complete(2);
+    await _pumpReader(tester);
+    expect(find.text('3 / 6'), findsOneWidget);
+    expect(
+      _webtoonView(tester).controller!.offset,
+      closeTo(6 + 1200 + 800 + (100 / 1200) * 800, .1),
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'End reaches the last webtoon page with mixed lazy item heights',
+    (tester) async {
+      final prefs = _FixedMangaPreferencesController(
+        const MangaReaderPreferences(
+          loaded: true,
+          mode: MangaReadingMode.webtoon,
+          pageGap: 0,
+          webtoonGap: 0,
+          bookAnimationEnabled: false,
+          keepScreenAwake: false,
+          preloadPages: 0,
+        ),
+      );
+      await tester.pumpWidget(
+        _readerHarness(
+          request: _sizedRemoteRequest(
+            List<int>.generate(100, (index) => index < 9 ? 100 : 1000),
+          ),
+          roots: _temporaryRoots(),
+          preferencesController: prefs,
+          pageFetchClient: _PendingMangaPageFetchClient(),
+        ),
+      );
+      await _pumpReader(tester);
+      await tester.sendKeyEvent(LogicalKeyboardKey.end);
+      await _pumpReader(tester);
+      expect(find.text('100 / 100'), findsOneWidget);
+      expect(_webtoonView(tester).controller!.offset, closeTo(90900, .1));
+      expect(
+        tester
+            .getTopLeft(find.byKey(const ValueKey('manga-webtoon-page-99')))
+            .dy,
+        closeTo(0, .1),
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
 }
+
+Future<void> _doubleTapReaderAt(WidgetTester tester, Offset position) async {
+  await tester.tapAt(position);
+  await tester.pump(const Duration(milliseconds: 100));
+  await tester.tapAt(position);
+  await tester.pump(const Duration(milliseconds: 350));
+}
+
+double _readerSurfaceScale(WidgetTester tester, Finder surface) => tester
+    .widget<Transform>(
+      find.descendant(of: surface, matching: find.byType(Transform)).first,
+    )
+    .transform
+    .getMaxScaleOnAxis();
+
+ListView _webtoonView(WidgetTester tester) =>
+    tester.widget<ListView>(find.byKey(const ValueKey('manga-reader-webtoon')));
+
+MangaReaderRequest _sizedRemoteRequest(
+  List<int> heights, {
+  int initialPageIndex = 0,
+}) => MangaReaderRequest(
+  sourceId: 'remote-source',
+  publicationId: 'customization-test',
+  chapterId: 'chapter-1',
+  seriesTitle: 'Reader test series',
+  chapterTitle: 'Chapter 1',
+  initialPageIndex: initialPageIndex,
+  pages: List.generate(
+    heights.length,
+    (index) => MangaReaderPage(
+      id: 'remote-$index',
+      index: index,
+      pixelWidth: 800,
+      pixelHeight: heights[index],
+      resource: MangaRemotePageResource(
+        uri: Uri.parse('https://reader.example.test/$index.png'),
+      ),
+    ),
+  ),
+);
+
+MangaReaderRequest _remoteRequest(int count) => MangaReaderRequest(
+  sourceId: 'remote-source',
+  publicationId: 'customization-test',
+  chapterId: 'chapter-1',
+  seriesTitle: 'Reader test series',
+  chapterTitle: 'Chapter 1',
+  pages: List.generate(
+    count,
+    (index) => MangaReaderPage(
+      id: 'remote-$index',
+      index: index,
+      resource: MangaRemotePageResource(
+        uri: Uri.parse('https://reader.example.test/$index.png'),
+      ),
+    ),
+  ),
+);
 
 Future<void> _allowImageWorkers(WidgetTester tester) async {
   await tester.runAsync(
     () => Future<void>.delayed(const Duration(milliseconds: 80)),
   );
   await tester.pump();
+}
+
+Future<void> _pumpReader(WidgetTester tester) async {
+  await tester.pump();
+  await tester.pump();
+  await _allowImageWorkers(tester);
+  await tester.pump(const Duration(milliseconds: 350));
+  await _allowImageWorkers(tester);
+  await tester.pump(const Duration(milliseconds: 350));
 }
 
 Widget _readerHarness({
@@ -905,6 +1345,9 @@ class _FixedMangaPreferencesController
   }
 
   void replace(MangaReaderPreferences preferences) => state = preferences;
+
+  @override
+  Future<void> load() async {}
 }
 
 class _DelayedMangaPreferencesController
@@ -923,13 +1366,18 @@ class _DelayedMangaPreferencesController
   void completePersistedPrivacyLoad({bool shareTitle = false}) {
     state = state.copyWith(loaded: true, showDiscordTitle: shareTitle);
   }
+
+  @override
+  Future<void> load() async {}
 }
 
 class _MemoryMangaPageFetchClient extends MangaPageFetchClient {
   MangaRemotePageResource? lastResource;
+  int fetchCount = 0;
 
   @override
   Future<Uint8List> fetch(MangaRemotePageResource resource) async {
+    fetchCount++;
     lastResource = resource;
     return _transparentPng;
   }
@@ -945,6 +1393,18 @@ class _FailingMangaPageFetchClient extends MangaPageFetchClient {
           statusCode: HttpStatus.forbidden,
         ),
       );
+}
+
+class _PendingMangaPageFetchClient extends MangaPageFetchClient {
+  final Map<int, Completer<Uint8List>> pending = {};
+
+  @override
+  Future<Uint8List> fetch(MangaRemotePageResource resource) {
+    final index = int.parse(resource.uri.pathSegments.last.split('.').first);
+    return pending.putIfAbsent(index, Completer<Uint8List>.new).future;
+  }
+
+  void complete(int index) => pending[index]!.complete(_transparentPng);
 }
 
 class _SilentMangaHubController extends MangaHubController {

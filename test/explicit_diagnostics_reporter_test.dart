@@ -2,9 +2,13 @@ import 'dart:convert';
 import 'dart:math';
 
 import 'package:anime_tv/core/diagnostics/explicit_diagnostics_reporter.dart';
+import 'package:anime_tv/core/diagnostics/playback_performance_diagnostics.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
+import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+import 'support/playback_performance_fixture.dart';
 
 void main() {
   test('explicit report is per-share, bounded, and redacted', () {
@@ -262,6 +266,225 @@ void main() {
     expect(truncation.values, everyElement(0));
   });
 
+  test(
+    'performance export keeps technical metrics without granting generic exemptions',
+    () {
+      final now = DateTime.utc(2026, 9, 4, 18);
+      final snapshot = playbackPerformanceFixture(updatedAt: now);
+      snapshot['title'] = 'Private title';
+      snapshot['metadata'] = {'accountId': 'private-account'};
+      final sample =
+          (snapshot['samples']! as List).last as Map<String, Object?>;
+      sample.addAll({
+        'headers': {'Authorization': 'private-token'},
+        'decoderName': 'Private media decoder',
+        'rawMpv': {'url': 'https://private.example/media'},
+        'path': r'C:\Private\media.mkv',
+        'availableMetrics': ['private-data'],
+      });
+      (snapshot['summary']! as Map)['url'] = 'https://private.example/media';
+      final text = _performanceReport(now, {
+        'diagnosticEvents': [
+          {'headers': 'private-generic-headers', 'path': 'private-path'},
+        ],
+        'playbackPerformanceSchema': 'private-schema',
+        'playbackPerformanceWindow': {
+          'invalidSnapshotCount': 3,
+          'droppedOutsideWindow': 4,
+          'droppedForCapacity': 2,
+          'path': 'private-path',
+        },
+        'playbackPerformance': [snapshot],
+      });
+      final decoded = jsonDecode(text) as Map;
+      final diagnostics = decoded['diagnostics'] as Map;
+      final result = (diagnostics['playbackPerformance'] as List).single as Map;
+      final latest = (result['samples'] as List).last as Map;
+      expect(
+        diagnostics['playbackPerformanceSchema'],
+        playbackPerformanceSchema,
+      );
+      expect(latest['codec'], 'h264');
+      expect(latest['activeHwdec'], 'mediacodec-copy');
+      expect(latest['width'], 1920);
+      expect(latest['sourceFps'], closeTo(23.976, 0.001));
+      expect(latest, isNot(contains('decoderName')));
+      expect(result['samples'], hasLength(maximumPlaybackPerformanceSamples));
+      expect(result['droppedSamples'], 6);
+      expect((result['summary'] as Map)['droppedFramesDelta'], 22);
+      expect(text.toLowerCase(), isNot(contains('private')));
+      final window = diagnostics['playbackPerformanceWindow'] as Map;
+      expect(window['invalidSnapshotCount'], 3);
+      expect(window['droppedOutsideWindow'], 4);
+      expect(window['droppedForCapacity'], 2);
+    },
+  );
+
+  test(
+    'performance export orders, deduplicates, bounds and declares rejected input',
+    () {
+      final now = DateTime.utc(2026, 9, 4, 18);
+      final older = now.subtract(const Duration(minutes: 1));
+      final text = _performanceReport(now, {
+        'playbackPerformance': [
+          playbackPerformanceFixture(updatedAt: older, attempt: 29),
+          for (var attempt = 1; attempt <= 29; attempt++)
+            playbackPerformanceFixture(updatedAt: now, attempt: attempt),
+          playbackPerformanceFixture(
+            updatedAt: now.subtract(const Duration(hours: 49)),
+            attempt: 30,
+          ),
+          playbackPerformanceFixture(
+            updatedAt: now.add(const Duration(seconds: 1)),
+            attempt: 31,
+          ),
+          {'sessionId': 'private-malformed'},
+        ],
+        'playbackPerformanceWindow': {
+          'storageUnavailable': true,
+          'invalidSnapshotCount': 'private-invalid',
+        },
+      });
+      final decoded = jsonDecode(text) as Map;
+      final diagnostics = decoded['diagnostics'] as Map;
+      final snapshots = diagnostics['playbackPerformance'] as List;
+      final window = diagnostics['playbackPerformanceWindow'] as Map;
+      expect(snapshots, hasLength(maximumPersistedPlaybackPerformanceAttempts));
+      expect((snapshots.first as Map)['attempt'], 29);
+      expect((snapshots.first as Map)['updatedAt'], now.toIso8601String());
+      expect((snapshots.last as Map)['attempt'], 6);
+      expect(window['ordering'], 'newest-first');
+      expect(window['retainedCount'], 24);
+      expect(window['droppedForExport'], 9);
+      expect(window['storageUnavailable'], true);
+      expect(window, isNot(contains('invalidSnapshotCount')));
+      final completeness = decoded['reportCompleteness'] as Map;
+      expect(completeness['reduced'], true);
+      expect((completeness['truncation'] as Map)['droppedListItems'], 9);
+      expect(text, isNot(contains('private')));
+    },
+  );
+
+  test(
+    'capacity-sized performance plus 500 real-sized events fits and keeps newest evidence',
+    () {
+      final now = DateTime.utc(2026, 9, 4, 18);
+      final snapshots = [
+        for (var attempt = 24; attempt >= 1; attempt--)
+          playbackPerformanceFixture(
+            updatedAt: now.subtract(Duration(minutes: 24 - attempt)),
+            attempt: attempt,
+          ),
+      ];
+      final text = _performanceReport(now, {
+        'playbackPerformance': snapshots,
+        'diagnosticWindow': {'ordering': 'oldest-first', 'retainedCount': 500},
+        'diagnosticEvents': [
+          for (var index = 0; index < maximumPersistedDiagnosticEvents; index++)
+            {
+              'timestamp': now
+                  .subtract(Duration(seconds: 500 - index))
+                  .toIso8601String(),
+              'component': 'player',
+              'severity': 'info',
+              'message':
+                  'Playback diagnostic event $index ${List.filled(100, 'x').join()}',
+              'context': {
+                'session_id': 'pbs-abcdefghijklmnopqrstuvwx',
+                'attempt': index ~/ 24 + 1,
+                'phase': 'opening',
+                'reason_code': 'video_parameters_available',
+                'elapsed_ms': index * 100,
+                'source_kind': 'web',
+              },
+            },
+        ],
+      });
+      final decoded = jsonDecode(text) as Map;
+      final diagnostics = decoded['diagnostics'] as Map;
+      final performance = diagnostics['playbackPerformance'] as List;
+      final events = diagnostics['diagnosticEvents'] as List;
+      expect(
+        text.length,
+        lessThanOrEqualTo(maximumExplicitDiagnosticsCharacters),
+      );
+      expect(performance, hasLength(24));
+      expect(performance.first, snapshots.first);
+      expect(performance.last, snapshots.last);
+      expect((performance.first as Map)['samples'], hasLength(6));
+      expect(
+        (events.last as Map)['message'],
+        startsWith('Playback diagnostic event 499 '),
+      );
+      final eventExport = diagnostics['diagnosticEventExport'] as Map;
+      expect(eventExport['exportedCount'], events.length);
+      expect(eventExport['droppedForExport'], 500 - events.length);
+      expect(eventExport['selection'], 'newest-retained-events');
+      final completeness = decoded['reportCompleteness'] as Map;
+      expect(
+        completeness['fullSanitizedCharacters'],
+        greaterThan(maximumExplicitDiagnosticsCharacters),
+      );
+      expect(completeness['reduced'], true);
+      expect(events, hasLength(50));
+      expect(
+        (events.first as Map)['message'],
+        startsWith('Playback diagnostic event 450 '),
+      );
+    },
+  );
+
+  test(
+    'last-resort export retains full newest performance samples and declares other omissions',
+    () {
+      final now = DateTime.utc(2026, 9, 4, 18);
+      final latest = playbackPerformanceFixture(
+        updatedAt: now,
+        sampleCount: 30,
+      );
+      final text = _performanceReport(now, {
+        'playbackPerformance': [
+          latest,
+          for (var attempt = 2; attempt <= 24; attempt++)
+            playbackPerformanceFixture(
+              updatedAt: now.subtract(Duration(minutes: attempt)),
+              attempt: attempt,
+            ),
+        ],
+        'diagnosticEvents': [
+          for (var index = 0; index < 500; index++) {'message': 'event-$index'},
+        ],
+        'unusuallyLargeNestedData': [
+          for (var index = 0; index < 50; index++)
+            {
+              for (var field = 0; field < 20; field++)
+                'field-$field': List.filled(1000, 'z').join(),
+            },
+        ],
+      });
+      final decoded = jsonDecode(text) as Map;
+      final diagnostics = decoded['diagnostics'] as Map;
+      final performance = diagnostics['playbackPerformance'] as List;
+      expect(
+        text.length,
+        lessThanOrEqualTo(maximumExplicitDiagnosticsCharacters),
+      );
+      expect(diagnostics, isNot(contains('unusuallyLargeNestedData')));
+      expect(diagnostics, isNot(contains('diagnosticEvents')));
+      expect(performance, hasLength(24));
+      expect(performance.first, latest);
+      expect((performance.first as Map)['samples'], hasLength(6));
+      expect((performance.first as Map)['droppedSamples'], 24);
+      expect(
+        (diagnostics['diagnosticEventExport'] as Map)['droppedForExport'],
+        500,
+      );
+      final completeness = decoded['reportCompleteness'] as Map;
+      expect(completeness['reduced'], true);
+      expect((completeness['truncation'] as Map)['droppedMapFields'], 3);
+    },
+  );
+
   test('local crash history bridge metadata is bounded and typed', () {
     final history = LocalCrashSummaryHistory.fromMap({
       'summaries': [
@@ -365,6 +588,15 @@ void main() {
     },
   );
 }
+
+String _performanceReport(DateTime now, Map<String, Object?> diagnostics) =>
+    buildRedactedDiagnosticsText(
+      version: const AppVersionInfo(name: '2.0.70', code: 410070),
+      profile: _profile,
+      isTelevision: true,
+      diagnostics: diagnostics,
+      generatedAt: now,
+    );
 
 Dio _stubDio(
   void Function(RequestOptions, RequestInterceptorHandler) callback,

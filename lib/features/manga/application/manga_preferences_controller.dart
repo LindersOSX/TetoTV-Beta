@@ -43,19 +43,30 @@ extension MangaPageFitLabel on MangaPageFit {
   };
 }
 
-enum MangaReaderBackground { black, charcoal, white }
+enum MangaTapZoneLayout { thirds, edges }
+
+extension MangaTapZoneLayoutLabel on MangaTapZoneLayout {
+  String get displayName => switch (this) {
+    MangaTapZoneLayout.thirds => 'Thirds',
+    MangaTapZoneLayout.edges => 'Edges',
+  };
+}
+
+enum MangaReaderBackground { black, charcoal, white, sepia }
 
 extension MangaReaderBackgroundValue on MangaReaderBackground {
   int get colorValue => switch (this) {
     MangaReaderBackground.black => 0xFF000000,
     MangaReaderBackground.charcoal => 0xFF17181B,
     MangaReaderBackground.white => 0xFFFFFFFF,
+    MangaReaderBackground.sepia => 0xFFF1E7D0,
   };
 
   String get displayName => switch (this) {
     MangaReaderBackground.black => 'Black',
     MangaReaderBackground.charcoal => 'Charcoal',
     MangaReaderBackground.white => 'White',
+    MangaReaderBackground.sepia => 'Sepia',
   };
 }
 
@@ -67,6 +78,16 @@ class MangaReaderPreferences {
     this.pageFit = MangaPageFit.contain,
     this.background = MangaReaderBackground.black,
     this.pageGap = 12,
+    this.sidePadding = 0,
+    this.webtoonGap = 0,
+    this.dimAmount = 0,
+    this.warmth = 0,
+    this.grayscale = false,
+    this.invertColors = false,
+    this.showPageNumber = true,
+    this.doubleTapZoom = true,
+    this.tapZoneLayout = MangaTapZoneLayout.thirds,
+    this.invertTapZones = false,
     this.preloadPages = 2,
     this.coverStartsAlone = true,
     this.invertDoublePages = false,
@@ -83,6 +104,16 @@ class MangaReaderPreferences {
   final MangaPageFit pageFit;
   final MangaReaderBackground background;
   final double pageGap;
+  final double sidePadding;
+  final double webtoonGap;
+  final double dimAmount;
+  final double warmth;
+  final bool grayscale;
+  final bool invertColors;
+  final bool showPageNumber;
+  final bool doubleTapZoom;
+  final MangaTapZoneLayout tapZoneLayout;
+  final bool invertTapZones;
   final int preloadPages;
   final bool coverStartsAlone;
   final bool invertDoublePages;
@@ -101,6 +132,16 @@ class MangaReaderPreferences {
     MangaPageFit? pageFit,
     MangaReaderBackground? background,
     double? pageGap,
+    double? sidePadding,
+    double? webtoonGap,
+    double? dimAmount,
+    double? warmth,
+    bool? grayscale,
+    bool? invertColors,
+    bool? showPageNumber,
+    bool? doubleTapZoom,
+    MangaTapZoneLayout? tapZoneLayout,
+    bool? invertTapZones,
     int? preloadPages,
     bool? coverStartsAlone,
     bool? invertDoublePages,
@@ -116,6 +157,16 @@ class MangaReaderPreferences {
     pageFit: pageFit ?? this.pageFit,
     background: background ?? this.background,
     pageGap: pageGap ?? this.pageGap,
+    sidePadding: sidePadding ?? this.sidePadding,
+    webtoonGap: webtoonGap ?? this.webtoonGap,
+    dimAmount: dimAmount ?? this.dimAmount,
+    warmth: warmth ?? this.warmth,
+    grayscale: grayscale ?? this.grayscale,
+    invertColors: invertColors ?? this.invertColors,
+    showPageNumber: showPageNumber ?? this.showPageNumber,
+    doubleTapZoom: doubleTapZoom ?? this.doubleTapZoom,
+    tapZoneLayout: tapZoneLayout ?? this.tapZoneLayout,
+    invertTapZones: invertTapZones ?? this.invertTapZones,
     preloadPages: preloadPages ?? this.preloadPages,
     coverStartsAlone: coverStartsAlone ?? this.coverStartsAlone,
     invertDoublePages: invertDoublePages ?? this.invertDoublePages,
@@ -146,32 +197,44 @@ class MangaReaderPreferencesController
       super(const MangaReaderPreferences());
 
   static const _prefix = 'manga_reader_v1_';
+  static const _keys = [
+    'mode',
+    'direction',
+    'spread',
+    'fit',
+    'background',
+    'gap',
+    'preload',
+    'cover_alone',
+    'invert_spread',
+    'tap_zones',
+    'book_animation',
+    'keep_awake',
+    'discord_title',
+    'side_padding',
+    'webtoon_gap',
+    'dim_amount',
+    'warmth',
+    'grayscale',
+    'invert_colors',
+    'page_number',
+    'double_tap_zoom',
+    'tap_zone_layout',
+    'invert_tap_zones',
+  ];
   final FlutterSecureStorage _storage;
   MangaReaderPreferences _durableState;
   final Map<String, Future<void>> _writeTails = <String, Future<void>>{};
   final Map<String, int> _writeVersions = <String, int>{};
   Future<void>? _loading;
 
-  Future<void> load() => _loading ??= _load().whenComplete(() {
-    _loading = null;
-  });
+  // Loading is intentionally idempotent. A later reload must not replace
+  // optimistic edits with storage reads that began before their writes.
+  Future<void> load() =>
+      _loading ??= state.loaded ? Future<void>.value() : _load();
 
   Future<void> _load() async {
-    final values = await Future.wait([
-      _read('mode'),
-      _read('direction'),
-      _read('spread'),
-      _read('fit'),
-      _read('background'),
-      _read('gap'),
-      _read('preload'),
-      _read('cover_alone'),
-      _read('invert_spread'),
-      _read('tap_zones'),
-      _read('book_animation'),
-      _read('keep_awake'),
-      _read('discord_title'),
-    ]);
+    final values = await Future.wait(_keys.map(_read));
     if (!mounted) return;
     final loaded = MangaReaderPreferences(
       mode:
@@ -198,6 +261,18 @@ class MangaReaderPreferencesController
       ),
       keepScreenAwake: _bool(values[11], _durableState.keepScreenAwake),
       showDiscordTitle: _bool(values[12], _durableState.showDiscordTitle),
+      sidePadding: _boundedDouble(values[13], 0, 80, _durableState.sidePadding),
+      webtoonGap: _boundedDouble(values[14], 0, 40, _durableState.webtoonGap),
+      dimAmount: _boundedDouble(values[15], 0, .7, _durableState.dimAmount),
+      warmth: _boundedDouble(values[16], 0, 1, _durableState.warmth),
+      grayscale: _bool(values[17], _durableState.grayscale),
+      invertColors: _bool(values[18], _durableState.invertColors),
+      showPageNumber: _bool(values[19], _durableState.showPageNumber),
+      doubleTapZoom: _bool(values[20], _durableState.doubleTapZoom),
+      tapZoneLayout:
+          _enumValue(MangaTapZoneLayout.values, values[21]) ??
+          _durableState.tapZoneLayout,
+      invertTapZones: _bool(values[22], _durableState.invertTapZones),
       loaded: true,
     );
     _durableState = loaded;
@@ -224,13 +299,80 @@ class MangaReaderPreferencesController
     value.name,
   );
   Future<void> setPageGap(double value) {
-    final bounded = value.clamp(0, 40).toDouble();
+    final bounded = _finiteBound(value, 0, 40, 12);
     return _save(
       (current) => current.copyWith(pageGap: bounded),
       'gap',
       '$bounded',
     );
   }
+
+  Future<void> setSidePadding(double value) {
+    final bounded = _finiteBound(value, 0, 80, 0);
+    return _save(
+      (current) => current.copyWith(sidePadding: bounded),
+      'side_padding',
+      '$bounded',
+    );
+  }
+
+  Future<void> setWebtoonGap(double value) {
+    final bounded = _finiteBound(value, 0, 40, 0);
+    return _save(
+      (current) => current.copyWith(webtoonGap: bounded),
+      'webtoon_gap',
+      '$bounded',
+    );
+  }
+
+  Future<void> setDimAmount(double value) {
+    final bounded = _finiteBound(value, 0, .7, 0);
+    return _save(
+      (current) => current.copyWith(dimAmount: bounded),
+      'dim_amount',
+      '$bounded',
+    );
+  }
+
+  Future<void> setWarmth(double value) {
+    final bounded = _finiteBound(value, 0, 1, 0);
+    return _save(
+      (current) => current.copyWith(warmth: bounded),
+      'warmth',
+      '$bounded',
+    );
+  }
+
+  Future<void> setGrayscale(bool value) => _save(
+    (current) => current.copyWith(grayscale: value),
+    'grayscale',
+    '$value',
+  );
+  Future<void> setInvertColors(bool value) => _save(
+    (current) => current.copyWith(invertColors: value),
+    'invert_colors',
+    '$value',
+  );
+  Future<void> setShowPageNumber(bool value) => _save(
+    (current) => current.copyWith(showPageNumber: value),
+    'page_number',
+    '$value',
+  );
+  Future<void> setDoubleTapZoom(bool value) => _save(
+    (current) => current.copyWith(doubleTapZoom: value),
+    'double_tap_zoom',
+    '$value',
+  );
+  Future<void> setTapZoneLayout(MangaTapZoneLayout value) => _save(
+    (current) => current.copyWith(tapZoneLayout: value),
+    'tap_zone_layout',
+    value.name,
+  );
+  Future<void> setInvertTapZones(bool value) => _save(
+    (current) => current.copyWith(invertTapZones: value),
+    'invert_tap_zones',
+    '$value',
+  );
 
   Future<void> setPreloadPages(int value) {
     final bounded = value.clamp(0, 5);
@@ -272,39 +414,30 @@ class MangaReaderPreferencesController
     '$value',
   );
 
-  Future<void> reset() async {
-    for (final key in const [
-      'mode',
-      'direction',
-      'spread',
-      'fit',
-      'background',
-      'gap',
-      'preload',
-      'cover_alone',
-      'invert_spread',
-      'tap_zones',
-      'book_animation',
-      'keep_awake',
-      'discord_title',
-    ]) {
-      await _storage.delete(key: '$_prefix$key');
-    }
-    if (mounted) {
-      _durableState = const MangaReaderPreferences(loaded: true);
-      state = _durableState;
-    }
+  Future<void> reset() {
+    if (!mounted) return Future<void>.value();
+    if (!state.loaded) return load().then((_) => reset());
+    const defaults = MangaReaderPreferences(loaded: true);
+    // Deletions share each setting's write queue: old saves finish before the
+    // reset, and new saves finish after it. Failure restores only its own key.
+    return Future.wait(
+      _keys.map(
+        (key) => _save(
+          (current) => _restorePreferenceKey(current, defaults, key),
+          key,
+          null,
+        ),
+      ),
+    ).then((_) {});
   }
 
   Future<void> _save(
     MangaReaderPreferences Function(MangaReaderPreferences current) update,
     String key,
-    String value,
+    String? value,
   ) {
-    final loading = _loading;
-    if (loading != null) {
-      return loading.then((_) => _save(update, key, value));
-    }
+    if (!mounted) return Future<void>.value();
+    if (!state.loaded) return load().then((_) => _save(update, key, value));
     state = update(state);
     final version = (_writeVersions[key] ?? 0) + 1;
     _writeVersions[key] = version;
@@ -312,7 +445,11 @@ class MangaReaderPreferencesController
     late final Future<void> operation;
     operation = previous.then((_) async {
       try {
-        await _storage.write(key: '$_prefix$key', value: value);
+        if (value == null) {
+          await _storage.delete(key: '$_prefix$key');
+        } else {
+          await _storage.write(key: '$_prefix$key', value: value);
+        }
         _durableState = update(_durableState);
       } catch (_) {
         // Reader controls are optimistic so they remain responsive. If the
@@ -355,6 +492,18 @@ MangaReaderPreferences _restorePreferenceKey(
   'fit' => current.copyWith(pageFit: durable.pageFit),
   'background' => current.copyWith(background: durable.background),
   'gap' => current.copyWith(pageGap: durable.pageGap),
+  'side_padding' => current.copyWith(sidePadding: durable.sidePadding),
+  'webtoon_gap' => current.copyWith(webtoonGap: durable.webtoonGap),
+  'dim_amount' => current.copyWith(dimAmount: durable.dimAmount),
+  'warmth' => current.copyWith(warmth: durable.warmth),
+  'grayscale' => current.copyWith(grayscale: durable.grayscale),
+  'invert_colors' => current.copyWith(invertColors: durable.invertColors),
+  'page_number' => current.copyWith(showPageNumber: durable.showPageNumber),
+  'double_tap_zoom' => current.copyWith(doubleTapZoom: durable.doubleTapZoom),
+  'tap_zone_layout' => current.copyWith(tapZoneLayout: durable.tapZoneLayout),
+  'invert_tap_zones' => current.copyWith(
+    invertTapZones: durable.invertTapZones,
+  ),
   'preload' => current.copyWith(preloadPages: durable.preloadPages),
   'cover_alone' => current.copyWith(coverStartsAlone: durable.coverStartsAlone),
   'invert_spread' => current.copyWith(
@@ -368,7 +517,7 @@ MangaReaderPreferences _restorePreferenceKey(
   'discord_title' => current.copyWith(
     showDiscordTitle: durable.showDiscordTitle,
   ),
-  _ => durable,
+  _ => current,
 };
 
 T? _enumValue<T extends Enum>(Iterable<T> values, String? name) {
@@ -386,8 +535,11 @@ bool _bool(String? value, bool fallback) => switch (value) {
 
 double _boundedDouble(String? value, double min, double max, double fallback) {
   final parsed = double.tryParse(value ?? '');
-  return parsed == null ? fallback : parsed.clamp(min, max).toDouble();
+  return parsed == null ? fallback : _finiteBound(parsed, min, max, fallback);
 }
+
+double _finiteBound(double value, double min, double max, double fallback) =>
+    value.isFinite ? value.clamp(min, max).toDouble() : fallback;
 
 int _boundedInt(String? value, int min, int max, int fallback) {
   final parsed = int.tryParse(value ?? '');

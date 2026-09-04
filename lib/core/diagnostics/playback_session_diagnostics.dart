@@ -395,6 +395,29 @@ Map<String, Object?> derivePlaybackSessionDiagnostics(
   );
   return {
     'playbackSessionSchema': playbackSessionDiagnosticSchema,
+    // Keep legacy outcome values and comparison keys stable while making their
+    // limited meaning explicit in both local and shared reports.
+    'playbackSessionOutcomeMeaning': {
+      'working':
+          'Playback startup was observed; this does not establish smooth playback.',
+      'completed':
+          'Playback reached completion; this does not establish smooth playback.',
+      'exited_after_start':
+          'The player was exited after startup was observed; this does not establish smooth playback.',
+      'exited_before_start':
+          'The player was exited before startup was observed.',
+      'failed':
+          'A failure was recorded or inferred from interruption; inspect finalReasonCode and timeline.',
+      'in_progress': 'No final outcome is retained for this session.',
+      'startupSignal':
+          'Video dimensions became available; this is not a rendered-frame callback. Legacy decoded_video_observed means the same startup signal as video_parameters_available.',
+      'comparisonWorking':
+          'The newest working, completed, or exited_after_start session; not a known-smooth control or proof of the same media source.',
+      'decoder':
+          'The selected decoder policy, not confirmation of the decoder actually active in the engine.',
+      'smoothnessEvidence':
+          'Inspect playbackPerformance samples matched by sessionId and attempt; sampled data cannot establish perfectly smooth playback.',
+    },
     'playbackSessionWindow': {
       'ordering': 'newest-first',
       'capacity': maximumPlaybackSessionTimelines,

@@ -184,10 +184,10 @@ void main() {
   });
 
   test(
-    'v10 to v12 migration preserves data and creates notification inbox',
+    'v10 migration preserves data and creates the current notification inbox',
     () async {
       final temporary = await Directory.systemTemp.createTemp(
-        'tetotv-notifications-v11-',
+        'tetotv-notifications-migration-',
       );
       final databasePath =
           '${temporary.path}${Platform.pathSeparator}tetotv.db';
@@ -230,7 +230,7 @@ void main() {
         (await database.query('legacy_fixture')).single['value'],
         'preserved',
       );
-      expect(await database.getVersion(), 12);
+      expect(await database.getVersion(), tetoTvDatabaseSchemaVersion);
       final table = await database.rawQuery(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
         ['app_notifications'],
@@ -244,7 +244,7 @@ void main() {
     },
   );
 
-  test('v11 notification rows survive the expanded v12 inbox schema', () async {
+  test('v11 notification rows survive the current inbox schema', () async {
     final temporary = await Directory.systemTemp.createTemp(
       'tetotv-notifications-v12-',
     );
@@ -322,7 +322,7 @@ void main() {
       rows.map((item) => item.kind),
       containsAll(AppNotificationKind.values),
     );
-    expect(await database.getVersion(), 12);
+    expect(await database.getVersion(), tetoTvDatabaseSchemaVersion);
   });
 
   group('AppNotificationController', () {

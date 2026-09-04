@@ -9,11 +9,13 @@ import 'package:anime_tv/core/tv/tv_shelf_focus.dart';
 import 'package:anime_tv/core/widgets/teto_top_level_shell.dart';
 import 'package:anime_tv/core/widgets/tv_text_input.dart';
 import 'package:anime_tv/features/local_media/application/local_media_controller.dart';
+import 'package:anime_tv/features/local_media/application/library_episode_source_service.dart';
 import 'package:anime_tv/features/local_media/application/plex_controller.dart';
 import 'package:anime_tv/features/local_media/application/unified_media_search_controller.dart';
 import 'package:anime_tv/features/local_media/data/jellyfin_client.dart';
 import 'package:anime_tv/features/local_media/data/plex_client.dart';
 import 'package:anime_tv/features/local_media/domain/jellyfin_models.dart';
+import 'package:anime_tv/features/local_media/domain/library_episode_source.dart';
 import 'package:anime_tv/features/local_media/domain/plex_models.dart';
 import 'package:anime_tv/features/player/domain/library_playback_request.dart';
 import 'package:anime_tv/features/player/presentation/library_tv_player_screen.dart';
@@ -485,110 +487,74 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
   );
 
   Future<void> _playJellyfin(JellyfinMediaItem item) async {
-    final controller = ref.read(localMediaControllerProvider.notifier);
-    final playSessionId = controller.createPlaybackSessionId();
     final settings = ref.read(settingsPreferencesProvider);
     final requestedAudio = settings.preferredAudio;
-    final plan = controller.playbackPlan(
-      item,
-      playSessionId: playSessionId,
-      preferredSubtitleLanguage: preferredCaptionLanguageForPreparation(
-        seriesLanguage: 'eng',
-        seriesPreferenceSet: false,
-        globalMode: settings.preferredCaptionMode,
-        globalLanguage: settings.preferredCaptionLanguage,
-      ),
-      preferredAudioLanguage: preferredPlaybackAudioLanguage(
-        globalPreference: requestedAudio,
-        globalLanguage: settings.preferredAudioLanguage,
-      ),
-      requestedAudio: requestedAudio,
-    );
-    await _openPlayer(
-      source: plan.uri,
-      title: item.displayTitle,
-      releaseName: item.seriesName?.isNotEmpty == true
-          ? '${item.seriesName} — ${item.displayTitle}'
-          : item.displayTitle,
-      streamLabel:
-          'Jellyfin • ${item.secondaryLabel}'
-          '${plan.isTranscode ? ' • compatibility stream' : ''}',
-      sourceProviderId: 'library-jellyfin',
-      sourceProviderName: 'Jellyfin',
-      headers: plan.headers,
-      mediaContentType: plan.mediaContentType,
-      externalSubtitle: plan.externalSubtitleUri?.toString(),
-      externalSubtitleTracks: plan.externalSubtitleTracks
-          .map(
-            (track) => LibraryExternalSubtitleTrack(
-              uri: track.uri,
-              label: track.label,
-              language: track.language,
-              contentType: track.contentType,
+    await _openPreparedPlayer(
+      () => ref
+          .read(libraryEpisodeSourceServiceProvider)
+          .prepareBrowsedPlayback(
+            LibraryEpisodeSource.jellyfin(item),
+            preferredSubtitleLanguage: preferredCaptionLanguageForPreparation(
+              seriesLanguage: 'eng',
+              seriesPreferenceSet: false,
+              globalMode: settings.preferredCaptionMode,
+              globalLanguage: settings.preferredCaptionLanguage,
             ),
-          )
-          .toList(growable: false),
-      subtitleContentType: plan.subtitleContentType,
-      artworkUrl: controller.imageUri(item)?.toString(),
-      serverResumePosition: controller.serverResumePosition(item),
-      onStarted: (position) => controller.reportPlaybackStarted(
-        item,
-        playSessionId: playSessionId,
-        position: position,
-        playMethod: plan.method,
-      ),
-      onProgress: (position, paused) => controller.reportPlaybackProgress(
-        item,
-        playSessionId: playSessionId,
-        position: position,
-        paused: paused,
-        playMethod: plan.method,
-      ),
-      onStopped: (position) => controller.reportPlaybackStopped(
-        item,
-        playSessionId: playSessionId,
-        position: position,
-        playMethod: plan.method,
-      ),
+            preferredAudioLanguage: preferredPlaybackAudioLanguage(
+              globalPreference: requestedAudio,
+              globalLanguage: settings.preferredAudioLanguage,
+            ),
+            requestedAudio: requestedAudio,
+          ),
     );
   }
 
   Future<void> _playPlex(PlexMediaItem item) async {
-    final controller = ref.read(plexControllerProvider.notifier);
+    final settings = ref.read(settingsPreferencesProvider);
+    final requestedAudio = settings.preferredAudio;
+    await _openPreparedPlayer(
+      () => ref
+          .read(libraryEpisodeSourceServiceProvider)
+          .prepareBrowsedPlayback(
+            LibraryEpisodeSource.plex(item),
+            preferredSubtitleLanguage: preferredCaptionLanguageForPreparation(
+              seriesLanguage: 'eng',
+              seriesPreferenceSet: false,
+              globalMode: settings.preferredCaptionMode,
+              globalLanguage: settings.preferredCaptionLanguage,
+            ),
+            preferredAudioLanguage: preferredPlaybackAudioLanguage(
+              globalPreference: requestedAudio,
+              globalLanguage: settings.preferredAudioLanguage,
+            ),
+            requestedAudio: requestedAudio,
+          ),
+    );
+  }
+
+  Future<void> _openPreparedPlayer(
+    Future<LibraryPlaybackRequest> Function() prepare,
+  ) async {
+    if (_openingPlayer) return;
+    setState(() => _openingPlayer = true);
     try {
-      final playable = await controller.preparePlayableItem(item);
-      final source = controller.playbackUri(playable);
-      final series = playable.grandparentTitle?.trim();
-      await _openPlayer(
-        source: source,
-        title: playable.displayTitle,
-        releaseName: series?.isNotEmpty == true
-            ? '$series — ${playable.displayTitle}'
-            : playable.displayTitle,
-        streamLabel: 'Plex • ${playable.secondaryLabel}',
-        sourceProviderId: 'library-plex',
-        sourceProviderName: 'Plex',
-        headers: controller.playbackHeaders(),
-        artworkUrl: controller.imageUri(playable)?.toString(),
-        serverResumePosition: controller.serverResumePosition(playable),
-        onStarted: (position) => controller.reportTimeline(
-          playable,
-          position: position,
-          playing: true,
-        ),
-        onProgress: (position, paused) => controller.reportTimeline(
-          playable,
-          position: position,
-          playing: !paused,
-        ),
-        onStopped: (position) => controller.reportTimeline(
-          playable,
-          position: position,
-          playing: false,
-        ),
-      );
+      final request = await prepare();
+      if (!mounted) return;
+      final openLibraryPlayer = widget.openLibraryPlayer;
+      if (openLibraryPlayer != null) {
+        await openLibraryPlayer(request);
+      } else {
+        await Navigator.of(context).push<void>(
+          MaterialPageRoute(
+            settings: const RouteSettings(name: 'library-player'),
+            builder: (_) => LibraryTvPlayerScreen(request: request),
+          ),
+        );
+      }
     } catch (error) {
       if (mounted) _showMessage(error.toString());
+    } finally {
+      if (mounted) setState(() => _openingPlayer = false);
     }
   }
 

@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:anime_tv/core/preferences/caption_language.dart';
 import 'package:anime_tv/features/local_media/domain/plex_models.dart';
 import 'package:dio/dio.dart';
 import 'package:xml/xml.dart';
@@ -284,6 +285,7 @@ class PlexClient {
     PlexConnection connection,
     PlexMediaItem item, {
     required String sessionId,
+    String? selectedAudioStreamId,
   }) {
     final baseUri = _validateConnection(connection);
     if (!item.isPlayable ||
@@ -301,6 +303,16 @@ class PlexClient {
     if (!serverPath.startsWith('/library/metadata/')) {
       throw const PlexException('Plex returned an invalid media identity.');
     }
+    final selectedAudio = selectedAudioStreamId == null
+        ? null
+        : item.preferredPart?.audioStreams
+              .where((stream) => stream.id == selectedAudioStreamId)
+              .firstOrNull;
+    if (selectedAudioStreamId != null && selectedAudio == null) {
+      throw const PlexException(
+        'Plex did not provide the selected audio track.',
+      );
+    }
     final uri = _endpoint(baseUri, '/video/:/transcode/universal/start.m3u8')
         .replace(
           queryParameters: {
@@ -316,6 +328,7 @@ class PlexClient {
             'maxVideoBitrate': '20000',
             'videoCodec': 'h264',
             'audioCodec': 'aac',
+            if (selectedAudio != null) 'audioStreamID': selectedAudio.id,
             'subtitleSize': '100',
             'session': sessionId,
           },
@@ -324,6 +337,65 @@ class PlexClient {
       throw const PlexException('Plex returned an invalid media identity.');
     }
     return uri;
+  }
+
+  /// Returns token-free, same-origin Plex text sidecars for the shared player
+  /// caption picker. Embedded streams remain discoverable directly by MPV.
+  List<PlexPlaybackSubtitleTrack> playbackSubtitleTracks(
+    PlexConnection connection,
+    PlexMediaItem item, {
+    String preferredLanguage = 'eng',
+  }) {
+    _validateConnection(connection);
+    final streams = item.preferredPart?.subtitleStreams ?? const [];
+    final ranked = streams
+        .where(
+          (stream) =>
+              stream.key != null &&
+              const {
+                'srt',
+                'subrip',
+                'vtt',
+                'webvtt',
+              }.contains(stream.codec?.trim().toLowerCase()),
+        )
+        .toList(growable: false);
+    final preferred = canonicalCaptionLanguageCode(preferredLanguage);
+    ranked.sort((left, right) {
+      int score(PlexSubtitleStream stream) {
+        var value = 0;
+        if (preferred.isNotEmpty &&
+            canonicalCaptionLanguageCode(stream.language) == preferred) {
+          value += 100;
+        }
+        if (stream.isSelected) value += 30;
+        if (stream.isDefault) value += 20;
+        if (stream.isForced) value += 5;
+        return value;
+      }
+
+      final byScore = score(right).compareTo(score(left));
+      if (byScore != 0) return byScore;
+      return left.id.compareTo(right.id);
+    });
+    return List.unmodifiable(
+      ranked.take(32).map((stream) {
+        final key = stream.key!;
+        final source = _resolveResponseKey(connection, key);
+        final uri = source.replace(
+          queryParameters: {...source.queryParameters, 'encoding': 'utf-8'},
+        );
+        return PlexPlaybackSubtitleTrack(
+          uri: uri,
+          label: stream.label,
+          language: stream.language,
+          contentType: switch (stream.codec?.trim().toLowerCase()) {
+            'vtt' || 'webvtt' => 'text/vtt',
+            _ => 'application/x-subrip',
+          },
+        );
+      }),
+    );
   }
 
   Uri? imageUri(
@@ -634,6 +706,53 @@ class PlexClient {
           connection.accessToken,
         );
         if (partKey == null) continue;
+        final audioStreams = <PlexAudioStream>[];
+        final subtitleStreams = <PlexSubtitleStream>[];
+        for (final stream in _directElements(part, const {'Stream'})) {
+          final streamType = _nonNegativeAttribute(stream, 'streamType');
+          final streamId = _boundedAttribute(stream, 'id', 1, 40);
+          if (streamId == null || !RegExp(r'^\d{1,20}$').hasMatch(streamId)) {
+            continue;
+          }
+          final language =
+              _boundedAttribute(stream, 'languageCode', 1, 40) ??
+              _boundedAttribute(stream, 'language', 1, 80);
+          final label =
+              _boundedAttribute(stream, 'extendedDisplayTitle', 1, 300) ??
+              _boundedAttribute(stream, 'displayTitle', 1, 300) ??
+              _boundedAttribute(stream, 'title', 1, 300) ??
+              language ??
+              (streamType == 2 ? 'Audio track' : 'Subtitles');
+          if (streamType == 2 && audioStreams.length < 32) {
+            audioStreams.add(
+              PlexAudioStream(
+                id: streamId,
+                label: label,
+                language: language,
+                isDefault: _booleanAttribute(stream, 'default'),
+                isSelected: _booleanAttribute(stream, 'selected'),
+              ),
+            );
+          } else if (streamType == 3 && subtitleStreams.length < 32) {
+            subtitleStreams.add(
+              PlexSubtitleStream(
+                id: streamId,
+                label: label,
+                language: language,
+                codec:
+                    _boundedAttribute(stream, 'codec', 1, 40) ??
+                    _boundedAttribute(stream, 'format', 1, 40),
+                key: _safeResponseKey(
+                  _attribute(stream, 'key'),
+                  connection.accessToken,
+                ),
+                isDefault: _booleanAttribute(stream, 'default'),
+                isForced: _booleanAttribute(stream, 'forced'),
+                isSelected: _booleanAttribute(stream, 'selected'),
+              ),
+            );
+          }
+        }
         parts.add(
           PlexMediaPart(
             key: partKey,
@@ -647,6 +766,8 @@ class PlexClient {
             audioCodec: audioCodec,
             videoWidth: videoWidth,
             videoHeight: videoHeight,
+            audioStreams: List.unmodifiable(audioStreams),
+            subtitleStreams: List.unmodifiable(subtitleStreams),
           ),
         );
       }
@@ -927,6 +1048,11 @@ String? _boundedAttribute(XmlElement element, String name, int min, int max) {
 int? _nonNegativeAttribute(XmlElement element, String name) {
   final parsed = int.tryParse(_attribute(element, name)?.trim() ?? '');
   return parsed == null || parsed < 0 ? null : parsed.clamp(0, _maxCount);
+}
+
+bool _booleanAttribute(XmlElement element, String name) {
+  final value = _attribute(element, name)?.trim().toLowerCase();
+  return value == '1' || value == 'true';
 }
 
 int? _nonNegativeHeader(Headers headers, String name) {

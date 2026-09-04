@@ -71,6 +71,12 @@ void main() {
     expect(find.byKey(const ValueKey('main-navigation')), findsOneWidget);
     expect(find.byKey(const ValueKey('main-nav-discover')), findsOneWidget);
     expect(
+      find.byKey(const ValueKey('top-level-fixed-notification')),
+      findsOneWidget,
+      reason: 'App notices must remain reachable without a linked profile.',
+    );
+    expect(find.byKey(const ValueKey('top-level-fixed-profile')), findsNothing);
+    expect(
       tester.getSize(find.byKey(const ValueKey('main-navigation'))).width,
       60,
     );
@@ -470,7 +476,16 @@ void main() {
       await tester.pumpAndSettle();
 
       final profile = find.byKey(const ValueKey('top-level-fixed-profile'));
+      final notification = find.byKey(
+        const ValueKey('top-level-fixed-notification'),
+      );
       expect(profile, findsOneWidget);
+      expect(notification, findsOneWidget);
+      expect(tester.getSize(notification), const Size.square(52));
+      expect(
+        tester.getRect(profile).left - tester.getRect(notification).right,
+        closeTo(10, .01),
+      );
       final switcher = find.descendant(
         of: profile,
         matching: find.byType(TetoProfileSwitcher),
@@ -518,6 +533,7 @@ void main() {
       await tester.pump();
       await tester.pump();
       expect(profile, findsNothing);
+      expect(notification, findsNothing);
       expect(
         FocusManager.instance.primaryFocus?.debugLabel,
         'top-level.active-navigation',
@@ -527,6 +543,7 @@ void main() {
       await tester.pump();
       await tester.pump();
       expect(profile, findsOneWidget);
+      expect(notification, findsOneWidget);
       expect(tester.takeException(), isNull);
     },
   );

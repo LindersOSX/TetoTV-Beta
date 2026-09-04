@@ -2,7 +2,9 @@ import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_navigation.dart';
 import 'package:anime_tv/features/home/presentation/main_navigation_bar.dart';
+import 'package:anime_tv/features/settings/application/local_profiles_controller.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
+import 'package:anime_tv/features/settings/application/tracking_accounts_controller.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -95,6 +97,9 @@ class TetoTopLevelShell extends ConsumerStatefulWidget {
 
 class _TetoTopLevelShellState extends ConsumerState<TetoTopLevelShell> {
   final _railFocusNode = FocusNode(debugLabel: 'top-level.active-navigation');
+  final _notificationFocusNode = FocusNode(
+    debugLabel: 'top-level.notifications',
+  );
   final _profileFocusNode = FocusNode(debugLabel: 'top-level.profile');
   bool _profileVisibleAtTop = true;
   bool _profileVisibilityUpdateScheduled = false;
@@ -103,6 +108,7 @@ class _TetoTopLevelShellState extends ConsumerState<TetoTopLevelShell> {
   @override
   void dispose() {
     _railFocusNode.dispose();
+    _notificationFocusNode.dispose();
     _profileFocusNode.dispose();
     super.dispose();
   }
@@ -111,6 +117,9 @@ class _TetoTopLevelShellState extends ConsumerState<TetoTopLevelShell> {
     if (_railFocusNode.context?.mounted == true &&
         _railFocusNode.canRequestFocus) {
       _railFocusNode.requestFocus();
+    } else if (_notificationFocusNode.context?.mounted == true &&
+        _notificationFocusNode.canRequestFocus) {
+      _notificationFocusNode.requestFocus();
     } else if (_profileFocusNode.context?.mounted == true &&
         _profileFocusNode.canRequestFocus) {
       // Settings may live under the profile menu while every optional rail
@@ -150,9 +159,9 @@ class _TetoTopLevelShellState extends ConsumerState<TetoTopLevelShell> {
   void _observeContentMetrics(ScrollMetrics metrics) {
     if (metrics.axis != Axis.vertical) return;
     _profileShouldBeVisibleAtTop = metrics.pixels <= .5;
-    final hiddenHeaderOwnsFocus = widget.tvHeaderFocusNodes.any(
-      (node) => node.hasFocus,
-    );
+    final hiddenHeaderOwnsFocus =
+        widget.tvHeaderFocusNodes.any((node) => node.hasFocus) ||
+        _notificationFocusNode.hasFocus;
     if (!_profileShouldBeVisibleAtTop &&
         (_profileFocusNode.hasFocus || hiddenHeaderOwnsFocus)) {
       if (_railFocusNode.context?.mounted == true &&
@@ -182,6 +191,10 @@ class _TetoTopLevelShellState extends ConsumerState<TetoTopLevelShell> {
   Widget build(BuildContext context) {
     final size = MediaQuery.sizeOf(context);
     final isTelevision = ref.watch(isTelevisionProvider);
+    final accounts = ref.watch(trackingAccountsControllerProvider);
+    final localProfiles = ref.watch(localProfilesControllerProvider);
+    final hasProfile =
+        accounts.profiles.isNotEmpty || localProfiles.activeProfile != null;
     final isPhysicalPhone = !isTelevision;
     final isPhoneLandscape = isPhysicalPhone && size.width > size.height;
     final isPhonePortrait = isPhysicalPhone && !isPhoneLandscape;
@@ -286,6 +299,7 @@ class _TetoTopLevelShellState extends ConsumerState<TetoTopLevelShell> {
                     right:
                         (size.width >= 1400 ? 30 : 22) +
                         52 +
+                        (hasProfile ? 10 + 52 : 0) +
                         (size.width >= 1400 ? 14 : 10),
                     // Search and section controls are 44px high; center them
                     // against the adjacent 52px profile switcher.
@@ -299,7 +313,7 @@ class _TetoTopLevelShellState extends ConsumerState<TetoTopLevelShell> {
                         child: widget.tvHeaderBuilder!(
                           context,
                           layout,
-                          _profileFocusNode,
+                          _notificationFocusNode,
                         ),
                       ),
                     ),
@@ -309,6 +323,45 @@ class _TetoTopLevelShellState extends ConsumerState<TetoTopLevelShell> {
                 // this prevents a Classic-at-top -> Modern transition from
                 // inheriting a stale hidden profile.
                 if (usesTvRail && _profileShouldBeVisibleAtTop)
+                  Positioned(
+                    right:
+                        (size.width >= 1400 ? 30 : 22) +
+                        (hasProfile ? 52 + 10 : 0),
+                    top: 12,
+                    child: RepaintBoundary(
+                      key: const ValueKey('top-level-fixed-notification'),
+                      child: TetoNotificationBell(
+                        focusNode: _notificationFocusNode,
+                        menuTrailingOffset: hasProfile ? 62 : 0,
+                        onKeyEvent: (_, event) {
+                          final isLeft =
+                              event.logicalKey == LogicalKeyboardKey.arrowLeft;
+                          final isRight =
+                              event.logicalKey == LogicalKeyboardKey.arrowRight;
+                          final isDown =
+                              event.logicalKey == LogicalKeyboardKey.arrowDown;
+                          if (!isLeft && !isRight && !isDown) {
+                            return KeyEventResult.ignored;
+                          }
+                          if (event is KeyDownEvent ||
+                              event is KeyRepeatEvent) {
+                            if (isLeft && widget.onTvProfileLeft != null) {
+                              widget.onTvProfileLeft!();
+                            } else if (isRight && hasProfile) {
+                              _profileFocusNode.requestFocus();
+                            } else if (isDown &&
+                                widget.onTvProfileDown != null) {
+                              widget.onTvProfileDown!();
+                            } else {
+                              _focusContent();
+                            }
+                          }
+                          return KeyEventResult.handled;
+                        },
+                      ),
+                    ),
+                  ),
+                if (usesTvRail && _profileShouldBeVisibleAtTop && hasProfile)
                   Positioned(
                     right: size.width >= 1400 ? 30 : 22,
                     top: 12,
@@ -328,8 +381,8 @@ class _TetoTopLevelShellState extends ConsumerState<TetoTopLevelShell> {
                           }
                           if (event is KeyDownEvent ||
                               event is KeyRepeatEvent) {
-                            if (isLeft && widget.onTvProfileLeft != null) {
-                              widget.onTvProfileLeft!();
+                            if (isLeft) {
+                              _notificationFocusNode.requestFocus();
                             } else if (isDown &&
                                 widget.onTvProfileDown != null) {
                               widget.onTvProfileDown!();

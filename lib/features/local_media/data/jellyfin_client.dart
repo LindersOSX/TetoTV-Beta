@@ -341,6 +341,7 @@ class JellyfinClient {
             audioStreams.add(
               JellyfinAudioStream(
                 index: index,
+                label: _bounded(stream['DisplayTitle'], 1, 300),
                 language: _bounded(stream['Language'], 1, 40),
                 isDefault: stream['IsDefault'] == true,
               ),
@@ -508,6 +509,26 @@ class JellyfinClient {
     forceCompatibility: true,
   );
 
+  /// Builds a compatibility stream pinned to the exact audio row selected in
+  /// TetoTV's player. The index is validated against the item's bounded media
+  /// metadata before it is sent to the viewer's own Jellyfin server.
+  JellyfinPlaybackPlan compatibilityPlaybackPlanForAudioStream(
+    JellyfinConnection connection,
+    JellyfinMediaItem item, {
+    required String playSessionId,
+    required int audioStreamIndex,
+    String preferredSubtitleLanguage = 'eng',
+  }) => _playbackPlan(
+    connection,
+    item,
+    playSessionId: playSessionId,
+    preferredSubtitleLanguage: preferredSubtitleLanguage,
+    preferredAudioLanguage: 'auto',
+    requestedAudio: null,
+    forceCompatibility: true,
+    exactAudioStreamIndex: audioStreamIndex,
+  );
+
   JellyfinPlaybackPlan _playbackPlan(
     JellyfinConnection connection,
     JellyfinMediaItem item, {
@@ -516,6 +537,7 @@ class JellyfinClient {
     required String preferredAudioLanguage,
     required PlaybackAudioPreference? requestedAudio,
     bool forceCompatibility = false,
+    int? exactAudioStreamIndex,
   }) {
     if (!RegExp(r'^[A-Za-z0-9_-]{16,100}$').hasMatch(playSessionId)) {
       throw const JellyfinException('The local playback session is invalid.');
@@ -534,18 +556,6 @@ class JellyfinClient {
     final headers = Map<String, String>.unmodifiable(
       _sessionHeaders(connection),
     );
-    if (!needsCompatibilityTranscode) {
-      return JellyfinPlaybackPlan(
-        uri: streamUri(connection, item),
-        headers: headers,
-        method: JellyfinPlayMethod.directPlay,
-        playSessionId: playSessionId,
-        mediaContentType: _containerContentType(item.container),
-      );
-    }
-
-    final path =
-        '${_basePath(connection.baseUri)}/Videos/${item.id}/master.m3u8';
     final externalSubtitleTracks =
         List<JellyfinPlaybackSubtitleTrack>.unmodifiable(
           _rankedSubtitles(item.subtitleStreams, preferredSubtitleLanguage).map(
@@ -566,11 +576,36 @@ class JellyfinClient {
             },
           ).whereType<JellyfinPlaybackSubtitleTrack>(),
         );
-    final audioStream = _preferredAudioStream(
-      item.audioStreams,
-      requestedAudio,
-      preferredAudioLanguage,
-    );
+    if (!needsCompatibilityTranscode) {
+      return JellyfinPlaybackPlan(
+        uri: streamUri(connection, item),
+        headers: headers,
+        method: JellyfinPlayMethod.directPlay,
+        playSessionId: playSessionId,
+        mediaContentType: _containerContentType(item.container),
+        externalSubtitleTracks: externalSubtitleTracks,
+      );
+    }
+
+    final path =
+        '${_basePath(connection.baseUri)}/Videos/${item.id}/master.m3u8';
+    final exactAudio = exactAudioStreamIndex == null
+        ? null
+        : item.audioStreams
+              .where((stream) => stream.index == exactAudioStreamIndex)
+              .firstOrNull;
+    if (exactAudioStreamIndex != null && exactAudio == null) {
+      throw const JellyfinException(
+        'Jellyfin did not provide the selected audio track.',
+      );
+    }
+    final audioStream =
+        exactAudio ??
+        _preferredAudioStream(
+          item.audioStreams,
+          requestedAudio,
+          preferredAudioLanguage,
+        );
     final uri = connection.baseUri
         .resolve(path)
         .replace(
@@ -600,6 +635,7 @@ class JellyfinClient {
       playSessionId: playSessionId,
       mediaContentType: 'application/x-mpegURL',
       externalSubtitleTracks: externalSubtitleTracks,
+      selectedAudioStreamIndex: audioStream?.index,
     );
   }
 

@@ -13,6 +13,7 @@ import 'package:anime_tv/features/manga/data/teto_manga_repository_parser.dart';
 import 'package:anime_tv/features/manga/domain/manga_source_models.dart';
 import 'package:anime_tv/features/marketplace/data/public_https_dio.dart';
 import 'package:anime_tv/features/marketplace/domain/addon_models.dart';
+import 'package:anime_tv/features/marketplace/domain/repository_format.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
@@ -275,6 +276,10 @@ class MangaCatalogClient {
       uri.toString(),
       field: 'Manga source URL',
     );
+    final compatibility = inspectExtensionRepositoryUri(requestedUri);
+    if (compatibility.isRejected) {
+      throw FormatException(compatibility.rejectionMessage!);
+    }
     final headers = sourceId == null
         ? const <String, String>{}
         : await _credentials.requestHeaders(sourceId);
@@ -294,6 +299,10 @@ class MangaCatalogClient {
   }) async {
     var current = uri;
     for (var redirects = 0; ; redirects++) {
+      final compatibility = inspectExtensionRepositoryUri(current);
+      if (compatibility.isRejected) {
+        throw FormatException(compatibility.rejectionMessage!);
+      }
       await _validateTarget(current).timeout(connectTimeout);
       final response = await _dio
           .get<ResponseBody>(
@@ -410,6 +419,10 @@ class MangaCatalogClient {
       const MangaParseLimits(),
       format: 'Manga source',
     );
+    final compatibility = inspectExtensionRepositoryJson(decoded);
+    if (compatibility.isRejected) {
+      throw FormatException(compatibility.rejectionMessage!);
+    }
     final root = requiredStringMap(decoded, field: 'Manga source');
     if (root['format'] == MangaRepositoryManifest.format) {
       return MangaFetchedRepository(

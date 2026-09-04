@@ -155,11 +155,13 @@ class JellyfinMediaItem {
 class JellyfinAudioStream {
   const JellyfinAudioStream({
     required this.index,
+    this.label,
     this.language,
     this.isDefault = false,
   });
 
   final int index;
+  final String? label;
   final String? language;
   final bool isDefault;
 }
@@ -217,6 +219,7 @@ class JellyfinPlaybackPlan {
     required this.playSessionId,
     this.mediaContentType,
     this.externalSubtitleTracks = const [],
+    this.selectedAudioStreamIndex,
   });
 
   final Uri uri;
@@ -225,6 +228,7 @@ class JellyfinPlaybackPlan {
   final String playSessionId;
   final String? mediaContentType;
   final List<JellyfinPlaybackSubtitleTrack> externalSubtitleTracks;
+  final int? selectedAudioStreamIndex;
 
   Uri? get externalSubtitleUri => externalSubtitleTracks.firstOrNull?.uri;
   String? get subtitleContentType =>

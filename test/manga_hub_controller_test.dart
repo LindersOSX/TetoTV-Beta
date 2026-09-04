@@ -71,6 +71,24 @@ void main() {
   );
 
   test(
+    'rejects a Mihon protobuf store before catalog network access',
+    () async {
+      final added = await controller.addSource(
+        Uri.parse('https://repo.example/index.pb?utm_source=example'),
+      );
+
+      expect(added, isFalse);
+      expect(client.calls, isEmpty);
+      expect(store.sourceRows, isEmpty);
+      expect(
+        controller.state.error,
+        contains('Mihon/Tachiyomi Android extension store'),
+      );
+      expect(controller.state.error, contains('manga-provider'));
+    },
+  );
+
+  test(
     'repository credentials reach only the explicitly intended matching child',
     () async {
       final repositoryUri = Uri.parse('https://repo.example/manga.json');

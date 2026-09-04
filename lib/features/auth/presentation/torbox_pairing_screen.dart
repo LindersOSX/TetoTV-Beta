@@ -377,9 +377,10 @@ class _TorBoxPairingScreenState extends ConsumerState<TorBoxPairingScreen>
               const SizedBox(height: 10),
               Text(
                 'Sign in to torbox.app in the same browser before approving. '
-                'If Continue does nothing, reload TorBox and enter this current '
-                'code again. You can also use Edge or another browser. Keep '
-                'this screen open while approving; TetoTV will keep retrying.',
+                "TorBox's Continue button may not respond in Chrome. If that "
+                'happens, use Edge, Firefox, or another browser and enter this '
+                'current code again. Keep this screen open while approving; '
+                'TetoTV will keep retrying.',
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
                   color: context.appPalette.mutedText,
                 ),

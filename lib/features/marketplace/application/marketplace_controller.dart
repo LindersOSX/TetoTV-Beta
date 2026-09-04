@@ -6,6 +6,7 @@ import 'package:anime_tv/features/marketplace/data/addon_store.dart';
 import 'package:anime_tv/features/marketplace/data/marketplace_client.dart';
 import 'package:anime_tv/features/marketplace/data/seanime_javascript_provider.dart';
 import 'package:anime_tv/features/marketplace/domain/addon_models.dart';
+import 'package:anime_tv/features/marketplace/domain/repository_format.dart';
 import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -291,6 +292,8 @@ class MarketplaceController extends StateNotifier<MarketplaceState> {
   }) async {
     final uri = safePublicHttpsUri(rawUrl);
     if (uri == null) return 'Enter a public HTTPS repository URL.';
+    final compatibility = inspectExtensionRepositoryUri(uri);
+    if (compatibility.isRejected) return compatibility.rejectionMessage;
     final normalized = uri.removeFragment().toString();
     if (state.repositories.any((item) => item.url == normalized)) {
       return 'That repository is already added.';

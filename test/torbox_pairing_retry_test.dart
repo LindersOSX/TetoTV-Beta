@@ -82,6 +82,16 @@ void main() {
       ),
       findsOneWidget,
     );
+    expect(
+      find.textContaining(
+        "TorBox's Continue button may not respond in Chrome.",
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('use Edge, Firefox, or another browser'),
+      findsOneWidget,
+    );
 
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);

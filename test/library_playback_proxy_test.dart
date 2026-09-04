@@ -123,6 +123,16 @@ segment-1.ts
         final raw = _request(
           source: source,
           isCompatibilityStream: true,
+          audioTracks: [
+            LibraryServerAudioTrack(
+              id: '1',
+              label: 'Japanese',
+              language: 'jpn',
+            ),
+            LibraryServerAudioTrack(id: '2', label: 'English', language: 'eng'),
+          ],
+          selectedAudioTrackId: '2',
+          onAudioTrackSelected: (_, _) async => throw UnimplementedError(),
           externalSubtitle: firstSubtitle.toString(),
           subtitleTracks: [
             LibraryExternalSubtitleTrack(
@@ -148,6 +158,9 @@ segment-1.ts
         expect(protected.headers, isEmpty);
         expect(protected.source.toString(), isNot(contains('secret-token')));
         expect(protected.externalSubtitleTracks, hasLength(2));
+        expect(protected.serverAudioTracks, hasLength(2));
+        expect(protected.selectedServerAudioTrackId, '2');
+        expect(protected.onServerAudioTrackSelected, isNotNull);
         expect(
           protected.externalSubtitleTracks,
           everyElement(
@@ -253,6 +266,9 @@ LibraryPlaybackRequest _request({
   },
   String? externalSubtitle,
   List<LibraryExternalSubtitleTrack> subtitleTracks = const [],
+  List<LibraryServerAudioTrack> audioTracks = const [],
+  String? selectedAudioTrackId,
+  LibraryServerAudioSelectionCallback? onAudioTrackSelected,
   bool isCompatibilityStream = false,
 }) => LibraryPlaybackRequest(
   source: source,
@@ -264,6 +280,9 @@ LibraryPlaybackRequest _request({
   headers: headers,
   externalSubtitle: externalSubtitle,
   externalSubtitleTracks: subtitleTracks,
+  serverAudioTracks: audioTracks,
+  selectedServerAudioTrackId: selectedAudioTrackId,
+  onServerAudioTrackSelected: onAudioTrackSelected,
   isCompatibilityStream: isCompatibilityStream,
 );
 

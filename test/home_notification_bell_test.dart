@@ -109,7 +109,31 @@ void main() {
     );
     expect(find.text('Beta'), findsOneWidget);
     expect(find.text('Install'), findsOneWidget);
-    expect(notifications.state.unreadCount, 0);
+    final installFocus = tester
+        .widget<FocusableActionDetector>(
+          find.descendant(
+            of: find.byKey(ValueKey('notification-action-${_notice().id}')),
+            matching: find.byType(FocusableActionDetector),
+          ),
+        )
+        .focusNode!;
+    final dismissFocus = tester
+        .widget<FocusableActionDetector>(
+          find.descendant(
+            of: find.byKey(ValueKey('notification-dismiss-${_notice().id}')),
+            matching: find.byType(FocusableActionDetector),
+          ),
+        )
+        .focusNode!;
+    expect(installFocus.hasFocus, isTrue);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    await tester.pump();
+    expect(dismissFocus.hasFocus, isTrue);
+    expect(
+      notifications.state.unreadCount,
+      1,
+      reason: 'Opening the inbox must not dismiss its messages.',
+    );
 
     updates.setTestState(
       _readyUpdateState().copyWith(
@@ -240,6 +264,80 @@ void main() {
     expect(find.text('NOTICE'), findsOneWidget);
     expect(find.text('Check'), findsNothing);
     expect(find.text('Install'), findsNothing);
+  });
+
+  testWidgets('activating a message durably dismisses it from the inbox', (
+    tester,
+  ) async {
+    final announcement = _announcement('a', 'Tap to dismiss me.');
+    final store = _MemoryNotificationStore([announcement]);
+    final notifications = AppNotificationController(store);
+    await notifications.load();
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          appNotificationControllerProvider.overrideWith((_) => notifications),
+        ],
+        child: MaterialApp(
+          theme: AppTheme.dark,
+          home: const Scaffold(body: TetoNotificationBell()),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byType(TetoNotificationBell));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(ValueKey('notification-dismiss-${announcement.id}')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(notifications.state.unreadCount, 0);
+    expect(notifications.state.inboxItems, isEmpty);
+    expect(
+      find.byKey(const ValueKey('notification-menu-surface')),
+      findsNothing,
+    );
+
+    await tester.tap(find.byType(TetoNotificationBell));
+    await tester.pumpAndSettle();
+    expect(find.text('You\'re all caught up'), findsOneWidget);
+    expect(find.text('Tap to dismiss me.'), findsNothing);
+  });
+
+  testWidgets('tapping update copy dismisses it without hijacking Install', (
+    tester,
+  ) async {
+    final notice = _notice();
+    final store = _MemoryNotificationStore([notice]);
+    final notifications = AppNotificationController(store);
+    await notifications.load();
+    final updates = _TestAppUpdateController(_readyUpdateState());
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          appNotificationControllerProvider.overrideWith((_) => notifications),
+          appUpdateControllerProvider.overrideWith((_) => updates),
+        ],
+        child: MaterialApp(
+          theme: AppTheme.dark,
+          home: const Scaffold(body: TetoNotificationBell()),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byType(TetoNotificationBell));
+    await tester.pumpAndSettle();
+    expect(find.text('Install'), findsOneWidget);
+    await tester.tap(find.byKey(ValueKey('notification-message-${notice.id}')));
+    await tester.pumpAndSettle();
+
+    expect(updates.installCalls, 0);
+    expect(notifications.state.inboxItems, isEmpty);
   });
 
   testWidgets('announcement cards stay D-pad focusable in a mixed inbox', (
@@ -392,6 +490,14 @@ class _MemoryNotificationStore extends AppNotificationStore {
 
   @override
   Future<List<AppNotification>> load() async => List.unmodifiable(_items);
+
+  @override
+  Future<void> markRead(String id, DateTime readAtUtc) async {
+    _items = [
+      for (final item in _items)
+        item.id == id ? item.copyWith(readAtUtc: readAtUtc) : item,
+    ];
+  }
 
   @override
   Future<void> markAllRead(DateTime readAtUtc) async {

@@ -4,7 +4,7 @@ publish_to: 'none'
 # Public and Beta artifacts built from the same source use one monotonically
 # increasing Android versionCode. The project default carries the Beta display
 # version; the Public universal APK overrides the build name to the 1.x line.
-version: 2.0.67+410044
+version: 2.0.68+410045
 
 environment:
   sdk: ^3.12.2
@@ -64,6 +64,7 @@ flutter:
   uses-material-design: true
   assets:
     - assets/branding/tetotv_icon.png
+    - assets/branding/tetotv_in_app_mark.png
     - assets/fonts/NotoSans-Regular.ttf
     - assets/fonts/OFL.txt
     - assets/legal/native/GPL-2.0.txt

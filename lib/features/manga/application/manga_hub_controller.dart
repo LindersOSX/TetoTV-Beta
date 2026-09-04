@@ -12,6 +12,7 @@ import 'package:anime_tv/features/manga/data/manga_uri_policy.dart';
 import 'package:anime_tv/features/manga/domain/manga_acquisition_models.dart';
 import 'package:anime_tv/features/manga/domain/manga_reader_models.dart';
 import 'package:anime_tv/features/manga/domain/manga_source_models.dart';
+import 'package:anime_tv/features/marketplace/domain/repository_format.dart';
 import 'package:anime_tv/features/settings/application/local_profiles_controller.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:anime_tv/features/settings/application/tracking_accounts_controller.dart';
@@ -305,6 +306,10 @@ class MangaHubController extends StateNotifier<MangaHubState> {
       uri.toString(),
       field: 'Manga source URL',
     );
+    final compatibility = inspectExtensionRepositoryUri(safeUri);
+    if (compatibility.isRejected) {
+      throw FormatException(compatibility.rejectionMessage!);
+    }
     final rootId = mangaSourceStableId(safeUri);
     final previousRootCredential = await _credentials.read(rootId);
     final credentialTargetsChild = repositoryCredentialSourceId != null;

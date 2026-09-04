@@ -2,10 +2,12 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
+import 'package:anime_tv/core/preferences/caption_language.dart';
 import 'package:anime_tv/core/preferences/playback_audio_preference.dart';
 import 'package:anime_tv/features/local_media/application/local_media_controller.dart';
 import 'package:anime_tv/features/local_media/application/plex_controller.dart';
 import 'package:anime_tv/features/local_media/domain/library_episode_source.dart';
+import 'package:anime_tv/features/local_media/domain/plex_models.dart';
 import 'package:anime_tv/features/player/domain/library_playback_request.dart';
 import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
 import 'package:crypto/crypto.dart';
@@ -189,8 +191,45 @@ class LibraryEpisodeSourceService {
     String preferredAudioLanguage = 'auto',
     PlaybackAudioPreference? requestedAudio,
     bool forceCompatibility = false,
+  }) => _preparePlayback(
+    source,
+    watchPartyIdentity: watchPartyIdentity,
+    preferredSubtitleLanguage: preferredSubtitleLanguage,
+    preferredAudioLanguage: preferredAudioLanguage,
+    requestedAudio: requestedAudio,
+    forceCompatibility: forceCompatibility,
+  );
+
+  /// Prepares an item already returned by a connected server's bounded browse
+  /// API. Discovery-only candidate checks are unnecessary here because the
+  /// controller/client pair has already validated and rendered this item.
+  Future<LibraryPlaybackRequest> prepareBrowsedPlayback(
+    LibraryEpisodeSource source, {
+    String preferredSubtitleLanguage = 'eng',
+    String preferredAudioLanguage = 'auto',
+    PlaybackAudioPreference? requestedAudio,
+  }) => _preparePlayback(
+    source,
+    preferredSubtitleLanguage: preferredSubtitleLanguage,
+    preferredAudioLanguage: preferredAudioLanguage,
+    requestedAudio: requestedAudio,
+    forceCompatibility: false,
+    trustedBrowsedItem: true,
+  );
+
+  Future<LibraryPlaybackRequest> _preparePlayback(
+    LibraryEpisodeSource source, {
+    LibraryWatchPartyIdentity? watchPartyIdentity,
+    required String preferredSubtitleLanguage,
+    required String preferredAudioLanguage,
+    required PlaybackAudioPreference? requestedAudio,
+    required bool forceCompatibility,
+    Duration? initialPositionOverride,
+    int? jellyfinAudioStreamIndex,
+    String? plexAudioStreamId,
+    bool trustedBrowsedItem = false,
   }) async {
-    if (!source.isPlayableCandidate) {
+    if (!trustedBrowsedItem && !source.isPlayableCandidate) {
       throw StateError(
         'The private-library episode is not currently playable.',
       );
@@ -211,7 +250,14 @@ class LibraryEpisodeSourceService {
     final jellyfin = source.jellyfinItem;
     if (jellyfin != null) {
       final sessionId = _localMedia.createPlaybackSessionId();
-      final plan = forceCompatibility
+      final plan = jellyfinAudioStreamIndex != null
+          ? _localMedia.compatibilityPlaybackPlanForAudioStream(
+              jellyfin,
+              playSessionId: sessionId,
+              audioStreamIndex: jellyfinAudioStreamIndex,
+              preferredSubtitleLanguage: preferredSubtitleLanguage,
+            )
+          : forceCompatibility
           ? _localMedia.compatibilityPlaybackPlan(
               jellyfin,
               playSessionId: sessionId,
@@ -232,6 +278,11 @@ class LibraryEpisodeSourceService {
       var resume = await _localMedia.resumePosition(_checkpointUri(identity));
       final serverResume = _localMedia.serverResumePosition(jellyfin);
       if (serverResume > resume) resume = serverResume;
+      if (initialPositionOverride != null) {
+        resume = initialPositionOverride.isNegative
+            ? Duration.zero
+            : initialPositionOverride;
+      }
       final writeback = _LibrarySourceWriteback(
         saveLocal: (position) =>
             _localMedia.saveResumePosition(_checkpointUri(identity), position),
@@ -273,6 +324,49 @@ class LibraryEpisodeSourceService {
         subtitleContentType: plan.subtitleContentType,
         initialPosition: resume,
         requestedAudio: requestedAudio,
+        serverAudioTracks: plan.isTranscode
+            ? jellyfin.audioStreams
+                  .map(
+                    (track) => LibraryServerAudioTrack(
+                      id: track.index.toString(),
+                      label:
+                          track.label ??
+                          (track.language?.isNotEmpty == true
+                              ? track.language!
+                              : 'Audio track ${track.index}'),
+                      language: track.language,
+                    ),
+                  )
+                  .toList(growable: false)
+            : const [],
+        selectedServerAudioTrackId: plan.isTranscode
+            ? plan.selectedAudioStreamIndex?.toString()
+            : null,
+        onServerAudioTrackSelected:
+            plan.isTranscode && jellyfin.audioStreams.length > 1
+            ? (trackId, position) {
+                final index = int.tryParse(trackId);
+                if (index == null ||
+                    !jellyfin.audioStreams.any(
+                      (track) => track.index == index,
+                    )) {
+                  throw StateError(
+                    'Jellyfin did not provide the selected audio track.',
+                  );
+                }
+                return _preparePlayback(
+                  source,
+                  watchPartyIdentity: watchPartyIdentity,
+                  preferredSubtitleLanguage: preferredSubtitleLanguage,
+                  preferredAudioLanguage: preferredAudioLanguage,
+                  requestedAudio: requestedAudio,
+                  forceCompatibility: true,
+                  initialPositionOverride: position,
+                  jellyfinAudioStreamIndex: index,
+                  trustedBrowsedItem: trustedBrowsedItem,
+                );
+              }
+            : null,
         onStarted: (position) => _localMedia.reportPlaybackStarted(
           jellyfin,
           playSessionId: sessionId,
@@ -309,8 +403,24 @@ class LibraryEpisodeSourceService {
     }
     final playable = await _plex.preparePlayableItem(plexItem);
     final sessionId = _localMedia.createPlaybackSessionId();
+    final selectedPlexAudio = plexAudioStreamId == null
+        ? _preferredPlexAudioStream(
+            playable.preferredPart?.audioStreams ?? const [],
+            preferredAudioLanguage,
+            requestedAudio,
+          )
+        : playable.preferredPart?.audioStreams
+              .where((track) => track.id == plexAudioStreamId)
+              .firstOrNull;
+    if (plexAudioStreamId != null && selectedPlexAudio == null) {
+      throw StateError('Plex did not provide the selected audio track.');
+    }
     final uri = forceCompatibility
-        ? _plex.compatibilityPlaybackUri(playable, sessionId: sessionId)
+        ? _plex.compatibilityPlaybackUri(
+            playable,
+            sessionId: sessionId,
+            selectedAudioStreamId: selectedPlexAudio?.id,
+          )
         : _plex.playbackUri(playable);
     final identity = _digest(
       'plex\u001f${_plexScope()}\u001f${source.stableKey}',
@@ -318,6 +428,15 @@ class LibraryEpisodeSourceService {
     var resume = await _localMedia.resumePosition(_checkpointUri(identity));
     final serverResume = _plex.serverResumePosition(playable);
     if (serverResume > resume) resume = serverResume;
+    if (initialPositionOverride != null) {
+      resume = initialPositionOverride.isNegative
+          ? Duration.zero
+          : initialPositionOverride;
+    }
+    final plexSubtitles = _plex.playbackSubtitleTracks(
+      playable,
+      preferredLanguage: preferredSubtitleLanguage,
+    );
     final writeback = _LibrarySourceWriteback(
       saveLocal: (position) =>
           _localMedia.saveResumePosition(_checkpointUri(identity), position),
@@ -340,8 +459,49 @@ class LibraryEpisodeSourceService {
       timelineIdentity: identity,
       headers: _plex.playbackHeaders(),
       artworkUrl: _plex.imageUri(playable)?.toString(),
+      externalSubtitle: plexSubtitles.firstOrNull?.uri.toString(),
+      externalSubtitleTracks: plexSubtitles
+          .map(
+            (track) => LibraryExternalSubtitleTrack(
+              uri: track.uri,
+              label: track.label,
+              language: track.language,
+              contentType: track.contentType,
+            ),
+          )
+          .toList(growable: false),
+      subtitleContentType: plexSubtitles.firstOrNull?.contentType,
       initialPosition: resume,
       requestedAudio: requestedAudio,
+      serverAudioTracks: forceCompatibility
+          ? (playable.preferredPart?.audioStreams ?? const [])
+                .map(
+                  (track) => LibraryServerAudioTrack(
+                    id: track.id,
+                    label: track.label,
+                    language: track.language,
+                  ),
+                )
+                .toList(growable: false)
+          : const [],
+      selectedServerAudioTrackId: forceCompatibility
+          ? selectedPlexAudio?.id
+          : null,
+      onServerAudioTrackSelected:
+          forceCompatibility &&
+              (playable.preferredPart?.audioStreams.length ?? 0) > 1
+          ? (trackId, position) => _preparePlayback(
+              source,
+              watchPartyIdentity: watchPartyIdentity,
+              preferredSubtitleLanguage: preferredSubtitleLanguage,
+              preferredAudioLanguage: preferredAudioLanguage,
+              requestedAudio: requestedAudio,
+              forceCompatibility: true,
+              initialPositionOverride: position,
+              plexAudioStreamId: trackId,
+              trustedBrowsedItem: trustedBrowsedItem,
+            )
+          : null,
       onStarted: (position) =>
           _plex.reportTimeline(playable, position: position, playing: true),
       onProgress: writeback.handle,
@@ -469,3 +629,39 @@ String _digest(String value) => sha256.convert(utf8.encode(value)).toString();
 
 Uri _checkpointUri(String identity) =>
     Uri(scheme: 'tetotv-library', host: 'checkpoint', path: '/$identity');
+
+PlexAudioStream? _preferredPlexAudioStream(
+  List<PlexAudioStream> streams,
+  String preferredLanguage,
+  PlaybackAudioPreference? requestedAudio,
+) {
+  if (streams.isEmpty) return null;
+  final configured = canonicalCaptionLanguageCode(preferredLanguage);
+  final requested = configured.isNotEmpty
+      ? configured
+      : requestedAudio?.audioLanguage;
+  if (requested != null) {
+    final matching = streams
+        .where(
+          (stream) =>
+              canonicalCaptionLanguageCode(stream.language) == requested,
+        )
+        .toList(growable: false);
+    if (matching.isNotEmpty) {
+      return matching.firstWhere(
+        (stream) => stream.isSelected,
+        orElse: () => matching.firstWhere(
+          (stream) => stream.isDefault,
+          orElse: () => matching.first,
+        ),
+      );
+    }
+  }
+  return streams.firstWhere(
+    (stream) => stream.isSelected,
+    orElse: () => streams.firstWhere(
+      (stream) => stream.isDefault,
+      orElse: () => streams.first,
+    ),
+  );
+}

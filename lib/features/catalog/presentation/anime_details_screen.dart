@@ -11,6 +11,7 @@ import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
 import 'package:anime_tv/features/catalog/application/filler_episode_providers.dart';
 import 'package:anime_tv/features/catalog/domain/anime_franchise_context.dart';
 import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
+import 'package:anime_tv/features/catalog/domain/catalog_episode_metadata.dart';
 import 'package:anime_tv/features/catalog/domain/episode_airing_availability.dart';
 import 'package:anime_tv/features/catalog/domain/filler_episode_lookup.dart';
 import 'package:anime_tv/features/catalog/presentation/anime_title_logo_view.dart';
@@ -99,6 +100,8 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
   bool _initialPrefetchScheduled = false;
   bool _startingWatchParty = false;
   bool _episodeBrowserOpen = false;
+  FocusNode? _episodeBrowserRestoreFocusNode;
+  Future<Map<int, CatalogEpisodeMetadata>>? _episodeBrowserMetadataFuture;
   final FocusNode _watchPartyFocusNode = FocusNode(
     debugLabel: 'episode.watch-together',
   );
@@ -302,14 +305,13 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
               ),
             )
           : null,
-      onBrowseEpisodes: isTelevision && !guestInWatchParty && !isUnreleased
-          ? () => unawaited(
-              _showEpisodeBrowser(
-                selectedEpisode: selectedEpisode,
-                totalEpisodes: knownEpisodes,
-              ),
+      onBrowseEpisodes: !guestInWatchParty && !isUnreleased
+          ? () => _openEpisodeBrowser(
+              selectedEpisode: selectedEpisode,
+              totalEpisodes: knownEpisodes,
             )
           : null,
+      isTelevision: isTelevision,
       onPlayFromBeginning:
           !selectedAvailability.isAvailable || guestInWatchParty
           ? null
@@ -383,6 +385,51 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
         onFranchise != null ||
         onCredits != null ||
         onDownloadSeason != null;
+    if (_episodeBrowserOpen) {
+      return PopScope(
+        canPop: false,
+        onPopInvokedWithResult: (didPop, _) {
+          if (!didPop) _closeEpisodeBrowser();
+        },
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            NetworkArtwork(
+              url: anime.bannerImageUrl ?? anime.coverImageUrl,
+              cacheWidth: 1000,
+            ),
+            const DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [
+                    Color(0xF5000000),
+                    Color(0xB8000000),
+                    Color(0xFA000000),
+                  ],
+                  stops: [0, .52, 1],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+              ),
+            ),
+            SafeArea(
+              minimum: context.responsiveScreenPadding,
+              child: EpisodeBrowserDialog(
+                anime: anime,
+                selectedEpisode: selectedEpisode,
+                totalEpisodes: knownEpisodes,
+                isTelevision: isTelevision,
+                embedded: true,
+                episodeMetadataFuture: _episodeBrowserMetadataFuture,
+                onClose: _closeEpisodeBrowser,
+                onEpisodeSelected: (episode) =>
+                    _closeEpisodeBrowser(selectedEpisode: episode),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
     return Stack(
       fit: StackFit.expand,
       children: [
@@ -901,52 +948,44 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
     }
   }
 
-  Future<void> _showEpisodeBrowser({
+  void _openEpisodeBrowser({
     required int selectedEpisode,
     required int totalEpisodes,
-  }) async {
+  }) {
     if (_episodeBrowserOpen) return;
-    FocusNode? restoreFocusNode;
     for (final node in <FocusNode>[
       _previousEpisodeFocusNode,
       _episodePickerFocusNode,
       _nextEpisodeFocusNode,
     ]) {
       if (node.hasFocus) {
-        restoreFocusNode = node;
+        _episodeBrowserRestoreFocusNode = node;
         break;
       }
     }
-    _episodeBrowserOpen = true;
-    int? episode;
-    try {
-      episode = await showEpisodeBrowserDialog(
-        context,
-        anime: anime,
-        selectedEpisode: selectedEpisode,
-        totalEpisodes: totalEpisodes,
-        isTelevision: ref.read(isTelevisionProvider),
-        episodeMetadataFuture: ref
-            .read(catalogClientProvider)
-            .episodeMetadata(anime.id),
-      );
-    } finally {
+    _episodeBrowserRestoreFocusNode ??= _episodePickerFocusNode;
+    _episodeBrowserMetadataFuture = ref
+        .read(catalogClientProvider)
+        .episodeMetadata(anime.id);
+    setState(() => _episodeBrowserOpen = true);
+  }
+
+  void _closeEpisodeBrowser({int? selectedEpisode}) {
+    if (!_episodeBrowserOpen) return;
+    final restoreFocusNode = _episodeBrowserRestoreFocusNode;
+    setState(() {
+      if (selectedEpisode != null) _selectedEpisode = selectedEpisode;
       _episodeBrowserOpen = false;
-    }
-    if (!mounted) return;
-    if (episode != null &&
-        episode >= 1 &&
-        episode <= totalEpisodes &&
-        _selectedEpisode != episode) {
-      setState(() => _selectedEpisode = episode);
-    }
-    if (restoreFocusNode != null) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted && restoreFocusNode!.canRequestFocus) {
-          restoreFocusNode.requestFocus();
-        }
-      });
-    }
+      _episodeBrowserRestoreFocusNode = null;
+      _episodeBrowserMetadataFuture = null;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || restoreFocusNode == null) return;
+      if (restoreFocusNode.canRequestFocus &&
+          restoreFocusNode.context != null) {
+        restoreFocusNode.requestFocus();
+      }
+    });
   }
 
   Future<void> _startWatchParty() async {
@@ -1686,6 +1725,7 @@ class _EpisodeActions extends StatelessWidget {
     required this.selectedEpisode,
     required this.resumeEpisode,
     required this.totalEpisodes,
+    required this.isTelevision,
     required this.hasProgress,
     required this.guestInWatchParty,
     required this.resumePosition,
@@ -1718,6 +1758,7 @@ class _EpisodeActions extends StatelessWidget {
   final int selectedEpisode;
   final int resumeEpisode;
   final int totalEpisodes;
+  final bool isTelevision;
   final bool hasProgress;
   final bool guestInWatchParty;
   final Duration? resumePosition;
@@ -1902,7 +1943,87 @@ class _EpisodeActions extends StatelessWidget {
               ],
             ),
           ),
+          if (onBrowseEpisodes != null) ...[
+            SizedBox(height: large ? 12 : 6),
+            _EpisodeBrowserPrompt(
+              isTelevision: isTelevision,
+              large: large,
+              onPressed: onBrowseEpisodes!,
+            ),
+          ],
         ],
+      ),
+    );
+  }
+}
+
+class _EpisodeBrowserPrompt extends StatelessWidget {
+  const _EpisodeBrowserPrompt({
+    required this.isTelevision,
+    required this.large,
+    required this.onPressed,
+  });
+
+  final bool isTelevision;
+  final bool large;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.appPalette;
+    final label = isTelevision
+        ? 'Press ↓ to browse all episodes'
+        : 'Swipe up or tap to browse all episodes';
+    return Semantics(
+      label: label,
+      button: true,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onVerticalDragEnd: (details) {
+          if ((details.primaryVelocity ?? 0) < -180) onPressed();
+        },
+        child: TvFocusable(
+          onPressed: onPressed,
+          focusScale: 1.018,
+          borderRadius: BorderRadius.circular(10),
+          child: Container(
+            key: const ValueKey('episode-browser-prompt'),
+            height: large ? 54 : 38,
+            padding: EdgeInsets.symmetric(horizontal: large ? 16 : 10),
+            decoration: BoxDecoration(
+              color: palette.accent.withValues(alpha: .12),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                color: palette.accentBright.withValues(alpha: .46),
+              ),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  isTelevision
+                      ? Icons.keyboard_arrow_down_rounded
+                      : Icons.swipe_up_alt_rounded,
+                  color: palette.accentBright,
+                  size: large ? 23 : 18,
+                ),
+                SizedBox(width: large ? 10 : 6),
+                Flexible(
+                  child: Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: palette.primaryText,
+                      fontSize: large ? 14 : 11,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }

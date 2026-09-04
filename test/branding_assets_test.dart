@@ -19,6 +19,25 @@ void main() {
     expect(pubspec, contains('adaptive_icon_background: "#030303"'));
   });
 
+  test('in-app navigation uses a separate theme-tinted brand mark', () {
+    final source = File(
+      'assets/branding/tetotv_in_app_mark.png',
+    ).readAsBytesSync();
+    expect(source.sublist(0, 8), <int>[137, 80, 78, 71, 13, 10, 26, 10]);
+
+    final navigation = File(
+      'lib/features/home/presentation/main_navigation_bar.dart',
+    ).readAsStringSync();
+    expect(navigation, contains('assets/branding/tetotv_in_app_mark.png'));
+    expect(navigation, contains('context.appPalette.accentBright'));
+    expect(navigation, contains('BlendMode.srcIn'));
+    expect(navigation, contains('cacheWidth: 192'));
+
+    final pubspec = File('pubspec.yaml').readAsStringSync();
+    expect(pubspec, contains('assets/branding/tetotv_in_app_mark.png'));
+    expect(pubspec, contains('image_path: "assets/branding/tetotv_icon.png"'));
+  });
+
   test('Android launcher keeps adaptive and themed icon layers', () {
     final adaptiveIcon = File(
       'android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml',

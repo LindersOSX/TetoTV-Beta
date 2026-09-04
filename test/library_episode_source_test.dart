@@ -1655,6 +1655,52 @@ void main() {
   );
 
   test(
+    'Jellyfin compatibility playback exposes exact server audio switching',
+    () async {
+      const item = JellyfinMediaItem(
+        id: 'episode-dual-12345678',
+        name: 'Dual audio episode',
+        type: 'Episode',
+        audioStreams: [
+          JellyfinAudioStream(index: 1, label: 'Japanese', language: 'jpn'),
+          JellyfinAudioStream(index: 2, label: 'English', language: 'eng'),
+        ],
+      );
+      final local = _PlaybackLocalMediaController(
+        savedResume: const Duration(minutes: 10),
+      );
+      final service = LibraryEpisodeSourceService(
+        local,
+        _FakePlexController(Future.value(const [])),
+        () => true,
+        () => true,
+        () => false,
+        () => 'jellyfin-scope',
+        () => '',
+      );
+
+      final request = await service.preparePlayback(
+        LibraryEpisodeSource.jellyfin(item),
+      );
+      expect(request.serverAudioTracks.map((track) => track.label), [
+        'Japanese',
+        'English',
+      ]);
+      expect(request.selectedServerAudioTrackId, '1');
+      expect(request.initialPosition, const Duration(minutes: 10));
+
+      final replacement = await request.onServerAudioTrackSelected!(
+        '2',
+        const Duration(minutes: 8),
+      );
+      expect(local.exactAudioStreamIndex, 2);
+      expect(replacement.selectedServerAudioTrackId, '2');
+      expect(replacement.initialPosition, const Duration(minutes: 8));
+      expect(replacement.source.toString(), isNot(contains('private-token')));
+    },
+  );
+
+  test(
     'connected media servers populate independently and sort deterministically',
     () async {
       final jellyfin = Completer<List<JellyfinMediaItem>>();
@@ -1928,10 +1974,14 @@ class _FakePlexController implements PlexController {
 }
 
 class _PlaybackLocalMediaController implements LocalMediaController {
+  _PlaybackLocalMediaController({this.savedResume = Duration.zero});
+
+  final Duration savedResume;
   String? preferredSubtitleLanguage;
   String? preferredAudioLanguage;
   PlaybackAudioPreference? requestedAudio;
   bool compatibilityRequested = false;
+  int? exactAudioStreamIndex;
 
   @override
   String createPlaybackSessionId() => 'session_1234567890abcdef';
@@ -1953,6 +2003,7 @@ class _PlaybackLocalMediaController implements LocalMediaController {
       method: JellyfinPlayMethod.transcode,
       playSessionId: playSessionId,
       mediaContentType: 'application/x-mpegURL',
+      selectedAudioStreamIndex: item.audioStreams.firstOrNull?.index,
       externalSubtitleTracks: [
         JellyfinPlaybackSubtitleTrack(
           uri: Uri.parse('https://media.example/japanese.vtt'),
@@ -1967,6 +2018,27 @@ class _PlaybackLocalMediaController implements LocalMediaController {
           contentType: 'text/vtt',
         ),
       ],
+    );
+  }
+
+  @override
+  JellyfinPlaybackPlan compatibilityPlaybackPlanForAudioStream(
+    JellyfinMediaItem item, {
+    required String playSessionId,
+    required int audioStreamIndex,
+    String preferredSubtitleLanguage = 'eng',
+  }) {
+    compatibilityRequested = true;
+    exactAudioStreamIndex = audioStreamIndex;
+    return JellyfinPlaybackPlan(
+      uri: Uri.parse(
+        'https://media.example/master.m3u8?audio=$audioStreamIndex',
+      ),
+      headers: const {'Authorization': 'private-token'},
+      method: JellyfinPlayMethod.transcode,
+      playSessionId: playSessionId,
+      mediaContentType: 'application/x-mpegURL',
+      selectedAudioStreamIndex: audioStreamIndex,
     );
   }
 
@@ -1989,7 +2061,7 @@ class _PlaybackLocalMediaController implements LocalMediaController {
   }
 
   @override
-  Future<Duration> resumePosition(Uri uri) async => Duration.zero;
+  Future<Duration> resumePosition(Uri uri) async => savedResume;
 
   @override
   Duration serverResumePosition(JellyfinMediaItem item) => Duration.zero;

@@ -464,6 +464,7 @@ bool _isExpectedArtworkNetworkFailure(Object error, StackTrace? stack) {
   final artworkHost = const [
     's4.anilist.co',
     's.anilist.co',
+    'media.kitsu.app',
     'media.kitsu.io',
     'cdn.myanimelist.net',
     'cdn.discordapp.com',

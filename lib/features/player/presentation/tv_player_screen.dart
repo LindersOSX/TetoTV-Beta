@@ -18,6 +18,7 @@ import 'package:anime_tv/features/player/application/playback_audio_diagnostics.
 import 'package:anime_tv/features/catalog/application/filler_episode_providers.dart';
 import 'package:anime_tv/features/catalog/domain/filler_episode_lookup.dart';
 import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
+import 'package:anime_tv/features/catalog/domain/catalog_episode_metadata.dart';
 import 'package:anime_tv/features/local_media/domain/library_episode_source.dart';
 import 'package:anime_tv/features/player/application/filler_episode_navigation.dart';
 import 'package:anime_tv/features/player/application/next_episode_prewarm_policy.dart';
@@ -28,6 +29,7 @@ import 'package:anime_tv/features/player/presentation/filler_skip_notification.d
 import 'package:anime_tv/features/player/presentation/player_control_overlay.dart';
 import 'package:anime_tv/features/player/presentation/player_failover_coordinator.dart';
 import 'package:anime_tv/features/player/presentation/player_failover_notification.dart';
+import 'package:anime_tv/features/player/presentation/player_paused_metadata_overlay.dart';
 import 'package:anime_tv/features/player/presentation/player_presentation_palette.dart';
 import 'package:anime_tv/features/player/presentation/player_stream_source_picker.dart';
 import 'package:anime_tv/features/player/presentation/teto_player_chrome.dart';
@@ -526,6 +528,16 @@ String _formatPlayerDuration(Duration value) {
   return hours > 0 ? '$hours:$minutes:$seconds' : '${value.inMinutes}:$seconds';
 }
 
+String? _normalizedPlayerHudText(String? value, {required int maxLength}) {
+  final normalized = value
+      ?.replaceAll(RegExp(r'[\u0000-\u001f\u007f]'), ' ')
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
+  if (normalized == null || normalized.isEmpty) return null;
+  if (normalized.length <= maxLength) return normalized;
+  return '${normalized.substring(0, maxLength).trimRight()}…';
+}
+
 class TvPlayerScreen extends ConsumerStatefulWidget {
   const TvPlayerScreen({
     required this.source,
@@ -892,6 +904,10 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
   DateTime _lastCheckpointSave = DateTime.fromMillisecondsSinceEpoch(0);
   DateTime _lastMediaSessionUpdate = DateTime.fromMillisecondsSinceEpoch(0);
   StreamSubscription<bool>? _playingSubscription;
+  bool _playerHasStartedPlayback = false;
+  bool _lastPlayerPlaying = false;
+  CatalogEpisodeMetadata? _pausedHudEpisodeMetadata;
+  int _pausedHudMetadataGeneration = 0;
   StreamSubscription<MediaAction>? _mediaActionSubscription;
   SeriesPlaybackPreferences _seriesPreferences =
       const SeriesPlaybackPreferences();
@@ -1006,6 +1022,52 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       : widget.launch.episode.malMediaId;
   int? get _catalogEpisodeNumber =>
       _animeFeaturesEnabled ? widget.episode : _libraryCatalogIdentity?.episode;
+
+  String get _pausedHudEpisodeTitle {
+    final metadataTitle = _normalizedPlayerHudText(
+      _pausedHudEpisodeMetadata?.title,
+      maxLength: 180,
+    );
+    if (metadataTitle != null) return metadataTitle;
+    if (!_animeFeaturesEnabled) {
+      final libraryTitle = _normalizedPlayerHudText(
+        widget.libraryPlayback?.request.title,
+        maxLength: 180,
+      );
+      if (libraryTitle != null) return libraryTitle;
+    }
+    final episode = _catalogEpisodeNumber ?? widget.launch.episode.episode;
+    return episode > 0 ? 'Episode $episode' : 'Episode';
+  }
+
+  String get _pausedHudDescription =>
+      _normalizedPlayerHudText(
+        _pausedHudEpisodeMetadata?.synopsis,
+        maxLength: 1600,
+      ) ??
+      '';
+
+  Future<void> _loadPausedHudMetadata() async {
+    final mediaId = _catalogAnilistMediaId;
+    final episode = _catalogEpisodeNumber;
+    if (mediaId == null || mediaId <= 0 || episode == null || episode <= 0) {
+      return;
+    }
+    final generation = ++_pausedHudMetadataGeneration;
+    final catalog = ref.read(catalogClientProvider);
+    // Missing optional metadata is deliberately fail-open and can never delay
+    // media playback.
+    CatalogEpisodeMetadata? episodeMetadata;
+    try {
+      episodeMetadata = (await catalog.episodeMetadata(mediaId))[episode];
+    } catch (_) {
+      // Playback and its controls remain independent of metadata uptime.
+    }
+    if (!mounted || generation != _pausedHudMetadataGeneration) return;
+    setState(() {
+      _pausedHudEpisodeMetadata = episodeMetadata;
+    });
+  }
 
   PlaybackDiagnosticSourceKind get _diagnosticSourceKind {
     final libraryProvider = widget.libraryPlayback?.request.sourceProviderId
@@ -1365,6 +1427,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
     _currentRelease = widget.launch.selectedRelease;
     _currentStream = widget.launch.stream;
     _requestedAudio = widget.launch.requestedAudio;
+    unawaited(_loadPausedHudMetadata());
     _playbackDiagnostics = PlaybackDiagnosticSessionRecorder(
       database: _database,
     );
@@ -1540,7 +1603,20 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
       unawaited(_matchContentFrameRate());
       unawaited(_inspectDecodedVideo(params));
     });
-    _playingSubscription = _player.stream.playing.listen((_) {
+    _lastPlayerPlaying = _player.state.playing;
+    _playerHasStartedPlayback = _lastPlayerPlaying;
+    _playingSubscription = _player.stream.playing.listen((playing) {
+      final wasPlaying = _lastPlayerPlaying;
+      _lastPlayerPlaying = playing;
+      if (playing) _playerHasStartedPlayback = true;
+      if (mounted && wasPlaying && !playing && !_engineHandoffInProgress) {
+        // A paused player keeps its HUD available so the episode synopsis can
+        // be read. It can still be dismissed immediately with Back or a tap.
+        _controlsTimer?.cancel();
+        if (!_controlsVisible) setState(() => _controlsVisible = true);
+      } else if (mounted && !wasPlaying && playing && _controlsVisible) {
+        _scheduleControlsHide();
+      }
       _reportLibraryPlayback(force: true);
       _publishWatchPartyPlayback();
       unawaited(_updateMediaSession(force: true));
@@ -6367,7 +6443,10 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
 
   void _scheduleControlsHide() {
     _controlsTimer?.cancel();
-    if (_hudAutoHideSuspended) return;
+    if (_hudAutoHideSuspended ||
+        (_playerHasStartedPlayback && !_player.state.playing)) {
+      return;
+    }
     _controlsTimer = Timer(playerControlsIdleTimeout, () {
       if (mounted && !_hudAutoHideSuspended) _hideControls();
     });
@@ -6632,26 +6711,23 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen> {
                   ),
                 if (!_engineHandoffInProgress)
                   Positioned(
-                    left: 34,
-                    right: 34,
-                    top: 28,
+                    left: 34 + MediaQuery.paddingOf(context).left,
+                    right: MediaQuery.sizeOf(context).width / 2,
+                    top: 28 + MediaQuery.paddingOf(context).top,
                     child: StreamBuilder<bool>(
                       stream: _player.stream.playing,
                       initialData: _player.state.playing,
                       builder: (context, snapshot) {
-                        if (snapshot.data == true) {
-                          return const SizedBox.shrink();
-                        }
-                        return Text(
-                          widget.title,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.headlineSmall
-                              ?.copyWith(
-                                shadows: const [
-                                  Shadow(color: Colors.black, blurRadius: 12),
-                                ],
-                              ),
+                        final paused = snapshot.data == false;
+                        return PlayerPausedMetadataOverlay(
+                          visible:
+                              _controlsVisible &&
+                              _playerHasStartedPlayback &&
+                              paused &&
+                              !_completionHandled &&
+                              _playbackError == null,
+                          episodeTitle: _pausedHudEpisodeTitle,
+                          description: _pausedHudDescription,
                         );
                       },
                     ),

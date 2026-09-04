@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:anime_tv/core/notifications/app_notification.dart';
@@ -6,11 +7,100 @@ import 'package:anime_tv/core/notifications/app_notification_controller.dart';
 import 'package:anime_tv/core/notifications/app_notification_store.dart';
 import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/features/settings/application/app_update_controller.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 void main() {
   setUpAll(sqfliteFfiInit);
+
+  testWidgets(
+    'foreground refresh scheduler pauses, resumes immediately, and avoids overlap',
+    (tester) async {
+      var announcementCalls = 0;
+      var updateCalls = 0;
+      var holdAnnouncement = Completer<void>();
+      final scheduler = AppNotificationRefreshScheduler(
+        announcementInterval: const Duration(seconds: 1),
+        updateInterval: const Duration(seconds: 2),
+        refreshAnnouncements: () {
+          announcementCalls++;
+          return holdAnnouncement.future;
+        },
+        refreshAppUpdate: () async {
+          updateCalls++;
+        },
+      );
+      addTearDown(() {
+        scheduler.dispose();
+        if (!holdAnnouncement.isCompleted) holdAnnouncement.complete();
+      });
+
+      scheduler.start();
+      await tester.pump(const Duration(seconds: 1));
+      expect(announcementCalls, 1);
+      await tester.pump(const Duration(seconds: 3));
+      expect(announcementCalls, 1, reason: 'slow fetches must not stack');
+      expect(updateCalls, 2);
+
+      holdAnnouncement.complete();
+      await tester.pump();
+      holdAnnouncement = Completer<void>()..complete();
+      await tester.pump(const Duration(seconds: 1));
+      expect(announcementCalls, 2);
+
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      await tester.pump();
+      final pausedAnnouncements = announcementCalls;
+      final pausedUpdates = updateCalls;
+      await tester.pump(const Duration(seconds: 5));
+      expect(announcementCalls, pausedAnnouncements);
+      expect(updateCalls, pausedUpdates);
+
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pump();
+      expect(announcementCalls, pausedAnnouncements + 1);
+      expect(updateCalls, pausedUpdates + 1);
+      scheduler.dispose();
+    },
+  );
+
+  testWidgets(
+    'update polling interval starts after the prior check completes',
+    (tester) async {
+      var updateCalls = 0;
+      final firstUpdate = Completer<void>();
+      final scheduler = AppNotificationRefreshScheduler(
+        announcementInterval: const Duration(hours: 1),
+        updateInterval: const Duration(seconds: 2),
+        refreshAnnouncements: () async {},
+        refreshAppUpdate: () {
+          updateCalls++;
+          return updateCalls == 1 ? firstUpdate.future : Future<void>.value();
+        },
+      );
+      addTearDown(() {
+        scheduler.dispose();
+        if (!firstUpdate.isCompleted) firstUpdate.complete();
+      });
+
+      scheduler.start();
+      await tester.pump(const Duration(seconds: 2));
+      expect(updateCalls, 1);
+
+      await tester.pump(const Duration(seconds: 10));
+      expect(updateCalls, 1, reason: 'an in-flight check must not be stacked');
+
+      firstUpdate.complete();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 1999));
+      expect(updateCalls, 1);
+      await tester.pump(const Duration(milliseconds: 1));
+      expect(updateCalls, 2);
+      await tester.pump();
+      scheduler.dispose();
+    },
+  );
 
   group('AppNotificationStore', () {
     late Database database;

@@ -68,6 +68,7 @@ final appUpdateControllerProvider =
           allowPrerelease: true,
         ),
         apkInspector: bridge.inspectApk,
+        automaticCheckInterval: const Duration(minutes: 5),
       );
       Future.microtask(controller.load);
       return controller;
@@ -884,6 +885,21 @@ bool shouldOfferAppRelease({
   return compareAppVersions(releaseVersion, currentVersion) > 0;
 }
 
+/// Whether a previously verified APK still represents the exact release asset
+/// currently advertised by the update service. Release-note edits do not
+/// invalidate the package, but replacing the asset, digest, or build identity
+/// does so the updater can fetch and verify the new bytes.
+bool _sameDownloadArtifact(AppReleaseInfo previous, AppReleaseInfo current) =>
+    previous.tagName == current.tagName &&
+    normalizeAppVersion(previous.version) ==
+        normalizeAppVersion(current.version) &&
+    previous.androidVersionCode == current.androidVersionCode &&
+    previous.asset.name == current.asset.name &&
+    previous.asset.publicUrl == current.asset.publicUrl &&
+    previous.asset.size == current.asset.size &&
+    previous.asset.sha256Digest?.toLowerCase() ==
+        current.asset.sha256Digest?.toLowerCase();
+
 typedef CurrentVersionLoader = Future<String> Function();
 typedef DeviceAbisLoader = Future<List<String>> Function();
 typedef CacheDirectoryLoader = Future<Directory> Function();
@@ -1166,11 +1182,12 @@ class AppUpdateController extends StateNotifier<AppUpdateState> {
   Future<void> checkForUpdates({
     bool automatic = false,
     bool launchInstaller = false,
+    bool downloadAvailable = true,
   }) async {
     await load();
     if (state.isBusy) return;
+    final stateBeforeCheck = state;
     if (automatic) {
-      if (!state.automaticUpdates) return;
       final saved = await _storage.read(key: _automaticCheckStorageKey);
       final lastCheck = DateTime.tryParse(saved ?? '');
       if (lastCheck != null) {
@@ -1224,6 +1241,30 @@ class AppUpdateController extends StateNotifier<AppUpdateState> {
         await _recordSuccessfulAutomaticCheck(automatic);
         return;
       }
+      final preservedDownloadPath = stateBeforeCheck.downloadedPath;
+      final canPreserveDownloadedRelease =
+          preservedDownloadPath != null &&
+          stateBeforeCheck.release != null &&
+          _sameDownloadArtifact(stateBeforeCheck.release!, release) &&
+          await _downloadedUpdateStillExists(
+            preservedDownloadPath,
+            release.asset.size,
+          );
+      if (canPreserveDownloadedRelease) {
+        state = state.copyWith(
+          phase: AppUpdatePhase.ready,
+          latestVersion: release.version,
+          release: release,
+          downloadedPath: preservedDownloadPath,
+          progress: 1,
+          message:
+              'TetoTV ${state.updateChannel.versionLabel(release.version)} '
+              'is ready to install.',
+        );
+        await _recordSuccessfulAutomaticCheck(automatic);
+        if (launchInstaller) await installDownloadedUpdate();
+        return;
+      }
       state = state.copyWith(
         phase: AppUpdatePhase.available,
         latestVersion: release.version,
@@ -1234,6 +1275,15 @@ class AppUpdateController extends StateNotifier<AppUpdateState> {
             'is available on the '
             '${state.updateChannel.displayName} channel.',
       );
+      // A background metadata check is always allowed. Only downloading is
+      // governed by the Automatic updates preference; an explicit user check
+      // may still download while that preference is disabled.
+      final shouldDownload =
+          downloadAvailable && (!automatic || state.automaticUpdates);
+      if (!shouldDownload) {
+        await _recordSuccessfulAutomaticCheck(automatic);
+        return;
+      }
       await downloadUpdate(
         release: release,
         releaseSource: releaseSource,
@@ -1268,6 +1318,19 @@ class AppUpdateController extends StateNotifier<AppUpdateState> {
     } catch (_) {
       // A failed bookkeeping write must not turn a valid update check into an
       // error. The next launch may simply check GitHub again.
+    }
+  }
+
+  Future<bool> _downloadedUpdateStillExists(
+    String downloadedPath,
+    int expectedSize,
+  ) async {
+    try {
+      final file = File(downloadedPath);
+      if (!await file.exists()) return false;
+      return expectedSize <= 0 || await file.length() == expectedSize;
+    } catch (_) {
+      return false;
     }
   }
 

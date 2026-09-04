@@ -247,7 +247,7 @@ class _EpisodeBrowserDialogState extends State<EpisodeBrowserDialog> {
       _pageIndex = _pageIndex.clamp(0, pageCount - 1);
     }
 
-    return Dialog(
+    final dialog = Dialog(
       key: ValueKey(
         widget.embedded ? 'episode-browser-page' : 'episode-browser-dialog',
       ),
@@ -383,6 +383,27 @@ class _EpisodeBrowserDialogState extends State<EpisodeBrowserDialog> {
         ),
       ),
     );
+
+    if (!widget.embedded) return dialog;
+    final animationsDisabled = MediaQuery.disableAnimationsOf(context);
+    return TweenAnimationBuilder<double>(
+      key: const ValueKey('episode-browser-open-animation'),
+      tween: Tween<double>(begin: 0, end: 1),
+      duration: animationsDisabled
+          ? Duration.zero
+          : const Duration(milliseconds: 160),
+      curve: Curves.easeOutCubic,
+      child: dialog,
+      builder: (context, progress, child) => Opacity(
+        key: const ValueKey('episode-browser-open-opacity'),
+        opacity: progress,
+        child: Transform.translate(
+          key: const ValueKey('episode-browser-open-slide'),
+          offset: Offset(0, 10 * (1 - progress)),
+          child: child,
+        ),
+      ),
+    );
   }
 }
 
@@ -488,7 +509,7 @@ class _EpisodeBrowserHeader extends StatelessWidget {
   }
 }
 
-class _EpisodeBrowserCard extends StatelessWidget {
+class _EpisodeBrowserCard extends StatefulWidget {
   const _EpisodeBrowserCard({
     required this.anime,
     required this.metadata,
@@ -517,57 +538,159 @@ class _EpisodeBrowserCard extends StatelessWidget {
   final VoidCallback onPressed;
 
   @override
+  State<_EpisodeBrowserCard> createState() => _EpisodeBrowserCardState();
+}
+
+class _EpisodeBrowserCardState extends State<_EpisodeBrowserCard> {
+  static const _descriptionScrollDelay = Duration(seconds: 3);
+  static const _descriptionScrollPixelsPerSecond = 12.0;
+
+  final ScrollController _descriptionScrollController = ScrollController();
+  Timer? _descriptionScrollTimer;
+  bool _focused = false;
+
+  String get _description => widget.availability.isAvailable
+      ? widget.metadata?.synopsis ?? 'Episode details unavailable.'
+      : 'This episode has not aired yet.';
+
+  @override
+  void didUpdateWidget(covariant _EpisodeBrowserCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final oldDescription = oldWidget.availability.isAvailable
+        ? oldWidget.metadata?.synopsis ?? 'Episode details unavailable.'
+        : 'This episode has not aired yet.';
+    if (oldDescription != _description) {
+      _cancelDescriptionScroll();
+      _resetDescriptionScroll();
+      if (_focused) _scheduleDescriptionScroll();
+    }
+  }
+
+  @override
+  void dispose() {
+    _cancelDescriptionScroll();
+    _descriptionScrollController.dispose();
+    super.dispose();
+  }
+
+  void _handleFocusChanged(bool focused) {
+    if (_focused == focused) return;
+    _focused = focused;
+    _cancelDescriptionScroll();
+    _resetDescriptionScroll();
+    if (focused) _scheduleDescriptionScroll();
+  }
+
+  void _scheduleDescriptionScroll() {
+    _descriptionScrollTimer = Timer(_descriptionScrollDelay, () {
+      if (!mounted || !_focused || !_descriptionScrollController.hasClients) {
+        return;
+      }
+      // Respect the platform accessibility preference. The full synopsis is
+      // still exposed through semantics, without forcing continuous motion.
+      if (MediaQuery.disableAnimationsOf(context)) return;
+      final extent = _descriptionScrollController.position.maxScrollExtent;
+      if (extent <= 0) return;
+      final duration = Duration(
+        milliseconds: math.max(
+          1500,
+          (extent / _descriptionScrollPixelsPerSecond * 1000).round(),
+        ),
+      );
+      unawaited(
+        _descriptionScrollController
+            .animateTo(extent, duration: duration, curve: Curves.linear)
+            .catchError((Object _) {
+              // A focus change or disposal intentionally cancels the scroll.
+            }),
+      );
+    });
+  }
+
+  void _cancelDescriptionScroll() {
+    _descriptionScrollTimer?.cancel();
+    _descriptionScrollTimer = null;
+  }
+
+  void _resetDescriptionScroll() {
+    if (_descriptionScrollController.hasClients) {
+      // jumpTo also cancels an in-flight animateTo, including the brief frame
+      // where the animation is active but has not moved away from zero yet.
+      _descriptionScrollController.jumpTo(0);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     final palette = context.appPalette;
-    final expectedAt = availability.expectedAt;
-    final runtime = metadata?.durationMinutes ?? anime.durationMinutes;
-    final episodeArtwork = metadata?.thumbnailUrl;
+    final expectedAt = widget.availability.expectedAt;
+    final runtime =
+        widget.metadata?.durationMinutes ?? widget.anime.durationMinutes;
+    final episodeArtwork = widget.metadata?.thumbnailUrl;
     final artwork =
-        episodeArtwork ?? anime.bannerImageUrl ?? anime.coverImageUrl;
+        episodeArtwork ??
+        widget.anime.bannerImageUrl ??
+        widget.anime.coverImageUrl;
     final usesSeriesArtwork = episodeArtwork == null && artwork != null;
-    final title = metadata?.title ?? 'Title unavailable';
-    final synopsis = metadata?.synopsis;
-    final statusLabel = availability.isAvailable
+    final title = widget.metadata?.title ?? 'Title unavailable';
+    final statusLabel = widget.availability.isAvailable
         ? null
         : expectedAt == null
         ? 'UNAIRED'
         : episodeAiringDateLabel(expectedAt);
     final semantics = <String>[
-      'Episode $episode, $title',
+      'Episode ${widget.episode}, $title',
       if (runtime != null) '$runtime minutes',
-      if (availability.isAvailable) 'available' else 'not aired yet',
+      if (widget.availability.isAvailable) 'available' else 'not aired yet',
       if (expectedAt != null) 'expected ${episodeAiringDateLabel(expectedAt)}',
+      if (_description.isNotEmpty) _description,
     ].join(', ');
+    final descriptionMaxLines = widget.compact && statusLabel != null
+        ? 1
+        : widget.compact
+        ? 2
+        : 3;
+    final descriptionStyle = TextStyle(
+      color: palette.mutedText,
+      fontSize: widget.compact ? 10 : 12,
+      height: 1.25,
+      fontWeight: FontWeight.w600,
+    );
+    final descriptionViewportHeight =
+        MediaQuery.textScalerOf(context).scale(descriptionStyle.fontSize!) *
+        descriptionStyle.height! *
+        descriptionMaxLines;
 
     return Semantics(
       label: semantics,
       button: true,
-      selected: selected,
+      selected: widget.selected,
       excludeSemantics: true,
       child: TvFocusable(
-        autofocus: autofocus,
-        focusNode: focusNode,
+        autofocus: widget.autofocus,
+        focusNode: widget.focusNode,
         focusScale: 1.018,
-        borderRadius: BorderRadius.circular(compact ? 11 : 14),
-        onPressed: onPressed,
-        onKeyEvent: onKeyEvent,
+        borderRadius: BorderRadius.circular(widget.compact ? 11 : 14),
+        onPressed: widget.onPressed,
+        onKeyEvent: widget.onKeyEvent,
+        onFocusChanged: _handleFocusChanged,
         child: Container(
           decoration: BoxDecoration(
             color: palette.surfaceRaised,
-            borderRadius: BorderRadius.circular(compact ? 11 : 14),
+            borderRadius: BorderRadius.circular(widget.compact ? 11 : 14),
             border: Border.all(
-              color: selected
+              color: widget.selected
                   ? palette.accentBright.withValues(alpha: .82)
                   : palette.primaryText.withValues(alpha: .13),
-              width: selected ? 2 : 1,
+              width: widget.selected ? 2 : 1,
             ),
           ),
           child: ClipRRect(
-            borderRadius: BorderRadius.circular(compact ? 10 : 13),
+            borderRadius: BorderRadius.circular(widget.compact ? 10 : 13),
             child: Row(
               children: [
                 SizedBox(
-                  width: artworkWidth,
+                  width: widget.artworkWidth,
                   height: double.infinity,
                   child: Stack(
                     fit: StackFit.expand,
@@ -575,7 +698,7 @@ class _EpisodeBrowserCard extends StatelessWidget {
                       NetworkArtwork(
                         url: artwork,
                         fit: BoxFit.contain,
-                        cacheWidth: compact ? 320 : 640,
+                        cacheWidth: widget.compact ? 320 : 640,
                         icon: Icons.video_library_outlined,
                       ),
                       const DecoratedBox(
@@ -588,13 +711,13 @@ class _EpisodeBrowserCard extends StatelessWidget {
                         ),
                       ),
                       Positioned(
-                        left: compact ? 8 : 10,
-                        bottom: compact ? 7 : 9,
+                        left: widget.compact ? 8 : 10,
+                        bottom: widget.compact ? 7 : 9,
                         child: Text(
-                          'EP $episode',
+                          'EP ${widget.episode}',
                           style: TextStyle(
                             color: Colors.white,
-                            fontSize: compact ? 11 : 13,
+                            fontSize: widget.compact ? 11 : 13,
                             fontWeight: FontWeight.w900,
                             letterSpacing: .6,
                           ),
@@ -602,12 +725,12 @@ class _EpisodeBrowserCard extends StatelessWidget {
                       ),
                       if (usesSeriesArtwork)
                         Positioned(
-                          left: compact ? 6 : 8,
-                          top: compact ? 6 : 8,
+                          left: widget.compact ? 6 : 8,
+                          top: widget.compact ? 6 : 8,
                           child: Container(
                             padding: EdgeInsets.symmetric(
-                              horizontal: compact ? 4 : 6,
-                              vertical: compact ? 2 : 3,
+                              horizontal: widget.compact ? 4 : 6,
+                              vertical: widget.compact ? 2 : 3,
                             ),
                             decoration: BoxDecoration(
                               color: Colors.black.withValues(alpha: .72),
@@ -617,7 +740,7 @@ class _EpisodeBrowserCard extends StatelessWidget {
                               'SERIES ART',
                               style: TextStyle(
                                 color: Colors.white.withValues(alpha: .9),
-                                fontSize: compact ? 6 : 8,
+                                fontSize: widget.compact ? 6 : 8,
                                 fontWeight: FontWeight.w900,
                                 letterSpacing: .35,
                               ),
@@ -629,55 +752,67 @@ class _EpisodeBrowserCard extends StatelessWidget {
                 ),
                 Expanded(
                   child: Padding(
-                    padding: EdgeInsets.all(compact ? 5 : 13),
+                    padding: EdgeInsets.all(widget.compact ? 5 : 13),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         Text(
-                          'Episode $episode${runtime == null ? '' : ' · $runtime min'}',
+                          'Episode ${widget.episode}${runtime == null ? '' : ' · $runtime min'}',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                             color: palette.primaryText,
-                            fontSize: compact ? 13 : 16,
+                            fontSize: widget.compact ? 13 : 16,
                             fontWeight: FontWeight.w900,
                           ),
                         ),
-                        SizedBox(height: compact ? 3 : 6),
+                        SizedBox(height: widget.compact ? 3 : 6),
                         Text(
                           title,
+                          key: ValueKey(
+                            'episode-browser-title-${widget.episode}',
+                          ),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                             color: palette.primaryText,
-                            fontSize: compact ? 12 : 15,
+                            fontSize: widget.compact ? 12 : 15,
                             fontWeight: FontWeight.w900,
                           ),
                         ),
-                        SizedBox(height: compact ? 4 : 7),
-                        Text(
-                          availability.isAvailable
-                              ? synopsis ?? 'Episode details unavailable.'
-                              : 'This episode has not aired yet.',
-                          maxLines: compact && statusLabel != null
-                              ? 1
-                              : compact
-                              ? 2
-                              : 3,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: palette.mutedText,
-                            fontSize: compact ? 10 : 12,
-                            height: 1.25,
-                            fontWeight: FontWeight.w600,
+                        SizedBox(height: widget.compact ? 4 : 7),
+                        ConstrainedBox(
+                          constraints: BoxConstraints(
+                            maxHeight: descriptionViewportHeight,
+                          ),
+                          child: ClipRect(
+                            child: ScrollConfiguration(
+                              behavior: ScrollConfiguration.of(
+                                context,
+                              ).copyWith(scrollbars: false, overscroll: false),
+                              child: SingleChildScrollView(
+                                key: ValueKey(
+                                  'episode-browser-description-scroll-${widget.episode}',
+                                ),
+                                controller: _descriptionScrollController,
+                                physics: const NeverScrollableScrollPhysics(),
+                                child: Text(
+                                  _description,
+                                  key: ValueKey(
+                                    'episode-browser-description-${widget.episode}',
+                                  ),
+                                  style: descriptionStyle,
+                                ),
+                              ),
+                            ),
                           ),
                         ),
                         if (statusLabel != null) ...[
-                          SizedBox(height: compact ? 4 : 7),
+                          SizedBox(height: widget.compact ? 4 : 7),
                           _EpisodeCardBadge(
                             label: statusLabel,
-                            compact: compact,
+                            compact: widget.compact,
                           ),
                         ],
                       ],

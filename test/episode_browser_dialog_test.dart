@@ -3,6 +3,7 @@ import 'package:anime_tv/core/widgets/network_artwork.dart';
 import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
 import 'package:anime_tv/features/catalog/domain/catalog_episode_metadata.dart';
 import 'package:anime_tv/features/catalog/presentation/episode_browser_dialog.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -229,6 +230,392 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('embedded browser opens with a restrained fade and lift', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(960, 540);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.dark,
+        home: EpisodeBrowserDialog(
+          anime: const AnimeSummary(
+            id: 908,
+            title: 'Animated Episodes',
+            description: '',
+            episodes: 2,
+            score: null,
+          ),
+          selectedEpisode: 1,
+          totalEpisodes: 2,
+          embedded: true,
+          onClose: () {},
+          onEpisodeSelected: (_) {},
+        ),
+      ),
+    );
+
+    final animation = tester.widget<TweenAnimationBuilder<double>>(
+      find.byKey(const ValueKey('episode-browser-open-animation')),
+    );
+    expect(animation.duration, const Duration(milliseconds: 160));
+    expect(animation.curve, Curves.easeOutCubic);
+
+    final initialOpacity = tester.widget<Opacity>(
+      find.byKey(const ValueKey('episode-browser-open-opacity')),
+    );
+    final initialSlide = tester.widget<Transform>(
+      find.byKey(const ValueKey('episode-browser-open-slide')),
+    );
+    expect(initialOpacity.opacity, 0);
+    expect(initialSlide.transform.getTranslation().y, 10);
+
+    await tester.pump(const Duration(milliseconds: 80));
+    final midOpacity = tester.widget<Opacity>(
+      find.byKey(const ValueKey('episode-browser-open-opacity')),
+    );
+    final midSlide = tester.widget<Transform>(
+      find.byKey(const ValueKey('episode-browser-open-slide')),
+    );
+    expect(midOpacity.opacity, inExclusiveRange(0, 1));
+    expect(midSlide.transform.getTranslation().y, inExclusiveRange(0, 10));
+
+    await tester.pump(const Duration(milliseconds: 80));
+    final finalOpacity = tester.widget<Opacity>(
+      find.byKey(const ValueKey('episode-browser-open-opacity')),
+    );
+    final finalSlide = tester.widget<Transform>(
+      find.byKey(const ValueKey('episode-browser-open-slide')),
+    );
+    expect(finalOpacity.opacity, 1);
+    expect(finalSlide.transform.getTranslation().y, 0);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'only a focused card description scrolls after three seconds and resets',
+    (tester) async {
+      tester.view.physicalSize = const Size(1920, 1080);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      const longSynopsis =
+          'A patient investigation carries the crew across the entire city '
+          'while each new clue changes what they know about the missing ship. '
+          'Old allies return, hidden motives surface, and the team must decide '
+          'who they can trust before the final signal disappears forever. '
+          'The journey continues through several districts so every important '
+          'detail has enough room to be presented to the viewer.';
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: AppTheme.dark,
+          home: const EpisodeBrowserDialog(
+            anime: AnimeSummary(
+              id: 909,
+              title: 'Scrolling Episodes',
+              description: '',
+              episodes: 2,
+              score: null,
+            ),
+            selectedEpisode: 1,
+            totalEpisodes: 2,
+            episodeMetadata: <int, CatalogEpisodeMetadata>{
+              1: CatalogEpisodeMetadata(
+                episode: 1,
+                title: 'The Title Must Stay Still',
+                synopsis: longSynopsis,
+              ),
+              2: CatalogEpisodeMetadata(
+                episode: 2,
+                title: 'A Short Follow-up',
+                synopsis: 'A short description.',
+              ),
+            },
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final descriptionController = _descriptionController(tester, 1);
+      expect(descriptionController.position.maxScrollExtent, greaterThan(0));
+      final titleTop = tester.getTopLeft(
+        find.byKey(const ValueKey('episode-browser-title-1')),
+      );
+      final descriptionTop = tester.getTopLeft(
+        find.byKey(const ValueKey('episode-browser-description-1')),
+      );
+
+      await tester.pump(const Duration(milliseconds: 2999));
+      expect(descriptionController.offset, 0);
+      await tester.pump(const Duration(milliseconds: 1));
+      await tester.pump(const Duration(seconds: 1));
+
+      expect(descriptionController.offset, greaterThan(0));
+      expect(
+        descriptionController.offset,
+        lessThan(descriptionController.position.maxScrollExtent),
+      );
+      expect(
+        tester
+            .getTopLeft(
+              find.byKey(const ValueKey('episode-browser-description-1')),
+            )
+            .dy,
+        lessThan(descriptionTop.dy),
+      );
+      expect(
+        tester.getTopLeft(
+          find.byKey(const ValueKey('episode-browser-title-1')),
+        ),
+        titleTop,
+      );
+
+      await tester.pump(const Duration(minutes: 1));
+      expect(
+        descriptionController.offset,
+        closeTo(descriptionController.position.maxScrollExtent, .01),
+      );
+
+      _cardFocusNode(tester, 2).requestFocus();
+      await tester.pump();
+      expect(descriptionController.offset, 0);
+      await tester.pump(const Duration(seconds: 4));
+      expect(descriptionController.offset, 0);
+
+      _cardFocusNode(tester, 1).requestFocus();
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 3));
+      _cardFocusNode(tester, 2).requestFocus();
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+      expect(descriptionController.offset, 0);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('reduced motion keeps the focused synopsis still', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1920, 1080);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    const synopsis =
+        'A deliberately long accessible synopsis fills enough lines to exceed '
+        'the visible card. It should remain completely still when the device '
+        'has disabled animations, even after the normal three second delay. '
+        'The complete text remains available to assistive technology.';
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.dark,
+        home: Builder(
+          builder: (context) => MediaQuery(
+            data: MediaQuery.of(context).copyWith(disableAnimations: true),
+            child: const EpisodeBrowserDialog(
+              anime: AnimeSummary(
+                id: 912,
+                title: 'Reduced Motion Episodes',
+                description: '',
+                episodes: 1,
+                score: null,
+              ),
+              selectedEpisode: 1,
+              totalEpisodes: 1,
+              episodeMetadata: <int, CatalogEpisodeMetadata>{
+                1: CatalogEpisodeMetadata(
+                  episode: 1,
+                  title: 'An Accessible Episode',
+                  synopsis: synopsis,
+                ),
+              },
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final descriptionController = _descriptionController(tester, 1);
+    expect(descriptionController.position.maxScrollExtent, greaterThan(0));
+    expect(_cardHasFocus(tester, 1), isTrue);
+    await tester.pump(const Duration(seconds: 10));
+    expect(descriptionController.offset, 0);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('episode card semantics include the complete synopsis', (
+    tester,
+  ) async {
+    final semanticsHandle = tester.ensureSemantics();
+    tester.view.physicalSize = const Size(1920, 1080);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    const synopsis =
+        'Every word of this synopsis should be spoken by TalkBack.';
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.dark,
+        home: const EpisodeBrowserDialog(
+          anime: AnimeSummary(
+            id: 913,
+            title: 'Semantic Episodes',
+            description: '',
+            episodes: 1,
+            score: null,
+          ),
+          selectedEpisode: 1,
+          totalEpisodes: 1,
+          episodeMetadata: <int, CatalogEpisodeMetadata>{
+            1: CatalogEpisodeMetadata(
+              episode: 1,
+              title: 'The Spoken Episode',
+              synopsis: synopsis,
+            ),
+          },
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final semanticsWidgets = tester.widgetList<Semantics>(
+      find.descendant(
+        of: find.byKey(const ValueKey('episode-browser-card-1')),
+        matching: find.byType(Semantics),
+      ),
+    );
+    expect(
+      semanticsWidgets.any(
+        (widget) => widget.properties.label?.contains(synopsis) ?? false,
+      ),
+      isTrue,
+    );
+    semanticsHandle.dispose();
+  });
+
+  testWidgets('pointer hover and touch focus start the description delay', (
+    tester,
+  ) async {
+    final previousHighlightStrategy = FocusManager.instance.highlightStrategy;
+    FocusManager.instance.highlightStrategy =
+        FocusHighlightStrategy.alwaysTraditional;
+    addTearDown(
+      () => FocusManager.instance.highlightStrategy = previousHighlightStrategy,
+    );
+    tester.view.physicalSize = const Size(1920, 1080);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    const longSynopsis =
+        'This deliberately long episode description provides enough text to '
+        'overflow the synopsis viewport. It keeps adding context about the '
+        'characters, their route, their discoveries, and their eventual plan '
+        'so the automatic upward movement is observable in this focused test.';
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.dark,
+        home: EpisodeBrowserDialog(
+          anime: const AnimeSummary(
+            id: 910,
+            title: 'Pointer Episodes',
+            description: '',
+            episodes: 2,
+            score: null,
+          ),
+          selectedEpisode: 2,
+          totalEpisodes: 2,
+          embedded: true,
+          episodeMetadata: const <int, CatalogEpisodeMetadata>{
+            1: CatalogEpisodeMetadata(
+              episode: 1,
+              title: 'Pointer Target',
+              synopsis: longSynopsis,
+            ),
+          },
+          onClose: () {},
+          onEpisodeSelected: (_) {},
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final descriptionController = _descriptionController(tester, 1);
+    expect(descriptionController.position.maxScrollExtent, greaterThan(0));
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    addTearDown(mouse.removePointer);
+    await mouse.addPointer(location: Offset.zero);
+    await tester.pump();
+    await mouse.moveTo(
+      tester.getCenter(find.byKey(const ValueKey('episode-browser-card-1'))),
+    );
+    await tester.pump();
+    expect(_cardHasFocus(tester, 1), isTrue);
+
+    await tester.pump(const Duration(seconds: 3));
+    await tester.pump(const Duration(seconds: 1));
+    expect(descriptionController.offset, greaterThan(0));
+
+    await mouse.moveTo(Offset.zero);
+    _cardFocusNode(tester, 2).requestFocus();
+    await tester.pump();
+    expect(descriptionController.offset, 0);
+
+    await tester.tap(find.byKey(const ValueKey('episode-browser-card-1')));
+    await tester.pump();
+    expect(_cardHasFocus(tester, 1), isTrue);
+    await tester.pump(const Duration(seconds: 3));
+    await tester.pump(const Duration(seconds: 1));
+    expect(descriptionController.offset, greaterThan(0));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('disposing a focused card cancels its delayed scroll', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(960, 540);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.dark,
+        home: const EpisodeBrowserDialog(
+          anime: AnimeSummary(
+            id: 911,
+            title: 'Disposable Episodes',
+            description: '',
+            episodes: 1,
+            score: null,
+          ),
+          selectedEpisode: 1,
+          totalEpisodes: 1,
+          episodeMetadata: <int, CatalogEpisodeMetadata>{
+            1: CatalogEpisodeMetadata(
+              episode: 1,
+              title: 'A Focused Episode',
+              synopsis: 'A description that will never start scrolling.',
+            ),
+          },
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(_cardHasFocus(tester, 1), isTrue);
+    await tester.pump(const Duration(seconds: 1));
+
+    await tester.pumpWidget(const MaterialApp(home: SizedBox.shrink()));
+    await tester.pump(const Duration(seconds: 4));
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('embedded browser exits upward from its first visible row', (
     tester,
   ) async {
@@ -396,13 +783,25 @@ void main() {
 }
 
 bool _cardHasFocus(WidgetTester tester, int episode) {
+  return _cardFocusNode(tester, episode).hasFocus;
+}
+
+FocusableActionDetector _cardFocusable(WidgetTester tester, int episode) {
   final focusable = find.descendant(
     of: find.byKey(ValueKey('episode-browser-card-$episode')),
     matching: find.byType(FocusableActionDetector),
   );
+  return tester.widget<FocusableActionDetector>(focusable);
+}
+
+FocusNode _cardFocusNode(WidgetTester tester, int episode) {
+  return _cardFocusable(tester, episode).focusNode!;
+}
+
+ScrollController _descriptionController(WidgetTester tester, int episode) {
   return tester
-          .widget<FocusableActionDetector>(focusable)
-          .focusNode
-          ?.hasFocus ==
-      true;
+      .widget<SingleChildScrollView>(
+        find.byKey(ValueKey('episode-browser-description-scroll-$episode')),
+      )
+      .controller!;
 }

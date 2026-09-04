@@ -1374,6 +1374,155 @@ void main() {
       expect(installs, 0);
     });
 
+    test(
+      'foreground polling discovers updates without downloading them',
+      () async {
+        final source = _MemoryReleaseSource('1.0.2');
+        final controller = _controller(storage: storage, publicSource: source);
+
+        await controller.checkForUpdates(
+          automatic: true,
+          downloadAvailable: false,
+        );
+
+        expect(source.latestCalls, 1);
+        expect(source.downloadCalls, 0);
+        expect(controller.state.phase, AppUpdatePhase.available);
+        expect(controller.state.release?.version, '1.0.2');
+
+        await controller.checkForUpdates(
+          automatic: true,
+          downloadAvailable: false,
+        );
+        expect(source.latestCalls, 1, reason: 'the automatic throttle is kept');
+      },
+    );
+
+    test(
+      'foreground polling still discovers updates when auto-download is off',
+      () async {
+        final source = _MemoryReleaseSource('1.0.2');
+        final controller = _controller(storage: storage, publicSource: source);
+        await controller.setAutomaticUpdates(false);
+
+        await controller.checkForUpdates(automatic: true);
+
+        expect(source.latestCalls, 1);
+        expect(source.downloadCalls, 0);
+        expect(controller.state.phase, AppUpdatePhase.available);
+        expect(controller.state.release?.version, '1.0.2');
+        expect(controller.state.automaticUpdates, isFalse);
+      },
+    );
+
+    test('foreground polling downloads when auto-download is on', () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'automatic-update-download-',
+      );
+      addTearDown(() => directory.delete(recursive: true));
+      final source = _MemoryReleaseSource('1.0.2');
+      final controller = _controller(
+        storage: storage,
+        publicSource: source,
+        cache: directory,
+      );
+
+      await controller.checkForUpdates(automatic: true);
+
+      expect(source.latestCalls, 1);
+      expect(source.downloadCalls, 1);
+      expect(controller.state.phase, AppUpdatePhase.ready);
+      expect(controller.state.downloadedPath, isNotNull);
+    });
+
+    test('automatic polling preserves an update already downloaded', () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'ready-update-poll-',
+      );
+      addTearDown(() => directory.delete(recursive: true));
+      final source = _MemoryReleaseSource('1.0.2');
+      final controller = _controller(
+        storage: storage,
+        publicSource: source,
+        cache: directory,
+      );
+      await controller.checkForUpdates();
+      final downloadedPath = controller.state.downloadedPath;
+      expect(controller.state.phase, AppUpdatePhase.ready);
+      expect(source.downloadCalls, 1);
+
+      await controller.checkForUpdates(
+        automatic: true,
+        downloadAvailable: false,
+      );
+
+      expect(source.latestCalls, 2);
+      expect(source.downloadCalls, 1);
+      expect(controller.state.phase, AppUpdatePhase.ready);
+      expect(controller.state.downloadedPath, downloadedPath);
+    });
+
+    test('a newer remote release supersedes an older ready update', () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'newer-ready-update-',
+      );
+      addTearDown(() => directory.delete(recursive: true));
+      final source = _MemoryReleaseSource('1.0.2');
+      final controller = _controller(
+        storage: storage,
+        publicSource: source,
+        cache: directory,
+      );
+      await controller.checkForUpdates();
+      final olderPath = controller.state.downloadedPath;
+      expect(olderPath, contains('v1.0.2'));
+
+      source.version = '1.0.3';
+      await controller.checkForUpdates(automatic: true);
+
+      expect(source.latestCalls, 2);
+      expect(source.downloadCalls, 2);
+      expect(source.downloadedVersions, ['1.0.2', '1.0.3']);
+      expect(controller.state.phase, AppUpdatePhase.ready);
+      expect(controller.state.release?.version, '1.0.3');
+      expect(controller.state.downloadedPath, contains('v1.0.3'));
+      expect(controller.state.downloadedPath, isNot(olderPath));
+    });
+
+    test(
+      'polling preserves a matching downloaded APK after installer failure',
+      () async {
+        final directory = await Directory.systemTemp.createTemp(
+          'installer-error-update-',
+        );
+        addTearDown(() => directory.delete(recursive: true));
+        final source = _MemoryReleaseSource('1.0.2');
+        final controller = _controller(
+          storage: storage,
+          publicSource: source,
+          cache: directory,
+          installer: (_) async => throw StateError('installer unavailable'),
+        );
+        await controller.checkForUpdates();
+        final downloadedPath = controller.state.downloadedPath;
+        await controller.installDownloadedUpdate();
+        expect(controller.state.phase, AppUpdatePhase.error);
+        expect(controller.state.downloadedPath, downloadedPath);
+
+        await controller.checkForUpdates(
+          automatic: true,
+          downloadAvailable: false,
+        );
+
+        expect(source.latestCalls, 2);
+        expect(source.downloadCalls, 1);
+        expect(controller.state.phase, AppUpdatePhase.ready);
+        expect(controller.state.message, contains('ready to install'));
+        expect(controller.state.downloadedPath, downloadedPath);
+        expect(File(downloadedPath!).existsSync(), isTrue);
+      },
+    );
+
     test('future automatic-check timestamps do not suppress retries', () async {
       FlutterSecureStorage.setMockInitialValues({
         lastAutomaticUpdateCheckStorageKey: DateTime.now()
@@ -1542,7 +1691,7 @@ class _MemoryReleaseSource implements AppReleaseSource {
 
   static final List<int> payload = List<int>.filled(1024 * 1024, 7);
 
-  final String version;
+  String version;
   final List<String>? historyVersions;
   final Map<String, int> androidVersionCodes;
   final String? digest;

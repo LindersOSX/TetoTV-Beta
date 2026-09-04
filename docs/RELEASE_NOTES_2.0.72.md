@@ -1,4 +1,4 @@
-# TetoTV 2.0.71 Beta
+# TetoTV 2.0.72 Beta
 
 > [!WARNING]
 > No independent native-license review: This Beta has not received independent native-library licensing review. Automated checks verify the APK, native-source bundle, notices, pinned inputs, and checksums, but do not establish legal compliance or reproducible builds.
@@ -20,16 +20,16 @@ This Beta adds a more customizable manga reader and richer, privacy-safe playbac
 
 ## Release assets
 
-- `TetoTV-v2.0.71-universal.apk` — install this file on a supported Android phone, tablet, TV, Google TV, or Fire TV device.
-- `TetoTV-v2.0.71-native-playback-sources.zip` — native playback source and license material for developers and compliance review; normal users do not need it.
+- `TetoTV-v2.0.72-universal.apk` — install this file on a supported Android phone, tablet, TV, Google TV, or Fire TV device.
+- `TetoTV-v2.0.72-native-playback-sources.zip` — native playback source and license material for developers and compliance review; normal users do not need it.
 - `SHA256SUMS` — integrity hashes for the two files above.
 
 ## Beta notes
 
-- This is a Beta-channel build with Android build code `410048`.
+- This is a Beta-channel build with Android build code `410049`.
 - No Public APK is being published with this release.
 - This update adds diagnostic evidence; it does not claim that every device-specific playback lag issue is fixed. Native metric availability varies by device and stream.
 - No manga repository, extension, provider, catalog, or title is bundled or recommended by TetoTV.
-- Android does not permit an in-place install over an APK with a higher build code. A future Public counterpart must use build code `410048` or newer for data-preserving channel switching.
+- Android does not permit an in-place install over an APK with a higher build code. A future Public counterpart must use build code `410049` or newer for data-preserving channel switching.
 
-<!-- tetotv-android-version-code: 410048 -->
+<!-- tetotv-android-version-code: 410049 -->

@@ -1,8 +1,13 @@
 import 'dart:io';
 
+import 'package:anime_tv/core/platform/android_tv_bridge.dart';
+import 'package:anime_tv/features/auth/application/pairing_controller.dart';
 import 'package:anime_tv/features/auth/application/tracking_token_service.dart';
+import 'package:anime_tv/features/auth/data/simkl_broker_capability_client.dart';
 import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
 import 'package:anime_tv/features/marketplace/domain/addon_models.dart';
+import 'package:anime_tv/features/settings/application/simkl_account_controller.dart';
+import 'package:anime_tv/features/tracking/data/simkl_account_session.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -150,6 +155,17 @@ class TrackingAccountsController extends StateNotifier<TrackingAccountsState> {
   }
 
   Future<void> disconnect(TrackingProvider provider) async {
+    final simklScopes = <String?>{};
+    if (provider == TrackingProvider.simkl) {
+      simklScopes.add(await _tokenService.activeProfileId(provider));
+      simklScopes.addAll([
+        for (final profile in await _tokenService.savedProfiles())
+          if (profile.provider == TrackingProvider.simkl) profile.id,
+      ]);
+      if (state.usernames[provider] case final username?) {
+        simklScopes.add(simklProfileCacheScope(username));
+      }
+    }
     // Remove the account from the visible state before the first await. This
     // keeps a slow secure-storage write or profile refresh from leaving a
     // disconnected account visible and also invalidates any older load.
@@ -167,6 +183,11 @@ class TrackingAccountsController extends StateNotifier<TrackingAccountsState> {
       errors: Map<TrackingProvider, String>.of(state.errors)..remove(provider),
     );
     await _tokenService.clear(provider);
+    if (provider == TrackingProvider.simkl) {
+      await _ref
+          .read(simklAccountSessionRegistryProvider)
+          .clearPersistentScopes(simklScopes);
+    }
     if (!mounted) return;
     _ref.invalidate(trackingHomeProvider);
     await load();
@@ -273,7 +294,46 @@ class TrackingAccountsController extends StateNotifier<TrackingAccountsState> {
     return switch (provider) {
       TrackingProvider.anilist => _anilistProfile(token),
       TrackingProvider.myAnimeList => _malProfile(token),
+      TrackingProvider.simkl => _simklProfile(token),
     };
+  }
+
+  Future<TrackingAccountProfile> _simklProfile(String token) async {
+    final storage = _ref.read(secureStorageProvider);
+    var clientId = (await storage.read(key: simklClientIdStorageKey))?.trim();
+    if (clientId == null || clientId.isEmpty) {
+      final brokerUrl = await effectiveAuthBrokerBaseUrl(storage);
+      final capability = brokerUrl == null
+          ? null
+          : await SimklBrokerCapabilityClient(baseUrl: brokerUrl).probe();
+      clientId = capability?.clientId;
+      if (clientId != null && clientId.isNotEmpty) {
+        await storage.write(key: simklClientIdStorageKey, value: clientId);
+      }
+    }
+    if (clientId == null || clientId.isEmpty) {
+      throw StateError(
+        'SIMKL needs the public app ID from the TetoTV companion. Reconnect SIMKL.',
+      );
+    }
+    final version = await AndroidTvBridge.instance.getAppVersion();
+    final profile = await _ref
+        .read(simklAccountSessionRegistryProvider)
+        .session(
+          accessToken: token,
+          clientId: clientId,
+          appVersion: version.name == 'unknown' ? '2' : version.name,
+          cacheScopeLoader: () => _tokenService.verifiedActiveProfileId(
+            TrackingProvider.simkl,
+            token,
+          ),
+        )
+        .profile();
+    return TrackingAccountProfile(
+      provider: TrackingProvider.simkl,
+      username: profile.username,
+      avatarUrl: profile.avatarUrl,
+    );
   }
 
   Future<TrackingAccountProfile> _anilistProfile(String token) async {

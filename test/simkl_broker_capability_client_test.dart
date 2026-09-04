@@ -31,6 +31,46 @@ void main() {
     );
   });
 
+  test('accepts direct PIN readiness with a public client ID alone', () async {
+    final client = SimklBrokerCapabilityClient(
+      baseUrl: 'https://auth.example.test',
+      dio: _jsonDio(
+        (_) => {
+          'status': 'ok',
+          'providers': {'simkl': false},
+          'provider_device_flows': {'simkl': true},
+          'provider_client_ids': {'simkl': 'public-simkl-client-id'},
+        },
+      ),
+    );
+
+    final capability = await client.probe();
+
+    expect(capability?.clientId, 'public-simkl-client-id');
+    expect(capability?.callbackUri, isNull);
+  });
+
+  test('direct PIN readiness does not trust an unrelated callback', () async {
+    final client = SimklBrokerCapabilityClient(
+      baseUrl: 'https://auth.example.test',
+      dio: _jsonDio(
+        (_) => {
+          'status': 'ok',
+          'provider_device_flows': {'simkl': true},
+          'callbacks': {
+            'simkl': 'https://attacker.example.test/oauth/simkl/callback',
+          },
+          'provider_client_ids': {'simkl': 'public-simkl-client-id'},
+        },
+      ),
+    );
+
+    final capability = await client.probe();
+
+    expect(capability, isNotNull);
+    expect(capability?.callbackUri, isNull);
+  });
+
   test('fails closed for incomplete or cross-origin readiness', () async {
     for (final payload in <Map<String, dynamic>>[
       {

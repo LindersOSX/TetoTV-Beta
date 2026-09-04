@@ -15,6 +15,11 @@ Manual API-token entry remains available as a fallback.
 
 TorBox currently requires a paid plan for third-party API streaming.
 
+The approval page is hosted by TorBox, not TetoTV. The browser used to enter
+the code must already have a valid TorBox sign-in. If TorBox's **Continue**
+button does nothing, reload its page and re-enter the still-current code, or
+use Edge or another browser while leaving TetoTV's pairing screen open.
+
 ## Episode flow
 
 1. A source explicitly configured by the user supplies release metadata and a

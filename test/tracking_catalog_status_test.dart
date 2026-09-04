@@ -13,6 +13,7 @@ void main() {
       FlutterSecureStorage.setMockInitialValues({
         TrackingProvider.anilist.tokenStorageKey: 'anilist-token',
         TrackingProvider.myAnimeList.tokenStorageKey: 'mal-token',
+        TrackingProvider.simkl.tokenStorageKey: 'simkl-token',
       });
       final repositories = <TrackingProvider, _RecordingRepository>{};
       final container = ProviderContainer(
@@ -39,6 +40,11 @@ void main() {
       expect(repositories[TrackingProvider.myAnimeList]!.statusUpdates, [
         (mediaId: 202, status: TrackingListStatus.planToWatch),
       ]);
+      final simklUpdate =
+          repositories[TrackingProvider.simkl]!.externalStatusUpdates.single;
+      expect(simklUpdate.ids.anilistId, 101);
+      expect(simklUpdate.ids.malId, 202);
+      expect(simklUpdate.status, TrackingListStatus.planToWatch);
     },
   );
 
@@ -65,7 +71,7 @@ void main() {
         isA<CatalogTrackingValidationError>().having(
           (error) => error.message,
           'message',
-          contains('Connect AniList or MAL'),
+          contains('Connect AniList, MAL, or SIMKL'),
         ),
       ),
     );
@@ -116,6 +122,7 @@ void main() {
       FlutterSecureStorage.setMockInitialValues({
         TrackingProvider.anilist.tokenStorageKey: 'anilist-token',
         TrackingProvider.myAnimeList.tokenStorageKey: 'mal-token',
+        TrackingProvider.simkl.tokenStorageKey: 'simkl-token',
       });
       final repositories = <TrackingProvider, _RecordingRepository>{};
       final container = ProviderContainer(
@@ -134,13 +141,21 @@ void main() {
       expect(result.updated, TrackingProvider.values.toSet());
       expect(repositories[TrackingProvider.anilist]!.removals, [303]);
       expect(repositories[TrackingProvider.myAnimeList]!.removals, [404]);
+      final simklRemoval =
+          repositories[TrackingProvider.simkl]!.externalRemovals.single;
+      expect(simklRemoval.anilistId, 303);
+      expect(simklRemoval.malId, 404);
     },
   );
 }
 
-class _RecordingRepository implements TrackingRepository {
+class _RecordingRepository
+    implements TrackingRepository, ExternalIdTrackingRepository {
   final statusUpdates = <({int mediaId, TrackingListStatus status})>[];
   final removals = <int>[];
+  final externalStatusUpdates =
+      <({TrackingMediaIds ids, TrackingListStatus status})>[];
+  final externalRemovals = <TrackingMediaIds>[];
 
   @override
   Future<int?> currentProgress(int mediaId) async => null;
@@ -165,5 +180,27 @@ class _RecordingRepository implements TrackingRepository {
     required TrackingListStatus status,
   }) async {
     statusUpdates.add((mediaId: mediaId, status: status));
+  }
+
+  @override
+  Future<int?> currentProgressByIds(TrackingMediaIds ids) async => null;
+
+  @override
+  Future<void> updateProgressByIds({
+    required TrackingMediaIds ids,
+    required int completedEpisodes,
+  }) async {}
+
+  @override
+  Future<void> updateStatusByIds({
+    required TrackingMediaIds ids,
+    required TrackingListStatus status,
+  }) async {
+    externalStatusUpdates.add((ids: ids, status: status));
+  }
+
+  @override
+  Future<void> removeFromListByIds(TrackingMediaIds ids) async {
+    externalRemovals.add(ids);
   }
 }

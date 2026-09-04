@@ -244,6 +244,39 @@ void main() {
     },
   );
 
+  test(
+    'a replacement SIMKL token cannot reuse the previous cache slot',
+    () async {
+      FlutterSecureStorage.setMockInitialValues({
+        TrackingProvider.simkl.tokenStorageKey: 'old-simkl-token',
+      });
+      final service = TrackingTokenService(storage);
+      final oldProfile = await service.rememberCurrentProfile(
+        TrackingProvider.simkl,
+        'Old SIMKL User',
+      );
+      await storage.write(
+        key: TrackingProvider.simkl.tokenStorageKey,
+        value: 'replacement-simkl-token',
+      );
+
+      expect(
+        await service.verifiedActiveProfileId(
+          TrackingProvider.simkl,
+          'replacement-simkl-token',
+        ),
+        isNull,
+      );
+      expect(
+        await service.verifiedActiveProfileId(
+          TrackingProvider.simkl,
+          'old-simkl-token',
+        ),
+        oldProfile?.id,
+      );
+    },
+  );
+
   test('profile activation restores rotating MAL session metadata', () async {
     FlutterSecureStorage.setMockInitialValues({
       TrackingProvider.myAnimeList.tokenStorageKey: 'mal-access-a',

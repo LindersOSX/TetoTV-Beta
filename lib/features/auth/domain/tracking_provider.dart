@@ -12,6 +12,13 @@ enum TrackingProvider {
     tokenStorageKey: 'myanimelist_access_token',
     refreshTokenStorageKey: 'myanimelist_refresh_token',
     expiresAtStorageKey: 'myanimelist_token_expires_at',
+  ),
+  simkl(
+    slug: 'simkl',
+    displayName: 'SIMKL',
+    tokenStorageKey: 'simkl_access_token',
+    refreshTokenStorageKey: 'simkl_refresh_token',
+    expiresAtStorageKey: 'simkl_token_expires_at',
   );
 
   const TrackingProvider({

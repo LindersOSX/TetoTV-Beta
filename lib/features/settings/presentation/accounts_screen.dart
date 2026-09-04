@@ -977,22 +977,23 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
         _premiumizeActionFocus,
       ],
     };
-    final selectedTrackingNodes =
-        preferences.trackingProvider == TrackingProvider.anilist
-        ? <FocusNode?>[
-            _simklFocus,
-            _anilistSaveFocus,
-            _anilistTokenFocus,
-            _trackingDisconnectFocus,
-            _anilistFocus,
-          ]
-        : <FocusNode?>[
-            _simklFocus,
-            _malSaveFocus,
-            _malTokenFocus,
-            _trackingDisconnectFocus,
-            _malFocus,
-          ];
+    final selectedTrackingNodes = switch (preferences.trackingProvider) {
+      TrackingProvider.anilist => <FocusNode?>[
+        _simklFocus,
+        _anilistSaveFocus,
+        _anilistTokenFocus,
+        _trackingDisconnectFocus,
+        _anilistFocus,
+      ],
+      TrackingProvider.myAnimeList => <FocusNode?>[
+        _simklFocus,
+        _malSaveFocus,
+        _malTokenFocus,
+        _trackingDisconnectFocus,
+        _malFocus,
+      ],
+      TrackingProvider.simkl => <FocusNode?>[_simklFocus],
+    };
     return switch (section) {
       _SettingsSection.themeDisplay => _showTitleStyleFocus,
       _SettingsSection.homeScreen => _continueWatchingFocus,
@@ -1447,10 +1448,11 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       DebridService.allDebrid => _allDebridSaveFocus,
       DebridService.premiumize => _premiumizeSaveFocus,
     };
-    final selectedTrackingAction =
-        preferences.trackingProvider == TrackingProvider.anilist
-        ? _anilistFocus
-        : _malFocus;
+    final selectedTrackingAction = switch (preferences.trackingProvider) {
+      TrackingProvider.anilist => _anilistFocus,
+      TrackingProvider.myAnimeList => _malFocus,
+      TrackingProvider.simkl => _simklFocus,
+    };
     FocusNode? target;
     final shelfNodes = [
       for (final shelf in ref.read(homeShelfOrderProvider))
@@ -2175,13 +2177,16 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       }
     } else if (current == _simklFocus) {
       if (key == LogicalKeyboardKey.arrowUp) {
-        if (focusNodeIsMounted(_trackingDisconnectFocus)) {
+        if (preferences.trackingProvider == TrackingProvider.simkl) {
+          target = _trackingProviderFocus;
+        } else if (focusNodeIsMounted(_trackingDisconnectFocus)) {
           target = _trackingDisconnectFocus;
         } else {
-          final selectedSave =
-              preferences.trackingProvider == TrackingProvider.anilist
-              ? _anilistSaveFocus
-              : _malSaveFocus;
+          final selectedSave = switch (preferences.trackingProvider) {
+            TrackingProvider.anilist => _anilistSaveFocus,
+            TrackingProvider.myAnimeList => _malSaveFocus,
+            TrackingProvider.simkl => _simklFocus,
+          };
           target = focusNodeIsMounted(selectedSave)
               ? selectedSave
               : selectedTrackingAction;
@@ -3523,73 +3528,76 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                                           .setTrackingProvider,
                                       showDivider: true,
                                     ),
-                                    _TrackingPanel(
-                                      provider: preferences.trackingProvider,
-                                      color:
-                                          preferences.trackingProvider ==
-                                              TrackingProvider.anilist
-                                          ? context.appPalette.accentBright
-                                          : const Color(0xFFB41F3D),
-                                      description:
-                                          preferences.trackingProvider ==
-                                              TrackingProvider.anilist
-                                          ? 'Seasonal discovery, lists, and automatic episode progress.'
-                                          : 'Sync watch progress and MAL statuses automatically.',
-                                      username:
-                                          tracking.usernames[preferences
-                                              .trackingProvider],
-                                      error: tracking
-                                          .errors[preferences.trackingProvider],
-                                      isLoading: tracking.isLoading,
-                                      onConnect: () async {
-                                        await context.push(
-                                          preferences.trackingProvider ==
-                                                  TrackingProvider.anilist
-                                              ? '/pair/anilist'
-                                              : '/pair/myanimelist',
-                                        );
-                                        await ref
+                                    if (preferences.trackingProvider !=
+                                        TrackingProvider.simkl)
+                                      _TrackingPanel(
+                                        provider: preferences.trackingProvider,
+                                        color:
+                                            preferences.trackingProvider ==
+                                                TrackingProvider.anilist
+                                            ? context.appPalette.accentBright
+                                            : const Color(0xFFB41F3D),
+                                        description:
+                                            preferences.trackingProvider ==
+                                                TrackingProvider.anilist
+                                            ? 'Seasonal discovery, lists, and automatic episode progress.'
+                                            : 'Sync watch progress and MAL statuses automatically.',
+                                        username:
+                                            tracking.usernames[preferences
+                                                .trackingProvider],
+                                        error:
+                                            tracking.errors[preferences
+                                                .trackingProvider],
+                                        isLoading: tracking.isLoading,
+                                        onConnect: () async {
+                                          await context.push(
+                                            preferences.trackingProvider ==
+                                                    TrackingProvider.anilist
+                                                ? '/pair/anilist'
+                                                : '/pair/myanimelist',
+                                          );
+                                          await ref
+                                              .read(
+                                                trackingAccountsControllerProvider
+                                                    .notifier,
+                                              )
+                                              .load();
+                                        },
+                                        onDisconnect: () => ref
                                             .read(
                                               trackingAccountsControllerProvider
                                                   .notifier,
                                             )
-                                            .load();
-                                      },
-                                      onDisconnect: () => ref
-                                          .read(
-                                            trackingAccountsControllerProvider
-                                                .notifier,
-                                          )
-                                          .disconnect(
-                                            preferences.trackingProvider,
-                                          ),
-                                      onSaveToken: (token) => ref
-                                          .read(
-                                            trackingAccountsControllerProvider
-                                                .notifier,
-                                          )
-                                          .save(
-                                            preferences.trackingProvider,
-                                            token,
-                                          ),
-                                      focusNode:
-                                          preferences.trackingProvider ==
-                                              TrackingProvider.anilist
-                                          ? _anilistFocus
-                                          : _malFocus,
-                                      tokenFocusNode:
-                                          preferences.trackingProvider ==
-                                              TrackingProvider.anilist
-                                          ? _anilistTokenFocus
-                                          : _malTokenFocus,
-                                      saveFocusNode:
-                                          preferences.trackingProvider ==
-                                              TrackingProvider.anilist
-                                          ? _anilistSaveFocus
-                                          : _malSaveFocus,
-                                      disconnectFocusNode:
-                                          _trackingDisconnectFocus,
-                                    ),
+                                            .disconnect(
+                                              preferences.trackingProvider,
+                                            ),
+                                        onSaveToken: (token) => ref
+                                            .read(
+                                              trackingAccountsControllerProvider
+                                                  .notifier,
+                                            )
+                                            .save(
+                                              preferences.trackingProvider,
+                                              token,
+                                            ),
+                                        focusNode:
+                                            preferences.trackingProvider ==
+                                                TrackingProvider.anilist
+                                            ? _anilistFocus
+                                            : _malFocus,
+                                        tokenFocusNode:
+                                            preferences.trackingProvider ==
+                                                TrackingProvider.anilist
+                                            ? _anilistTokenFocus
+                                            : _malTokenFocus,
+                                        saveFocusNode:
+                                            preferences.trackingProvider ==
+                                                TrackingProvider.anilist
+                                            ? _anilistSaveFocus
+                                            : _malSaveFocus,
+                                        disconnectFocusNode:
+                                            _trackingDisconnectFocus,
+                                      ),
                                     _SimklPanel(
                                       state: simkl,
                                       focusNode: _simklFocus,
@@ -3597,17 +3605,31 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                                         await context.push('/pair/simkl');
                                         await ref
                                             .read(
+                                              trackingAccountsControllerProvider
+                                                  .notifier,
+                                            )
+                                            .load();
+                                        await ref
+                                            .read(
                                               simklAccountControllerProvider
                                                   .notifier,
                                             )
                                             .load(force: true);
                                       },
-                                      onDisconnect: () => ref
-                                          .read(
-                                            simklAccountControllerProvider
-                                                .notifier,
-                                          )
-                                          .disconnect(),
+                                      onDisconnect: () async {
+                                        await ref
+                                            .read(
+                                              trackingAccountsControllerProvider
+                                                  .notifier,
+                                            )
+                                            .disconnect(TrackingProvider.simkl);
+                                        await ref
+                                            .read(
+                                              simklAccountControllerProvider
+                                                  .notifier,
+                                            )
+                                            .disconnect();
+                                      },
                                     ),
                                   ],
                                 ),
@@ -9823,7 +9845,7 @@ class _SimklPanel extends StatelessWidget {
         ? 'READY'
         : 'UNAVAILABLE';
     final description = connected
-        ? 'Connected as ${state.username}. SIMKL is available as a linked account.'
+        ? 'Connected as ${state.username}. Lists and episode progress sync automatically.'
         : hasCredentials
         ? state.error ?? 'Reconnect SIMKL to verify this saved account.'
         : state.isAvailable

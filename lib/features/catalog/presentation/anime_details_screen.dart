@@ -925,6 +925,10 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
         anime: anime,
         selectedEpisode: selectedEpisode,
         totalEpisodes: totalEpisodes,
+        isTelevision: ref.read(isTelevisionProvider),
+        episodeMetadataFuture: ref
+            .read(catalogClientProvider)
+            .episodeMetadata(anime.id),
       );
     } finally {
       _episodeBrowserOpen = false;

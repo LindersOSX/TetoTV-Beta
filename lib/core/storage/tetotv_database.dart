@@ -9,7 +9,7 @@ import 'package:sqflite/sqflite.dart';
 /// The SQLite table survives process death; it is never uploaded unless the
 /// user presses the diagnostic-report share button.
 const diagnosticHistoryWindow = Duration(hours: 48);
-const tetoTvDatabaseSchemaVersion = 11;
+const tetoTvDatabaseSchemaVersion = 12;
 // Provider searches and playback startup can each emit a burst of events.
 // Retain enough history for a complete search plus the playback which follows
 // it; 240 entries allowed title-artwork noise to evict the evidence needed to
@@ -1020,6 +1020,11 @@ class TetoTvDatabase {
     maxStaleAge: maxStaleAge,
   );
 
+  Future<void> removeCachedJson(String key) async {
+    final db = await database;
+    await db.delete('catalog_cache', where: 'cache_key = ?', whereArgs: [key]);
+  }
+
   Future<Map<String, Object?>> diagnosticsSnapshot({DateTime? now}) async {
     final db = await database;
     final snapshotEnd = (now ?? DateTime.now()).toUtc();
@@ -1203,6 +1208,9 @@ Future<void> upgradeTetoTvDatabaseSchema(
   if (oldVersion < 11 && newVersion >= 11) {
     await createAppNotificationsTable(db);
   }
+  if (oldVersion >= 11 && oldVersion < 12 && newVersion >= 12) {
+    await _upgradeAppNotificationsToV12(db);
+  }
 }
 
 /// Creates the local in-app notification inbox.
@@ -1223,10 +1231,10 @@ Future<void> createAppNotificationsTable(DatabaseExecutor db) async {
       created_at INTEGER NOT NULL,
       read_at INTEGER,
       CHECK(length(id) BETWEEN 1 AND 192),
-      CHECK(kind IN ('app_update')),
+      CHECK(kind IN ('app_update', 'announcement')),
       CHECK(length(title) BETWEEN 1 AND 256),
-      CHECK(length(body) BETWEEN 1 AND 512),
-      CHECK(action IN ('open_app_updates')),
+      CHECK(length(body) BETWEEN 1 AND 1000),
+      CHECK(action IN ('open_app_updates', 'none')),
       CHECK(target_version IS NULL OR length(target_version) BETWEEN 1 AND 64),
       CHECK(target_version_code IS NULL OR target_version_code > 0),
       CHECK(target_channel IS NULL OR target_channel IN ('public', 'beta')),
@@ -1238,6 +1246,24 @@ Future<void> createAppNotificationsTable(DatabaseExecutor db) async {
     CREATE INDEX IF NOT EXISTS app_notifications_unread_created
     ON app_notifications(read_at, created_at DESC)
   ''');
+}
+
+Future<void> _upgradeAppNotificationsToV12(DatabaseExecutor db) async {
+  await db.execute('DROP INDEX IF EXISTS app_notifications_unread_created');
+  await db.execute(
+    'ALTER TABLE app_notifications RENAME TO app_notifications_v11',
+  );
+  await createAppNotificationsTable(db);
+  await db.execute('''
+    INSERT INTO app_notifications (
+      id, kind, title, body, action, target_version, target_version_code,
+      target_channel, created_at, read_at
+    )
+    SELECT id, kind, title, body, action, target_version, target_version_code,
+      target_channel, created_at, read_at
+    FROM app_notifications_v11
+  ''');
+  await db.execute('DROP TABLE app_notifications_v11');
 }
 
 /// Creates the developer-only manga catalog, reading-progress, and offline

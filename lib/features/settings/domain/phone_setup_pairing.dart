@@ -376,6 +376,7 @@ class PhoneSetupBundle {
       trackingProvider: _enumValue(preferences['tracking_provider'], const {
         'anilist',
         'myanimelist',
+        'simkl',
       }),
       debridProvider: _enumValue(preferences['debrid_provider'], const {
         'realdebrid',
@@ -480,14 +481,15 @@ PhoneSetupTrackingCredentials? _parseTrackingCredentials(Object? value) {
   final provider = _requiredEnum(data['provider'], const {
     'anilist',
     'myanimelist',
+    'simkl',
   }, 'tracker provider');
   final accessToken = _requiredCredential(data['access_token']);
   final refreshToken = _credential(data['refresh_token']);
   final tokenType = _shortText(data['token_type'], maximum: 64);
   final expiresAt = _epochSeconds(data['expires_at']);
-  if (provider == 'anilist' && refreshToken != null) {
+  if ((provider == 'anilist' || provider == 'simkl') && refreshToken != null) {
     throw const FormatException(
-      'AniList phone setup does not accept a refresh token.',
+      'This tracker phone setup does not accept a refresh token.',
     );
   }
   if (provider == 'myanimelist' &&

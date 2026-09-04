@@ -1433,6 +1433,9 @@ class _UpdateNotificationCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (item.kind == AppNotificationKind.announcement) {
+      return _AnnouncementNotificationCard(item: item, autofocus: autofocus);
+    }
     final matches = _notificationMatchesUpdate(item, updateState);
     final busy = matches && updateState.isBusy;
     final canInstall = matches && updateState.phase == AppUpdatePhase.ready;
@@ -1550,6 +1553,77 @@ class _UpdateNotificationCard extends StatelessWidget {
   }
 }
 
+class _AnnouncementNotificationCard extends StatelessWidget {
+  const _AnnouncementNotificationCard({
+    required this.item,
+    required this.autofocus,
+  });
+
+  final AppNotification item;
+  final bool autofocus;
+
+  @override
+  Widget build(BuildContext context) => TvFocusable(
+    autofocus: autofocus,
+    enabled: false,
+    focusScale: 1.005,
+    borderRadius: BorderRadius.circular(11),
+    onPressed: () {},
+    child: Container(
+      key: ValueKey('notification-item-${item.id}'),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: context.appPalette.surfaceRaised,
+        borderRadius: BorderRadius.circular(11),
+        border: Border.all(
+          color: item.isRead
+              ? context.appPalette.primaryText.withValues(alpha: .09)
+              : context.appPalette.accent.withValues(alpha: .64),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  item.title,
+                  style: TextStyle(
+                    color: context.appPalette.primaryText,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              const _NotificationChannelBadge(label: 'NOTICE'),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            item.body,
+            style: TextStyle(
+              color: context.appPalette.mutedText,
+              fontSize: 12,
+              height: 1.35,
+            ),
+          ),
+          const SizedBox(height: 7),
+          Text(
+            _formatNotificationDate(item.createdAtUtc),
+            style: TextStyle(
+              color: context.appPalette.mutedText,
+              fontSize: 10,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
 class _NotificationEmptyState extends StatelessWidget {
   const _NotificationEmptyState({required this.updateState});
 
@@ -1605,16 +1679,19 @@ class _NotificationEmptyState extends StatelessWidget {
 }
 
 class _NotificationChannelBadge extends StatelessWidget {
-  const _NotificationChannelBadge({required this.channel});
+  const _NotificationChannelBadge({this.channel, this.label});
 
   final String? channel;
+  final String? label;
 
   @override
   Widget build(BuildContext context) {
     final value = channel?.trim();
-    final label = value == null || value.isEmpty
-        ? 'UPDATE'
-        : value[0].toUpperCase() + value.substring(1).toLowerCase();
+    final visibleLabel =
+        label ??
+        (value == null || value.isEmpty
+            ? 'UPDATE'
+            : value[0].toUpperCase() + value.substring(1).toLowerCase());
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
       decoration: BoxDecoration(
@@ -1625,7 +1702,7 @@ class _NotificationChannelBadge extends StatelessWidget {
         ),
       ),
       child: Text(
-        label,
+        visibleLabel,
         key: const ValueKey('notification-channel'),
         style: TextStyle(
           color: context.appPalette.accentBright,

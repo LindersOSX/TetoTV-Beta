@@ -1,5 +1,4 @@
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
-import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
 import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
@@ -120,12 +119,7 @@ List<EpisodeReleaseNotification> buildEpisodeReleaseNotificationPlan({
 bool _isFollowed(AnimeSummary anime, List<HomeTrackedAnime> followed) {
   final normalized = _normalizedTitle(anime.title);
   return followed.any((item) {
-    if (item.provider == TrackingProvider.anilist &&
-        (item.anilistId ?? item.tracked.mediaId) == anime.id) {
-      return true;
-    }
-    if (item.provider == TrackingProvider.myAnimeList &&
-        anime.idMal == item.tracked.mediaId) {
+    if (matchesTrackingIds(item, anilistId: anime.id, malId: anime.idMal)) {
       return true;
     }
     return _normalizedTitle(item.tracked.title) == normalized;

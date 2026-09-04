@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   test('production companion services share the Wispbyte origin', () {
+    expect(AppConfig.appAnnouncementBaseUrl, 'https://tetotv-bot.wisp.uno');
     expect(AppConfig.authBrokerBaseUrl, 'https://tetotv-bot.wisp.uno');
     expect(AppConfig.sourcePairingBrokerBaseUrl, 'https://tetotv-bot.wisp.uno');
     expect(AppConfig.sourcePairingBrokerBaseUrl, AppConfig.authBrokerBaseUrl);

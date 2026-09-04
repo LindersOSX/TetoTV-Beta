@@ -1,4 +1,4 @@
-# AniList and MyAnimeList QR pairing
+# AniList, MyAnimeList, and SIMKL pairing
 
 AniList currently documents authorization-code and implicit OAuth grants, but
 not RFC 8628 device authorization. MyAnimeList uses OAuth authorization code
@@ -67,6 +67,32 @@ https://tetotv-bot.wisp.uno/oauth/myanimelist/callback
 The broker uses PKCE for the authorization-code exchange. The client secret,
 when the registered client has one, remains server-side.
 
+## SIMKL direct PIN flow
+
+Current TetoTV builds do not use the callback broker for normal SIMKL linking.
+The companion `/health` response advertises
+`provider_device_flows.simkl: true` and the registered application's public
+`provider_client_ids.simkl` when `SIMKL_CLIENT_ID` is configured. A client ID
+identifies the application and is not a user credential or client secret.
+
+The TV then performs SIMKL's official limited-input flow directly:
+
+1. Request a short-lived code from `GET https://api.simkl.com/oauth/pin` with
+   the public client ID and required app metadata.
+2. Show the returned code and the official <https://simkl.com/pin> page.
+3. Poll `GET https://api.simkl.com/oauth/pin/{user_code}` only at SIMKL's
+   returned interval until authorization, expiry, or cancellation.
+4. Receive the access token directly from SIMKL and save it in Android
+   Keystore-backed secure storage.
+
+No SIMKL client secret, TetoTV callback, or companion-held token is involved
+in that standalone TV path. Unified phone setup uses the same PIN endpoints
+through the bound setup session: the companion holds the resulting token only
+in volatile link state until the browser claims it, and the browser includes it
+in the end-to-end encrypted setup envelope for the TV. The optional legacy
+callback route exists only for older builds and is not required by the current
+PIN flow.
+
 ## App-facing contract
 
 `POST /v1/{provider}/pairings`
@@ -111,14 +137,19 @@ not issue one.
 
 ## Finish the provider link
 
-1. Register the two callback URLs above in the provider developer consoles.
+1. Register the two AniList/MyAnimeList callback URLs above in their provider
+   developer consoles. Register a SIMKL application separately for its PIN
+   flow; a SIMKL callback is needed only if the legacy fallback is deliberately
+   retained.
 2. Add `ANILIST_CLIENT_ID`, `ANILIST_CLIENT_SECRET`, `MAL_CLIENT_ID`, and
    `MAL_CLIENT_SECRET` to the Wispbyte bot environment. Never place them in the
    Flutter configuration or APK.
 3. Deploy the Discord-bot companion process with
    `PUBLIC_BASE_URL=https://tetotv-bot.wisp.uno`.
-4. Confirm `/health` reports both providers as `true` and lists the exact two
-   callback URLs before publishing an APK.
+4. Confirm `/health` reports AniList and MyAnimeList as ready and lists the
+   exact two callback URLs. For SIMKL, confirm
+   `provider_device_flows.simkl: true` and a non-empty public
+   `provider_client_ids.simkl` before publishing an APK.
 5. TetoTV defaults to that Wispbyte origin. `AUTH_BROKER_BASE_URL` remains only
    as a developer/self-host override.
 
@@ -127,7 +158,7 @@ AniList/MyAnimeList > Connect by QR** opens a one-time self-host setup panel.
 The address is stored in Android's encrypted storage and used for both
 trackers. A local `localhost` URL will not work from a phone scanning the TV.
 
-The APK never needs either provider client secret.
+The APK never needs an AniList, MyAnimeList, or SIMKL client secret.
 
 The Wispbyte companion rate-limits by pseudonymous address buckets, returns
 `429` with `Retry-After`, binds state to one pairing, uses strict CSP, and
@@ -137,3 +168,5 @@ with an encrypted shared TTL store before horizontally scaling the service.
 For a public product, review AniList's API terms and request authorization if
 the application could be considered a competing tracker. Significant,
 sustained AniList synchronization should be explicit in that request.
+Likewise, obtain any SIMKL API or commercial-use approval required for the
+intended distribution before enabling SIMKL in a release.

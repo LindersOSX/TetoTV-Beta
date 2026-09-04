@@ -862,11 +862,12 @@ class _AccountsStep extends ConsumerWidget {
             icon: trackingConnected
                 ? Icons.check_rounded
                 : Icons.qr_code_rounded,
-            onPressed: () => context.push(
-              preferences.trackingProvider == TrackingProvider.anilist
-                  ? '/pair/anilist'
-                  : '/pair/myanimelist',
-            ),
+            onPressed: () =>
+                context.push(switch (preferences.trackingProvider) {
+                  TrackingProvider.anilist => '/pair/anilist',
+                  TrackingProvider.myAnimeList => '/pair/myanimelist',
+                  TrackingProvider.simkl => '/pair/simkl',
+                }),
           ),
           const SizedBox(height: 18),
           const Text(

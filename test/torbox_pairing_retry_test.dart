@@ -76,6 +76,12 @@ void main() {
     );
     await tester.pump();
     expect(client.pollCalls, 0);
+    expect(
+      find.textContaining(
+        'Sign in to torbox.app in the same browser before approving.',
+      ),
+      findsOneWidget,
+    );
 
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);

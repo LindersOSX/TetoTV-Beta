@@ -305,6 +305,27 @@ class TrackingTokenService {
   Future<String?> activeProfileId(TrackingProvider provider) =>
       _storage.read(key: _activeProfileKey(provider));
 
+  /// Returns the active non-secret profile slot only when its encrypted
+  /// credential still matches [accessToken]. A newly paired credential must
+  /// never inherit a previous account's persistent tracker cache.
+  Future<String?> verifiedActiveProfileId(
+    TrackingProvider provider,
+    String accessToken,
+  ) async {
+    final normalizedToken = accessToken.trim();
+    if (normalizedToken.isEmpty) return null;
+    final activeId = await activeProfileId(provider);
+    if (activeId == null || activeId.isEmpty) return null;
+    final profile = (await savedProfiles())
+        .where((item) => item.provider == provider && item.id == activeId)
+        .firstOrNull;
+    if (profile == null) return null;
+    final storedToken = await _storage.read(
+      key: _profileCredentialKey(profile, 'access'),
+    );
+    return storedToken == normalizedToken ? activeId : null;
+  }
+
   Future<void> activateProfile(StoredTrackingProfile profile) async {
     final profiles = await savedProfiles();
     final registered = profiles.any(

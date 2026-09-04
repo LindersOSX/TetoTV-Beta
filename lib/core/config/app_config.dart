@@ -5,6 +5,11 @@ abstract final class AppConfig {
   /// must never be redirected to an unrelated host by a build flag.
   static const anonymousPresenceBaseUrl = 'https://tetotv-bot.wisp.uno';
 
+  /// Fixed first-party, read-only feed written exclusively by Discord
+  /// administrators. Release build flags must not be able to replace the
+  /// authority which supplies messages shown inside TetoTV.
+  static const appAnnouncementBaseUrl = 'https://tetotv-bot.wisp.uno';
+
   static const authBrokerBaseUrl = String.fromEnvironment(
     'AUTH_BROKER_BASE_URL',
     defaultValue: 'https://tetotv-bot.wisp.uno',

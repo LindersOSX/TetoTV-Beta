@@ -39,6 +39,10 @@ object AnonymousCrashStore {
     private const val MAX_TRACE_CHARS = 4_000
     private const val MAX_LOCAL_TRACE_CHARS = 1_800
     private const val MAX_NATIVE_TRACE_BYTES = 64_000
+    // Android ANR traces can place the main-thread stack after a long runtime
+    // and GC preamble. Reading only 64 KB repeatedly captured that preamble
+    // while dropping the thread that explained the freeze.
+    private const val MAX_TEXT_TRACE_BYTES = 512_000
     private const val MAX_LOCAL_CRASH_SUMMARIES = 12
     private const val MAX_BREADCRUMBS = 16
     private const val MAX_PROCESS_STATE_BYTES = 120
@@ -336,9 +340,14 @@ object AnonymousCrashStore {
      */
     @RequiresApi(Build.VERSION_CODES.R)
     private fun exitTrace(exit: ApplicationExitInfo, maximumChars: Int): TraceEvidence {
+        val maximumBytes = if (exit.reason == ApplicationExitInfo.REASON_CRASH_NATIVE) {
+            MAX_NATIVE_TRACE_BYTES
+        } else {
+            MAX_TEXT_TRACE_BYTES
+        }
         val bounded = runCatching {
             exit.traceInputStream?.use { stream ->
-                readAtMost(stream, MAX_NATIVE_TRACE_BYTES)
+                readAtMost(stream, maximumBytes)
             }
         }.getOrNull() ?: BoundedBytes(ByteArray(0), truncated = false)
         if (bounded.bytes.isEmpty()) {
@@ -355,7 +364,7 @@ object AnonymousCrashStore {
         if (isGzip(bounded.bytes)) {
             val inflated = runCatching {
                 GZIPInputStream(ByteArrayInputStream(bounded.bytes)).use { stream ->
-                    readAtMost(stream, MAX_NATIVE_TRACE_BYTES)
+                    readAtMost(stream, maximumBytes)
                 }
             }.getOrNull()
             if (inflated != null) {
@@ -688,7 +697,7 @@ object AnonymousCrashStore {
                 "status=${exit.status.coerceIn(-999, 999)} " +
                 "importance=${importanceName(exit.importance)} " +
                 "pss_mb=${memoryMegabytes(exit.pss)} rss_mb=${memoryMegabytes(exit.rss)} " +
-                "trace_format=${trace.format} trace_bytes=${trace.rawBytes.coerceIn(0, MAX_NATIVE_TRACE_BYTES)} " +
+                "trace_format=${trace.format} trace_bytes=${trace.rawBytes.coerceIn(0, MAX_TEXT_TRACE_BYTES)} " +
                 "trace_truncated=${trace.truncated}",
             processTimeline.ifEmpty { currentBreadcrumbContext(context, exit.timestamp) },
             sanitize(exit.description.orEmpty(), 500)
@@ -776,7 +785,60 @@ object AnonymousCrashStore {
     }
 
     private fun safeTextTrace(value: ByteArray, maximum: Int): String =
-        sanitizeStack(value.toString(Charsets.UTF_8), maximum)
+        summarizeTextTrace(value.toString(Charsets.UTF_8), maximum)
+
+    /**
+     * Keeps the actionable part of an Android text trace.
+     *
+     * ART commonly prefixes an ANR with tens of kilobytes of GC statistics.
+     * A simple first-N-lines truncation therefore loses the `main` thread. We
+     * retain a tiny process header and prioritize the main-thread block. If a
+     * vendor emits an unfamiliar format, the bounded head/tail fallback is
+     * still more useful than returning only the runtime preamble.
+     */
+    internal fun summarizeTextTrace(value: String, maximum: Int): String {
+        if (value.isEmpty() || maximum <= 0) return ""
+        val lines = value
+            .replace("\r\n", "\n")
+            .replace('\r', '\n')
+            .lineSequence()
+            .toList()
+        if (lines.isEmpty()) return ""
+
+        val selected = mutableListOf<String>()
+        selected += lines.asSequence().filter { it.isNotBlank() }.take(5)
+
+        val threadHeader = Regex("^\"[^\"]{1,160}\"(?:\\s|$)")
+        val mainIndex = lines.indexOfFirst {
+            it == "\"main\"" || it.startsWith("\"main\" ")
+        }
+        if (mainIndex >= 0) {
+            val nextThread = (mainIndex + 1 until lines.size)
+                .firstOrNull { threadHeader.containsMatchIn(lines[it]) }
+                ?: lines.size
+            selected += lines.subList(mainIndex, nextThread).take(43)
+        } else {
+            val signalLines = lines.asSequence()
+                .filter {
+                    val lower = it.lowercase()
+                    lower.contains("anr in ") ||
+                        lower.contains("waiting to lock") ||
+                        lower.contains("held by thread") ||
+                        lower.contains("native method") ||
+                        lower.contains("dev.animetv.anime_tv") ||
+                        lower.contains("io.flutter")
+                }
+                .take(25)
+                .toList()
+            if (signalLines.isNotEmpty()) {
+                selected += signalLines
+            } else {
+                selected += lines.take(23)
+                selected += lines.takeLast(22)
+            }
+        }
+        return sanitizeStack(selected.joinToString("\n"), maximum)
+    }
 
     private fun binaryTraceSignature(value: ByteArray): String =
         "binary_trace signature=${shortDigest(value.take(4_096).toByteArray())}"

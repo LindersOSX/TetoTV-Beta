@@ -319,6 +319,36 @@ class AnonymousCrashStoreTest {
     }
 
     @Test
+    fun `text trace summary keeps main thread after long runtime preamble`() {
+        val mainHeader = "\"main\" prio=5 tid=1 Native"
+        val trace = buildString {
+            appendLine("----- pid 5080 at 2026-09-03 11:12:26 -----")
+            appendLine("Cmd line: dev.animetv.anime_tv")
+            repeat(4_000) { index -> appendLine("GcHistogram$index: 12ms") }
+            appendLine(mainHeader)
+            appendLine("  | group=\"main\" sCount=1 dsCount=0 flags=1 obj=0x0 self=0x0")
+            appendLine("  at android.os.MessageQueue.nativePollOnce(Native method)")
+            appendLine("  at io.flutter.embedding.engine.FlutterJNI.nativeSurfaceChanged(Native method)")
+            appendLine("\"RenderThread\" daemon prio=7 tid=18 Native")
+            appendLine("  at android.view.ThreadedRenderer.nSyncAndDrawFrame(Native method)")
+        }
+        val mainByteOffset = trace
+            .substringBefore(mainHeader)
+            .toByteArray(Charsets.UTF_8)
+            .size
+
+        assertTrue(mainByteOffset > 64_000)
+
+        val output = AnonymousCrashStore.summarizeTextTrace(trace, 1_800)
+
+        assertTrue(output.contains("\"main\""))
+        assertTrue(output.contains("MessageQueue.nativePollOnce"))
+        assertTrue(output.contains("FlutterJNI.nativeSurfaceChanged"))
+        assertFalse(output.contains("GcHistogram3999"))
+        assertTrue(output.length <= 1_800)
+    }
+
+    @Test
     fun `foreground service importance is not classified as visible`() {
         assertEquals(
             "foreground_service",

@@ -43,6 +43,10 @@ import io.flutter.plugin.common.MethodChannel
 import dev.animetv.anime_tv.security.AppDeepLinkPolicy
 import java.io.File
 import java.security.MessageDigest
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 import java.util.zip.ZipFile
 import kotlin.math.abs
 
@@ -59,6 +63,7 @@ class MainActivity : FlutterActivity() {
     private var externalProxyHandoffBackgrounded = false
     private var speechRecognizer: SpeechRecognizer? = null
     private val voiceSearchHandler = Handler(Looper.getMainLooper())
+    private val platformResultHandler = Handler(Looper.getMainLooper())
     private val voiceSearchTimeout = Runnable {
         if (pendingVoiceSearchResult != null) {
             finishEmbeddedVoiceSearch(
@@ -158,31 +163,65 @@ class MainActivity : FlutterActivity() {
                     }
                     "clearAppCache" -> clearAppCacheAsync(result)
                     "setAnonymousCrashReportingEnabled" -> {
-                        AnonymousCrashStore.setEnabled(
-                            this,
-                            call.argument<Boolean>("enabled") ?: false,
+                        val context = applicationContext
+                        val enabled = call.argument<Boolean>("enabled") ?: false
+                        runPlatformBlockingOperation(
+                            result = result,
+                            operationName = "Update crash-reporting preference",
+                            operation = {
+                                AnonymousCrashStore.setEnabled(context, enabled)
+                                null
+                            },
                         )
-                        result.success(null)
                     }
                     "storePendingAnonymousCrashReport" -> {
+                        val context = applicationContext
                         @Suppress("UNCHECKED_CAST")
-                        val report = call.arguments as? Map<String, Any?> ?: emptyMap()
-                        result.success(AnonymousCrashStore.store(this, report))
-                    }
-                    "getPendingAnonymousCrashReport" ->
-                        result.success(AnonymousCrashStore.pending(this))
-                    "getRecentLocalCrashSummaries" ->
-                        result.success(AnonymousCrashStore.recentLocalCrashSummaries(this))
-                    "acknowledgeAnonymousCrashReport" -> {
-                        AnonymousCrashStore.acknowledge(
-                            this,
-                            call.argument<String>("reportId").orEmpty(),
+                        val report = (call.arguments as? Map<String, Any?> ?: emptyMap()).toMap()
+                        runPlatformBlockingOperation(
+                            result = result,
+                            operationName = "Save crash report",
+                            operation = { AnonymousCrashStore.store(context, report) },
                         )
-                        result.success(null)
+                    }
+                    "getPendingAnonymousCrashReport" -> {
+                        val context = applicationContext
+                        runPlatformBlockingOperation(
+                            result = result,
+                            operationName = "Load pending crash report",
+                            operation = { AnonymousCrashStore.pending(context) },
+                        )
+                    }
+                    "getRecentLocalCrashSummaries" -> {
+                        val context = applicationContext
+                        runPlatformBlockingOperation(
+                            result = result,
+                            operationName = "Load recent crash summaries",
+                            operation = { AnonymousCrashStore.recentLocalCrashSummaries(context) },
+                        )
+                    }
+                    "acknowledgeAnonymousCrashReport" -> {
+                        val context = applicationContext
+                        val reportId = call.argument<String>("reportId").orEmpty()
+                        runPlatformBlockingOperation(
+                            result = result,
+                            operationName = "Acknowledge crash report",
+                            operation = {
+                                AnonymousCrashStore.acknowledge(context, reportId)
+                                null
+                            },
+                        )
                     }
                     "clearPendingAnonymousCrashReports" -> {
-                        AnonymousCrashStore.clear(this)
-                        result.success(null)
+                        val context = applicationContext
+                        runPlatformBlockingOperation(
+                            result = result,
+                            operationName = "Clear crash reports",
+                            operation = {
+                                AnonymousCrashStore.clear(context)
+                                null
+                            },
+                        )
                     }
                     "resetApplicationData" -> {
                         val activityManager = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
@@ -206,11 +245,21 @@ class MainActivity : FlutterActivity() {
                     }
                     "publishWatchNext" -> {
                         @Suppress("UNCHECKED_CAST")
-                        result.success(publishWatchNext(call.arguments as? Map<String, Any?> ?: emptyMap()))
+                        val data = (call.arguments as? Map<String, Any?> ?: emptyMap()).toMap()
+                        runPlatformBlockingOperation(
+                            result = result,
+                            operationName = "Publish Watch Next item",
+                            operation = { publishWatchNext(data) },
+                        )
                     }
                     "removeWatchNext" -> {
                         @Suppress("UNCHECKED_CAST")
-                        result.success(removeWatchNext(call.arguments as? Map<String, Any?> ?: emptyMap()))
+                        val data = (call.arguments as? Map<String, Any?> ?: emptyMap()).toMap()
+                        runPlatformBlockingOperation(
+                            result = result,
+                            operationName = "Remove Watch Next item",
+                            operation = { removeWatchNext(data) },
+                        )
                     }
                     "scheduleReminder" -> {
                         @Suppress("UNCHECKED_CAST")
@@ -218,10 +267,15 @@ class MainActivity : FlutterActivity() {
                     }
                     "syncEpisodeReleaseNotifications" -> {
                         @Suppress("UNCHECKED_CAST")
-                        result.success(
-                            syncEpisodeReleaseNotifications(
-                                call.arguments as? Map<String, Any?> ?: emptyMap(),
-                            ),
+                        val data = (call.arguments as? Map<String, Any?> ?: emptyMap()).toMap()
+                        runPlatformBlockingOperation(
+                            result = result,
+                            operationName = "Sync episode release notifications",
+                            operation = { syncEpisodeReleaseNotifications(data) },
+                            onSuccess = { scheduledCount ->
+                                requestEpisodeReleaseNotificationPermissionIfNeeded(scheduledCount)
+                                result.success(scheduledCount)
+                            },
                         )
                     }
                     "clearPreferredFrameRate" -> {
@@ -241,6 +295,54 @@ class MainActivity : FlutterActivity() {
             } catch (error: Throwable) {
                 result.error("ANDROID_TV_BRIDGE", error.message, null)
             }
+        }
+    }
+
+    /**
+     * Android history, TV-provider, and alarm calls can cross process or read
+     * large traces. Keep those calls off Flutter's platform thread, serialize
+     * them so repeated playback checkpoints cannot overlap, and cap queued
+     * work so a stalled system provider cannot grow memory without bound.
+     */
+    private fun <T> runPlatformBlockingOperation(
+        result: MethodChannel.Result,
+        operationName: String,
+        operation: () -> T,
+        onSuccess: (T) -> Unit = { value -> result.success(value) },
+    ) {
+        try {
+            platformBlockingExecutor.execute {
+                val outcome = runCatching(operation)
+                platformResultHandler.post {
+                    outcome.fold(
+                        onSuccess = { value ->
+                            runCatching { onSuccess(value) }
+                                .onFailure { error ->
+                                    result.error(
+                                        "ANDROID_TV_BRIDGE",
+                                        "$operationName failed: " +
+                                            (error.message ?: error.javaClass.simpleName),
+                                        null,
+                                    )
+                                }
+                        },
+                        onFailure = { error ->
+                            result.error(
+                                "ANDROID_TV_BRIDGE",
+                                "$operationName failed: " +
+                                    (error.message ?: error.javaClass.simpleName),
+                                null,
+                            )
+                        },
+                    )
+                }
+            }
+        } catch (_: RejectedExecutionException) {
+            result.error(
+                "ANDROID_TV_BUSY",
+                "$operationName is waiting for Android. Please try again shortly.",
+                null,
+            )
         }
     }
 
@@ -1513,15 +1615,20 @@ class MainActivity : FlutterActivity() {
             scheduledKeys += key
         }
         preferences.edit { putStringSet(AUTO_RELEASE_REMINDER_KEYS, scheduledKeys) }
+        return scheduledKeys.size
+    }
+
+    /** Permission prompts are Activity UI and must remain on the main thread. */
+    private fun requestEpisodeReleaseNotificationPermissionIfNeeded(scheduledCount: Int) {
+        if (isFinishing || isDestroyed) return
         if (
-            scheduledKeys.isNotEmpty() &&
+            scheduledCount > 0 &&
             Build.VERSION.SDK_INT >= 33 &&
             checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
             PackageManager.PERMISSION_GRANTED
         ) {
             requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 5105)
         }
-        return scheduledKeys.size
     }
 
     private fun autoReleaseReminderPendingIntent(
@@ -1599,6 +1706,20 @@ class MainActivity : FlutterActivity() {
     }
 
     companion object {
+        private const val PLATFORM_BLOCKING_QUEUE_CAPACITY = 24
+        private val platformBlockingExecutor = ThreadPoolExecutor(
+            1,
+            1,
+            30L,
+            TimeUnit.SECONDS,
+            ArrayBlockingQueue<Runnable>(PLATFORM_BLOCKING_QUEUE_CAPACITY),
+            { task ->
+                Thread(task, "tetotv-platform-blocking").apply { isDaemon = true }
+            },
+            ThreadPoolExecutor.AbortPolicy(),
+        ).apply {
+            allowCoreThreadTimeOut(true)
+        }
         private const val AUTO_RELEASE_REMINDER_PREFERENCES = "auto_release_reminders"
         private const val AUTO_RELEASE_REMINDER_KEYS = "scheduled_keys"
         private const val AUTO_RELEASE_REMINDER_ACTION =

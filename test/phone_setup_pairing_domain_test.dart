@@ -112,6 +112,43 @@ void main() {
       );
     });
 
+    test('accepts a version-three SIMKL direct-PIN credential', () {
+      final bundle = _parse({
+        'version': 3,
+        'preferences': {'tracking_provider': 'simkl'},
+        'credentials': {
+          'tracking': {
+            'provider': 'simkl',
+            'access_token': 'simkl-access-token',
+            'token_type': 'Bearer',
+          },
+        },
+      });
+
+      expect(bundle.preferences.trackingProvider, 'simkl');
+      expect(bundle.credentials.tracking?.provider, 'simkl');
+      expect(bundle.credentials.tracking?.accessToken, 'simkl-access-token');
+      expect(bundle.credentials.tracking?.refreshToken, isNull);
+      expect(bundle.credentials.tracking?.expiresAt, isNull);
+    });
+
+    test('rejects a SIMKL refresh token from phone setup', () {
+      expect(
+        () => _parse({
+          'version': 3,
+          'preferences': {'tracking_provider': 'simkl'},
+          'credentials': {
+            'tracking': {
+              'provider': 'simkl',
+              'access_token': 'simkl-access-token',
+              'refresh_token': 'unexpected-refresh-token',
+            },
+          },
+        }),
+        throwsFormatException,
+      );
+    });
+
     test(
       'accepts the production AniList, Real-Debrid, and Discord bundle with empty sources',
       () {

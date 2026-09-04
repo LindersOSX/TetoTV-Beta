@@ -17,7 +17,7 @@ device-agnostic Android playback path.
 | Local state | SQLite (`sqflite`, WAL mode) | Exact resume, history, per-series settings, compatibility failures, catalog cache, and performance events. |
 | Native TV | Kotlin method channel | MediaSession, Watch Next, reminders, codec/display/audio capabilities, content-URI permissions, and display mode selection. |
 | Metadata | AniList GraphQL with mapped Kitsu and Jikan fallbacks | AniList remains canonical; two independent account-free backups provide bounded read-only coverage when identity and requested filters can be preserved, and otherwise fail safely. |
-| Auth | Direct Real-Debrid device OAuth plus an account pairing broker | Real-Debrid exposes a TV-friendly device flow; AniList, MAL, and SIMKL authorization is adapted by a small server so provider secrets never ship in the APK. |
+| Auth | Direct provider device/PIN flows plus an account pairing broker | Real-Debrid and SIMKL expose TV-friendly direct flows. AniList and MAL are adapted by the companion, while encrypted phone setup transports selected credentials to the device. Provider secrets never ship in the APK; SIMKL's normal PIN flow needs only its public client ID. |
 | Debrid | Real-Debrid, TorBox, AllDebrid, and Premiumize APIs | Magnets are processed remotely and only provider-generated HTTPS streams reach the player. |
 | Direct torrent | libtorrent4j 2.1.0-38 behind an Android loopback Range server | Optional peer playback without a Debrid account; disabled by default, ARM-only, capability-scoped, and cleaned up with the player lease. |
 
@@ -25,6 +25,19 @@ Flutter remains responsible for catalog, account, stream-resolution, and TV
 navigation UI. Full-screen video is hosted by media_kit's Android libmpv
 surface integration. The same player widget, track model, recovery policy,
 and remote HUD are used for every supported source class.
+
+SIMKL is a first-class tracking provider rather than a profile-only adapter.
+The app obtains the registered public client ID from the companion capability
+response, performs SIMKL's PIN exchange directly, and stores the resulting
+token with the other tracker credentials. SIMKL list entries retain canonical
+SIMKL IDs and visible source links; catalog actions and progress sync can use
+the AniList or MAL IDs accepted by SIMKL without reinterpreting a generic ID.
+User-driven Home/My List loads share an account-scoped persistent cache. After
+its 20-minute watermark, freshness is gated by SIMKL activity timestamps;
+changed items arrive as an exact-timestamp delta that is merged into the cache,
+and a changed removal timestamp triggers a compact current-ID diff. Unchanged
+activity reuses the cache without a full-library request. See
+[SIMKL_INTEGRATION.md](SIMKL_INTEGRATION.md) for the complete boundary.
 
 ## Module boundaries
 

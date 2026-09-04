@@ -4,8 +4,11 @@ import 'dart:convert';
 import 'package:anime_tv/features/auth/application/pairing_controller.dart';
 import 'package:anime_tv/features/auth/application/tracking_token_service.dart';
 import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
+import 'package:anime_tv/features/settings/application/simkl_account_controller.dart';
 import 'package:anime_tv/features/tracking/data/anilist_tracking_repository.dart';
 import 'package:anime_tv/features/tracking/data/myanimelist_tracking_repository.dart';
+import 'package:anime_tv/features/tracking/data/simkl_account_session.dart';
+import 'package:anime_tv/features/tracking/data/simkl_tracking_repository.dart';
 import 'package:anime_tv/features/tracking/domain/tracking_repository.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -21,6 +24,7 @@ final trackingSyncServiceProvider = Provider<TrackingSyncService>((ref) {
   final service = TrackingSyncService(
     ref.watch(secureStorageProvider),
     ref.watch(trackingTokenServiceProvider),
+    simklSessionRegistry: ref.watch(simklAccountSessionRegistryProvider),
   );
   ref.onDispose(service.dispose);
   return service;
@@ -36,6 +40,9 @@ typedef TokenLookup = Future<String?> Function(TrackingProvider);
 /// Callback type for reading the non-secret active account slot.
 typedef TrackingProfileLookup = Future<String?> Function(TrackingProvider);
 
+typedef TrackingVerifiedProfileLookup =
+    Future<String?> Function(TrackingProvider provider, String accessToken);
+
 /// Injectable timer factory used to verify retry/debounce behavior without
 /// sleeping in unit tests.
 typedef TrackingTimerFactory =
@@ -45,6 +52,7 @@ class TrackingSyncService with WidgetsBindingObserver {
   TrackingSyncService(
     this._storage,
     TrackingTokenService tokenService, {
+    required this._simklSessionRegistry,
     this._resumeDebounce = const Duration(milliseconds: 400),
     List<Duration> retryDelays = const [
       Duration(seconds: 5),
@@ -57,6 +65,7 @@ class TrackingSyncService with WidgetsBindingObserver {
     this._observeLifecycle = true,
   }) : _tokenLookup = tokenService.accessToken,
        _profileLookup = tokenService.activeProfileId,
+       _verifiedProfileLookup = tokenService.verifiedActiveProfileId,
        _retryDelays = List.unmodifiable(retryDelays) {
     if (_observeLifecycle) WidgetsBinding.instance.addObserver(this);
   }
@@ -68,11 +77,15 @@ class TrackingSyncService with WidgetsBindingObserver {
     this._storage,
     this._tokenLookup, {
     TrackingProfileLookup? profileLookup,
+    TrackingVerifiedProfileLookup? verifiedProfileLookup,
+    this._simklSessionRegistry,
     this._resumeDebounce = const Duration(milliseconds: 400),
     List<Duration> retryDelays = const [],
     this._timerFactory = _systemTrackingTimer,
     this._observeLifecycle = false,
   }) : _profileLookup = profileLookup ?? _noActiveProfile,
+       _verifiedProfileLookup =
+           verifiedProfileLookup ?? _noVerifiedActiveProfile,
        _retryDelays = List.unmodifiable(retryDelays) {
     if (_observeLifecycle) WidgetsBinding.instance.addObserver(this);
   }
@@ -80,6 +93,8 @@ class TrackingSyncService with WidgetsBindingObserver {
   final FlutterSecureStorage _storage;
   final TokenLookup _tokenLookup;
   final TrackingProfileLookup _profileLookup;
+  final TrackingVerifiedProfileLookup _verifiedProfileLookup;
+  final SimklAccountSessionRegistry? _simklSessionRegistry;
   final Duration _resumeDebounce;
   final List<Duration> _retryDelays;
   final TrackingTimerFactory _timerFactory;
@@ -119,8 +134,38 @@ class TrackingSyncService with WidgetsBindingObserver {
     }
     await _mutateOutbox((current) => [...current, ...pending]);
 
+    try {
+      final simklToken = await _tokenLookup(TrackingProvider.simkl);
+      if (simklToken != null && simklToken.isNotEmpty) {
+        final simklProfile = _normalizeProfileId(
+          await _verifiedProfileLookup(TrackingProvider.simkl, simklToken),
+        );
+        // Never persist a SIMKL update under an unverified or stale account
+        // slot. A later playback update can enqueue it once pairing has bound
+        // the token to its non-secret profile identity.
+        if (simklProfile != null) {
+          final simklPending = _PendingProgress(
+            provider: TrackingProvider.simkl,
+            profileId: simklProfile,
+            mediaId: anilistMediaId ?? malMediaId!,
+            anilistMediaId: anilistMediaId,
+            malMediaId: malMediaId,
+            completedEpisodes: completedEpisodes,
+          );
+          pending.add(simklPending);
+          await _mutateOutbox((current) => [...current, simklPending]);
+        }
+      }
+    } catch (_) {
+      // A temporarily unreadable SIMKL token must not block AniList/MAL.
+    }
+
     _cancelScheduledFlush();
     await _requestFlush();
+    return _finishSync(pending);
+  }
+
+  Future<bool> _finishSync(List<_PendingProgress> pending) async {
     final remaining = await _readOutbox();
     return pending.every(
       (target) => !remaining.any(
@@ -166,8 +211,29 @@ class TrackingSyncService with WidgetsBindingObserver {
     final unavailableProfiles = <TrackingProvider>{};
 
     for (final item in pending) {
+      String? token;
+      if (item.provider == TrackingProvider.simkl) {
+        try {
+          token = await _tokenLookup(item.provider);
+          if (token == null || token.isEmpty) continue;
+          final verifiedProfile = _normalizeProfileId(
+            await _verifiedProfileLookup(item.provider, token),
+          );
+          if (verifiedProfile == null ||
+              !_sameProfile(item.profileId, verifiedProfile)) {
+            continue;
+          }
+        } catch (_) {
+          retryableFailure = true;
+          continue;
+        }
+      }
+
       String? activeProfile;
-      if (activeProfiles.containsKey(item.provider)) {
+      if (item.provider == TrackingProvider.simkl) {
+        // The token-bound check above replaces the generic active-slot check.
+        activeProfile = item.profileId;
+      } else if (activeProfiles.containsKey(item.provider)) {
         activeProfile = activeProfiles[item.provider];
       } else if (unavailableProfiles.contains(item.provider)) {
         retryableFailure = true;
@@ -186,22 +252,43 @@ class TrackingSyncService with WidgetsBindingObserver {
       if (!_sameProfile(item.profileId, activeProfile)) continue;
 
       try {
-        final token = await _tokenLookup(item.provider);
+        token ??= await _tokenLookup(item.provider);
         if (token == null || token.isEmpty) continue;
 
         // A profile can be switched while MAL refreshes its access token. Read
         // the slot again before using that token and retain the queued row if
         // the account changed.
         final verifiedProfile = _normalizeProfileId(
-          await _profileLookup(item.provider),
+          item.provider == TrackingProvider.simkl
+              ? await _verifiedProfileLookup(item.provider, token)
+              : await _profileLookup(item.provider),
         );
+        if (item.provider == TrackingProvider.simkl &&
+            verifiedProfile == null) {
+          continue;
+        }
         if (!_sameProfile(item.profileId, verifiedProfile)) continue;
 
         final repository = buildRepository(item.provider, token);
-        await repository.updateProgress(
-          mediaId: item.mediaId,
-          completedEpisodes: item.completedEpisodes,
-        );
+        final externalRepository = switch (repository) {
+          ExternalIdTrackingRepository value => value,
+          _ => null,
+        };
+        if (item.provider == TrackingProvider.simkl &&
+            externalRepository != null) {
+          await externalRepository.updateProgressByIds(
+            ids: TrackingMediaIds(
+              anilistId: item.anilistMediaId,
+              malId: item.malMediaId,
+            ),
+            completedEpisodes: item.completedEpisodes,
+          );
+        } else {
+          await repository.updateProgress(
+            mediaId: item.mediaId,
+            completedEpisodes: item.completedEpisodes,
+          );
+        }
         completed[item.outboxKey] = item.completedEpisodes;
       } catch (_) {
         retryableFailure = true;
@@ -234,6 +321,15 @@ class TrackingSyncService with WidgetsBindingObserver {
       TrackingProvider.anilist => AniListTrackingRepository(accessToken: token),
       TrackingProvider.myAnimeList => MyAnimeListTrackingRepository(
         accessToken: token,
+      ),
+      TrackingProvider.simkl => SimklTrackingRepository(
+        accessToken: token,
+        clientIdLoader: () => _storage.read(key: simklClientIdStorageKey),
+        sessionRegistry:
+            _simklSessionRegistry ??
+            (throw StateError('SIMKL account sessions are unavailable.')),
+        cacheScopeLoader: () =>
+            _verifiedProfileLookup(TrackingProvider.simkl, token),
       ),
     };
   }
@@ -360,6 +456,9 @@ class TrackingSyncService with WidgetsBindingObserver {
 
 Future<String?> _noActiveProfile(TrackingProvider _) async => null;
 
+Future<String?> _noVerifiedActiveProfile(TrackingProvider _, String _) async =>
+    null;
+
 String? _normalizeProfileId(String? value) {
   final normalized = value?.trim();
   return normalized == null || normalized.isEmpty ? null : normalized;
@@ -373,28 +472,44 @@ class _PendingProgress {
     required this.provider,
     required this.profileId,
     required this.mediaId,
+    this.anilistMediaId,
+    this.malMediaId,
     required this.completedEpisodes,
   });
 
   final TrackingProvider provider;
   final String? profileId;
   final int mediaId;
+  final int? anilistMediaId;
+  final int? malMediaId;
   final int completedEpisodes;
 
-  String get outboxKey =>
-      '${provider.slug}:${profileId ?? '<legacy>'}:$mediaId';
+  String get outboxKey {
+    final identity = provider == TrackingProvider.simkl
+        ? anilistMediaId != null
+              ? 'anilist:$anilistMediaId'
+              : 'mal:${malMediaId ?? mediaId}'
+        : '$mediaId';
+    return '${provider.slug}:${profileId ?? '<legacy>'}:$identity';
+  }
 
   static _PendingProgress? tryParse(Map<dynamic, dynamic> json) {
     final providerSlug = json['provider'];
     final mediaId = json['media_id'];
     final completedEpisodes = json['completed_episodes'];
     final profileId = json['profile_id'];
+    final anilistMediaId = json['anilist_media_id'];
+    final malMediaId = json['mal_media_id'];
     if (providerSlug is! String ||
         mediaId is! num ||
         mediaId.toInt() <= 0 ||
         completedEpisodes is! num ||
         completedEpisodes.toInt() < 0 ||
-        (profileId != null && profileId is! String)) {
+        (profileId != null && profileId is! String) ||
+        (anilistMediaId != null &&
+            (anilistMediaId is! num || anilistMediaId.toInt() <= 0)) ||
+        (malMediaId != null &&
+            (malMediaId is! num || malMediaId.toInt() <= 0))) {
       return null;
     }
     TrackingProvider? provider;
@@ -415,6 +530,8 @@ class _PendingProgress {
       provider: provider,
       profileId: normalizedProfile,
       mediaId: mediaId.toInt(),
+      anilistMediaId: anilistMediaId is num ? anilistMediaId.toInt() : null,
+      malMediaId: malMediaId is num ? malMediaId.toInt() : null,
       completedEpisodes: completedEpisodes.toInt(),
     );
   }
@@ -423,6 +540,8 @@ class _PendingProgress {
     'provider': provider.slug,
     'profile_id': profileId,
     'media_id': mediaId,
+    if (anilistMediaId != null) 'anilist_media_id': anilistMediaId,
+    if (malMediaId != null) 'mal_media_id': malMediaId,
     'completed_episodes': completedEpisodes,
   };
 }

@@ -9,11 +9,14 @@ import 'package:anime_tv/features/discord/application/discord_presence_controlle
 import 'package:anime_tv/features/manga/application/manga_discord_presence.dart';
 import 'package:anime_tv/features/manga/application/manga_hub_controller.dart';
 import 'package:anime_tv/features/manga/application/manga_preferences_controller.dart';
+import 'package:anime_tv/features/manga/application/manga_series_preferences_controller.dart';
 import 'package:anime_tv/features/manga/data/manga_image_safety.dart';
 import 'package:anime_tv/features/manga/data/manga_local_storage.dart';
 import 'package:anime_tv/features/manga/data/manga_page_fetch_client.dart';
 import 'package:anime_tv/features/manga/domain/manga_reader_models.dart';
 import 'package:anime_tv/features/manga/domain/manga_spread_layout.dart';
+import 'package:anime_tv/features/manga/presentation/manga_reader_page_surface.dart';
+import 'package:anime_tv/features/manga/presentation/manga_reader_settings_sheet.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -49,8 +52,24 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen> {
   bool _hudVisible = true;
   bool _initialPositionApplied = false;
   bool? _keepAwakeApplied;
+  final Set<String> _zoomedSurfaces = {};
+  bool get _pageZoomed => _zoomedSurfaces.isNotEmpty;
+  int _zoomGeneration = 0;
+  String? _webtoonGeometry;
+  Size _readerViewport = Size.zero;
+  final Map<int, double> _pageAspectRatios = {};
+  final Map<int, double> _pendingPageAspectRatios = {};
+  bool _pageDimensionsFlushScheduled = false;
   Timer? _hudTimer;
   Timer? _progressTimer;
+
+  MangaReaderSeriesKey get _seriesKey => MangaReaderSeriesKey(
+    sourceId: widget.request.sourceId,
+    publicationId: widget.request.publicationId,
+  );
+
+  MangaReaderPreferences get _preferences =>
+      ref.read(mangaEffectiveReaderPreferencesProvider(_seriesKey));
 
   @override
   void initState() {
@@ -128,24 +147,6 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen> {
     }
     setState(() => _hudVisible = !_hudVisible);
     _scheduleHudHide();
-  }
-
-  void _handleTapZone(TapUpDetails details, MangaReaderPreferences prefs) {
-    final width = MediaQuery.sizeOf(context).width;
-    if (!width.isFinite || width <= 0) {
-      _toggleHud();
-      return;
-    }
-    final x = details.localPosition.dx;
-    if (x >= width / 3 && x <= width * 2 / 3) {
-      _toggleHud();
-      return;
-    }
-    final tappedLeft = x < width / 3;
-    final forward = prefs.direction == MangaReadingDirection.rightToLeft
-        ? tappedLeft
-        : !tappedLeft;
-    _moveBy(forward ? 1 : -1, prefs);
   }
 
   void _focusChrome(FocusNode node) {
@@ -273,6 +274,7 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen> {
 
   void _moveBy(int delta, MangaReaderPreferences prefs) {
     _cancelPositionSync();
+    _resetZoom();
     _showHud();
     if (prefs.mode == MangaReadingMode.webtoon) {
       _goToPage(
@@ -286,36 +288,64 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen> {
         0,
         widget.request.pages.length - 1,
       );
-      _pageController.animateToPage(
-        target,
-        duration: const Duration(milliseconds: 220),
-        curve: Curves.easeOutCubic,
-      );
+      _turnToPage(target, prefs);
       return;
     }
     final layout = _layout;
     if (layout == null) return;
     final currentSpread = layout.spreadIndexForPage(_pageIndex);
     final target = (currentSpread + delta).clamp(0, layout.spreads.length - 1);
-    _pageController.animateToPage(
-      target,
-      duration: const Duration(milliseconds: 260),
-      curve: Curves.easeOutCubic,
-    );
+    _turnToPage(target, prefs);
+  }
+
+  bool _animatePages(MangaReaderPreferences prefs) =>
+      prefs.bookAnimationEnabled && !MediaQuery.disableAnimationsOf(context);
+
+  void _turnToPage(int target, MangaReaderPreferences prefs) {
+    if (!_pageController.hasClients) return;
+    if (_animatePages(prefs)) {
+      unawaited(
+        _pageController.animateToPage(
+          target,
+          duration: const Duration(milliseconds: 260),
+          curve: Curves.easeOutCubic,
+        ),
+      );
+    } else {
+      _pageController.jumpToPage(target);
+    }
+  }
+
+  void _resetZoom() {
+    if (!_pageZoomed) return;
+    setState(() {
+      _zoomedSurfaces.clear();
+      _zoomGeneration++;
+    });
   }
 
   void _goToPage(int pageIndex, MangaReaderPreferences prefs) {
     _cancelPositionSync();
+    _resetZoom();
     final bounded = pageIndex.clamp(0, widget.request.pages.length - 1);
     if (prefs.mode == MangaReadingMode.webtoon) {
-      final viewport = MediaQuery.sizeOf(context);
-      final offsets = _webtoonOffsets(viewport.width);
+      final offsets = _webtoonOffsets(_readerViewport.width, prefs);
       if (_webtoonController.hasClients && bounded < offsets.length) {
-        _webtoonController.animateTo(
-          offsets[bounded],
-          duration: const Duration(milliseconds: 260),
-          curve: Curves.easeOutCubic,
+        final offset = offsets[bounded].clamp(
+          0.0,
+          _webtoonController.position.maxScrollExtent,
         );
+        if (_animatePages(prefs)) {
+          unawaited(
+            _webtoonController.animateTo(
+              offset,
+              duration: const Duration(milliseconds: 260),
+              curve: Curves.easeOutCubic,
+            ),
+          );
+        } else {
+          _webtoonController.jumpTo(offset);
+        }
       }
       _setPageIndex(bounded);
       return;
@@ -323,20 +353,18 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen> {
     final target = prefs.mode == MangaReadingMode.vertical
         ? bounded
         : _layout?.spreadIndexForPage(bounded) ?? bounded;
-    if (_pageController.hasClients) {
-      _pageController.animateToPage(
-        target,
-        duration: const Duration(milliseconds: 260),
-        curve: Curves.easeOutCubic,
-      );
-    }
+    _turnToPage(target, prefs);
     _setPageIndex(bounded);
   }
 
   void _setPageIndex(int value) {
     final bounded = value.clamp(0, widget.request.pages.length - 1);
     if (_pageIndex == bounded) return;
-    setState(() => _pageIndex = bounded);
+    setState(() {
+      _pageIndex = bounded;
+      _zoomedSurfaces.clear();
+      _zoomGeneration++;
+    });
     _scheduleProgressSave();
     _publishPresence();
     _preloadNear(bounded);
@@ -442,14 +470,19 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen> {
     }
   }
 
-  List<double> _webtoonOffsets(double width) {
-    final contentWidth = math.max(240, width);
+  double _contentWidth(double width, MangaReaderPreferences prefs) =>
+      math.max(1, width - math.min(prefs.sidePadding, width * .25) * 2);
+
+  double _pageRatio(MangaReaderPage page) =>
+      _pageAspectRatios[page.index] ?? page.aspectRatio ?? .7;
+
+  List<double> _webtoonOffsets(double width, MangaReaderPreferences prefs) {
+    final contentWidth = _contentWidth(width, prefs);
     final result = <double>[];
-    var offset = 0.0;
+    var offset = prefs.pageGap / 2;
     for (final page in widget.request.pages) {
       result.add(offset);
-      final ratio = page.aspectRatio ?? .7;
-      offset += contentWidth / ratio;
+      offset += contentWidth / _pageRatio(page) + prefs.webtoonGap;
     }
     return result;
   }
@@ -458,13 +491,76 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen> {
     if (_positionSyncPending || !_webtoonController.hasClients || !mounted) {
       return;
     }
-    final offsets = _webtoonOffsets(MediaQuery.sizeOf(context).width);
+    final offsets = _webtoonOffsets(_readerViewport.width, _preferences);
     final target = _webtoonController.offset + 40;
     var index = 0;
     while (index + 1 < offsets.length && offsets[index + 1] <= target) {
       index += 1;
     }
     if (index != _pageIndex) _setPageIndex(index);
+  }
+
+  void _receivePageDimensions(int index, MangaImageInfo info) {
+    final ratio = info.width / info.height;
+    if (_pageAspectRatios[index] == ratio) return;
+    _pendingPageAspectRatios[index] = ratio;
+    _schedulePageDimensionsFlush();
+  }
+
+  void _schedulePageDimensionsFlush() {
+    if (_pageDimensionsFlushScheduled || _pendingPageAspectRatios.isEmpty) {
+      return;
+    }
+    _pageDimensionsFlushScheduled = true;
+    // Batch dimensions against one physical layout. Updating several images
+    // individually would mix new page heights with the old scroll offset.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final prefs = _preferences;
+      final before = _webtoonOffsets(_readerViewport.width, prefs);
+      final oldOffset = _webtoonController.hasClients
+          ? _webtoonController.offset
+          : 0.0;
+      final pageAnchor = _pageIndex;
+      final oldHeight =
+          _contentWidth(_readerViewport.width, prefs) /
+          _pageRatio(widget.request.pages[pageAnchor]);
+      final fraction = oldHeight > 0
+          ? ((oldOffset - before[pageAnchor]) / oldHeight).clamp(0.0, 1.0)
+          : 0.0;
+      setState(() {
+        _pageAspectRatios.addAll(_pendingPageAspectRatios);
+        _pendingPageAspectRatios.clear();
+      });
+      if (prefs.mode != MangaReadingMode.webtoon) {
+        _pageDimensionsFlushScheduled = false;
+        return;
+      }
+      final generation = ++_positionSyncGeneration;
+      _positionSyncPending = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        if (generation == _positionSyncGeneration &&
+            _webtoonController.hasClients) {
+          final after = _webtoonOffsets(_readerViewport.width, _preferences);
+          final newHeight =
+              _contentWidth(_readerViewport.width, _preferences) /
+              _pageRatio(widget.request.pages[pageAnchor]);
+          _webtoonController.jumpTo(
+            (after[pageAnchor] + fraction * newHeight).clamp(
+              0.0,
+              _webtoonController.position.maxScrollExtent,
+            ),
+          );
+        }
+        if (generation == _positionSyncGeneration) {
+          _positionSyncPending = false;
+        }
+        _pageDimensionsFlushScheduled = false;
+        _schedulePageDimensionsFlush();
+      });
+    });
+    WidgetsBinding.instance.ensureVisualUpdate();
   }
 
   void _leaveReader() {
@@ -478,7 +574,9 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final prefs = ref.watch(mangaReaderPreferencesProvider);
+    final prefs = ref.watch(
+      mangaEffectiveReaderPreferencesProvider(_seriesKey),
+    );
     final roots = ref.watch(mangaStorageRootsProvider).valueOrNull;
     ref.listen<DiscordPresenceState>(discordPresenceControllerProvider, (
       previous,
@@ -514,37 +612,62 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen> {
         onKeyEvent: (_, event) => _handleKeys(event, prefs),
         child: Scaffold(
           backgroundColor: background,
-          body: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTapUp: prefs.tapZonesEnabled
-                ? (details) => _handleTapZone(details, prefs)
-                : null,
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                LayoutBuilder(
-                  builder: (context, constraints) => _buildReader(
-                    context,
-                    prefs,
-                    roots,
-                    Size(constraints.maxWidth, constraints.maxHeight),
+          body: Stack(
+            fit: StackFit.expand,
+            children: [
+              LayoutBuilder(
+                builder: (context, constraints) => _buildReader(
+                  context,
+                  prefs,
+                  roots,
+                  Size(constraints.maxWidth, constraints.maxHeight),
+                ),
+              ),
+              if (prefs.showPageNumber && !_hudVisible)
+                Positioned(
+                  bottom: 12,
+                  left: 0,
+                  right: 0,
+                  child: IgnorePointer(
+                    child: SafeArea(
+                      top: false,
+                      child: Center(
+                        child: DecoratedBox(
+                          key: const ValueKey('manga-reader-page-counter'),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: .65),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 4,
+                            ),
+                            child: Text(
+                              '${_pageIndex + 1} / ${widget.request.pages.length}',
+                              style: Theme.of(context).textTheme.labelMedium
+                                  ?.copyWith(color: Colors.white),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
                   ),
                 ),
-                _ReaderChrome(
-                  visible: _hudVisible,
-                  title: widget.request.seriesTitle,
-                  chapter: widget.request.chapterTitle,
-                  page: _pageIndex + 1,
-                  pageCount: widget.request.pages.length,
-                  onBack: _leaveReader,
-                  onSettings: _openReaderSettings,
-                  onPageChanged: (value) => _goToPage(value, prefs),
-                  backFocusNode: _backFocus,
-                  settingsFocusNode: _settingsFocus,
-                  progressFocusNode: _progressFocus,
-                ),
-              ],
-            ),
+              _ReaderChrome(
+                visible: _hudVisible,
+                title: widget.request.seriesTitle,
+                chapter: widget.request.chapterTitle,
+                page: _pageIndex + 1,
+                pageCount: widget.request.pages.length,
+                onBack: _leaveReader,
+                onSettings: _openReaderSettings,
+                onPageChanged: (value) => _goToPage(value, prefs),
+                backFocusNode: _backFocus,
+                settingsFocusNode: _settingsFocus,
+                progressFocusNode: _progressFocus,
+              ),
+            ],
           ),
         ),
       ),
@@ -557,6 +680,18 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen> {
     MangaStorageRoots? roots,
     Size viewport,
   ) {
+    _readerViewport = viewport;
+    final geometry =
+        '${viewport.width}:${viewport.height}:${prefs.sidePadding}:${prefs.pageGap}:${prefs.webtoonGap}:${prefs.mode}:${prefs.pageFit}:${prefs.spreadMode}';
+    if (_webtoonGeometry != geometry) {
+      final hadGeometry = _webtoonGeometry != null;
+      _webtoonGeometry = geometry;
+      _zoomedSurfaces.clear();
+      _zoomGeneration++;
+      if (hadGeometry && prefs.mode == MangaReadingMode.webtoon) {
+        _scheduleReaderPositionSync(prefs, _pageIndex);
+      }
+    }
     if (!_initialPositionApplied || _presentedMode != prefs.mode) {
       _initialPositionApplied = true;
       _presentedMode = prefs.mode;
@@ -570,16 +705,25 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen> {
         key: const ValueKey('manga-reader-vertical'),
         controller: _pageController,
         scrollDirection: Axis.vertical,
+        physics: _pageZoomed ? const NeverScrollableScrollPhysics() : null,
         itemCount: widget.request.pages.length,
         onPageChanged: (index) {
           if (!_positionSyncPending) _setPageIndex(index);
         },
-        itemBuilder: (context, index) => Padding(
-          padding: EdgeInsets.all(prefs.pageGap / 2),
-          child: _MangaPageView(
-            page: widget.request.pages[index],
-            roots: roots,
-            fit: _boxFit(prefs.pageFit),
+        itemBuilder: (context, index) => _surface(
+          identity: 'vertical-$index',
+          prefs: prefs,
+          child: Padding(
+            padding: EdgeInsets.symmetric(
+              horizontal: math.min(prefs.sidePadding, viewport.width * .25),
+              vertical: prefs.pageGap / 2,
+            ),
+            child: _MangaPageView(
+              page: widget.request.pages[index],
+              roots: roots,
+              fit: _boxFit(prefs.pageFit),
+              preferences: prefs,
+            ),
           ),
         ),
       );
@@ -609,6 +753,7 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen> {
       key: const ValueKey('manga-reader-paged'),
       controller: _pageController,
       reverse: prefs.direction == MangaReadingDirection.rightToLeft,
+      physics: _pageZoomed ? const NeverScrollableScrollPhysics() : null,
       itemCount: layout.spreads.length,
       onPageChanged: (index) {
         if (!_positionSyncPending) {
@@ -624,16 +769,46 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen> {
           gap: layout.gutterExtent,
           fold: fold,
           invert: prefs.invertDoublePages,
+          preferences: prefs,
         );
-        if (prefs.bookAnimationEnabled) {
-          page = _BookPageTransform(
-            index: index,
-            controller: _pageController,
-            child: page,
-          );
-        }
-        return page;
+        page = _surface(identity: 'spread-$index', prefs: prefs, child: page);
+        return _BookPageTransform(
+          index: index,
+          controller: _pageController,
+          enabled: _animatePages(prefs),
+          child: page,
+        );
       },
+    );
+  }
+
+  Widget _surface({
+    required String identity,
+    required MangaReaderPreferences prefs,
+    required Widget child,
+  }) {
+    final generation = _zoomGeneration;
+    return MangaReaderPageSurface(
+      key: ValueKey('manga-surface-$identity'),
+      resetToken: generation,
+      preferences: prefs,
+      onToggleHud: _toggleHud,
+      onTurnPage: (delta) => _moveBy(delta, prefs),
+      onZoomChanged: (zoomed) {
+        if (!mounted ||
+            generation != _zoomGeneration ||
+            _zoomedSurfaces.contains(identity) == zoomed) {
+          return;
+        }
+        setState(() {
+          if (zoomed) {
+            _zoomedSurfaces.add(identity);
+          } else {
+            _zoomedSurfaces.remove(identity);
+          }
+        });
+      },
+      child: child,
     );
   }
 
@@ -651,6 +826,8 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen> {
       _layout = layout;
       return;
     }
+    _zoomedSurfaces.clear();
+    _zoomGeneration++;
     final anchor = _layout?.anchorForPage(_pageIndex);
     _layout = layout;
     _layoutSignature = signature;
@@ -675,9 +852,14 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || generation != _positionSyncGeneration) return;
       if (prefs.mode == MangaReadingMode.webtoon) {
-        final offsets = _webtoonOffsets(MediaQuery.sizeOf(context).width);
+        final offsets = _webtoonOffsets(_readerViewport.width, prefs);
         if (_webtoonController.hasClients && bounded < offsets.length) {
-          _webtoonController.jumpTo(offsets[bounded]);
+          _webtoonController.jumpTo(
+            offsets[bounded].clamp(
+              0.0,
+              _webtoonController.position.maxScrollExtent,
+            ),
+          );
         }
       } else if (_pageController.hasClients) {
         final target = prefs.mode == MangaReadingMode.vertical
@@ -699,26 +881,57 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen> {
     MangaStorageRoots? roots,
     Size viewport,
   ) {
-    return ListView.builder(
+    final width = _contentWidth(viewport.width, prefs);
+    final extents = [
+      for (final page in widget.request.pages)
+        width / _pageRatio(page) +
+            (page.index < widget.request.pages.length - 1
+                ? prefs.webtoonGap
+                : 0),
+    ];
+    return ListView.custom(
       key: const ValueKey('manga-reader-webtoon'),
       controller: _webtoonController,
-      padding: EdgeInsets.symmetric(vertical: prefs.pageGap / 2),
-      itemCount: widget.request.pages.length,
-      itemBuilder: (context, index) {
-        final page = widget.request.pages[index];
-        final ratio = page.aspectRatio ?? .7;
-        return Center(
-          child: SizedBox(
-            width: viewport.width,
-            height: viewport.width / ratio,
-            child: _MangaPageView(
-              page: page,
-              roots: roots,
-              fit: BoxFit.fitWidth,
+      physics: _pageZoomed ? const NeverScrollableScrollPhysics() : null,
+      padding: EdgeInsets.symmetric(
+        horizontal: math.min(prefs.sidePadding, viewport.width * .25),
+        vertical: prefs.pageGap / 2,
+      ),
+      // Supply every known extent so distant page jumps use the real total,
+      // not an estimate based on whichever short/tall pages are visible.
+      itemExtentBuilder: (index, _) =>
+          index < extents.length ? extents[index] : null,
+      childrenDelegate: _MangaStripChildren(
+        totalExtent: extents.fold(0.0, (total, height) => total + height),
+        childCount: widget.request.pages.length,
+        builder: (context, index) {
+          final page = widget.request.pages[index];
+          final ratio = _pageRatio(page);
+          return Padding(
+            padding: EdgeInsets.only(
+              bottom: index < widget.request.pages.length - 1
+                  ? prefs.webtoonGap
+                  : 0,
             ),
-          ),
-        );
-      },
+            child: SizedBox(
+              key: ValueKey('manga-webtoon-page-$index'),
+              width: width,
+              height: width / ratio,
+              child: _surface(
+                identity: 'webtoon-$index',
+                prefs: prefs,
+                child: _MangaPageView(
+                  page: page,
+                  roots: roots,
+                  fit: BoxFit.fitWidth,
+                  preferences: prefs,
+                  onImageInfo: (info) => _receivePageDimensions(index, info),
+                ),
+              ),
+            ),
+          );
+        },
+      ),
     );
   }
 
@@ -730,10 +943,31 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen> {
       useSafeArea: true,
       backgroundColor: context.appPalette.surface,
       constraints: const BoxConstraints(maxWidth: 720),
-      builder: (context) => const _MangaReaderSettingsSheet(),
+      builder: (context) => MangaReaderSettingsSheet(
+        seriesKey: _seriesKey,
+        seriesTitle: widget.request.seriesTitle,
+      ),
     );
     if (mounted) _readerFocus.requestFocus();
   }
+}
+
+class _MangaStripChildren extends SliverChildBuilderDelegate {
+  _MangaStripChildren({
+    required IndexedWidgetBuilder builder,
+    required int childCount,
+    required this.totalExtent,
+  }) : super(builder, childCount: childCount);
+
+  final double totalExtent;
+
+  @override
+  double estimateMaxScrollOffset(
+    int firstIndex,
+    int lastIndex,
+    double leadingScrollOffset,
+    double trailingScrollOffset,
+  ) => totalExtent;
 }
 
 class _SpreadView extends StatelessWidget {
@@ -744,6 +978,7 @@ class _SpreadView extends StatelessWidget {
     required this.gap,
     required this.fold,
     required this.invert,
+    required this.preferences,
   });
 
   final MangaPageSpread spread;
@@ -752,6 +987,7 @@ class _SpreadView extends StatelessWidget {
   final double gap;
   final MangaFoldGeometry? fold;
   final bool invert;
+  final MangaReaderPreferences preferences;
 
   @override
   Widget build(BuildContext context) {
@@ -764,10 +1000,13 @@ class _SpreadView extends StatelessWidget {
     }
     if (spread.isSingleton) {
       return Center(
-        child: _MangaPageView(
-          page: spread.pagesInReadingOrder.single,
-          roots: roots,
-          fit: fit,
+        child: _withMargins(
+          _MangaPageView(
+            page: spread.pagesInReadingOrder.single,
+            roots: roots,
+            fit: fit,
+            preferences: preferences,
+          ),
         ),
       );
     }
@@ -793,22 +1032,74 @@ class _SpreadView extends StatelessWidget {
 
   Widget _optionalPage(MangaReaderPage? page) => page == null
       ? const SizedBox.shrink()
-      : _MangaPageView(page: page, roots: roots, fit: fit);
+      : _withMargins(
+          _MangaPageView(
+            page: page,
+            roots: roots,
+            fit: fit,
+            preferences: preferences,
+          ),
+        );
+
+  Widget _withMargins(Widget child) => LayoutBuilder(
+    builder: (_, constraints) => Padding(
+      padding: EdgeInsets.symmetric(
+        horizontal: math.min(
+          preferences.sidePadding,
+          constraints.maxWidth * .25,
+        ),
+      ),
+      child: child,
+    ),
+  );
 }
 
-class _MangaPageView extends ConsumerWidget {
+class _MangaPageView extends ConsumerStatefulWidget {
   const _MangaPageView({
     required this.page,
     required this.roots,
     required this.fit,
+    required this.preferences,
+    this.onImageInfo,
   });
 
   final MangaReaderPage page;
   final MangaStorageRoots? roots;
   final BoxFit fit;
+  final MangaReaderPreferences preferences;
+  final ValueChanged<MangaImageInfo>? onImageInfo;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_MangaPageView> createState() => _MangaPageViewState();
+}
+
+class _MangaPageViewState extends ConsumerState<_MangaPageView> {
+  Future<Uint8List>? _remoteBytes;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadPage();
+  }
+
+  @override
+  void didUpdateWidget(covariant _MangaPageView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.page.resource != widget.page.resource) _loadPage();
+  }
+
+  void _loadPage() {
+    final resource = widget.page.resource;
+    _remoteBytes = resource is MangaRemotePageResource
+        ? ref.read(mangaPageFetchClientProvider).fetch(resource)
+        : null;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final page = widget.page;
+    final roots = widget.roots;
+    final fit = widget.fit;
     return LayoutBuilder(
       builder: (context, constraints) {
         final desiredCacheWidth = _readerDesiredCacheWidth(
@@ -816,9 +1107,9 @@ class _MangaPageView extends ConsumerWidget {
           constraints,
         );
         switch (page.resource) {
-          case MangaRemotePageResource resource:
+          case MangaRemotePageResource():
             return FutureBuilder<Uint8List>(
-              future: ref.read(mangaPageFetchClientProvider).fetch(resource),
+              future: _remoteBytes,
               builder: (context, snapshot) {
                 if (snapshot.hasError) {
                   final error = snapshot.error;
@@ -840,6 +1131,7 @@ class _MangaPageView extends ConsumerWidget {
                     message: 'This page could not be decoded safely.',
                   );
                 }
+                widget.onImageInfo?.call(image);
                 return Image.memory(
                   bytes,
                   key: ValueKey('manga-page-${page.id}'),
@@ -847,6 +1139,13 @@ class _MangaPageView extends ConsumerWidget {
                   fit: fit,
                   cacheWidth: _safeReaderCacheWidth(image, desiredCacheWidth),
                   filterQuality: FilterQuality.medium,
+                  frameBuilder: (context, child, frame, sync) =>
+                      frame != null || sync
+                      ? MangaReaderImageFilter(
+                          preferences: widget.preferences,
+                          child: child,
+                        )
+                      : const Center(child: CircularProgressIndicator()),
                   errorBuilder: (context, error, stackTrace) =>
                       const _PageFailure(
                         message: 'This page could not be decoded.',
@@ -868,6 +1167,8 @@ class _MangaPageView extends ConsumerWidget {
               semanticLabel: 'Manga page ${page.index + 1}',
               fit: fit,
               desiredCacheWidth: desiredCacheWidth,
+              preferences: widget.preferences,
+              onImageInfo: widget.onImageInfo,
             );
         }
       },
@@ -907,6 +1208,8 @@ class _SafeLocalMangaImage extends StatefulWidget {
     required this.semanticLabel,
     required this.fit,
     required this.desiredCacheWidth,
+    required this.preferences,
+    this.onImageInfo,
     super.key,
   });
 
@@ -915,6 +1218,8 @@ class _SafeLocalMangaImage extends StatefulWidget {
   final String semanticLabel;
   final BoxFit fit;
   final int desiredCacheWidth;
+  final MangaReaderPreferences preferences;
+  final ValueChanged<MangaImageInfo>? onImageInfo;
 
   @override
   State<_SafeLocalMangaImage> createState() => _SafeLocalMangaImageState();
@@ -950,6 +1255,7 @@ class _SafeLocalMangaImageState extends State<_SafeLocalMangaImage> {
       if (info == null) {
         return const Center(child: CircularProgressIndicator());
       }
+      widget.onImageInfo?.call(info);
       return Image(
         key: widget.imageKey,
         image: ResizeImage(
@@ -960,7 +1266,10 @@ class _SafeLocalMangaImageState extends State<_SafeLocalMangaImage> {
         fit: widget.fit,
         filterQuality: FilterQuality.medium,
         frameBuilder: (context, child, frame, sync) => frame != null || sync
-            ? child
+            ? MangaReaderImageFilter(
+                preferences: widget.preferences,
+                child: child,
+              )
             : const Center(child: CircularProgressIndicator()),
         errorBuilder: (context, error, stackTrace) =>
             const _PageFailure(message: 'This page could not be loaded.'),
@@ -995,11 +1304,13 @@ class _BookPageTransform extends StatelessWidget {
   const _BookPageTransform({
     required this.index,
     required this.controller,
+    required this.enabled,
     required this.child,
   });
 
   final int index;
   final PageController controller;
+  final bool enabled;
   final Widget child;
 
   @override
@@ -1007,10 +1318,12 @@ class _BookPageTransform extends StatelessWidget {
     animation: controller,
     child: child,
     builder: (context, child) {
-      final page = controller.hasClients
+      // During a paged/vertical rebuild the outgoing and incoming scrollables
+      // briefly share this controller. Reading .page then would assert.
+      final page = controller.positions.length == 1
           ? controller.page ?? controller.initialPage.toDouble()
           : controller.initialPage.toDouble();
-      final delta = (page - index).clamp(-1.0, 1.0);
+      final delta = enabled ? (page - index).clamp(-1.0, 1.0) : 0.0;
       final transform = Matrix4.identity()
         ..setEntry(3, 2, .0012)
         ..rotateY(delta * .18);
@@ -1158,217 +1471,6 @@ class _ReaderChrome extends StatelessWidget {
         ),
       ),
     ),
-  );
-}
-
-class _MangaReaderSettingsSheet extends ConsumerWidget {
-  const _MangaReaderSettingsSheet();
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final prefs = ref.watch(mangaReaderPreferencesProvider);
-    final controller = ref.read(mangaReaderPreferencesProvider.notifier);
-    return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(22, 16, 22, 28),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  'Reader settings',
-                  style: Theme.of(context).textTheme.headlineSmall,
-                ),
-              ),
-              IconButton(
-                tooltip: 'Close',
-                onPressed: () => Navigator.of(context).pop(),
-                icon: const Icon(Icons.close_rounded),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          _ReaderChoice<MangaReadingMode>(
-            label: 'Reading mode',
-            value: prefs.mode,
-            values: MangaReadingMode.values,
-            name: (value) => value.displayName,
-            onChanged: controller.setMode,
-          ),
-          _ReaderChoice<MangaReadingDirection>(
-            label: 'Reading direction',
-            value: prefs.direction,
-            values: MangaReadingDirection.values,
-            name: (value) => value.displayName,
-            onChanged: controller.setDirection,
-          ),
-          _ReaderChoice<MangaSpreadMode>(
-            label: 'Page spread',
-            value: prefs.spreadMode,
-            values: MangaSpreadMode.values,
-            name: (value) => value.displayName,
-            onChanged: controller.setSpreadMode,
-          ),
-          _ReaderChoice<MangaPageFit>(
-            label: 'Page fit',
-            value: prefs.pageFit,
-            values: MangaPageFit.values,
-            name: (value) => value.displayName,
-            onChanged: controller.setPageFit,
-          ),
-          _ReaderChoice<MangaReaderBackground>(
-            label: 'Background',
-            value: prefs.background,
-            values: MangaReaderBackground.values,
-            name: (value) => value.displayName,
-            onChanged: controller.setBackground,
-          ),
-          _ReaderSlider(
-            label: 'Page gap',
-            value: prefs.pageGap,
-            min: 0,
-            max: 40,
-            divisions: 8,
-            valueLabel: '${prefs.pageGap.round()} px',
-            onChanged: controller.setPageGap,
-          ),
-          _ReaderSlider(
-            label: 'Pages to preload',
-            value: prefs.preloadPages.toDouble(),
-            min: 0,
-            max: 5,
-            divisions: 5,
-            valueLabel: '${prefs.preloadPages}',
-            onChanged: (value) => controller.setPreloadPages(value.round()),
-          ),
-          _ReaderSwitch(
-            label: 'Keep cover by itself',
-            value: prefs.coverStartsAlone,
-            onChanged: controller.setCoverStartsAlone,
-          ),
-          _ReaderSwitch(
-            label: 'Swap double-page sides',
-            value: prefs.invertDoublePages,
-            onChanged: controller.setInvertDoublePages,
-          ),
-          _ReaderSwitch(
-            label: 'Book page animation',
-            value: prefs.bookAnimationEnabled,
-            onChanged: controller.setBookAnimationEnabled,
-          ),
-          _ReaderSwitch(
-            label: 'Tap zones',
-            value: prefs.tapZonesEnabled,
-            onChanged: controller.setTapZonesEnabled,
-          ),
-          _ReaderSwitch(
-            label: 'Keep screen awake',
-            value: prefs.keepScreenAwake,
-            onChanged: controller.setKeepScreenAwake,
-          ),
-          _ReaderSwitch(
-            label: 'Show manga title on Discord',
-            subtitle: 'Turn off to share only “Reading manga”.',
-            value: prefs.showDiscordTitle,
-            onChanged: controller.setShowDiscordTitle,
-          ),
-          const SizedBox(height: 10),
-          OutlinedButton.icon(
-            onPressed: controller.reset,
-            icon: const Icon(Icons.restart_alt_rounded),
-            label: const Text('Reset reader settings'),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ReaderChoice<T> extends StatelessWidget {
-  const _ReaderChoice({
-    required this.label,
-    required this.value,
-    required this.values,
-    required this.name,
-    required this.onChanged,
-  });
-
-  final String label;
-  final T value;
-  final List<T> values;
-  final String Function(T value) name;
-  final Future<void> Function(T value) onChanged;
-
-  @override
-  Widget build(BuildContext context) => ListTile(
-    title: Text(label),
-    trailing: DropdownButton<T>(
-      value: value,
-      items: [
-        for (final item in values)
-          DropdownMenuItem(value: item, child: Text(name(item))),
-      ],
-      onChanged: (item) {
-        if (item != null) unawaited(onChanged(item));
-      },
-    ),
-  );
-}
-
-class _ReaderSlider extends StatelessWidget {
-  const _ReaderSlider({
-    required this.label,
-    required this.value,
-    required this.min,
-    required this.max,
-    required this.divisions,
-    required this.valueLabel,
-    required this.onChanged,
-  });
-
-  final String label;
-  final double value;
-  final double min;
-  final double max;
-  final int divisions;
-  final String valueLabel;
-  final Future<void> Function(double value) onChanged;
-
-  @override
-  Widget build(BuildContext context) => ListTile(
-    title: Text(label),
-    subtitle: Slider(
-      value: value,
-      min: min,
-      max: max,
-      divisions: divisions,
-      label: valueLabel,
-      onChanged: (next) => unawaited(onChanged(next)),
-    ),
-    trailing: Text(valueLabel),
-  );
-}
-
-class _ReaderSwitch extends StatelessWidget {
-  const _ReaderSwitch({
-    required this.label,
-    required this.value,
-    required this.onChanged,
-    this.subtitle,
-  });
-
-  final String label;
-  final String? subtitle;
-  final bool value;
-  final Future<void> Function(bool value) onChanged;
-
-  @override
-  Widget build(BuildContext context) => SwitchListTile.adaptive(
-    title: Text(label),
-    subtitle: subtitle == null ? null : Text(subtitle!),
-    value: value,
-    onChanged: (next) => unawaited(onChanged(next)),
   );
 }
 

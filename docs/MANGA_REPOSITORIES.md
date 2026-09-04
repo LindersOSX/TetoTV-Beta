@@ -220,6 +220,9 @@ that operation or that every acquisition format can be displayed or saved.
 
 ## Reading and compatible chapter downloads
 
+For layouts, per-manga preferences, zoom, page colors, and reader controls, see
+[Manga reader controls](MANGA_READER.md).
+
 TetoTV can read bounded public HTTPS image resources from an OPDS reading
 order. Compatible downloads can use those image resources or a ZIP/CBZ
 acquisition selected from the publication. Source credentials are loaded from

@@ -122,7 +122,8 @@ void main() {
     expect(
       source,
       contains(
-        'await _player.seek(position);\n        _recordCommittedSeek(position);',
+        'await _seekWithPerformanceDiagnostics(position, userInitiated: false);\n'
+        '        _recordCommittedSeek(position);',
       ),
     );
     expect(

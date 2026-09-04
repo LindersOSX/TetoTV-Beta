@@ -40,6 +40,59 @@ void main() {
   });
 
   test(
+    'legacy startup outcomes stay compatible and do not imply smoothness',
+    () {
+      final derived = derivePlaybackSessionDiagnostics([
+        _playbackEvent(
+          timestamp: DateTime.utc(2026, 9, 4, 12),
+          sessionId: 'pbs-workingSession1234',
+          sequence: 1,
+          stage: 'final_outcome',
+          status: 'working',
+        ),
+        _playbackEvent(
+          timestamp: DateTime.utc(2026, 9, 4, 13),
+          sessionId: 'pbs-exitedSession12345',
+          sequence: 1,
+          stage: 'final_outcome',
+          status: 'exited_after_start',
+        ),
+      ]);
+      final sessions = (derived['playbackSessions']! as List).cast<Map>();
+      final comparison = derived['playbackSessionComparison']! as Map;
+      final meanings = derived['playbackSessionOutcomeMeaning']! as Map;
+
+      expect(sessions.map((session) => session['finalOutcome']), [
+        'exited_after_start',
+        'working',
+      ]);
+      expect(
+        (comparison['working'] as Map)['finalOutcome'],
+        'exited_after_start',
+      );
+      expect(
+        meanings['working'],
+        contains('does not establish smooth playback'),
+      );
+      expect(
+        meanings['exited_after_start'],
+        contains('does not establish smooth playback'),
+      );
+      expect(
+        meanings['startupSignal'],
+        contains('not a rendered-frame callback'),
+      );
+      expect(meanings['startupSignal'], contains('decoded_video_observed'));
+      expect(meanings['startupSignal'], contains('video_parameters_available'));
+      expect(
+        meanings['comparisonWorking'],
+        contains('not a known-smooth control'),
+      );
+      expect(meanings['smoothnessEvidence'], contains('sessionId and attempt'));
+    },
+  );
+
+  test(
     'persisted playback stages produce working vs failed comparison',
     () async {
       final database = await databaseFactoryFfi.openDatabase(

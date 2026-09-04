@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:math';
 
 import 'package:anime_tv/core/config/app_config.dart';
+import 'package:anime_tv/core/diagnostics/playback_performance_diagnostics.dart';
 import 'package:anime_tv/core/diagnostics/playback_session_diagnostics.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/core/storage/tetotv_database.dart';
@@ -347,6 +348,14 @@ String buildRedactedDiagnosticsText({
   required Map<String, Object?> diagnostics,
   required DateTime generatedAt,
 }) {
+  // This section has a closed numeric/enum schema. Rebuild it separately at
+  // this exact export boundary: the generic redactor intentionally considers
+  // names such as path unsafe, but must not destroy validated metrics.
+  // Never grant arbitrary diagnostic contexts an allowlist exemption.
+  final genericDiagnostics = Map<String, Object?>.from(diagnostics)
+    ..remove('playbackPerformance')
+    ..remove('playbackPerformanceSchema')
+    ..remove('playbackPerformanceWindow');
   final payload = <String, Object?>{
     'schema': 'tetotv-explicit-diagnostics-v3',
     'generatedAt': generatedAt.toUtc().toIso8601String(),
@@ -369,7 +378,7 @@ String buildRedactedDiagnosticsText({
         AppConfig.diagnosticReportBaseUrl,
       ),
     },
-    'diagnostics': diagnostics,
+    'diagnostics': genericDiagnostics,
     'privacy':
         'Explicit user share only. Account and tracker identity, credentials, room codes and capabilities, display names and avatars, direct media source data, URLs, magnets, torrent hashes, local file paths, email addresses, network addresses, and media bytes are redacted.',
   };
@@ -382,7 +391,12 @@ String buildRedactedDiagnosticsText({
     truncation: fullTruncation,
   );
   final fullPayload = _snapshotWithCompleteness(
-    safe,
+    _attachPlaybackPerformanceForReport(
+      safe,
+      diagnostics,
+      generatedAt: generatedAt,
+      truncation: fullTruncation,
+    ),
     truncation: fullTruncation,
     reducedForSize: false,
   );
@@ -403,7 +417,12 @@ String buildRedactedDiagnosticsText({
     truncation: compactTruncation,
   );
   final compactPayload = _snapshotWithCompleteness(
-    compact,
+    _attachPlaybackPerformanceForReport(
+      compact,
+      diagnostics,
+      generatedAt: generatedAt,
+      truncation: compactTruncation,
+    ),
     truncation: compactTruncation,
     reducedForSize: true,
     fullSanitizedCharacters: text.length,
@@ -413,9 +432,140 @@ String buildRedactedDiagnosticsText({
   if (compactText.length <= maximumExplicitDiagnosticsCharacters) {
     return compactText;
   }
+  // Even pathological nested capability/event maps must not evict the most
+  // recent attempt's performance evidence or make the report unshareable.
+  // Keep the closed, tightly bounded performance section and explicitly mark
+  // every other diagnostics section as omitted in this last-resort fallback.
+  final minimalTruncation = _SnapshotTruncation()
+    ..truncatedMaps = 1
+    ..droppedMapFields = genericDiagnostics.length + 1;
+  final minimalPayload = _snapshotWithCompleteness(
+    _attachPlaybackPerformanceForReport(
+      {
+        'schema': payload['schema'],
+        'generatedAt': payload['generatedAt'],
+        'app': payload['app'],
+        'deviceClass': payload['deviceClass'],
+        'serviceConfiguration': payload['serviceConfiguration'],
+        'diagnostics': <String, Object?>{},
+        'privacy': payload['privacy'],
+      },
+      diagnostics,
+      generatedAt: generatedAt,
+      truncation: minimalTruncation,
+    ),
+    truncation: minimalTruncation,
+    reducedForSize: true,
+    fullSanitizedCharacters: text.length,
+    preReductionTruncation: fullTruncation,
+  );
+  final minimalText = jsonEncode(minimalPayload);
+  if (minimalText.length <= maximumExplicitDiagnosticsCharacters) {
+    return minimalText;
+  }
   throw const DiagnosticsShareException(
     'The redacted diagnostic snapshot is unexpectedly large. Refresh Diagnostics and try again.',
   );
+}
+
+Map<String, Object?> _attachPlaybackPerformanceForReport(
+  Object? value,
+  Map<String, Object?> rawDiagnostics, {
+  required DateTime generatedAt,
+  required _SnapshotTruncation truncation,
+}) {
+  final payload = Map<String, Object?>.from(value! as Map<String, Object?>);
+  final safeDiagnostics = Map<String, Object?>.from(
+    payload['diagnostics']! as Map<String, Object?>,
+  );
+  payload['diagnostics'] = safeDiagnostics;
+  final rawEvents = rawDiagnostics['diagnosticEvents'];
+  final safeEvents = safeDiagnostics['diagnosticEvents'];
+  if (rawEvents is List) {
+    final exportedCount = safeEvents is List ? safeEvents.length : 0;
+    safeDiagnostics['diagnosticEventExport'] = {
+      'ordering': 'oldest-first',
+      'selection': 'newest-retained-events',
+      'availableCount': rawEvents.length,
+      'exportedCount': exportedCount,
+      'droppedForExport': rawEvents.length - exportedCount,
+    };
+  }
+  if (!rawDiagnostics.containsKey('playbackPerformance') &&
+      !rawDiagnostics.containsKey('playbackPerformanceSchema') &&
+      !rawDiagnostics.containsKey('playbackPerformanceWindow')) {
+    return payload;
+  }
+  final end = generatedAt.toUtc();
+  final start = end.subtract(diagnosticHistoryWindow);
+  final raw = rawDiagnostics['playbackPerformance'];
+  final snapshots = <Map<String, Object?>>[];
+  if (raw is List) {
+    for (final item in raw.take(maximumPersistedDiagnosticEvents)) {
+      final safe = sanitizePlaybackPerformanceSnapshot(item);
+      if (safe.isEmpty) continue;
+      final updatedAt = DateTime.parse(safe['updatedAt']! as String);
+      if (updatedAt.isBefore(start) || updatedAt.isAfter(end)) continue;
+      snapshots.add(safe);
+    }
+  }
+  snapshots.sort((left, right) {
+    final byTime = DateTime.parse(
+      right['updatedAt']! as String,
+    ).compareTo(DateTime.parse(left['updatedAt']! as String));
+    if (byTime != 0) return byTime;
+    final bySession = (right['sessionId']! as String).compareTo(
+      left['sessionId']! as String,
+    );
+    return bySession != 0
+        ? bySession
+        : (right['attempt']! as int).compareTo(left['attempt']! as int);
+  });
+  final seenAttempts = <String>{};
+  final retained = snapshots
+      .where(
+        (snapshot) =>
+            seenAttempts.add('${snapshot['sessionId']}:${snapshot['attempt']}'),
+      )
+      .take(maximumPersistedPlaybackPerformanceAttempts)
+      .toList(growable: false);
+  if (raw is List && raw.length > retained.length) {
+    truncation.truncatedLists++;
+    truncation.droppedListItems += raw.length - retained.length;
+  }
+  final rawWindow = rawDiagnostics['playbackPerformanceWindow'];
+  return {
+    ...payload,
+    'diagnostics': {
+      ...safeDiagnostics,
+      'playbackPerformanceSchema': playbackPerformanceSchema,
+      'playbackPerformanceWindow': {
+        'hours': diagnosticHistoryWindow.inHours,
+        'startsAt': start.toIso8601String(),
+        'endsAt': end.toIso8601String(),
+        'ordering': 'newest-first',
+        'capacity': maximumPersistedPlaybackPerformanceAttempts,
+        'retainedCount': retained.length,
+        'droppedForExport': raw is List ? raw.length - retained.length : 0,
+        if (retained.isNotEmpty) ...{
+          'newestRetainedAt': retained.first['updatedAt'],
+          'oldestRetainedAt': retained.last['updatedAt'],
+        },
+        if (rawWindow is Map)
+          for (final key in const [
+            'invalidSnapshotCount',
+            'droppedOutsideWindow',
+            'droppedForCapacity',
+          ])
+            if (rawWindow[key] is int && (rawWindow[key] as int) >= 0)
+              key: (rawWindow[key] as int).clamp(0, 1000000000),
+        'dropCountScope': 'since-diagnostics-storage-created',
+        if (rawWindow is Map && rawWindow['storageUnavailable'] == true)
+          'storageUnavailable': true,
+      },
+      'playbackPerformance': retained,
+    },
+  };
 }
 
 Object? _sanitizeSnapshot(
@@ -424,6 +574,7 @@ Object? _sanitizeSnapshot(
   required int stringMaximum,
   required int listMaximum,
   required _SnapshotTruncation truncation,
+  bool retainListTail = false,
 }) {
   if (depth > 8) {
     truncation.depthLimitedValues++;
@@ -444,7 +595,8 @@ Object? _sanitizeSnapshot(
       truncation.droppedListItems += dropped;
     }
     return [
-      for (final item in value.take(listMaximum))
+      for (final item
+          in retainListTail ? value.skip(dropped) : value.take(listMaximum))
         _sanitizeSnapshot(
           item,
           depth: depth + 1,
@@ -477,6 +629,9 @@ Object? _sanitizeSnapshot(
               stringMaximum: stringMaximum,
               listMaximum: listMaximum,
               truncation: truncation,
+              // The persisted event ring is chronological. When reduced,
+              // retain its newest evidence without reversing that order.
+              retainListTail: depth == 1 && rawKey == 'diagnosticEvents',
             );
     }
     return result;

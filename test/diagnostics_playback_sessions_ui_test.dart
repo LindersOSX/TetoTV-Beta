@@ -5,7 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  testWidgets('TV panel compares working and failed playback timelines', (
+  testWidgets('TV panel describes startup without claiming smooth playback', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(1280, 720);
@@ -30,12 +30,42 @@ void main() {
     await tester.pump();
 
     expect(find.text('PLAYBACK SESSION TIMELINES'), findsOneWidget);
-    expect(find.text('WORKING VS FAILED PLAYBACK'), findsOneWidget);
-    expect(find.text('WORKING SESSION'), findsOneWidget);
+    expect(find.text('STARTED VS FAILED PLAYBACK'), findsOneWidget);
+    expect(find.text('STARTED SESSION'), findsOneWidget);
+    expect(find.textContaining('not that playback was smooth'), findsOneWidget);
+    expect(find.textContaining('not video frame rate'), findsOneWidget);
+    expect(find.textContaining('Working'), findsNothing);
     expect(find.text('FAILED SESSION'), findsOneWidget);
     expect(find.textContaining('Codec H264'), findsOneWidget);
     expect(find.textContaining('Codec Hevc'), findsOneWidget);
     expect(find.textContaining('Fallback attempted'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('empty panel does not promise a smoothness comparison', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.dark,
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: PlaybackSessionDiagnosticsPanel(
+              diagnostics: derivePlaybackSessionDiagnostics(const []),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    expect(
+      find.textContaining('not a smooth-versus-stuttering comparison'),
+      findsOneWidget,
+    );
+    expect(
+      find.text('No correlated playback sessions have been recorded yet.'),
+      findsOneWidget,
+    );
     expect(tester.takeException(), isNull);
   });
 }

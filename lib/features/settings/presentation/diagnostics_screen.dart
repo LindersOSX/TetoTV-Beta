@@ -332,9 +332,14 @@ class PlaybackSessionDiagnosticsPanel extends StatelessWidget {
             'Privacy-safe stages correlate source selection, stream opening, decoder choice, fallback attempts, and the final result. Media names, addresses, URLs, filenames, headers, and server IDs are never shown.',
             style: TextStyle(color: palette.mutedText, fontSize: 11),
           ),
+          const SizedBox(height: 6),
+          Text(
+            'Started means video parameters became available, not that playback was smooth. Decoder choice is a requested policy; the full report includes sampled engine performance when available. UI frame timings describe the app interface, not video frame rate or dropped video frames.',
+            style: TextStyle(color: palette.mutedText, fontSize: 11),
+          ),
           const SizedBox(height: 12),
           Text(
-            'WORKING VS FAILED PLAYBACK',
+            'STARTED VS FAILED PLAYBACK',
             style: TextStyle(
               color: palette.primaryText,
               fontWeight: FontWeight.w900,
@@ -344,7 +349,7 @@ class PlaybackSessionDiagnosticsPanel extends StatelessWidget {
           const SizedBox(height: 8),
           if (comparison['available'] != true)
             Text(
-              'A completed working session and a failed session are needed before TetoTV can compare them.',
+              'A session that started and a failed session are needed before TetoTV can compare them. This is not a smooth-versus-stuttering comparison.',
               style: TextStyle(color: palette.mutedText, fontSize: 11),
             )
           else
@@ -360,7 +365,7 @@ class PlaybackSessionDiagnosticsPanel extends StatelessWidget {
                     SizedBox(
                       width: cardWidth,
                       child: _PlaybackComparisonCard(
-                        title: 'WORKING SESSION',
+                        title: 'STARTED SESSION',
                         value: comparison['working'] as Map,
                         successful: true,
                       ),
@@ -627,7 +632,7 @@ String _outcomeLabel(Object? value) => switch (value) {
   'opened' => 'Opened',
   'open_failed' => 'Open failed',
   'attempted' => 'Attempted',
-  'working' => 'Working',
+  'working' => 'Started',
   'completed' => 'Completed',
   'failed' => 'Failed',
   'exited_after_start' => 'Exited after playback started',

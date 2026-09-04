@@ -4,11 +4,40 @@ import 'dart:typed_data';
 
 import 'package:anime_tv/features/manga/data/manga_image_safety.dart';
 import 'package:anime_tv/features/manga/data/manga_page_fetch_client.dart';
+import 'package:anime_tv/features/manga/data/manga_uri_policy.dart';
 import 'package:anime_tv/features/manga/domain/manga_reader_models.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('canonicalizes safe manga Origin and Referer metadata', () {
+    expect(
+      canonicalMangaPageOriginHeader(' https://Reader.Example:443/ '),
+      'https://reader.example',
+    );
+    expect(
+      canonicalMangaPageOriginHeader('https://reader.example/path?secret=1'),
+      'https://reader.example',
+    );
+    expect(
+      canonicalMangaPageRefererHeader(
+        'https://Reader.Example:443/chapter/1?capability=private',
+      ),
+      'https://reader.example/chapter/1?capability=private',
+    );
+    expect(
+      canonicalMangaPageRefererHeader(
+        'https://reader.example/chapter/1?capability=private',
+        originOnly: true,
+      ),
+      'https://reader.example/',
+    );
+    expect(
+      canonicalMangaPageRefererHeader('https://reader.example/#private'),
+      isNull,
+    );
+  });
+
   test(
     'validates every redirect and strips credentials across origins',
     () async {
@@ -198,6 +227,43 @@ void main() {
     expect(failure.toString(), isNot(contains('private')));
   });
 
+  test('reports privacy-safe redirect context without request URLs', () async {
+    final reported = Completer<MangaPageFetchException>();
+    final adapter = _PageRoutingAdapter(<String, _PageResponseFactory>{
+      'https://pages.example/start': (_) => ResponseBody.fromBytes(
+        const <int>[],
+        HttpStatus.found,
+        headers: <String, List<String>>{
+          HttpHeaders.locationHeader: <String>[
+            'https://cdn.example/private/page.png?capability=secret',
+          ],
+        },
+      ),
+      'https://cdn.example/private/page.png?capability=secret': (_) =>
+          ResponseBody.fromBytes(const <int>[], HttpStatus.forbidden),
+    });
+    final client = _client(
+      adapter,
+      reportFailure: (failure) {
+        if (!reported.isCompleted) reported.complete(failure);
+      },
+    );
+    addTearDown(client.close);
+
+    await expectLater(
+      client.fetch(
+        MangaRemotePageResource(uri: Uri.parse('https://pages.example/start')),
+      ),
+      throwsA(isA<MangaPageFetchException>()),
+    );
+    final failure = await reported.future;
+
+    expect(failure.redirectCount, 1);
+    expect(failure.crossOriginRedirect, isTrue);
+    expect(failure.toString(), isNot(contains('cdn.example')));
+    expect(failure.toString(), isNot(contains('secret')));
+  });
+
   test('classifies common HTTP failures accurately', () async {
     final cases = <(int, String, String)>[
       (HttpStatus.unauthorized, 'http_unauthorized', 'access credential'),
@@ -278,6 +344,64 @@ void main() {
     client.close();
 
     await expectLater(future, throwsA(isA<MangaPageFetchException>()));
+    await Future<void>.delayed(Duration.zero);
+    expect(failures, isEmpty);
+  });
+
+  test('does not report a transport-level request cancellation', () async {
+    final failures = <MangaPageFetchException>[];
+    final adapter = _ImmediateCancellationPageAdapter();
+    final client = _client(adapter, reportFailure: failures.add);
+    addTearDown(client.close);
+
+    await expectLater(
+      client.fetch(
+        MangaRemotePageResource(
+          uri: Uri.parse('https://pages.example/cancelled.png'),
+        ),
+      ),
+      throwsA(
+        isA<MangaPageFetchException>().having(
+          (failure) => failure.reasonCode,
+          'reason',
+          'request_cancelled',
+        ),
+      ),
+    );
+    await Future<void>.delayed(Duration.zero);
+    expect(failures, isEmpty);
+  });
+
+  test('closing marks active and queued page loads as loader_closed', () async {
+    final failures = <MangaPageFetchException>[];
+    final adapter = _CancellationPageAdapter();
+    final client = _client(
+      adapter,
+      maximumConcurrentRequests: 1,
+      maximumCacheEntries: 2,
+      reportFailure: failures.add,
+    );
+
+    final active = client.fetch(
+      MangaRemotePageResource(
+        uri: Uri.parse('https://pages.example/active.png'),
+      ),
+    );
+    await adapter.started.future;
+    final queued = client.fetch(
+      MangaRemotePageResource(
+        uri: Uri.parse('https://pages.example/queued.png'),
+      ),
+    );
+    client.close();
+
+    final loaderClosed = isA<MangaPageFetchException>().having(
+      (failure) => failure.reasonCode,
+      'reason',
+      'loader_closed',
+    );
+    await expectLater(active, throwsA(loaderClosed));
+    await expectLater(queued, throwsA(loaderClosed));
     await Future<void>.delayed(Duration.zero);
     expect(failures, isEmpty);
   });
@@ -624,6 +748,24 @@ class _CancellationPageAdapter implements HttpClientAdapter {
       message: 'cancelled',
     );
   }
+
+  @override
+  void close({bool force = false}) {}
+}
+
+class _ImmediateCancellationPageAdapter implements HttpClientAdapter {
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) => Future<ResponseBody>.error(
+    DioException(
+      requestOptions: options,
+      type: DioExceptionType.cancel,
+      message: 'cancelled',
+    ),
+  );
 
   @override
   void close({bool force = false}) {}

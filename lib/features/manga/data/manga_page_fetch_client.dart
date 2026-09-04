@@ -26,6 +26,8 @@ final mangaPageFetchClientProvider = Provider<MangaPageFetchClient>((ref) {
       details: <String, Object?>{
         'reason_code': failure.reasonCode,
         'status': ?failure.statusCode,
+        'redirect_count': failure.redirectCount,
+        'cross_origin': failure.crossOriginRedirect,
       },
     ),
   );
@@ -41,11 +43,32 @@ class MangaPageFetchException implements Exception {
     this.message, {
     this.reasonCode = 'unknown',
     this.statusCode,
+    this.redirectCount = 0,
+    this.crossOriginRedirect = false,
   });
 
   final String message;
   final String reasonCode;
   final int? statusCode;
+  final int redirectCount;
+  final bool crossOriginRedirect;
+
+  MangaPageFetchException withRedirectContext({
+    required int redirectCount,
+    required bool crossOriginRedirect,
+  }) {
+    if (this.redirectCount == redirectCount &&
+        this.crossOriginRedirect == crossOriginRedirect) {
+      return this;
+    }
+    return MangaPageFetchException(
+      message,
+      reasonCode: reasonCode,
+      statusCode: statusCode,
+      redirectCount: redirectCount,
+      crossOriginRedirect: crossOriginRedirect,
+    );
+  }
 
   @override
   String toString() => message;
@@ -173,8 +196,9 @@ class MangaPageFetchClient {
     MangaRemotePageResource resource,
     CancelToken token,
   ) async {
+    final context = _MangaPageFetchContext();
     try {
-      return await _fetchWithPermit(resource, token).timeout(
+      return await _fetchWithPermit(resource, token, context).timeout(
         requestDeadline,
         onTimeout: () {
           token.cancel('Manga page exceeded its total request deadline.');
@@ -185,7 +209,10 @@ class MangaPageFetchClient {
         },
       );
     } catch (error, stackTrace) {
-      final failure = _normalizeFailure(error);
+      final failure = _normalizeFailure(error).withRedirectContext(
+        redirectCount: context.redirectCount,
+        crossOriginRedirect: context.crossOriginRedirect,
+      );
       _recordFailure(failure);
       Error.throwWithStackTrace(failure, stackTrace);
     }
@@ -194,7 +221,13 @@ class MangaPageFetchClient {
   MangaPageFetchException _normalizeFailure(Object error) {
     if (error is MangaPageFetchException) return error;
     if (error is DioException) {
-      if (_closed || error.type == DioExceptionType.cancel) {
+      if (_closed) {
+        return const MangaPageFetchException(
+          'The manga page loader is closed.',
+          reasonCode: 'loader_closed',
+        );
+      }
+      if (error.type == DioExceptionType.cancel) {
         return const MangaPageFetchException(
           'The manga page loader was interrupted.',
           reasonCode: 'request_cancelled',
@@ -234,13 +267,14 @@ class MangaPageFetchClient {
   Future<Uint8List> _fetchWithPermit(
     MangaRemotePageResource resource,
     CancelToken lifetimeToken,
+    _MangaPageFetchContext context,
   ) async {
     var acquired = false;
     try {
       await _acquirePermit(lifetimeToken);
       acquired = true;
       if (lifetimeToken.isCancelled) throw lifetimeToken.cancelError!;
-      return await _fetchValidated(resource, lifetimeToken);
+      return await _fetchValidated(resource, lifetimeToken, context);
     } finally {
       if (acquired) _releasePermit();
     }
@@ -312,6 +346,7 @@ class MangaPageFetchClient {
   Future<Uint8List> _fetchValidated(
     MangaRemotePageResource resource,
     CancelToken lifetimeToken,
+    _MangaPageFetchContext context,
   ) async {
     final originalOrigin = _origin(resource.uri);
     var target = requireMangaPublicHttpsUri(
@@ -359,11 +394,13 @@ class MangaPageFetchClient {
             reasonCode: 'invalid_redirect',
           );
         }
-        target = resolveMangaPublicHttpsReference(
+        final redirected = resolveMangaPublicHttpsReference(
           target,
           location,
           field: 'Manga page redirect',
         );
+        context.recordRedirect(from: target, to: redirected);
+        target = redirected;
         continue;
       }
       if (status != HttpStatus.ok) {
@@ -447,10 +484,9 @@ class MangaPageFetchClient {
   void close() {
     if (_closed) return;
     _closed = true;
-    for (final token in _activeTokens.toList(growable: false)) {
-      token.cancel('Manga page loader closed.');
-    }
-    _activeTokens.clear();
+    // Complete permit waiters explicitly before cancelling their lifetime
+    // tokens. Otherwise the cancellation callback can race this loop and turn
+    // a deliberate loader shutdown into a misleading request_cancelled error.
     while (_permitWaiters.isNotEmpty) {
       final waiter = _permitWaiters.removeFirst();
       if (!waiter.completer.isCompleted) {
@@ -462,6 +498,10 @@ class MangaPageFetchClient {
         );
       }
     }
+    for (final token in _activeTokens.toList(growable: false)) {
+      token.cancel('Manga page loader closed.');
+    }
+    _activeTokens.clear();
     _cache.clear();
     _cachedBytes = 0;
     _dio.close(force: true);
@@ -507,6 +547,16 @@ class _MangaPagePermitWaiter {
   final Completer<void> completer = Completer<void>();
 }
 
+class _MangaPageFetchContext {
+  int redirectCount = 0;
+  bool crossOriginRedirect = false;
+
+  void recordRedirect({required Uri from, required Uri to}) {
+    redirectCount++;
+    if (_origin(from) != _origin(to)) crossOriginRedirect = true;
+  }
+}
+
 String _cacheKey(MangaRemotePageResource resource) {
   final values = <int>[...resource.uri.toString().codeUnits];
   final keys = resource.headers.keys.toList()..sort();
@@ -534,7 +584,12 @@ Map<String, String> _pageRequestHeaders(
   for (final header in headers.entries) {
     final name = header.key.toLowerCase();
     if (sameOrigin) {
-      safe[header.key] = header.value;
+      final value = switch (name) {
+        'origin' => canonicalMangaPageOriginHeader(header.value),
+        'referer' => canonicalMangaPageRefererHeader(header.value),
+        _ => header.value,
+      };
+      if (value != null) safe[header.key] = value;
       continue;
     }
     if (_crossOriginSafePageHeaders.contains(name)) {
@@ -554,12 +609,11 @@ Map<String, String> _pageRequestHeaders(
 }
 
 String? _safeCrossOriginHeaderValue(String name, String value) {
-  if (name != 'origin' && name != 'referer') return value;
-  final uri = safePublicHttpsUri(value);
-  if (uri == null) return null;
-  // A provider may need the source site for hotlink checks, but a path or
-  // query can contain a chapter capability. Only forward the validated origin.
-  return name == 'referer' ? '${uri.origin}/' : uri.origin;
+  return switch (name) {
+    'origin' => canonicalMangaPageOriginHeader(value),
+    'referer' => canonicalMangaPageRefererHeader(value, originOnly: true),
+    _ => value,
+  };
 }
 
 MangaPageFetchException _httpPageFailure(int status) => switch (status) {

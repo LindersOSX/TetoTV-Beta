@@ -4,6 +4,50 @@ import 'package:anime_tv/core/diagnostics/playback_performance_diagnostics.dart'
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('MPV remains default and Media3 keeps its own engine identity', () {
+    expect(_accumulator().snapshot()['engine'], 'mpv');
+    final accumulator = _accumulator(engine: 'media3');
+    accumulator.addSample({..._sample(0), 'renderedFrames': 0});
+    accumulator.addSample({..._sample(5000), 'renderedFrames': 120});
+    final snapshot = accumulator.snapshot();
+    expect(snapshot['engine'], 'media3');
+    final roundTrip = sanitizePlaybackPerformanceSnapshot(
+      jsonDecode(jsonEncode(snapshot)),
+    );
+    expect(roundTrip, snapshot);
+    expect(roundTrip['summary'], containsPair('renderedFramesDelta', 120));
+    expect(
+      roundTrip['summary'],
+      containsPair('renderedFramesObservedIntervals', 1),
+    );
+    expect(jsonEncode(roundTrip), isNot(contains('displayedFps')));
+    for (final engine in ['external', 'vlc', 'MEDIA3', 'https://private']) {
+      expect(_accumulator(engine: engine).snapshot(), isEmpty);
+    }
+  });
+
+  test('rendered counters retain absence and reset boundaries without FPS', () {
+    final accumulator = _accumulator(engine: 'media3');
+    accumulator.addSample({..._sample(0), 'renderedFrames': -1});
+    expect(
+      (accumulator.snapshot()['samples'] as List).single,
+      isNot(contains('renderedFrames')),
+    );
+    expect(
+      accumulator.snapshot()['summary'],
+      isNot(contains('renderedFramesDelta')),
+    );
+    accumulator.addSample({..._sample(5000), 'renderedFrames': 120});
+    accumulator.addSample({..._sample(10000), 'renderedFrames': 5});
+    accumulator.addSample({..._sample(15000), 'renderedFrames': 105});
+    final summary = accumulator.snapshot()['summary'] as Map;
+    expect(summary['counterResetCount'], 1);
+    expect(summary['renderedFramesDelta'], 100);
+    expect(summary['renderedFramesObservedIntervals'], 1);
+    expect(summary, isNot(contains('displayFps')));
+    expect(summary, isNot(contains('estimatedDisplayFps')));
+  });
+
   test('strict allowlist removes private data at every nesting level', () {
     final accumulator = _accumulator();
     accumulator.addSample({
@@ -536,13 +580,15 @@ void main() {
   });
 }
 
-PlaybackPerformanceAccumulator _accumulator() => PlaybackPerformanceAccumulator(
-  sessionId: 'pbs-performanceTest1234',
-  attempt: 1,
-  startedAt: DateTime.utc(2026, 9, 4, 12),
-  sourceKind: 'web',
-  requestedDecoder: 'hardware_adaptive',
-);
+PlaybackPerformanceAccumulator _accumulator({String engine = 'mpv'}) =>
+    PlaybackPerformanceAccumulator(
+      sessionId: 'pbs-performanceTest1234',
+      engine: engine,
+      attempt: 1,
+      startedAt: DateTime.utc(2026, 9, 4, 12),
+      sourceKind: 'web',
+      requestedDecoder: 'hardware_adaptive',
+    );
 
 Map<String, Object?> _sample(int elapsedMs) => {
   'timestamp': DateTime.utc(

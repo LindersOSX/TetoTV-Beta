@@ -38,7 +38,11 @@ object AnonymousCrashStore {
     private const val MAX_QUEUED_BYTES = 12_000
     private const val MAX_TRACE_CHARS = 4_000
     private const val MAX_LOCAL_TRACE_CHARS = 1_800
-    private const val MAX_NATIVE_TRACE_BYTES = 64_000
+    // The faulting thread may follow large memory maps and many other threads.
+    // This is a local parsing bound, not an upload limit: raw tombstones never
+    // leave the device, and the existing 1,800/4,000-character summaries remain.
+    internal const val MAX_NATIVE_TRACE_BYTES = 1_048_576
+    private const val MAX_NATIVE_PROTO_FIELDS = 65_536
     // Android ANR traces can place the main-thread stack after a long runtime
     // and GC preamble. Reading only 64 KB repeatedly captured that preamble
     // while dropping the thread that explained the freeze.
@@ -340,11 +344,12 @@ object AnonymousCrashStore {
      */
     @RequiresApi(Build.VERSION_CODES.R)
     private fun exitTrace(exit: ApplicationExitInfo, maximumChars: Int): TraceEvidence {
-        val maximumBytes = if (exit.reason == ApplicationExitInfo.REASON_CRASH_NATIVE) {
-            MAX_NATIVE_TRACE_BYTES
-        } else {
-            MAX_TEXT_TRACE_BYTES
+        if (exit.reason == ApplicationExitInfo.REASON_CRASH_NATIVE) {
+            return runCatching {
+                exit.traceInputStream?.use { readNativeTrace(it, maximumChars) }
+            }.getOrNull() ?: TraceEvidence("", "none", 0, false)
         }
+        val maximumBytes = MAX_TEXT_TRACE_BYTES
         val bounded = runCatching {
             exit.traceInputStream?.use { stream ->
                 readAtMost(stream, maximumBytes)
@@ -352,14 +357,6 @@ object AnonymousCrashStore {
         }.getOrNull() ?: BoundedBytes(ByteArray(0), truncated = false)
         if (bounded.bytes.isEmpty()) {
             return TraceEvidence("", "none", 0, bounded.truncated)
-        }
-        if (exit.reason == ApplicationExitInfo.REASON_CRASH_NATIVE) {
-            return TraceEvidence(
-                summarizeNativeTombstone(bounded.bytes, maximumChars),
-                "native_tombstone_protobuf",
-                bounded.bytes.size,
-                bounded.truncated,
-            )
         }
         if (isGzip(bounded.bytes)) {
             val inflated = runCatching {
@@ -411,16 +408,31 @@ object AnonymousCrashStore {
         return BoundedBytes(output.toByteArray(), truncated)
     }
 
+    internal fun readNativeTrace(stream: InputStream, maximumChars: Int): TraceEvidence {
+        val bounded = readAtMost(stream, MAX_NATIVE_TRACE_BYTES)
+        return TraceEvidence(
+            summarizeNativeTombstone(bounded.bytes, maximumChars),
+            if (bounded.bytes.isEmpty()) "none" else "native_tombstone_protobuf",
+            bounded.bytes.size,
+            bounded.truncated,
+        )
+    }
+
     internal fun summarizeNativeTombstone(value: ByteArray, maximum: Int): String {
         if (value.isEmpty() || maximum <= 0) return ""
-        val tombstone = parseNativeTombstone(value)
-        val signals = listOfNotNull(tombstone?.signal, tombstone?.signalCode).distinct().take(4)
-        val reasons = listOfNotNull(tombstone?.reason)
-        val libraries = tombstone?.frames.orEmpty().mapNotNull(NativeFrameEvidence::module).distinct().take(10)
-        val buildIds = tombstone?.frames.orEmpty().mapNotNull(NativeFrameEvidence::buildId).distinct().take(10)
-        val threads = listOfNotNull(tombstone?.thread)
-        val symbols = tombstone?.frames.orEmpty().mapNotNull(NativeFrameEvidence::function).distinct().take(10)
-        val frameLocations = tombstone?.frames.orEmpty().map {
+        val boundedValue = if (value.size > MAX_NATIVE_TRACE_BYTES) {
+            value.copyOf(MAX_NATIVE_TRACE_BYTES)
+        } else {
+            value
+        }
+        val tombstone = parseNativeTombstone(boundedValue)
+        val signals = listOfNotNull(tombstone.signal, tombstone.signalCode).distinct().take(4)
+        val reasons = listOfNotNull(tombstone.reason)
+        val libraries = tombstone.frames.mapNotNull(NativeFrameEvidence::module).distinct().take(10)
+        val buildIds = tombstone.frames.mapNotNull(NativeFrameEvidence::buildId).distinct().take(10)
+        val threads = listOfNotNull(tombstone.thread)
+        val symbols = tombstone.frames.mapNotNull(NativeFrameEvidence::function).distinct().take(10)
+        val frameLocations = tombstone.frames.map {
             "${it.module.orEmpty()}@${it.relativePc.toString(16)}#${it.buildId.orEmpty()}"
         }
         val signatureInput = listOf(
@@ -435,7 +447,7 @@ object AnonymousCrashStore {
             .flatten()
             .joinToString("|")
         val signatureBytes = if (signatureInput.isEmpty()) {
-            value.take(4_096).toByteArray()
+            boundedValue.take(4_096).toByteArray()
         } else {
             signatureInput.toByteArray(Charsets.UTF_8)
         }
@@ -444,20 +456,22 @@ object AnonymousCrashStore {
             .take(8)
             .joinToString("") { "%02x".format(it) }
         val lines = buildList {
-            add("native_tombstone_protobuf signature=$signature")
+            // "signature" is intentionally a credential-redaction keyword.
+            // This is a short hash of allowlisted crash evidence, not a token.
+            add("native_tombstone_protobuf fingerprint=$signature")
+            add("thread_selection=${tombstone.selection}")
+            add("parser_status=${tombstone.parserStatus}")
             if (signals.isNotEmpty()) add("signals=${signals.joinToString(",")}")
             if (reasons.isNotEmpty()) add("reason=${reasons.joinToString(",")}")
             if (threads.isNotEmpty()) add("threads=${threads.joinToString(",")}")
             if (libraries.isNotEmpty()) add("libraries=${libraries.joinToString(",")}")
-            if (buildIds.isNotEmpty()) add("build_ids=${buildIds.joinToString(",")}")
-            if (symbols.isNotEmpty()) add("symbols=${symbols.joinToString(",")}")
-            tombstone?.frames.orEmpty().take(12).forEachIndexed { index, frame ->
+            tombstone.frames.take(12).forEachIndexed { index, frame ->
                 add(
                     "frame_$index rel_pc=0x${frame.relativePc.toString(16)}" +
                         listOfNotNull(
                             frame.module?.let { "module=$it" },
+                            frame.buildId?.let { "build_id=${it.chunked(4).joinToString("-")}" },
                             frame.function?.let { "function=$it" },
-                            frame.buildId?.let { "build_id=$it" },
                         ).joinToString(" ", prefix = " "),
                 )
             }
@@ -465,33 +479,68 @@ object AnonymousCrashStore {
         return lines.take(maximum)
     }
 
-    private fun parseNativeTombstone(value: ByteArray): NativeTombstoneEvidence? {
+    private fun parseNativeTombstone(value: ByteArray): NativeTombstoneEvidence {
         val reader = ProtoReader(value)
         var crashedTid: Long? = null
         var signal: String? = null
         var signalCode: String? = null
         var reason: String? = null
-        val threads = mutableListOf<Pair<Long?, ParsedThread>>()
-        repeat(256) {
-            val field = reader.next() ?: return@repeat
+        var fieldCount = 0
+        // Protobuf field order is not guaranteed. First obtain Tombstone.tid
+        // (AOSP field 6), then scan every bounded map entry in field 16. Never
+        // substitute an arbitrary waiting thread for the actual crash stack.
+        while (!reader.finished && fieldCount++ < MAX_NATIVE_PROTO_FIELDS) {
+            val field = reader.next { it == 10 || it == 15 } ?: break
             when {
-                field.number == 6 && field.varint != null -> crashedTid = field.varint
+                field.number == 6 && field.varint != null -> {
+                    crashedTid = field.varint.takeIf { it in 1..0xffffffffL }
+                }
                 field.number == 10 && field.bytes != null -> {
                     val parsed = parseSignal(field.bytes)
                     signal = parsed.first
                     signalCode = parsed.second
                 }
                 field.number == 15 && field.bytes != null -> reason = parseCause(field.bytes)
-                field.number == 16 && field.bytes != null && threads.size < 8 -> {
-                    parseThreadEntry(field.bytes)?.let(threads::add)
+            }
+        }
+        var parserStatus = when {
+            reader.malformed -> "incomplete_or_malformed"
+            !reader.finished -> "field_limit_reached"
+            else -> "complete"
+        }
+        var thread: ParsedThread? = null
+        if (crashedTid != null) {
+            val threadReader = ProtoReader(value)
+            var threadFieldCount = 0
+            while (!threadReader.finished && threadFieldCount++ < MAX_NATIVE_PROTO_FIELDS) {
+                val field = threadReader.next { it == 16 } ?: break
+                if (field.number != 16 || field.bytes == null) continue
+                val entry = parseThreadEntry(field.bytes)
+                if (entry == null) {
+                    parserStatus = "incomplete_or_malformed"
+                } else if (entry.first == crashedTid) {
+                    thread = parseThread(entry.second)
+                    if (thread.id != null && thread.id != crashedTid) {
+                        // A contradictory map key/Thread.id is not trustworthy.
+                        thread = null
+                        parserStatus = "incomplete_or_malformed"
+                    } else if (!thread.complete) {
+                        parserStatus = "incomplete_or_malformed"
+                    }
+                    break
                 }
             }
-            if (reader.finished) return@repeat
         }
-        val thread = threads.firstOrNull { it.first == crashedTid }?.second
-            ?: threads.firstOrNull { it.second.frames.isNotEmpty() }?.second
-        if (signal == null && signalCode == null && reason == null && thread == null) return null
-        return NativeTombstoneEvidence(signal, signalCode, reason, thread?.name, thread?.frames.orEmpty())
+        val selection = when {
+            crashedTid == null -> "faulting_tid_missing"
+            thread == null -> "faulting_thread_missing"
+            thread.frames.isEmpty() -> "faulting_thread_no_frames"
+            else -> "exact_tid"
+        }
+        return NativeTombstoneEvidence(
+            signal, signalCode, reason, thread?.name, thread?.frames.orEmpty(),
+            selection, parserStatus,
+        )
     }
 
     private fun parseSignal(value: ByteArray): Pair<String?, String?> {
@@ -527,31 +576,37 @@ object AnonymousCrashStore {
         return null
     }
 
-    private fun parseThreadEntry(value: ByteArray): Pair<Long?, ParsedThread>? {
+    private fun parseThreadEntry(value: ByteArray): Pair<Long, ByteArray>? {
         val reader = ProtoReader(value)
         var tid: Long? = null
-        var thread: ParsedThread? = null
-        repeat(24) {
-            val field = reader.next() ?: return@repeat
+        var thread: ByteArray? = null
+        var fields = 0
+        while (!reader.finished && fields++ < MAX_NATIVE_PROTO_FIELDS) {
+            val field = reader.next { it == 2 } ?: break
             if (field.number == 1) tid = field.varint
-            if (field.number == 2 && field.bytes != null) thread = parseThread(field.bytes)
+            if (field.number == 2 && field.bytes != null) thread = field.bytes
         }
+        if (reader.malformed || !reader.finished || tid == null || tid !in 1..0xffffffffL) return null
         return thread?.let { tid to it }
     }
 
     private fun parseThread(value: ByteArray): ParsedThread {
         val reader = ProtoReader(value)
+        var id: Long? = null
         var name: String? = null
         val frames = mutableListOf<NativeFrameEvidence>()
-        repeat(128) {
-            val field = reader.next() ?: return@repeat
-            if (field.number == 2 && field.bytes != null) {
+        var fields = 0
+        while (!reader.finished && fields++ < MAX_NATIVE_PROTO_FIELDS) {
+            val field = reader.next { it == 2 || (it == 4 && frames.size < 12) } ?: break
+            if (field.number == 1) {
+                id = field.varint
+            } else if (field.number == 2 && field.bytes != null) {
                 name = safeThreadCategory(safeProtoString(field.bytes, 80))
             } else if (field.number == 4 && field.bytes != null && frames.size < 12) {
                 parseFrame(field.bytes)?.let(frames::add)
             }
         }
-        return ParsedThread(name, frames)
+        return ParsedThread(id, name, frames, !reader.malformed && reader.finished)
     }
 
     private fun parseFrame(value: ByteArray): NativeFrameEvidence? {
@@ -608,33 +663,48 @@ object AnonymousCrashStore {
         else -> null
     }
 
-    private data class ParsedThread(val name: String?, val frames: List<NativeFrameEvidence>)
+    private data class ParsedThread(
+        val id: Long?,
+        val name: String?,
+        val frames: List<NativeFrameEvidence>,
+        val complete: Boolean,
+    )
 
     private data class ProtoField(val number: Int, val varint: Long? = null, val bytes: ByteArray? = null)
 
     private class ProtoReader(private val value: ByteArray) {
         private var offset = 0
+        var malformed = false
+            private set
         val finished: Boolean get() = offset >= value.size
 
-        fun next(): ProtoField? {
+        fun next(retainBytes: (Int) -> Boolean = { true }): ProtoField? {
             if (finished) return null
-            val key = readVarint() ?: return null
-            val number = (key ushr 3).toInt()
+            val key = readVarint() ?: return fail()
+            val rawNumber = key ushr 3
+            if (rawNumber !in 1..0x1fffffffL) return fail()
+            val number = rawNumber.toInt()
             val wire = (key and 7).toInt()
-            if (number !in 1..999) return null
             return when (wire) {
-                0 -> ProtoField(number, varint = readVarint() ?: return null)
+                0 -> ProtoField(number, varint = readVarint() ?: return fail())
                 1 -> skip(8)?.let { ProtoField(number) }
                 2 -> {
-                    val length = readVarint()?.toInt() ?: return null
-                    if (length !in 0..65_536 || offset + length > value.size) return null
-                    val bytes = value.copyOfRange(offset, offset + length)
+                    val rawLength = readVarint() ?: return fail()
+                    if (rawLength < 0 || rawLength > value.size - offset) return fail()
+                    val length = rawLength.toInt()
+                    val bytes = if (retainBytes(number)) value.copyOfRange(offset, offset + length) else null
                     offset += length
                     ProtoField(number, bytes = bytes)
                 }
                 5 -> skip(4)?.let { ProtoField(number) }
-                else -> null
+                else -> fail()
             }
+        }
+
+        private fun fail(): ProtoField? {
+            malformed = true
+            offset = value.size
+            return null
         }
 
         private fun readVarint(): Long? {
@@ -642,6 +712,7 @@ object AnonymousCrashStore {
             for (shift in 0..63 step 7) {
                 if (offset >= value.size) return null
                 val byte = value[offset++].toInt() and 0xff
+                if (shift == 63 && byte > 1) return null
                 result = result or ((byte and 0x7f).toLong() shl shift)
                 if (byte and 0x80 == 0) return result
             }
@@ -649,7 +720,10 @@ object AnonymousCrashStore {
         }
 
         private fun skip(count: Int): Unit? {
-            if (offset + count > value.size) return null
+            if (count > value.size - offset) {
+                fail()
+                return null
+            }
             offset += count
             return Unit
         }
@@ -657,7 +731,7 @@ object AnonymousCrashStore {
 
     private data class BoundedBytes(val bytes: ByteArray, val truncated: Boolean)
 
-    private data class TraceEvidence(
+    internal data class TraceEvidence(
         val text: String,
         val format: String,
         val rawBytes: Int,
@@ -679,6 +753,8 @@ object AnonymousCrashStore {
         val reason: String?,
         val thread: String?,
         val frames: List<NativeFrameEvidence>,
+        val selection: String,
+        val parserStatus: String,
     )
 
     @RequiresApi(Build.VERSION_CODES.R)

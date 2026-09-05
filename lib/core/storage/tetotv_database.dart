@@ -933,6 +933,9 @@ class TetoTvDatabase {
     String engine,
   ) async {
     final current = await devicePlaybackProfile(deviceKey);
+    // This legacy table describes MPV only. A Media3 outcome must not train
+    // MPV's compatibility history or silently change the selected engine.
+    if (engine != 'mpv') return current;
     final mpv = current.mpvFailures + 1;
     final next = DevicePlaybackProfile(
       deviceKey: deviceKey,
@@ -944,6 +947,7 @@ class TetoTvDatabase {
   }
 
   Future<void> recordPlayerSuccess(String deviceKey, String engine) async {
+    if (engine != 'mpv') return;
     await _saveDevicePlaybackProfile(
       DevicePlaybackProfile(
         deviceKey: deviceKey,

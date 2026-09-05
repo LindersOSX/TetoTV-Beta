@@ -80,6 +80,9 @@ const _bundledNotices = <_BundledNotice>[
   _BundledNotice(['Boost 1.89.0'], 'assets/legal/native/BOOST_LICENSE_1_0.txt'),
   _BundledNotice(['OpenSSL 3.5.2'], 'assets/legal/native/OPENSSL_LICENSE.txt'),
   _BundledNotice([
+    'AndroidX Media3 1.11.0',
+  ], 'assets/legal/native/ANDROIDX_MEDIA3_LICENSE.txt'),
+  _BundledNotice([
     'libdatachannel 6ab310b',
   ], 'assets/legal/native/LIBDATACHANNEL_LICENSE.txt'),
   _BundledNotice([

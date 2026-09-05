@@ -265,16 +265,18 @@ extension ContentDensityLabel on ContentDensity {
   };
 }
 
-enum PreferredPlayer { mpv, external }
+enum PreferredPlayer { mpv, media3, external }
 
 extension PreferredPlayerLabel on PreferredPlayer {
   String get displayName => switch (this) {
     PreferredPlayer.mpv => 'MPV',
+    PreferredPlayer.media3 => 'Media3 (Built in)',
     PreferredPlayer.external => 'External player',
   };
 
   String get description => switch (this) {
     PreferredPlayer.mpv => 'TetoTV built-in player',
+    PreferredPlayer.media3 => 'Built-in Android player with TetoTV controls',
     PreferredPlayer.external => 'A selected app installed on this device',
   };
 }
@@ -1910,9 +1912,11 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
       );
     }
 
-    // Do not leave Settings claiming that an external app is the default
-    // while the feature gate silently routes playback through MPV. Disabling
-    // external playback is an explicit return to the built-in player.
+    // An external default must return to MPV when handoff is disabled. An
+    // explicitly selected built-in engine is independent of that feature gate.
+    final preferredPlayer = state.preferredPlayer == PreferredPlayer.external
+        ? PreferredPlayer.mpv
+        : state.preferredPlayer;
     const keys = [
       _externalPlayerEnabledKey,
       _preferredPlayerKey,
@@ -1922,13 +1926,13 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
     _markMutated(keys);
     state = state.copyWith(
       externalPlayerEnabled: false,
-      preferredPlayer: PreferredPlayer.mpv,
+      preferredPlayer: preferredPlayer,
       clearSelectedExternalPlayer: true,
       loaded: true,
     );
     return _enqueueStorage(() async {
       await _write(_externalPlayerEnabledKey, 'false');
-      await _write(_preferredPlayerKey, PreferredPlayer.mpv.name);
+      await _write(_preferredPlayerKey, preferredPlayer.name);
       await _delete(_externalPlayerPackageKey);
       await _delete(_externalPlayerLabelKey);
     });

@@ -547,6 +547,49 @@ void main() {
     expect(restored.state.externalPlayerEnabled, isTrue);
   });
 
+  test('MPV stays the default and Media3 persists as a built-in choice', () async {
+    FlutterSecureStorage.setMockInitialValues({});
+    const storage = FlutterSecureStorage();
+    final controller = SettingsPreferencesController(storage);
+    await controller.load();
+
+    expect(controller.state.preferredPlayer, PreferredPlayer.mpv);
+    expect(PreferredPlayer.media3.displayName, 'Media3 (Built in)');
+
+    await controller.setPreferredPlayer(PreferredPlayer.media3);
+    expect(await storage.read(key: 'player_preferred_engine'), 'media3');
+    final restored = SettingsPreferencesController(storage);
+    await restored.load();
+
+    expect(restored.state.preferredPlayer, PreferredPlayer.media3);
+    expect(restored.state.externalPlayerEnabled, isFalse);
+    expect(restored.state.selectedExternalPlayerPackage, isNull);
+
+    await restored.setPreferredPlayer(PreferredPlayer.mpv);
+    final switchedBack = SettingsPreferencesController(storage);
+    await switchedBack.load();
+    expect(switchedBack.state.preferredPlayer, PreferredPlayer.mpv);
+  });
+
+  test('disabling external handoff preserves a selected Media3 engine', () async {
+    FlutterSecureStorage.setMockInitialValues({});
+    const storage = FlutterSecureStorage();
+    final controller = SettingsPreferencesController(storage);
+    await controller.setDefaultExternalPlayer(
+      packageName: 'org.example.player',
+      label: 'Example Player',
+    );
+    await controller.setPreferredPlayer(PreferredPlayer.media3);
+    await controller.setExternalPlayerEnabled(false);
+
+    final restored = SettingsPreferencesController(storage);
+    await restored.load();
+    expect(restored.state.preferredPlayer, PreferredPlayer.media3);
+    expect(restored.state.externalPlayerEnabled, isFalse);
+    expect(restored.state.selectedExternalPlayerPackage, isNull);
+    expect(restored.state.selectedExternalPlayerLabel, isNull);
+  });
+
   test(
     'specific default external player persists and can fall back to MPV',
     () async {
@@ -612,17 +655,19 @@ void main() {
     expect(controller.state.preferredPlayer, PreferredPlayer.mpv);
   });
 
-  test('legacy player choices migrate to MPV', () async {
-    FlutterSecureStorage.setMockInitialValues({
-      'player_preferred_engine': 'automatic',
-    });
-    final controller = SettingsPreferencesController(
-      const FlutterSecureStorage(),
-    );
+  test('unsupported legacy player choices migrate to MPV', () async {
+    for (final legacyValue in ['automatic', 'vlc', 'unknown']) {
+      FlutterSecureStorage.setMockInitialValues({
+        'player_preferred_engine': legacyValue,
+      });
+      final controller = SettingsPreferencesController(
+        const FlutterSecureStorage(),
+      );
 
-    await controller.load();
+      await controller.load();
 
-    expect(controller.state.preferredPlayer, PreferredPlayer.mpv);
+      expect(controller.state.preferredPlayer, PreferredPlayer.mpv);
+    }
   });
 
   test(

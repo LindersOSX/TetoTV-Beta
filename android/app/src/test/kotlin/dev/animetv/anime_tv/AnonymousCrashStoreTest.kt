@@ -5,6 +5,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.ByteArrayInputStream
 
 class AnonymousCrashStoreTest {
     @Test
@@ -188,7 +189,7 @@ class AnonymousCrashStoreTest {
         val second = AnonymousCrashStore.summarizeNativeTombstone(payload, 1_800)
 
         assertEquals(first, second)
-        assertTrue(first.contains("native_tombstone_protobuf signature="))
+        assertTrue(first.contains("native_tombstone_protobuf fingerprint="))
         assertFalse(first.contains("SIGSEGV"))
         assertFalse(first.contains("flutter-worker-3"))
         assertFalse(first.contains("libflutter.so"))
@@ -237,7 +238,8 @@ class AnonymousCrashStoreTest {
         assertTrue(output.contains("rel_pc=0x1234"))
         assertTrue(output.contains("module=libmpv.so"))
         assertTrue(output.contains("function=mpv.video.render"))
-        assertTrue(output.contains("build_id=AABBCCDDEEFF0011"))
+        assertTrue(output.contains("build_id=AABB-CCDD-EEFF-0011"))
+        assertTrue(output.contains("thread_selection=exact_tid"))
         assertFalse(output.contains("secret-title"))
         assertFalse(output.contains("private.example"))
         assertFalse(output.contains("episode.mkv"))
@@ -273,7 +275,7 @@ class AnonymousCrashStoreTest {
         val malformed = byteArrayOf(0x52, 0xff.toByte(), 0xff.toByte(), 0xff.toByte(), 0x7f)
         val output = AnonymousCrashStore.summarizeNativeTombstone(malformed, 80)
 
-        assertTrue(output.startsWith("native_tombstone_protobuf signature="))
+        assertTrue(output.startsWith("native_tombstone_protobuf fingerprint="))
         assertTrue(output.length <= 80)
     }
 
@@ -287,7 +289,7 @@ class AnonymousCrashStoreTest {
 
         val output = AnonymousCrashStore.summarizeNativeTombstone(tombstone, 1_800)
 
-        assertTrue(output.startsWith("native_tombstone_protobuf signature="))
+        assertTrue(output.startsWith("native_tombstone_protobuf fingerprint="))
         assertFalse(output.contains("DiscordPrivateViewer"))
         assertFalse(output.contains("private_episode"))
         assertFalse(output.contains("private.example"))
@@ -300,7 +302,7 @@ class AnonymousCrashStoreTest {
             varintField(1, 0x9876),
             bytesField(4, "mpv::video::render"),
             bytesField(6, "/system/lib64/libmpv.so"),
-            bytesField(8, "0011223344556677"),
+            bytesField(8, "00112233445566778899aabbccddeeff00112233"),
         )
         val thread = message(bytesField(2, "RenderThread"), bytesField(4, frame))
         val tombstone = message(varintField(6, 9), bytesField(16, message(varintField(1, 9), bytesField(2, thread))))
@@ -315,7 +317,185 @@ class AnonymousCrashStoreTest {
         assertTrue(composed.contains("module=libmpv.so"))
         assertTrue(composed.contains("function=mpv.video.render"))
         assertTrue(composed.contains("rel_pc=0x9876"))
+        assertTrue(composed.contains("build_id=0011-2233-4455-6677-8899-aabb-ccdd-eeff-0011-2233"))
+        assertTrue(composed.contains("fingerprint="))
+        assertFalse(composed.contains("[NETWORK ADDRESS]"))
         assertFalse(composed.contains("[URI]"))
+    }
+
+    @Test
+    fun `faulting thread beyond eight threads and 64 KB is selected exactly`() {
+        val fields = mutableListOf(varintField(6, 991))
+        // An opaque memory mapping larger than the old per-field 64 KB bound
+        // must be skipped without interpreting any of its private bytes.
+        fields.add(bytesField(17, ByteArray(70_000) { 0x61 }))
+        repeat(300) { index ->
+            fields.add(threadEntry(index + 1L, "libutils.so", "ALooper_pollOnce"))
+        }
+        fields.add(threadEntry(991, "libflutter.so", "impeller::RenderPass"))
+        val tombstone = message(*fields.toTypedArray())
+
+        assertTrue(tombstone.size > 64_000)
+        val evidence = AnonymousCrashStore.readNativeTrace(ByteArrayInputStream(tombstone), 1_800)
+
+        assertFalse(evidence.truncated)
+        assertEquals(tombstone.size, evidence.rawBytes)
+        assertTrue(evidence.text.contains("thread_selection=exact_tid"))
+        assertTrue(evidence.text.contains("parser_status=complete"))
+        assertTrue(evidence.text.contains("function=impeller.RenderPass"))
+        assertFalse(evidence.text.contains("ALooper_pollOnce"))
+        assertFalse(evidence.text.contains("libutils.so"))
+        assertTrue(evidence.text.length <= 1_800)
+    }
+
+    @Test
+    fun `thread fields may precede faulting tid and map values may precede keys`() {
+        val thread = message(
+            varintField(1, 71),
+            bytesField(2, "main"),
+            bytesField(4, message(bytesField(6, "libmpv.so"))),
+        )
+        val tombstone = message(
+            threadEntry(1, "libutils.so", "__epoll_pwait"),
+            bytesField(16, message(bytesField(2, thread), varintField(1, 71))),
+            varintField(6, 71),
+        )
+
+        val output = AnonymousCrashStore.summarizeNativeTombstone(tombstone, 1_800)
+
+        assertTrue(output.contains("thread_selection=exact_tid"))
+        assertTrue(output.contains("module=libmpv.so"))
+        assertFalse(output.contains("__epoll_pwait"))
+    }
+
+    @Test
+    fun `missing faulting thread never falsely attributes waiting thread stack`() {
+        val tombstone = message(
+            varintField(6, 999),
+            bytesField(10, message(bytesField(2, "SIGSEGV"), bytesField(4, "SEGV_MAPERR"))),
+            threadEntry(42, "libflutter.so", "__epoll_pwait"),
+        )
+
+        val output = AnonymousCrashStore.summarizeNativeTombstone(tombstone, 1_800)
+
+        assertTrue(output.contains("thread_selection=faulting_thread_missing"))
+        assertTrue(output.contains("signals=SIGSEGV,SEGV_MAPERR"))
+        assertFalse(output.contains("frame_0"))
+        assertFalse(output.contains("libflutter.so"))
+        assertFalse(output.contains("__epoll_pwait"))
+    }
+
+    @Test
+    fun `missing faulting tid and conflicting thread id fail closed`() {
+        val noTid = AnonymousCrashStore.summarizeNativeTombstone(
+            threadEntry(42, "libutils.so", "__epoll_pwait"),
+            1_800,
+        )
+        val mismatchedThread = message(
+            varintField(1, 43),
+            bytesField(4, message(bytesField(6, "libutils.so"))),
+        )
+        val mismatch = AnonymousCrashStore.summarizeNativeTombstone(
+            message(
+                varintField(6, 42),
+                bytesField(16, message(varintField(1, 42), bytesField(2, mismatchedThread))),
+            ),
+            1_800,
+        )
+
+        assertTrue(noTid.contains("thread_selection=faulting_tid_missing"))
+        assertTrue(mismatch.contains("thread_selection=faulting_thread_missing"))
+        assertTrue(mismatch.contains("parser_status=incomplete_or_malformed"))
+        assertFalse(noTid.contains("frame_0"))
+        assertFalse(mismatch.contains("frame_0"))
+    }
+
+    @Test
+    fun `partial thread and malformed tail never get parsed as unrelated frames`() {
+        val correctThread = threadEntry(42, "libmpv.so", "mpv::render")
+        val truncated = message(varintField(6, 42), correctThread.copyOf(correctThread.size - 6))
+        val malformed = message(
+            varintField(6, 42),
+            // Invalid wire type followed by an otherwise convincing frame.
+            byteArrayOf(0x0f),
+            correctThread,
+        )
+
+        for (input in listOf(truncated, malformed)) {
+            val output = AnonymousCrashStore.summarizeNativeTombstone(input, 1_800)
+            assertTrue(output.contains("parser_status=incomplete_or_malformed"))
+            assertTrue(output.contains("thread_selection=faulting_thread_missing"))
+            assertFalse(output.contains("frame_0"))
+            assertFalse(output.contains("libmpv.so"))
+        }
+    }
+
+    @Test
+    fun `native capture remains bounded and reports truncation without raw bytes`() {
+        val maximumBytes = AnonymousCrashStore.MAX_NATIVE_TRACE_BYTES
+        val payload = message(
+            varintField(6, 91),
+            threadEntry(1, "libutils.so", "__epoll_pwait"),
+            bytesField(17, ByteArray(maximumBytes) { 0x61 }),
+            threadEntry(91, "libmpv.so", "mpv::render"),
+        )
+        val input = ByteArrayInputStream(payload)
+
+        val evidence = AnonymousCrashStore.readNativeTrace(input, 1_800)
+
+        assertTrue(evidence.truncated)
+        assertEquals(maximumBytes, evidence.rawBytes)
+        assertEquals(payload.size - maximumBytes - 1, input.available())
+        assertTrue(evidence.text.contains("thread_selection=faulting_thread_missing"))
+        assertTrue(evidence.text.contains("parser_status=incomplete_or_malformed"))
+        assertTrue(evidence.text.length <= 1_800)
+        assertFalse(evidence.text.contains("__epoll_pwait"))
+        assertFalse(evidence.text.contains("a".repeat(40)))
+        assertFalse(evidence.text.contains("frame_0"))
+    }
+
+    @Test
+    fun `native parser enforces work bound for excessive tiny fields`() {
+        val tinyFields = message(*Array(65_537) { varintField(70, 0) })
+        val payload = message(tinyFields, varintField(6, 42), threadEntry(42, "libmpv.so", "mpv::render"))
+
+        val output = AnonymousCrashStore.summarizeNativeTombstone(payload, 1_800)
+
+        assertTrue(output.contains("parser_status=field_limit_reached"))
+        assertTrue(output.contains("thread_selection=faulting_tid_missing"))
+        assertFalse(output.contains("frame_0"))
+        assertTrue(output.length <= 1_800)
+    }
+
+    @Test
+    fun `build ids survive privacy pipeline while ordinary credentials remain redacted`() {
+        val buildId = "0123456789abcdef0123456789abcdef01234567"
+        val frame = message(
+            varintField(1, 0x1234),
+            bytesField(6, "libflutter.so"),
+            bytesField(8, buildId),
+            bytesField(4, "x".repeat(160)),
+        )
+        val tombstone = message(
+            varintField(6, 42),
+            bytesField(16, message(varintField(1, 42), bytesField(2, bytesField(4, frame)))),
+        )
+        val summary = AnonymousCrashStore.summarizeNativeTombstone(tombstone, 4_000)
+        val output = AnonymousCrashStore.composeCrashDetails(
+            listOf("exit_context reason=native_crash"),
+            AnonymousCrashStore.sanitizeStack(summary, 4_000),
+            4_000,
+        )
+        val privateValue = AnonymousCrashStore.sanitize(
+            "token=$buildId signature=$buildId 01:23:45:67:89:ab",
+            1_000,
+        )
+
+        assertTrue(output.contains("build_id=${buildId.chunked(4).joinToString("-")}"))
+        assertTrue(output.contains("fingerprint="))
+        assertFalse(output.contains("[NETWORK ADDRESS]"))
+        assertFalse(privateValue.contains(buildId))
+        assertFalse(privateValue.contains("01:23:45:67:89:ab"))
     }
 
     @Test
@@ -358,6 +538,21 @@ class AnonymousCrashStoreTest {
     }
 
     private fun message(vararg fields: ByteArray): ByteArray = fields.flatMap { it.toList() }.toByteArray()
+
+    private fun threadEntry(tid: Long, module: String, function: String): ByteArray = bytesField(
+        16,
+        message(
+            varintField(1, tid),
+            bytesField(
+                2,
+                message(
+                    varintField(1, tid),
+                    bytesField(2, "main"),
+                    bytesField(4, message(bytesField(6, module), bytesField(4, function))),
+                ),
+            ),
+        ),
+    )
 
     private fun bytesField(number: Int, value: String): ByteArray =
         bytesField(number, value.toByteArray(Charsets.US_ASCII))

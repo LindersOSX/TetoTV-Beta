@@ -4,7 +4,7 @@ publish_to: 'none'
 # Public and Beta artifacts built from the same source use one monotonically
 # increasing Android versionCode. The project default carries the Beta display
 # version; the Public universal APK overrides the build name to the 1.x line.
-version: 2.0.72+410049
+version: 2.0.73+410050
 
 environment:
   sdk: ^3.12.2
@@ -91,6 +91,7 @@ flutter:
     - assets/legal/native/LIBTORRENT_ED25519_LICENSE.txt
     - assets/legal/native/BOOST_LICENSE_1_0.txt
     - assets/legal/native/OPENSSL_LICENSE.txt
+    - assets/legal/native/ANDROIDX_MEDIA3_LICENSE.txt
     - assets/legal/native/LIBDATACHANNEL_LICENSE.txt
     - assets/legal/native/LIBJUICE_LICENSE.txt
     - assets/legal/native/USRSCTP_LICENSE.txt

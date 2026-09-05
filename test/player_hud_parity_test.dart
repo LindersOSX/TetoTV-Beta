@@ -10,7 +10,7 @@ void main() {
     'lib/features/player/presentation/teto_player_chrome.dart',
   ).readAsStringSync();
 
-  test('the player router has one MPV destination', () {
+  test('both built-in engines use one shared Flutter player route', () {
     expect(player, contains('return MpvTvPlayerScreen('));
     expect(player, isNot(contains('NativeMedia3PlayerScreen(')));
     expect(player, isNot(contains('VlcTvPlayerScreen(')));
@@ -18,8 +18,10 @@ void main() {
     expect(player, isNot(contains('onSelectEngine')));
   });
 
-  test('MPV owns the shared TV HUD without a player switch control', () {
-    expect(player, contains("engineKey: 'mpv'"));
+  test('built-in players share the TV HUD without duplicating controls', () {
+    expect(player, contains("_usesMedia3 ? 'media3' : 'mpv'"));
+    expect(player, contains('engineKey: _engineKey'));
+    expect(player, contains('engineKey: engineKey'));
     expect(player, contains('TetoPlayerChrome('));
     expect(chrome, isNot(contains('onFixVideo')));
     expect(chrome, isNot(contains("label: 'Player'")));

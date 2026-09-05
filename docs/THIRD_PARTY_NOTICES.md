@@ -1,11 +1,12 @@
 # Third-party notices
 
-TetoTV's MPV Android player and supporting application components use
+TetoTV's built-in Android players and supporting application components use
 the following third-party components:
 
 | Component | Use in TetoTV | Upstream license |
 | --- | --- | --- |
 | Google Material Icons | Rounded/outlined vector glyphs used by the Flutter player and TV interface | Apache License 2.0 |
+| AndroidX Media3 1.11.0 (ExoPlayer, HLS, DASH, UI and common components) | Optional built-in Android playback engine sharing TetoTV's existing controls; MPV remains the default | Apache License 2.0; Copyright The Android Open Source Project. License text: `assets/legal/native/ANDROIDX_MEDIA3_LICENSE.txt`; upstream source: https://github.com/androidx/media/tree/1.11.0 |
 | `media_kit`, `media_kit_video`, and `media_kit_libs_android_video` | MPV compatibility player and Flutter integration | MIT License for the media_kit projects; bundled native components retain their own licenses |
 | mpv, FFmpeg, libass, and their selected native dependencies | Compatibility decoding and styled ASS subtitle rendering, compiled by TetoTV from immutable source revisions | LGPL-3.0-or-later is used conservatively for the combined playback library; component MIT/ISC/BSD/Apache/FTL/LGPL notices and the exact build configuration are recorded in `NATIVE_PLAYBACK_REDISTRIBUTION.md` |
 | libtorrent4j 2.1.0-38, libtorrent-rasterbar, `try_signal`, Boost, OpenSSL, libdatachannel, libjuice, usrsctp, and plog | Opt-in direct peer-to-peer torrent transport, compiled by TetoTV from source, and verified piece delivery to the app-owned loopback Range bridge | libtorrent4j MIT; rasterbar and `try_signal` BSD-3-Clause; Boost Software License 1.0; OpenSSL Apache-2.0; libdatachannel and libjuice MPL-2.0; usrsctp BSD-style; plog MIT. libsrtp is source-only and is not linked because media support is disabled. |

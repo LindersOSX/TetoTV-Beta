@@ -52,6 +52,7 @@ $noticeFiles = @(
     [pscustomobject]@{ Source = "assets/legal/native/LIBTORRENT_ED25519_LICENSE.txt"; Destination = "assets/legal/native/LIBTORRENT_ED25519_LICENSE.txt"; Marker = "public domain" }
     [pscustomobject]@{ Source = "assets/legal/native/BOOST_LICENSE_1_0.txt"; Destination = "assets/legal/native/BOOST_LICENSE_1_0.txt"; Marker = "Boost Software License - Version 1.0" }
     [pscustomobject]@{ Source = "assets/legal/native/OPENSSL_LICENSE.txt"; Destination = "assets/legal/native/OPENSSL_LICENSE.txt"; Marker = "Apache License" }
+    [pscustomobject]@{ Source = "assets/legal/native/ANDROIDX_MEDIA3_LICENSE.txt"; Destination = "assets/legal/native/ANDROIDX_MEDIA3_LICENSE.txt"; Marker = "AndroidX Media3 1.11.0" }
     [pscustomobject]@{ Source = "assets/legal/native/LIBDATACHANNEL_LICENSE.txt"; Destination = "assets/legal/native/LIBDATACHANNEL_LICENSE.txt"; Marker = "Mozilla Public License Version 2.0" }
     [pscustomobject]@{ Source = "assets/legal/native/LIBJUICE_LICENSE.txt"; Destination = "assets/legal/native/LIBJUICE_LICENSE.txt"; Marker = "Mozilla Public License Version 2.0" }
     [pscustomobject]@{ Source = "assets/legal/native/USRSCTP_LICENSE.txt"; Destination = "assets/legal/native/USRSCTP_LICENSE.txt"; Marker = "Copyright (c) 2015" }

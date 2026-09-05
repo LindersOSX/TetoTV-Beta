@@ -4,7 +4,7 @@ const playbackPerformanceSchema = 'tetotv-playback-performance-v1';
 const maximumPlaybackPerformanceSamples = 6;
 
 /// Performance observations are intentionally a closed technical vocabulary.
-/// Never pass through an MPV property map, a device decoder description, or
+/// Never pass through a native property map, a device decoder description, or
 /// free-form strings: any of those can contain media identity or credentials.
 Map<String, Object?> sanitizePlaybackPerformanceSnapshot(Object? raw) {
   if (raw is! Map) return {};
@@ -28,7 +28,7 @@ Map<String, Object?> sanitizePlaybackPerformanceSnapshot(Object? raw) {
       DateTime.parse(updatedAt).isBefore(DateTime.parse(startedAt)) ||
       sourceKind == null ||
       decoder == null ||
-      raw['engine'] != 'mpv' ||
+      !const {'mpv', 'media3'}.contains(raw['engine']) ||
       (raw['schema'] != null && raw['schema'] != playbackPerformanceSchema) ||
       count == null ||
       raw['samples'] is! List) {
@@ -51,7 +51,7 @@ Map<String, Object?> sanitizePlaybackPerformanceSnapshot(Object? raw) {
     'attempt': attempt,
     'startedAt': startedAt,
     'updatedAt': updatedAt,
-    'engine': 'mpv',
+    'engine': raw['engine'],
     'sourceKind': sourceKind,
     'requestedDecoder': decoder,
     'sampleCount': count,
@@ -70,6 +70,7 @@ class PlaybackPerformanceAccumulator {
     required DateTime startedAt,
     required this.sourceKind,
     required this.requestedDecoder,
+    this.engine = 'mpv',
   }) : startedAt = startedAt.toUtc();
 
   final String sessionId;
@@ -77,6 +78,7 @@ class PlaybackPerformanceAccumulator {
   final DateTime startedAt;
   final String sourceKind;
   final String requestedDecoder;
+  final String engine;
   final _samples = <Map<String, Object?>>[];
   final _deltas = <String, int>{};
   final _observedIntervals = <String, int>{};
@@ -163,7 +165,7 @@ class PlaybackPerformanceAccumulator {
       'startedAt': startedAt.toIso8601String(),
       'updatedAt': (updated.isBefore(startedAt) ? startedAt : updated)
           .toIso8601String(),
-      'engine': 'mpv',
+      'engine': engine,
       'sourceKind': sourceKind,
       'requestedDecoder': requestedDecoder,
       'sampleCount': _sampleCount,
@@ -191,6 +193,8 @@ class PlaybackPerformanceAccumulator {
 const _maximumCount = 1000000000;
 const _maximumDurationMs = 604800000; // Seven days, including live streams.
 const _counterFields = <String>{
+  // Engine-reported rendered output buffers, not physical display FPS.
+  'renderedFrames',
   'droppedFrames',
   'decoderDroppedFrames',
   'mistimedFrames',

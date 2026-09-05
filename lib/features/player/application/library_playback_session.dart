@@ -38,6 +38,28 @@ LibraryPlaybackStartupFailure? classifyLibraryPlaybackStartupFailure(
 ) {
   final value = error?.toString().trim().toLowerCase() ?? '';
   if (value.isEmpty) return null;
+  if (value.startsWith('media3 could not play this stream')) {
+    // The Media3 adapter emits only this fixed wrapper and a safe error code.
+    // Do not interpret arbitrary native payloads, network/authentication errors,
+    // or unknown codes as a reason to request server transcoding.
+    final code = RegExp(
+      r'^media3 could not play this stream \((error_code_[a-z0-9_]+)\)\.$',
+    ).firstMatch(value)?.group(1);
+    return switch (code) {
+      'error_code_decoder_init_failed' ||
+      'error_code_decoder_query_failed' ||
+      'error_code_decoding_failed' ||
+      'error_code_decoding_format_exceeds_capabilities' ||
+      'error_code_decoding_format_unsupported' =>
+        LibraryPlaybackStartupFailure.decoder,
+      'error_code_parsing_container_malformed' ||
+      'error_code_parsing_manifest_malformed' ||
+      'error_code_parsing_container_unsupported' ||
+      'error_code_parsing_manifest_unsupported' =>
+        LibraryPlaybackStartupFailure.container,
+      _ => null,
+    };
+  }
   if (const [
     'could not open codec',
     'failed to initialize a decoder',

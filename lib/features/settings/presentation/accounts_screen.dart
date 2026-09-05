@@ -237,6 +237,10 @@ extension _SettingsSectionMetadata on _SettingsSection {
     _SettingsSection.playerControls => const [
       'Player controls',
       'Default player',
+      'MPV',
+      'Media3',
+      'ExoPlayer',
+      'Built-in player',
       'Preferred audio',
       'Preferred audio language',
       'Default audio language',
@@ -6404,7 +6408,8 @@ class _CustomizationPanel extends StatelessWidget {
                 ),
                 const _SettingsSupportingText(
                   'Adds an Open externally action for compatible streams. '
-                  'Turning this off returns the default to MPV. TetoTV never '
+                  'Turning this off returns an external default to MPV; '
+                  'your built-in player choice stays selected. TetoTV never '
                   'shares account headers or private-server credentials.',
                 ),
                 _AppearanceSelectionRow<int>(
@@ -6498,6 +6503,7 @@ class _ExternalPlayerDefaultSelection extends StatefulWidget {
 class _ExternalPlayerDefaultSelectionState
     extends State<_ExternalPlayerDefaultSelection> {
   static const _mpvValue = 'teto:mpv';
+  static const _media3Value = 'teto:media3';
   late Future<List<ExternalVideoPlayerApp>> _players;
 
   @override
@@ -6514,19 +6520,24 @@ class _ExternalPlayerDefaultSelectionState
         final installed = snapshot.data ?? const <ExternalVideoPlayerApp>[];
         final savedPackage = widget.preferences.selectedExternalPlayerPackage;
         final savedLabel = widget.preferences.selectedExternalPlayerLabel;
-        final selectedValue =
-            widget.preferences.preferredPlayer == PreferredPlayer.external &&
-                savedPackage != null
-            ? savedPackage
-            : _mpvValue;
+        final selectedValue = switch (widget.preferences.preferredPlayer) {
+          PreferredPlayer.mpv => _mpvValue,
+          PreferredPlayer.media3 => _media3Value,
+          PreferredPlayer.external => savedPackage ?? _mpvValue,
+        };
         final hasSavedPlayer = installed.any(
           (player) => player.packageName == savedPackage,
         );
         final options = <_SettingsOption<String>>[
           const _SettingsOption(
             value: _mpvValue,
-            label: 'MPV (built in)',
-            detail: 'Best compatibility and full TetoTV controls',
+            label: 'MPV (Built in)',
+            detail: 'Default engine with full TetoTV controls',
+          ),
+          const _SettingsOption(
+            value: _media3Value,
+            label: 'Media3 (Built in)',
+            detail: 'Android playback engine with the same TetoTV controls',
           ),
           for (final player in installed)
             _SettingsOption(
@@ -6534,7 +6545,9 @@ class _ExternalPlayerDefaultSelectionState
               label: player.label,
               detail: player.packageName,
             ),
-          if (selectedValue != _mpvValue && !hasSavedPlayer)
+          if (widget.preferences.preferredPlayer == PreferredPlayer.external &&
+              savedPackage != null &&
+              !hasSavedPlayer)
             _SettingsOption(
               value: selectedValue,
               label: savedLabel ?? 'Unavailable player',
@@ -6562,6 +6575,12 @@ class _ExternalPlayerDefaultSelectionState
                   );
                   return;
                 }
+                if (value == _media3Value) {
+                  unawaited(
+                    widget.controller.setPreferredPlayer(PreferredPlayer.media3),
+                  );
+                  return;
+                }
                 final player = installed
                     .where((candidate) => candidate.packageName == value)
                     .firstOrNull;
@@ -6583,7 +6602,7 @@ class _ExternalPlayerDefaultSelectionState
               snapshot.connectionState == ConnectionState.waiting
                   ? 'Checking installed video players…'
                   : 'External apps can only receive safe, header-free streams. '
-                        'Private Plex and Jellyfin sessions stay in MPV.',
+                        'Private Plex and Jellyfin sessions stay in TetoTV.',
             ),
           ],
         );

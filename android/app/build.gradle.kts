@@ -312,6 +312,14 @@ dependencies {
     // resolving Maven Central's prebuilt JNI artifacts.
     implementation(files(selfBuiltLibtorrentArtifacts))
     implementation("androidx.media:media:1.8.0")
+    // Embedded alternate engine; Flutter retains all playback chrome. Keep
+    // these artifacts on one reviewed stable version (AndroidX, 2026-08-05).
+    val media3Version = "1.11.0"
+    implementation("androidx.media3:media3-exoplayer:$media3Version")
+    implementation("androidx.media3:media3-exoplayer-hls:$media3Version")
+    implementation("androidx.media3:media3-exoplayer-dash:$media3Version")
+    implementation("androidx.media3:media3-datasource-okhttp:$media3Version")
+    implementation("androidx.media3:media3-ui:$media3Version")
     implementation("androidx.profileinstaller:profileinstaller:1.4.1")
     implementation("androidx.tvprovider:tvprovider:1.1.0")
     testImplementation("junit:junit:4.13.2")

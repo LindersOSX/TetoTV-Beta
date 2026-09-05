@@ -5,6 +5,65 @@ import 'package:anime_tv/core/diagnostics/playback_performance_monitor.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  testWidgets('Media3 monitor preserves engine and optional rendered counter', (
+    tester,
+  ) async {
+    final h = _Harness(
+      tester,
+      engine: 'media3',
+      read: (property) async => switch (property) {
+        'current-tracks/video/codec' => 'h264',
+        'tetotv-rendered-frame-count' => '120',
+        _ => null,
+      },
+    )..begin();
+    await h.open();
+    expect(h.requests, orderedEquals(media3PlaybackPerformanceProperties));
+    final snapshot = await h.snapshot();
+    expect(snapshot['engine'], 'media3');
+    final sample = _lastSample(snapshot);
+    expect(sample['codec'], 'h264');
+    expect(sample['renderedFrames'], 120);
+    expect(sample, isNot(contains('droppedFrames')));
+    expect(sample, isNot(contains('displayFps')));
+    expect(sample['probeStatus'], 'partial');
+    await h.close();
+  });
+
+  test('Media3 scalar parser has the same privacy and numeric allowlists', () {
+    expect(
+      playbackPerformanceMetricsFromProperties({
+        'tetotv-rendered-frame-count': '0',
+        'current-tracks/video/codec': 'HEVC',
+        'current-tracks/video/decoder': 'private.movie.mkv',
+        'track-list': 'https://private.example/token',
+      }, engine: 'media3'),
+      {'renderedFrames': 0, 'codec': 'hevc'},
+    );
+    for (final value in ['-1', '1.5', 'NaN', 'Infinity', '1000000001']) {
+      expect(
+        playbackPerformanceMetricsFromProperties({
+          'tetotv-rendered-frame-count': value,
+        }, engine: 'media3'),
+        isEmpty,
+      );
+    }
+    expect(
+      playbackPerformanceMetricsFromMpv({'tetotv-rendered-frame-count': '12'}),
+      isEmpty,
+    );
+    expect(
+      playbackPerformanceProperties,
+      isNot(contains('tetotv-rendered-frame-count')),
+    );
+    expect(
+      playbackPerformanceMetricsFromProperties({
+        'frame-drop-count': '0',
+      }, engine: 'https://private'),
+      isEmpty,
+    );
+  });
+
   test(
     'parser uses a closed scalar allowlist and never returns raw secrets',
     () {
@@ -699,10 +758,12 @@ class _Harness {
     this.tester, {
     PlaybackPropertyReader? read,
     PlaybackPerformanceWriter? persist,
+    String engine = 'mpv',
   }) {
     final epoch = tester.binding.clock.now();
     monitor = PlaybackPerformanceMonitor(
       sessionId: 'pbs-monitorTests12345678',
+      engine: engine,
       clock: () => wallClock,
       monotonicClock: () =>
           tester.binding.clock.now().difference(epoch) + tickOffset,

@@ -41,6 +41,92 @@ void main() {
     },
   );
 
+  for (final code in const [
+    'ERROR_CODE_DECODER_INIT_FAILED',
+    'ERROR_CODE_DECODER_QUERY_FAILED',
+    'ERROR_CODE_DECODING_FAILED',
+    'ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES',
+    'ERROR_CODE_DECODING_FORMAT_UNSUPPORTED',
+  ]) {
+    test('startup classifier recognizes safe Media3 decoder code $code', () {
+      expect(
+        classifyLibraryPlaybackStartupFailure(
+          'Media3 could not play this stream ($code).',
+        ),
+        LibraryPlaybackStartupFailure.decoder,
+      );
+    });
+  }
+
+  for (final code in const [
+    'ERROR_CODE_PARSING_CONTAINER_MALFORMED',
+    'ERROR_CODE_PARSING_MANIFEST_MALFORMED',
+    'ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED',
+    'ERROR_CODE_PARSING_MANIFEST_UNSUPPORTED',
+  ]) {
+    test('startup classifier recognizes safe Media3 container code $code', () {
+      expect(
+        classifyLibraryPlaybackStartupFailure(
+          'Media3 could not play this stream ($code).',
+        ),
+        LibraryPlaybackStartupFailure.container,
+      );
+    });
+  }
+
+  test(
+    'Media3 network, auth, DRM and unknown codes do not request transcode',
+    () {
+      for (final code in const [
+        'ERROR_CODE_IO_NETWORK_CONNECTION_FAILED',
+        'ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT',
+        'ERROR_CODE_IO_BAD_HTTP_STATUS',
+        'ERROR_CODE_IO_INVALID_HTTP_CONTENT_TYPE',
+        'ERROR_CODE_IO_FILE_NOT_FOUND',
+        'ERROR_CODE_IO_NO_PERMISSION',
+        'ERROR_CODE_IO_CLEARTEXT_NOT_PERMITTED',
+        'ERROR_CODE_AUTHENTICATION_EXPIRED',
+        'ERROR_CODE_PERMISSION_DENIED',
+        'ERROR_CODE_DRM_SCHEME_UNSUPPORTED',
+        'ERROR_CODE_DRM_LICENSE_EXPIRED',
+        'ERROR_CODE_TIMEOUT',
+        'ERROR_CODE_DECODING_RESOURCES_RECLAIMED',
+        'ERROR_CODE_AUDIO_TRACK_INIT_FAILED',
+        'ERROR_CODE_UNSPECIFIED',
+        'ERROR_CODE_DECODING_FAILED_UNKNOWN',
+        'ERROR_CODE_UNKNOWN_MEDIACODEC_FAILURE',
+      ]) {
+        expect(
+          classifyLibraryPlaybackStartupFailure(
+            'Media3 could not play this stream ($code).',
+          ),
+          isNull,
+          reason: code,
+        );
+      }
+    },
+  );
+
+  test('Media3 classifier requires the exact safe adapter error envelope', () {
+    for (final error in const [
+      'Media3 could not play this stream.',
+      'Media3 could not play this stream (ERROR_CODE_DECODING_FAILED)',
+      'Media3 could not play this stream (ERROR_CODE_DECODING_FAILED). extra',
+      'Media3 could not play this stream (ERROR_CODE_DECODING_FAILED extra).',
+      'Media3 could not play this stream (unknown MediaCodec error).',
+      'Media3 could not play this stream (ERROR_CODE_DECODING_FAILED). '
+          'https://server.example/private/video?token=secret',
+      'https://server.example/ERROR_CODE_DECODING_FAILED?token=secret',
+      'ERROR_CODE_DECODING_FAILED',
+    ]) {
+      expect(
+        classifyLibraryPlaybackStartupFailure(error),
+        isNull,
+        reason: error,
+      );
+    }
+  });
+
   test('library request is isolated from every anime-only side effect', () {
     final request = _request(requestedAudio: PlaybackAudioPreference.sub);
 

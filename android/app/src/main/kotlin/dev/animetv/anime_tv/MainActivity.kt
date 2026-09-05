@@ -41,6 +41,7 @@ import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import dev.animetv.anime_tv.security.AppDeepLinkPolicy
+import dev.animetv.anime_tv.player.Media3FlutterBridge
 import java.io.File
 import java.security.MessageDigest
 import java.util.concurrent.ArrayBlockingQueue
@@ -54,6 +55,7 @@ class MainActivity : FlutterActivity() {
     private val channelName = "dev.tetotv/android_tv"
     private lateinit var channel: MethodChannel
     private lateinit var mediaSession: MediaSessionCompat
+    private var media3Bridge: Media3FlutterBridge? = null
     private var pendingApkInstallResult: MethodChannel.Result? = null
     private var pendingApkPath: String? = null
     private var pendingVoiceSearchResult: MethodChannel.Result? = null
@@ -108,6 +110,8 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        media3Bridge?.close()
+        media3Bridge = Media3FlutterBridge(this, flutterEngine)
         channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, channelName)
         DiscordRichPresenceBridge.attach(this, channel)
         createMediaSession()
@@ -564,6 +568,7 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun onPause() {
+        media3Bridge?.setForeground(false)
         if (externalProxyHandoffActive) externalProxyHandoffBackgrounded = true
         AnonymousCrashStore.recordBreadcrumb(this, "activity_paused")
         super.onPause()
@@ -571,6 +576,7 @@ class MainActivity : FlutterActivity() {
 
     override fun onResume() {
         super.onResume()
+        media3Bridge?.setForeground(true)
         AnonymousCrashStore.recordBreadcrumb(this, "activity_resumed")
         if (externalProxyHandoffActive && externalProxyHandoffBackgrounded) {
             finishExternalProxyHandoff(notifyDart = true)
@@ -1667,7 +1673,15 @@ class MainActivity : FlutterActivity() {
         )
     }
 
+    override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
+        media3Bridge?.close()
+        media3Bridge = null
+        super.cleanUpFlutterEngine(flutterEngine)
+    }
+
     override fun onDestroy() {
+        media3Bridge?.close()
+        media3Bridge = null
         AnonymousCrashStore.recordBreadcrumb(this, "activity_destroyed")
         if (externalProxyHandoffActive) {
             finishExternalProxyHandoff(notifyDart = false)

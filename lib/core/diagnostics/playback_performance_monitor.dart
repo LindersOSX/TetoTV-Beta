@@ -31,7 +31,8 @@ class PlaybackPerformanceContext {
   final double? androidDisplayFps;
 }
 
-/// Optional read-only MPV telemetry. No recovery actions or player mutations.
+/// Optional read-only built-in player telemetry. No recovery actions or player
+/// mutations. Backend adapters expose only the common scalar vocabulary below.
 ///
 /// At most four native requests remain outstanding, including timeouts from
 /// old attempts. A timeout cannot release a still-running native call's slot,
@@ -43,6 +44,7 @@ class PlaybackPerformanceMonitor {
     required this._readProperty,
     required this._context,
     required this._persist,
+    this.engine = 'mpv',
     DateTime Function()? clock,
     this._monotonicClock,
     this.sampleInterval = const Duration(seconds: 5),
@@ -52,6 +54,7 @@ class PlaybackPerformanceMonitor {
   }) : _clock = clock ?? DateTime.now;
 
   final String sessionId;
+  final String engine;
   final PlaybackPropertyReader _readProperty;
   final PlaybackPerformanceContext Function() _context;
   final PlaybackPerformanceWriter _persist;
@@ -123,6 +126,7 @@ class PlaybackPerformanceMonitor {
       startedAt: _startedAt!,
       sourceKind: sourceKind,
       requestedDecoder: requestedDecoder,
+      engine: engine,
     );
     _accumulator!.addSample({
       'timestamp': _startedAt!.toIso8601String(),
@@ -208,6 +212,9 @@ class PlaybackPerformanceMonitor {
     _capturingGeneration = generation;
     try {
       final results = <String, String?>{};
+      final properties = engine == 'media3'
+          ? media3PlaybackPerformanceProperties
+          : playbackPerformanceProperties;
       var index = 0;
       var timedOut = false;
       final probeStarted = _tick;
@@ -215,7 +222,7 @@ class PlaybackPerformanceMonitor {
         while (!_disposed &&
             generation == _generation &&
             revision == _stateRevision) {
-          if (index >= playbackPerformanceProperties.length) return;
+          if (index >= properties.length) return;
           final remaining = probeBudget - (_tick - probeStarted);
           if (remaining <= Duration.zero || _pendingProperties.length >= 4) {
             // Do not consume the shared work index: other workers may still
@@ -223,7 +230,7 @@ class PlaybackPerformanceMonitor {
             timedOut = true;
             return;
           }
-          final property = playbackPerformanceProperties[index++];
+          final property = properties[index++];
           if (_pendingProperties.contains(property)) {
             timedOut = true;
             continue;
@@ -263,7 +270,10 @@ class PlaybackPerformanceMonitor {
       }
       final current = _safeContext();
       if (current == null) return;
-      final native = playbackPerformanceMetricsFromMpv(results);
+      final native = playbackPerformanceMetricsFromProperties(
+        results,
+        engine: engine,
+      );
       _accumulator!.addSample({
         ..._contextSample(current, _tick),
         ...native,
@@ -271,7 +281,7 @@ class PlaybackPerformanceMonitor {
             ? 'timeout'
             : native.isEmpty
             ? 'unavailable'
-            : _mpvMetricFields.values.every(native.containsKey)
+            : _metricFieldsForEngine(engine).values.every(native.containsKey)
             ? 'supported'
             : 'partial',
       });
@@ -493,6 +503,13 @@ const playbackPerformanceProperties = <String>[
   'audio-bitrate',
 ];
 
+/// Media3 reports rendered output buffers through its adapter. This counter is
+/// optional and must not be presented as a measured physical display FPS.
+const media3PlaybackPerformanceProperties = <String>[
+  ...playbackPerformanceProperties,
+  'tetotv-rendered-frame-count',
+];
+
 const _mpvStringFields = {
   'hwdec-current': 'activeHwdec',
   'current-tracks/video/codec': 'codec',
@@ -527,15 +544,33 @@ const _mpvMetricFields = {
   ..._mpvBooleanFields,
 };
 
+const _media3NumberFields = {
+  'tetotv-rendered-frame-count': 'renderedFrames',
+};
+
+Map<String, String> _metricFieldsForEngine(String engine) => {
+  ..._mpvMetricFields,
+  if (engine == 'media3') ..._media3NumberFields,
+};
+
 Map<String, Object?> playbackPerformanceMetricsFromMpv(
   Map<String, String?> properties,
-) {
+) => playbackPerformanceMetricsFromProperties(properties);
+
+Map<String, Object?> playbackPerformanceMetricsFromProperties(
+  Map<String, String?> properties, {
+  String engine = 'mpv',
+}) {
+  if (engine != 'mpv' && engine != 'media3') return {};
   final result = <String, Object?>{};
   for (final field in _mpvStringFields.entries) {
     final value = properties[field.key];
     if (value != null && value.length <= 64) result[field.value] = value;
   }
-  for (final field in _mpvNumberFields.entries) {
+  for (final field in {
+    ..._mpvNumberFields,
+    if (engine == 'media3') ..._media3NumberFields,
+  }.entries) {
     final raw = properties[field.key];
     if (raw == null || raw.length > 128) continue;
     final value = double.tryParse(raw);
@@ -578,7 +613,7 @@ Map<String, Object?> playbackPerformanceMetricsFromMpv(
     'attempt': 1,
     'startedAt': '2026-01-01T00:00:00Z',
     'updatedAt': '2026-01-01T00:00:00Z',
-    'engine': 'mpv',
+    'engine': engine,
     'sourceKind': 'web',
     'requestedDecoder': 'hardware_adaptive',
     'sampleCount': 1,
@@ -589,7 +624,8 @@ Map<String, Object?> playbackPerformanceMetricsFromMpv(
   final sample = (safe['samples'] as List).single as Map<String, Object?>;
   return {
     for (final entry in sample.entries)
-      if (_mpvMetricFields.containsValue(entry.key) || entry.key == 'bitDepth')
+      if (_metricFieldsForEngine(engine).containsValue(entry.key) ||
+          entry.key == 'bitDepth')
         entry.key: entry.value,
   };
 }

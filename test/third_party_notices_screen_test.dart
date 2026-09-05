@@ -18,7 +18,7 @@ void main() {
     expect(find.text('Third-party notices'), findsNWidgets(2));
     expect(find.text('Package licenses'), findsOneWidget);
     expect(find.textContaining('media_kit_libs_android_video'), findsOneWidget);
-    expect(find.textContaining('AndroidX Media3'), findsNothing);
+    expect(find.textContaining('AndroidX Media3 1.11.0'), findsOneWidget);
     expect(find.textContaining('libVLC'), findsNothing);
     expect(find.textContaining('Kasane Teto name and artwork'), findsOneWidget);
     expect(FocusManager.instance.primaryFocus?.debugLabel, 'notices.back');

@@ -12,6 +12,40 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test(
+    'native technical fingerprints survive without loosening secret redaction',
+    () async {
+      final client = _CrashClient();
+      final reporter = AnonymousCrashReporter(client, _CrashPlatform())
+        ..setEnabled(true);
+      const groupedBuildId = 'abcd-ef01-2345-6789-abcd-ef01-2345-6789';
+      await reporter.record(
+        kind: 'native',
+        error: StateError('native process crash'),
+        stack: StackTrace.fromString(
+          'native_tombstone_protobuf fingerprint=abcdef0123456789\n'
+          'thread_selection=exact_tid\n'
+          'frame_0 rel_pc=0x4eddb4 module=libflutter.so build_id=$groupedBuildId\n'
+          'Authorization: Bearer top-secret\n'
+          'token=abcdef0123456789abcdef0123456789\n'
+          'https://private.example/episode?signature=private-signature',
+        ),
+      );
+      final stack = client.reports.single.stack;
+      expect(stack, contains('fingerprint=abcdef0123456789'));
+      expect(stack, contains('thread_selection=exact_tid'));
+      expect(stack, contains('build_id=$groupedBuildId'));
+      for (final secret in [
+        'top-secret',
+        'private.example',
+        'private-signature',
+        'abcdef0123456789abcdef0123456789',
+      ]) {
+        expect(stack, isNot(contains(secret)));
+      }
+    },
+  );
+
   test('reporting stays completely dormant until explicit opt in', () async {
     final client = _CrashClient();
     final platform = _CrashPlatform();

@@ -24,7 +24,7 @@ dependencies:
     path: third_party/media_kit_libs_android_video
   media_kit_video: ^2.0.1
   qr_flutter: ^4.1.0
-  cached_network_image: ^3.4.1
+  cached_network_image: ^4.0.0
   flutter_cache_manager: ^3.4.2
   crypto: ^3.0.6
   cryptography: ^2.7.0

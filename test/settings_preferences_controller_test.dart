@@ -547,48 +547,191 @@ void main() {
     expect(restored.state.externalPlayerEnabled, isTrue);
   });
 
-  test('MPV stays the default and Media3 persists as a built-in choice', () async {
+  test(
+    'MPV stays the default and Media3 persists as a built-in choice',
+    () async {
+      FlutterSecureStorage.setMockInitialValues({});
+      const storage = FlutterSecureStorage();
+      final controller = SettingsPreferencesController(storage);
+      await controller.load();
+
+      expect(controller.state.preferredPlayer, PreferredPlayer.mpv);
+      expect(PreferredPlayer.media3.displayName, 'Media3 (Built in)');
+
+      await controller.setPreferredPlayer(PreferredPlayer.media3);
+      expect(await storage.read(key: 'player_preferred_engine'), 'media3');
+      final restored = SettingsPreferencesController(storage);
+      await restored.load();
+
+      expect(restored.state.preferredPlayer, PreferredPlayer.media3);
+      expect(restored.state.externalPlayerEnabled, isFalse);
+      expect(restored.state.selectedExternalPlayerPackage, isNull);
+
+      await restored.setPreferredPlayer(PreferredPlayer.mpv);
+      final switchedBack = SettingsPreferencesController(storage);
+      await switchedBack.load();
+      expect(switchedBack.state.preferredPlayer, PreferredPlayer.mpv);
+    },
+  );
+
+  test(
+    'disabling external handoff preserves a selected Media3 engine',
+    () async {
+      FlutterSecureStorage.setMockInitialValues({});
+      const storage = FlutterSecureStorage();
+      final controller = SettingsPreferencesController(storage);
+      await controller.setDefaultExternalPlayer(
+        packageName: 'org.example.player',
+        label: 'Example Player',
+      );
+      await controller.setPreferredPlayer(PreferredPlayer.media3);
+      await controller.setExternalPlayerEnabled(false);
+
+      final restored = SettingsPreferencesController(storage);
+      await restored.load();
+      expect(restored.state.preferredPlayer, PreferredPlayer.media3);
+      expect(restored.state.externalPlayerEnabled, isFalse);
+      expect(restored.state.selectedExternalPlayerPackage, isNull);
+      expect(restored.state.selectedExternalPlayerLabel, isNull);
+    },
+  );
+
+  test(
+    'Media3 rendering defaults to TextureView for existing installs',
+    () async {
+      for (final storedValue in [null, 'false', 'invalid']) {
+        FlutterSecureStorage.setMockInitialValues({
+          'player_preferred_engine': 'media3',
+          'player_media3_surface_view_enabled': ?storedValue,
+        });
+        final controller = SettingsPreferencesController(
+          const FlutterSecureStorage(),
+        );
+        addTearDown(controller.dispose);
+        expect(controller.state.media3SurfaceViewEnabled, isFalse);
+        await controller.load();
+        expect(controller.state.media3SurfaceViewEnabled, isFalse);
+        expect(controller.state.preferredPlayer, PreferredPlayer.media3);
+      }
+    },
+  );
+
+  test(
+    'enabling SurfaceView selects Media3 and persists both choices',
+    () async {
+      FlutterSecureStorage.setMockInitialValues({});
+      const storage = FlutterSecureStorage();
+      final controller = SettingsPreferencesController(storage);
+      addTearDown(controller.dispose);
+      await controller.load();
+      await controller.setDefaultExternalPlayer(
+        packageName: 'org.example.player',
+        label: 'Example player',
+      );
+
+      final save = controller.setMedia3SurfaceViewEnabled(true);
+      expect(controller.state.media3SurfaceViewEnabled, isTrue);
+      expect(controller.state.preferredPlayer, PreferredPlayer.media3);
+      await save;
+      expect(
+        await storage.read(key: 'player_media3_surface_view_enabled'),
+        'true',
+      );
+      expect(await storage.read(key: 'player_preferred_engine'), 'media3');
+
+      final restored = SettingsPreferencesController(storage);
+      addTearDown(restored.dispose);
+      await restored.load();
+      expect(restored.state.media3SurfaceViewEnabled, isTrue);
+      expect(restored.state.preferredPlayer, PreferredPlayer.media3);
+      expect(restored.state.externalPlayerEnabled, isTrue);
+      expect(
+        restored.state.selectedExternalPlayerPackage,
+        'org.example.player',
+      );
+
+      await restored.setMedia3SurfaceViewEnabled(false);
+      expect(restored.state.media3SurfaceViewEnabled, isFalse);
+      expect(restored.state.preferredPlayer, PreferredPlayer.media3);
+      expect(
+        await storage.read(key: 'player_media3_surface_view_enabled'),
+        'false',
+      );
+      expect(await storage.read(key: 'player_preferred_engine'), 'media3');
+    },
+  );
+
+  test('SurfaceView preference never overrides a later MPV choice', () async {
     FlutterSecureStorage.setMockInitialValues({});
     const storage = FlutterSecureStorage();
     final controller = SettingsPreferencesController(storage);
-    await controller.load();
+    addTearDown(controller.dispose);
+    await controller.setMedia3SurfaceViewEnabled(true);
+    await controller.setPreferredPlayer(PreferredPlayer.mpv);
 
-    expect(controller.state.preferredPlayer, PreferredPlayer.mpv);
-    expect(PreferredPlayer.media3.displayName, 'Media3 (Built in)');
-
-    await controller.setPreferredPlayer(PreferredPlayer.media3);
-    expect(await storage.read(key: 'player_preferred_engine'), 'media3');
     final restored = SettingsPreferencesController(storage);
+    addTearDown(restored.dispose);
     await restored.load();
+    expect(restored.state.media3SurfaceViewEnabled, isTrue);
+    expect(restored.state.preferredPlayer, PreferredPlayer.mpv);
 
-    expect(restored.state.preferredPlayer, PreferredPlayer.media3);
-    expect(restored.state.externalPlayerEnabled, isFalse);
-    expect(restored.state.selectedExternalPlayerPackage, isNull);
-
-    await restored.setPreferredPlayer(PreferredPlayer.mpv);
-    final switchedBack = SettingsPreferencesController(storage);
-    await switchedBack.load();
-    expect(switchedBack.state.preferredPlayer, PreferredPlayer.mpv);
+    await restored.setMedia3SurfaceViewEnabled(false);
+    expect(restored.state.media3SurfaceViewEnabled, isFalse);
+    expect(restored.state.preferredPlayer, PreferredPlayer.mpv);
+    expect(await storage.read(key: 'player_preferred_engine'), 'mpv');
   });
 
-  test('disabling external handoff preserves a selected Media3 engine', () async {
+  test('full preference reset restores Media3 TextureView', () async {
     FlutterSecureStorage.setMockInitialValues({});
     const storage = FlutterSecureStorage();
     final controller = SettingsPreferencesController(storage);
-    await controller.setDefaultExternalPlayer(
-      packageName: 'org.example.player',
-      label: 'Example Player',
+    addTearDown(controller.dispose);
+    await controller.setMedia3SurfaceViewEnabled(true);
+    expect(
+      controller.state.copyWith(loaded: true).media3SurfaceViewEnabled,
+      isTrue,
     );
-    await controller.setPreferredPlayer(PreferredPlayer.media3);
-    await controller.setExternalPlayerEnabled(false);
+    await controller.resetAppearance();
+    expect(controller.state.media3SurfaceViewEnabled, isFalse);
+    expect(controller.state.preferredPlayer, PreferredPlayer.mpv);
+    expect(
+      await storage.read(key: 'player_media3_surface_view_enabled'),
+      isNull,
+    );
 
     final restored = SettingsPreferencesController(storage);
+    addTearDown(restored.dispose);
     await restored.load();
-    expect(restored.state.preferredPlayer, PreferredPlayer.media3);
-    expect(restored.state.externalPlayerEnabled, isFalse);
-    expect(restored.state.selectedExternalPlayerPackage, isNull);
-    expect(restored.state.selectedExternalPlayerLabel, isNull);
+    expect(restored.state.media3SurfaceViewEnabled, isFalse);
   });
+
+  for (final beforeLoad in [true, false]) {
+    test(
+      'SurfaceView choice ${beforeLoad ? 'before' : 'during'} startup survives stale restore',
+      () async {
+        FlutterSecureStorage.setMockInitialValues({});
+        final gate = Completer<void>();
+        final controller = SettingsPreferencesController(
+          const FlutterSecureStorage(),
+          readValue: (key) async {
+            await gate.future;
+            return const {
+              'player_preferred_engine': 'mpv',
+              'player_media3_surface_view_enabled': 'false',
+            }[key];
+          },
+        );
+        addTearDown(controller.dispose);
+        if (beforeLoad) await controller.setMedia3SurfaceViewEnabled(true);
+        final load = controller.load();
+        if (!beforeLoad) await controller.setMedia3SurfaceViewEnabled(true);
+        gate.complete();
+        await load;
+        expect(controller.state.media3SurfaceViewEnabled, isTrue);
+        expect(controller.state.preferredPlayer, PreferredPlayer.media3);
+      },
+    );
+  }
 
   test(
     'specific default external player persists and can fall back to MPV',
@@ -1303,7 +1446,7 @@ void main() {
       gate.complete();
       await Future.wait([firstLoad, duplicateLoad]);
 
-      expect(reads, 61, reason: 'duplicate startup loads must be coalesced');
+      expect(reads, 62, reason: 'duplicate startup loads must be coalesced');
       expect(controller.state.webStreamsEnabled, isTrue);
       expect(controller.state.navigationSounds, isFalse);
     },

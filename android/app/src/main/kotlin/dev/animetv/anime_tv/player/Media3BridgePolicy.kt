@@ -9,7 +9,21 @@ internal object Media3BridgePolicy {
     const val MAX_SIDECARS = 32
     const val MAX_PLAYERS = 2
     const val RELEASE_TIMEOUT_MS = 1_000L
+    const val SCREENSHOT_MAX_DIMENSION = 480
+    const val SCREENSHOT_MAX_BYTES = 256 * 1024
     private val headerName = Regex("^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,128}$")
+
+    fun surfaceType(raw: Any?): String = when (raw) {
+        null, "texture" -> "texture"
+        "surface" -> "surface"
+        else -> throw IllegalArgumentException("invalid_surface_type")
+    }
+
+    fun screenshotSize(width: Int, height: Int): Pair<Int, Int>? {
+        if (width <= 0 || height <= 0) return null
+        val scale = minOf(1.0, SCREENSHOT_MAX_DIMENSION.toDouble() / maxOf(width, height))
+        return maxOf(1, (width * scale).toInt()) to maxOf(1, (height * scale).toInt())
+    }
 
     fun supportedUri(value: String): Boolean {
         if (value.isBlank() || value.length > 16_384 || value.any { it.code < 32 }) return false
@@ -148,4 +162,16 @@ internal class Media3CallbackEpoch {
     fun begin(openId: Long): Ticket = Ticket(++generation, openId).also { current = it }
     fun invalidate() { generation++; current = null }
     fun accepts(ticket: Ticket): Boolean = current === ticket
+}
+
+/** A detached/disposed capture replies with null once, even if PixelCopy finishes later. */
+internal class Media3ScreenshotResult(reply: (ByteArray?) -> Unit) {
+    private var reply: ((ByteArray?) -> Unit)? = reply
+    val isPending: Boolean get() = reply != null
+
+    fun complete(bytes: ByteArray?) {
+        val callback = reply ?: return
+        reply = null
+        callback(bytes)
+    }
 }

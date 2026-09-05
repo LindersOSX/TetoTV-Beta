@@ -73,6 +73,52 @@ void main() {
     expect(metrics, contains('return media3.readProperty(property)'));
   });
 
+  test('alternate surface is captured only for Media3 at session creation', () {
+    expect(source, contains('late final bool _media3SurfaceViewEnabled;'));
+    expect(
+      RegExp(
+        r'_media3SurfaceViewEnabled\s*=\s*_usesMedia3 &&\s*ref.read\(settingsPreferencesProvider\).media3SurfaceViewEnabled',
+      ).hasMatch(source),
+      isTrue,
+    );
+    expect(source, contains('useSurfaceView: _media3SurfaceViewEnabled'));
+    final surface = File(
+      'lib/features/player/presentation/media3_video_surface.dart',
+    ).readAsStringSync();
+    expect(surface, contains('this.useSurfaceView = false'));
+    expect(surface, contains('if (!widget.useSurfaceView)'));
+    expect(surface, contains('return AndroidView('));
+    expect(surface, contains('return PlatformViewLink('));
+    expect(surface, contains('PlatformViewsService.initExpensiveAndroidView('));
+    expect(surface, contains("widget.useSurfaceView ? 'surface' : 'texture'"));
+  });
+
+  test('Media3 seeks never capture or render a scene thumbnail', () {
+    final capture = method(
+      'Future<void> _captureTrickplay(',
+      'Future<void> _openAudioTrackPicker()',
+    );
+    expect(capture, contains('if (_usesMedia3) return;'));
+    expect(
+      capture.indexOf('if (_usesMedia3) return;'),
+      lessThan(capture.indexOf('await Future<void>.delayed')),
+    );
+    expect(capture, contains("_player.screenshot(format: 'image/jpeg')"));
+    expect(
+      source,
+      contains('if (_seekPreview case final preview? when !_usesMedia3)'),
+    );
+    expect(
+      RegExp(
+        r'onSeekPreview:\s*!_usesMedia3 &&\s*supportsProvisionalSeekPreview\(\s*_currentStream,?\s*\)',
+      ).hasMatch(source),
+      isTrue,
+    );
+    // Final seek commits still use the normal queue and diagnostics.
+    expect(source, contains('onSeek: _seekTo'));
+    expect(source, contains('await _seekWithPerformanceDiagnostics(target)'));
+  });
+
   test(
     'MPV performance recovery and surface internals do not run on Media3',
     () {

@@ -45,6 +45,7 @@ const _navigationSoundsKey = 'audio_navigation_sounds';
 const _clickSoundsKey = 'audio_click_sounds';
 const _defaultLandingPageKey = 'navigation_default_landing_page';
 const _preferredPlayerKey = 'player_preferred_engine';
+const _media3SurfaceViewEnabledKey = 'player_media3_surface_view_enabled';
 const _preferredAudioKey = 'player_preferred_audio';
 const _preferredAudioLanguageKey = 'player_preferred_audio_language';
 const _preferredCaptionsKey = 'player_preferred_captions';
@@ -467,6 +468,7 @@ class SettingsPreferences {
     this.clickSounds = true,
     this.defaultLandingPage = LandingPage.home,
     this.preferredPlayer = PreferredPlayer.mpv,
+    this.media3SurfaceViewEnabled = false,
     this.preferredAudio = PlaybackAudioPreference.dub,
     this.preferredAudioLanguage = 'auto',
     this.preferredCaptionMode = PreferredCaptionMode.automatic,
@@ -541,6 +543,9 @@ class SettingsPreferences {
   final bool clickSounds;
   final LandingPage defaultLandingPage;
   final PreferredPlayer preferredPlayer;
+
+  /// Rendering preference for Media3 only; MPV keeps its existing renderer.
+  final bool media3SurfaceViewEnabled;
   final PlaybackAudioPreference preferredAudio;
   final String preferredAudioLanguage;
   final PreferredCaptionMode preferredCaptionMode;
@@ -625,6 +630,7 @@ class SettingsPreferences {
     bool? clickSounds,
     LandingPage? defaultLandingPage,
     PreferredPlayer? preferredPlayer,
+    bool? media3SurfaceViewEnabled,
     PlaybackAudioPreference? preferredAudio,
     String? preferredAudioLanguage,
     PreferredCaptionMode? preferredCaptionMode,
@@ -693,6 +699,8 @@ class SettingsPreferences {
     clickSounds: clickSounds ?? this.clickSounds,
     defaultLandingPage: defaultLandingPage ?? this.defaultLandingPage,
     preferredPlayer: preferredPlayer ?? this.preferredPlayer,
+    media3SurfaceViewEnabled:
+        media3SurfaceViewEnabled ?? this.media3SurfaceViewEnabled,
     preferredAudio: preferredAudio ?? this.preferredAudio,
     preferredAudioLanguage: preferredAudioLanguage == null
         ? this.preferredAudioLanguage
@@ -985,6 +993,8 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
       // Preferred audio language is append-only. `auto` preserves the legacy
       // Dub/Sub behavior until the viewer explicitly chooses a language.
       _safeRead(_preferredAudioLanguageKey),
+      // Media3 rendering is append-only; missing values keep TextureView.
+      _safeRead(_media3SurfaceViewEnabledKey),
     ]);
 
     bool canRestore(String key, int index) {
@@ -1362,6 +1372,11 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
         preferredAudioLanguage: _normalizePreferredAudioLanguage(valueAt(60)),
       );
     }
+    if (canRestore(_media3SurfaceViewEnabledKey, 61)) {
+      restored = restored.copyWith(
+        media3SurfaceViewEnabled: valueAt(61) == 'true',
+      );
+    }
     if (restored.preferredPlayer == PreferredPlayer.external &&
         (!restored.externalPlayerEnabled ||
             restored.selectedExternalPlayerPackage == null)) {
@@ -1677,6 +1692,19 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
   Future<void> setPreferredPlayer(PreferredPlayer value) => _update(
     state.copyWith(preferredPlayer: value),
     {_preferredPlayerKey: value.name},
+  );
+
+  /// SurfaceView opts the next video into Media3. Later explicit player
+  /// choices remain independent, and disabling only restores TextureView.
+  Future<void> setMedia3SurfaceViewEnabled(bool value) => _update(
+    state.copyWith(
+      media3SurfaceViewEnabled: value,
+      preferredPlayer: value ? PreferredPlayer.media3 : state.preferredPlayer,
+    ),
+    {
+      _media3SurfaceViewEnabledKey: value.toString(),
+      if (value) _preferredPlayerKey: PreferredPlayer.media3.name,
+    },
   );
 
   Future<void> setDefaultExternalPlayer({
@@ -2065,6 +2093,7 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
       _seekBackSecondsKey,
       _seekForwardSecondsKey,
       _preferredPlayerKey,
+      _media3SurfaceViewEnabledKey,
       _preferredAudioKey,
       _preferredAudioLanguageKey,
       _preferredCaptionsKey,
@@ -2087,6 +2116,7 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
       seekBackSeconds: defaults.seekBackSeconds,
       seekForwardSeconds: defaults.seekForwardSeconds,
       preferredPlayer: defaults.preferredPlayer,
+      media3SurfaceViewEnabled: defaults.media3SurfaceViewEnabled,
       preferredAudio: defaults.preferredAudio,
       preferredAudioLanguage: defaults.preferredAudioLanguage,
       preferredCaptionMode: defaults.preferredCaptionMode,

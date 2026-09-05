@@ -928,6 +928,67 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets(
+    'Media3-style scrubbing keeps the time bubble without scene previews',
+    (tester) async {
+      final playFocus = FocusNode();
+      final progressFocus = FocusNode();
+      final seeks = <Duration>[];
+      addTearDown(playFocus.dispose);
+      addTearDown(progressFocus.dispose);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: TetoPlayerChrome(
+              engineKey: 'media3',
+              title: 'Episode',
+              streamLabel: 'Stream',
+              position: const Duration(minutes: 3),
+              duration: const Duration(minutes: 24),
+              isPlaying: true,
+              playFocusNode: playFocus,
+              progressFocusNode: progressFocus,
+              seekBackSeconds: 10,
+              seekForwardSeconds: 30,
+              onSeek: seeks.add,
+              onSeekPreview: null,
+              onRewind: () {},
+              onPlayPause: () {},
+              onForward: () {},
+              onAudio: () {},
+              onSubtitles: () {},
+              onPicture: () {},
+              onOptions: () {},
+              onDismiss: () {},
+            ),
+          ),
+        ),
+      );
+
+      progressFocus.requestFocus();
+      await tester.pump();
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.arrowRight);
+      await tester.pump(const Duration(milliseconds: 150));
+      final bubble = find.byKey(
+        const ValueKey('media3-player-seek-time-bubble'),
+      );
+      expect(bubble, findsOneWidget);
+      expect(
+        find.descendant(of: bubble, matching: find.text('03:30')),
+        findsOneWidget,
+      );
+      expect(seeks, isEmpty);
+      expect(find.byType(Image), findsNothing);
+
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.arrowRight);
+      await tester.pump();
+      expect(seeks, [const Duration(minutes: 3, seconds: 30)]);
+      expect(find.byType(Image), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   testWidgets('held TV scrubbing shows its target time and avoids exact EOF', (
     tester,
   ) async {

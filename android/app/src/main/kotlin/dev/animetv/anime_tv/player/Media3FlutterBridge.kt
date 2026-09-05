@@ -11,6 +11,8 @@ import android.os.SystemClock
 import android.util.Base64
 import android.util.TypedValue
 import android.view.LayoutInflater
+import android.view.PixelCopy
+import android.view.SurfaceView
 import android.view.TextureView
 import android.view.View
 import android.view.ViewGroup
@@ -75,10 +77,12 @@ class Media3FlutterBridge(context: Context, engine: FlutterEngine) :
             "dev.tetotv/media3/video",
             object : PlatformViewFactory(StandardMessageCodec.INSTANCE) {
                 override fun create(context: Context, viewId: Int, args: Any?): PlatformView {
-                    val id = (args as? Map<*, *>)?.get("id") as? Number
+                    val params = args as? Map<*, *>
+                    val surfaceType = Media3BridgePolicy.surfaceType(params?.get("surfaceType"))
+                    val id = params?.get("id") as? Number
                     val session = id?.toLong()?.let(sessions::get)
                         ?: throw IllegalArgumentException("Media3 player is unavailable")
-                    return Media3VideoView(context, session)
+                    return Media3VideoView(context, session, surfaceType)
                 }
             },
         )
@@ -145,7 +149,12 @@ class Media3FlutterBridge(context: Context, engine: FlutterEngine) :
                     result.success(session.addSubtitle(call.arguments as? Map<*, *> ?: emptyMap<Any, Any>()))
                     return
                 }
-                "screenshot" -> { result.success(session.screenshot(call.argument<String>("format") ?: "image/jpeg")); return }
+                "screenshot" -> {
+                    session.screenshot(call.argument<String>("format") ?: "image/jpeg") { bytes ->
+                        runCatching { result.success(bytes) }
+                    }
+                    return
+                }
                 "readProperty" -> { result.success(session.readProperty(call.argument<String>("property").orEmpty())); return }
                 "ready" -> { result.success(true); return }
                 else -> { result.notImplemented(); return }
@@ -179,8 +188,10 @@ class Media3FlutterBridge(context: Context, engine: FlutterEngine) :
 }
 
 @androidx.annotation.OptIn(UnstableApi::class)
-private class Media3VideoView(context: Context, private val session: Media3Session) : PlatformView {
-    private val video = (LayoutInflater.from(context).inflate(R.layout.media3_flutter_video, null) as PlayerView).apply {
+private class Media3VideoView(context: Context, private val session: Media3Session, surfaceType: String) : PlatformView {
+    // PlayerView chooses its rendering surface at inflation time, before player attachment.
+    private val layout = if (surfaceType == "surface") R.layout.media3_flutter_surface_video else R.layout.media3_flutter_video
+    private val video = (LayoutInflater.from(context).inflate(layout, null) as PlayerView).apply {
         useController = false
         controllerAutoShow = false
         isFocusable = false
@@ -214,6 +225,10 @@ private class Media3Session(
     private var eventGeneration = 0L
     private var openId = 0L
     private var disposed = false
+    // Separate from the bridge handler, whose callbacks are cleared on teardown:
+    // a completed PixelCopy must still recycle its destination bitmap.
+    private val screenshotHandler = Handler(Looper.getMainLooper())
+    private var pendingScreenshot: Media3ScreenshotResult? = null
     private var desiredPlaying = false
     private var rate = 1f
     private var volume = 1f
@@ -384,8 +399,9 @@ private class Media3Session(
     fun seek(positionMs: Long) { player?.seekTo(request?.endMs?.let { minOf(positionMs, it) } ?: positionMs); emitState() }
     fun setRate(value: Float) { rate = value; player?.setPlaybackSpeed(value); emitState() }
     fun setVolume(value: Float) { volume = value; player?.volume = value; emitState() }
-    fun stop() { desiredPlaying = false; player?.pause(); player?.stop(); handler.removeCallbacks(tick); emitState() }
+    fun stop() { cancelScreenshot(); desiredPlaying = false; player?.pause(); player?.stop(); handler.removeCallbacks(tick); emitState() }
     fun setForeground(value: Boolean) {
+        if (!value) cancelScreenshot()
         foreground = value
         player?.playWhenReady = desiredPlaying && value
         scheduleTick()
@@ -457,12 +473,14 @@ private class Media3Session(
 
     fun attach(surface: PlayerView) {
         if (view === surface) return
+        cancelScreenshot()
         view?.player = null
         view = surface
         surface.player = player
         applyOptions()
     }
     fun detach(surface: PlayerView) {
+        if (view === surface) cancelScreenshot()
         surface.player = null
         if (view === surface) view = null
     }
@@ -688,20 +706,67 @@ private class Media3Session(
         }
     }
 
-    fun screenshot(format: String): ByteArray? {
+    fun screenshot(format: String, reply: (ByteArray?) -> Unit) {
         require(format in setOf("image/jpeg", "image/png"))
-        val texture = view?.videoSurfaceView as? TextureView ?: return null
-        if (!texture.isAvailable || firstFrameAfterMs == null) return null
-        val width = minOf(texture.width, 480).coerceAtLeast(1)
-        val height = (texture.height.toDouble() * width / texture.width.coerceAtLeast(1)).toInt().coerceIn(1, 480)
-        val bitmap = texture.getBitmap(width, height) ?: return null
+        val attached = view
+        val source = attached?.videoSurfaceView
+        val native = player
+        val size = source?.let { Media3BridgePolicy.screenshotSize(it.width, it.height) }
+        if (disposed || !foreground || native == null || firstFrameAfterMs == null || size == null) {
+            reply(null)
+            return
+        }
+        when (source) {
+            is TextureView -> {
+                val bitmap = if (source.isAvailable) source.getBitmap(size.first, size.second) else null
+                reply(bitmap?.let { encodeScreenshot(it, format) })
+            }
+            is SurfaceView -> {
+                // Keep allocation bounded to one outstanding copy per player, even
+                // when its result has already been cancelled by lifecycle changes.
+                if (pendingScreenshot != null || !source.holder.surface.isValid) {
+                    reply(null)
+                    return
+                }
+                val bitmap = Bitmap.createBitmap(size.first, size.second, Bitmap.Config.ARGB_8888)
+                val capture = Media3ScreenshotResult(reply)
+                pendingScreenshot = capture
+                try {
+                    // This overload is available on API 24, including supported Fire OS devices.
+                    PixelCopy.request(source, bitmap, { status ->
+                        if (pendingScreenshot === capture) pendingScreenshot = null
+                        val current = capture.isPending && !disposed && foreground &&
+                            player === native && view === attached && attached.videoSurfaceView === source
+                        val bytes = if (status == PixelCopy.SUCCESS && current) {
+                            encodeScreenshot(bitmap, format)
+                        } else {
+                            bitmap.recycle()
+                            null
+                        }
+                        capture.complete(bytes)
+                    }, screenshotHandler)
+                } catch (_: Exception) {
+                    if (pendingScreenshot === capture) pendingScreenshot = null
+                    bitmap.recycle()
+                    capture.complete(null)
+                }
+            }
+            else -> reply(null)
+        }
+    }
+
+    private fun encodeScreenshot(bitmap: Bitmap, format: String): ByteArray? {
         return try {
             ByteArrayOutputStream().use { output ->
                 if (!bitmap.compress(if (format == "image/png") Bitmap.CompressFormat.PNG else Bitmap.CompressFormat.JPEG, 65, output)) return null
-                output.toByteArray().takeIf { it.size <= 256 * 1024 }
+                output.toByteArray().takeIf { it.size <= Media3BridgePolicy.SCREENSHOT_MAX_BYTES }
             }
+        } catch (_: Exception) {
+            null
         } finally { bitmap.recycle() }
     }
+
+    private fun cancelScreenshot() { pendingScreenshot?.complete(null) }
 
     private fun scheduleTick() {
         handler.removeCallbacks(tick)
@@ -709,6 +774,7 @@ private class Media3Session(
     }
 
     private fun releasePlayer() {
+        cancelScreenshot()
         callbacks.invalidate() // Before detach/release can enqueue events.
         handler.removeCallbacks(tick)
         val old = player

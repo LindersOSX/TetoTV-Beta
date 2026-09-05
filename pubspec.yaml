@@ -28,7 +28,7 @@ dependencies:
   flutter_cache_manager: ^3.4.2
   crypto: ^3.0.6
   cryptography: ^2.7.0
-  xml: ^6.6.1
+  xml: ^7.0.1
   # Streamed CBZ/ZIP support for the developer Manga Preview. Archives are
   # extracted with TetoTV's own traversal, symlink, entry-count, and size
   # guards rather than the package convenience extractors.

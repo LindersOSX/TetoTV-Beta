@@ -33,6 +33,7 @@ import 'package:anime_tv/features/settings/presentation/theme_studio_screen.dart
 import 'package:anime_tv/features/streaming/domain/debrid_service.dart';
 import 'package:anime_tv/features/streaming/domain/stream_ranking_preferences.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show defaultTargetPlatform, kIsWeb;
 import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -239,6 +240,10 @@ extension _SettingsSectionMetadata on _SettingsSection {
       'Default player',
       'MPV',
       'Media3',
+      'Media3 SurfaceView',
+      'SurfaceView',
+      'TextureView',
+      'Video rendering',
       'ExoPlayer',
       'Built-in player',
       'Preferred audio',
@@ -564,6 +569,9 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
   );
   final _playerControlsSectionFocus = FocusNode(
     debugLabel: 'accounts.section.player-controls',
+  );
+  final _media3SurfaceViewFocus = FocusNode(
+    debugLabel: 'accounts.playback.media3-surface-view',
   );
   final _fillerIndicatorsFocus = FocusNode(
     debugLabel: 'accounts.playback.filler-indicators',
@@ -1106,6 +1114,10 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       'text color' => _captionTextColorFocus,
       'text size' => _captionTextSizeFocus,
       'default player' => _playerControlsSectionFocus,
+      'media3 surfaceview' ||
+      'surfaceview' ||
+      'textureview' ||
+      'video rendering' => _media3SurfaceViewFocus,
       'filler episode labels' => _fillerIndicatorsFocus,
       'debrid provider' ||
       'real debrid' ||
@@ -1333,6 +1345,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     _captionTextColorFocus.dispose();
     _captionTextSizeFocus.dispose();
     _playerControlsSectionFocus.dispose();
+    _media3SurfaceViewFocus.dispose();
     _fillerIndicatorsFocus.dispose();
     _customizationResetFocus.dispose();
     _setupFocus.dispose();
@@ -1529,6 +1542,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       _captionTextColorFocus,
       _captionTextSizeFocus,
       _playerControlsSectionFocus,
+      _media3SurfaceViewFocus,
       _customizationResetFocus,
       ...shelfNodes,
       _customizationFocus,
@@ -2674,6 +2688,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       captionTextColorFocusNode: _captionTextColorFocus,
       captionTextSizeFocusNode: _captionTextSizeFocus,
       playerControlsSectionFocusNode: _playerControlsSectionFocus,
+      media3SurfaceViewFocusNode: _media3SurfaceViewFocus,
       fillerIndicatorsFocusNode: _fillerIndicatorsFocus,
       resetFocusNode: _customizationResetFocus,
       expandedSections: _expandedCustomizationSections,
@@ -5874,6 +5889,7 @@ class _CustomizationPanel extends StatelessWidget {
     required this.captionTextColorFocusNode,
     required this.captionTextSizeFocusNode,
     required this.playerControlsSectionFocusNode,
+    required this.media3SurfaceViewFocusNode,
     required this.fillerIndicatorsFocusNode,
     required this.resetFocusNode,
     required this.expandedSections,
@@ -5908,6 +5924,7 @@ class _CustomizationPanel extends StatelessWidget {
   final FocusNode captionTextColorFocusNode;
   final FocusNode captionTextSizeFocusNode;
   final FocusNode playerControlsSectionFocusNode;
+  final FocusNode media3SurfaceViewFocusNode;
   final FocusNode fillerIndicatorsFocusNode;
   final FocusNode resetFocusNode;
   final Set<_CustomizationSection> expandedSections;
@@ -6354,6 +6371,19 @@ class _CustomizationPanel extends StatelessWidget {
                       ? playerControlsSectionFocusNode
                       : null,
                 ),
+                if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android)
+                  _AppearanceToggleRow(
+                    key: const ValueKey('settings-media3-surface-view'),
+                    label: 'Media3 SurfaceView',
+                    subtitle: preferences.media3SurfaceViewEnabled
+                        ? 'SurfaceView (experimental). Media3 only; applies to the next video.'
+                        : 'TextureView (default). Turn on to use SurfaceView and select Media3 for the next video.',
+                    icon: Icons.video_settings_rounded,
+                    focusNode: media3SurfaceViewFocusNode,
+                    value: preferences.media3SurfaceViewEnabled,
+                    showDivider: true,
+                    onChanged: controller.setMedia3SurfaceViewEnabled,
+                  ),
                 const SizedBox(height: 8),
                 _AppearanceSelectionRow<PlaybackAudioPreference>(
                   label: 'Preferred audio',
@@ -6577,7 +6607,9 @@ class _ExternalPlayerDefaultSelectionState
                 }
                 if (value == _media3Value) {
                   unawaited(
-                    widget.controller.setPreferredPlayer(PreferredPlayer.media3),
+                    widget.controller.setPreferredPlayer(
+                      PreferredPlayer.media3,
+                    ),
                   );
                   return;
                 }

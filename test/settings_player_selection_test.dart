@@ -35,18 +35,38 @@ void main() {
         await tester.pumpAndSettle();
 
         final row = find.byKey(const ValueKey('settings-default-player'));
+        final surfaceViewToggle = find.byKey(
+          const ValueKey('settings-media3-surface-view'),
+        );
+        final container = ProviderScope.containerOf(tester.element(row));
+        expect(
+          container.read(settingsPreferencesProvider).media3SurfaceViewEnabled,
+          isFalse,
+        );
+        await tester.ensureVisible(surfaceViewToggle);
+        await tester.pumpAndSettle();
+        await tester.tap(surfaceViewToggle);
+        await tester.pumpAndSettle();
+        expect(
+          container.read(settingsPreferencesProvider).media3SurfaceViewEnabled,
+          isTrue,
+        );
+        expect(
+          container.read(settingsPreferencesProvider).preferredPlayer,
+          PreferredPlayer.media3,
+        );
+
         await tester.ensureVisible(row);
         await tester.pumpAndSettle();
         await tester.tap(row);
         await tester.pumpAndSettle();
 
-        expect(find.text('Media3 (Built in)'), findsOneWidget);
+        expect(find.text('Media3 (Built in)'), findsWidgets);
         expect(find.text('MPV (Built in)'), findsWidgets);
         expect(find.text('Unavailable player'), findsNothing);
-        await tester.tap(find.text('Media3 (Built in)'));
+        await tester.tap(find.text('Media3 (Built in)').last);
         await tester.pumpAndSettle();
 
-        final container = ProviderScope.containerOf(tester.element(row));
         expect(
           container.read(settingsPreferencesProvider).preferredPlayer,
           PreferredPlayer.media3,
@@ -67,8 +87,53 @@ void main() {
           container.read(settingsPreferencesProvider).preferredPlayer,
           PreferredPlayer.mpv,
         );
+        expect(
+          container.read(settingsPreferencesProvider).media3SurfaceViewEnabled,
+          isTrue,
+        );
+        await tester.ensureVisible(surfaceViewToggle);
+        await tester.pumpAndSettle();
+        await tester.tap(surfaceViewToggle);
+        await tester.pumpAndSettle();
+        expect(
+          container.read(settingsPreferencesProvider).media3SurfaceViewEnabled,
+          isFalse,
+        );
+        expect(
+          container.read(settingsPreferencesProvider).preferredPlayer,
+          PreferredPlayer.mpv,
+        );
         expect(tester.takeException(), isNull);
       },
     );
   }
+
+  testWidgets(
+    'Media3 SurfaceView toggle is hidden outside Android',
+    (tester) async {
+      FlutterSecureStorage.setMockInitialValues({});
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [isTelevisionProvider.overrideWithValue(false)],
+          child: MaterialApp(
+            theme: AppTheme.dark,
+            home: const TvShortcuts(child: AccountsScreen()),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('settings-area-playback')));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('settings-default-player')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('settings-media3-surface-view')),
+        findsNothing,
+      );
+      expect(tester.takeException(), isNull);
+    },
+    variant: const TargetPlatformVariant({TargetPlatform.windows}),
+  );
 }

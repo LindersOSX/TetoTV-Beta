@@ -2,6 +2,12 @@
 
 MPV remains the default. On Android, choose **Settings → Playback → Default player → Media3 (Built in)** to use AndroidX Media3/ExoPlayer for the next playback session. Choose MPV again to switch back. Existing preferences are not migrated to an external player.
 
+Android Playback settings also include **Media3 SurfaceView** (experimental, off by default). Off uses the existing TextureView video output. Enabling it selects Media3 as the default player and uses SurfaceView for the next playback session. Disabling it returns Media3 to TextureView without changing the selected player. A later explicit choice of MPV is respected; the rendering preference never changes MPV's output or decoder configuration.
+
+SurfaceView uses native hierarchy composition beneath the shared Flutter HUD. It is an optional device-comparison setting, not a guarantee of higher FPS. Both modes retain the same controls, native captions, fit/zoom options, and screenshot API. Rendering mode does not change in the middle of an active playback session. Media3 scrubbing shows only the timestamp bubble, without scene thumbnails.
+
+The SurfaceView option was checked on the Android TV API 36 emulator in both modes: playback, seeking, caption/audio selection, decoder changes, HUD input, view recreation, sizing, screenshots, and bounded playback end passed. Settings tests cover persistence, startup races, reset, automatic Media3 selection, and later explicit MPV selection. These checks do not establish an FPS improvement on the customer's physical TV.
+
 Both engines use the existing TetoTV player screen and controls: resume, pause, seeking, episode switching, skip controls, speed, audio/CC selection, caption preferences, fit/zoom, Watch Party, tracking and Discord activity. Media3 renders video and native captions underneath that shared Flutter interface; Android's own player controls are disabled.
 
 Plex/Jellyfin playback continues through the same server playback requests, audio/subtitle metadata and compatibility recovery. External subtitle tracks are registered together, retaining language and selection metadata. Media3 decoder preferences and outcomes do not overwrite MPV's saved per-series decoder preference or device-health history.

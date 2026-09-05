@@ -837,6 +837,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
   late final Player _player;
   VideoController? _controller;
   late final bool _usesMedia3;
+  late final bool _media3SurfaceViewEnabled;
   Media3PlatformPlayer? _media3Player;
   String get _engineKey => _usesMedia3 ? 'media3' : 'mpv';
   String get _engineLabel => _usesMedia3 ? 'Media3 (Built in)' : 'MPV';
@@ -1414,6 +1415,11 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
       platform: defaultTargetPlatform,
       isWeb: kIsWeb,
     );
+    // Rendering is fixed for this playback session. Settings changes apply on
+    // the next open, without recreating a playing surface or affecting MPV.
+    _media3SurfaceViewEnabled =
+        _usesMedia3 &&
+        ref.read(settingsPreferencesProvider).media3SurfaceViewEnabled;
     final initialParty = ref.read(watchPartyControllerProvider);
     _watchPartyStatus = watchPartyPlayerStatus(initialParty);
     _watchPartyActive = initialParty.isActive;
@@ -6241,6 +6247,9 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
   }
 
   Future<void> _captureTrickplay(Duration target, int generation) async {
+    // Media3 scrubbing uses only the shared timestamp bubble, not a scene
+    // thumbnail. Skip the capture too, including committed and button seeks.
+    if (_usesMedia3) return;
     try {
       // media_kit can complete seek before the newly decoded frame reaches
       // MPV's screenshot surface. Give it one short frame window, then keep
@@ -7068,7 +7077,11 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
               fit: StackFit.expand,
               children: [
                 if (!_engineHandoffInProgress && _media3Player != null)
-                  Media3VideoSurface(player: _media3Player!, fit: _videoFit)
+                  Media3VideoSurface(
+                    player: _media3Player!,
+                    fit: _videoFit,
+                    useSurfaceView: _media3SurfaceViewEnabled,
+                  )
                 else if (!_engineHandoffInProgress)
                   Video(
                     controller: _controller!,
@@ -7162,7 +7175,10 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
                             seekForwardSeconds: _seekForwardSeconds,
                             onSeek: _seekTo,
                             onSeekPreview:
-                                supportsProvisionalSeekPreview(_currentStream)
+                                !_usesMedia3 &&
+                                    supportsProvisionalSeekPreview(
+                                      _currentStream,
+                                    )
                                 ? (target) {
                                     unawaited(_seekTo(target));
                                   }
@@ -7273,7 +7289,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
                       ),
                     ),
                   ),
-                if (_seekPreview case final preview?)
+                if (_seekPreview case final preview? when !_usesMedia3)
                   Positioned(
                     left: playerSeekPreviewLeft(
                       viewportWidth: MediaQuery.sizeOf(context).width,

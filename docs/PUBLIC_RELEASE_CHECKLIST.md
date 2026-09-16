@@ -81,10 +81,14 @@ the same as legal, store, or codec certification.
   source-only because media support is disabled. Make the pinned MPL-covered
   source and modifications available to APK recipients. Confirm the feature is
   off by default and its peer-IP/upload/cache warning still appears before use.
-- Verify the vendored QuickJS 2026-06-04 archive and reviewed FFI bridge with
-  `powershell -ExecutionPolicy Bypass -File tool/android/verify_vendored_quickjs.ps1`, then run the packaged runtime and
-  infinite-loop interruption tests on a 16 KiB-page Android device. Do not
-  reintroduce the legacy QuickJS 2021-03-27 JitPack AAR.
+- Verify both source-built QuickJS engines with
+  `powershell -ExecutionPolicy Bypass -File tool/android/verify_vendored_quickjs.ps1`
+  and
+  `powershell -ExecutionPolicy Bypass -File tool/android/verify_vendored_app_cash_quickjs.ps1`.
+  The first preserves the Seanime add-on FFI bridge; the second preserves the
+  Aniyomi `app.cash.quickjs` 0.9.2 ABI. Then run the packaged runtimes and
+  infinite-loop/process-deadline tests on a 16 KiB-page Android device. Do not
+  reintroduce the legacy 4 KiB-aligned Maven/JitPack runtime binaries.
 - Decide whether automatic/manual AniSkip lookups are enabled in the public
   product, and ensure the privacy disclosure and settings accurately describe
   when episode identifiers and durations are sent.
@@ -136,8 +140,11 @@ the same as legal, store, or codec certification.
   the room capability; contains no source URL, debrid credential, or media
   server credential; and expires within six hours. Confirm the companion's
   ordinary IP/request metadata follows its documented retention schedule.
-- Verify anonymous crash reporting is opt-in and manually send both a crash
-  report and a diagnostic bundle. Confirm the report's exact fields, the
+- Verify anonymous crash reporting starts enabled only for a genuinely new
+  install, that setup and Settings clearly offer an opt-out, and that an
+  upgraded install with a missing legacy preference or an explicit `false`
+  remains disabled. Manually send both a crash report and a diagnostic bundle.
+  Confirm the report's exact fields, the
   restricted Discord destination, moderator access, retention/deletion
   procedure, and that no password, token, stream URL, or setup secret is
   included. Do not describe Discord-hosted reports as locally retained.
@@ -161,12 +168,16 @@ public privacy policy. Do not upload the sideload flavor to Google Play or
 describe a GitHub/sideload declaration as Google Play approval.
 
 The extension marketplace downloads user-selected JavaScript/TypeScript,
-including optional anime-stream and Developer Mode manga-provider extensions,
+including optional anime-stream and manga-provider extensions,
 and runs it in a bounded interpreter. A Play distribution must separately
 review or disable that feature and prove that every remotely loaded extension
 and resulting content complies with current Google Play dynamic-code,
 device/network-abuse, content, and intellectual-property policies. Passing
 Android security tests is not a Play policy approval.
+
+The separate experimental Aniyomi APK-extension path remains Developer
+Mode-only and requires its own release-policy, security, license, and content
+review before any broader distribution.
 
 The current GitHub APK also supports direct peer networking and companion
 features whose policy, disclosure, and permission treatment may differ in a

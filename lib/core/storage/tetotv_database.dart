@@ -10,7 +10,7 @@ import 'package:sqflite/sqflite.dart';
 /// The SQLite table survives process death; it is never uploaded unless the
 /// user presses the diagnostic-report share button.
 const diagnosticHistoryWindow = Duration(hours: 48);
-const tetoTvDatabaseSchemaVersion = 13;
+const tetoTvDatabaseSchemaVersion = 15;
 const maximumPersistedPlaybackPerformanceAttempts = 24;
 // Provider searches and playback startup can each emit a burst of events.
 // Retain enough history for a complete search plus the playback which follows
@@ -381,9 +381,11 @@ class ProviderFailureCircuitPolicy {
 
   /// Null means the failure remains visible and testable but never opens the
   /// transient circuit breaker. Title-specific empty results and permanent
-  /// runtime/security incompatibilities use that path for different reasons:
-  /// the former must not damage global health, while the latter is surfaced as
-  /// incompatible until the add-on is updated or manually reset.
+  /// security incompatibilities use that path for different reasons: the
+  /// former must not damage global health, while unsafe targets remain blocked
+  /// until the add-on is updated or manually reset. Runtime failures observed
+  /// during discovery use the ordinary repeated-failure circuit; only an
+  /// explicit compatibility result may establish permanent incompatibility.
   final int? quarantineAfter;
   final Duration? quarantineFor;
 }
@@ -396,7 +398,6 @@ ProviderFailureCircuitPolicy providerFailureCircuitPolicy({
   final normalized = reason?.trim().toLowerCase();
   if (normalized == 'empty_result' ||
       normalized == 'empty_sources' ||
-      normalized == 'runtime_api' ||
       normalized == 'unsafe_target' ||
       normalized == 'http_404') {
     return const ProviderFailureCircuitPolicy(
@@ -663,23 +664,30 @@ class TetoTvDatabase {
     required String reason,
   }) async {
     final db = await database;
-    await db.rawInsert(
-      '''
-      INSERT INTO stream_failures
-        (device_key, info_hash, reason, failure_count, last_failed_at)
-      VALUES (?, ?, ?, 1, ?)
-      ON CONFLICT(device_key, info_hash) DO UPDATE SET
-        reason = excluded.reason,
-        failure_count = failure_count + 1,
-        last_failed_at = excluded.last_failed_at
-      ''',
-      [
-        deviceKey,
-        infoHash.toLowerCase(),
-        redactDiagnosticValue(reason),
-        DateTime.now().millisecondsSinceEpoch,
-      ],
-    );
+    final normalizedHash = infoHash.toLowerCase();
+    final safeReason = redactDiagnosticValue(reason);
+    final failedAt = DateTime.now().millisecondsSinceEpoch;
+    // Android 7 / SDK 25 ships SQLite older than 3.24, so it cannot parse the
+    // modern UPSERT clause. Keep the increment atomic while using
+    // statements supported by every Android version TetoTV accepts.
+    await db.transaction((txn) async {
+      final updated = await txn.rawUpdate(
+        '''
+        UPDATE stream_failures
+        SET reason = ?, failure_count = failure_count + 1, last_failed_at = ?
+        WHERE device_key = ? AND info_hash = ?
+        ''',
+        [safeReason, failedAt, deviceKey, normalizedHash],
+      );
+      if (updated != 0) return;
+      await txn.insert('stream_failures', {
+        'device_key': deviceKey,
+        'info_hash': normalizedHash,
+        'reason': safeReason,
+        'failure_count': 1,
+        'last_failed_at': failedAt,
+      });
+    });
   }
 
   Future<Map<String, int>> failureCounts(String deviceKey) async {
@@ -722,23 +730,37 @@ class TetoTvDatabase {
   Future<void> recordProviderSuccess(String providerId) async {
     final db = await database;
     final now = DateTime.now().millisecondsSinceEpoch;
-    await db.rawInsert(
-      '''
-      INSERT INTO provider_health
-        (provider_id, consecutive_failures, total_failures, last_success_at,
-         last_error, last_failure_stage, last_failure_reason,
-         quarantined_until)
-      VALUES (?, 0, 0, ?, NULL, NULL, NULL, NULL)
-      ON CONFLICT(provider_id) DO UPDATE SET
-        consecutive_failures = 0,
-        last_success_at = excluded.last_success_at,
-        last_error = NULL,
-        last_failure_stage = NULL,
-        last_failure_reason = NULL,
-        quarantined_until = NULL
-      ''',
-      [providerId, now],
-    );
+    await db.transaction((txn) async {
+      final values = <String, Object?>{
+        'consecutive_failures': 0,
+        'last_success_at': now,
+        'last_error': null,
+        'last_failure_stage': null,
+        'last_failure_reason': null,
+        'quarantined_until': null,
+      };
+      final existing = await txn.query(
+        'provider_health',
+        columns: const ['provider_id'],
+        where: 'provider_id = ?',
+        whereArgs: [providerId],
+        limit: 1,
+      );
+      if (existing.isEmpty) {
+        await txn.insert('provider_health', {
+          'provider_id': providerId,
+          'total_failures': 0,
+          ...values,
+        });
+      } else {
+        await txn.update(
+          'provider_health',
+          values,
+          where: 'provider_id = ?',
+          whereArgs: [providerId],
+        );
+      }
+    });
   }
 
   /// A completed discovery request is healthy even when it has no match.
@@ -747,21 +769,36 @@ class TetoTvDatabase {
   /// were actually validated/played and drives last-good prioritization.
   Future<void> recordProviderHealthyResponse(String providerId) async {
     final db = await database;
-    await db.rawInsert(
-      '''
-      INSERT INTO provider_health
-        (provider_id, consecutive_failures, total_failures, last_error,
-         last_failure_stage, last_failure_reason, quarantined_until)
-      VALUES (?, 0, 0, NULL, NULL, NULL, NULL)
-      ON CONFLICT(provider_id) DO UPDATE SET
-        consecutive_failures = 0,
-        last_error = NULL,
-        last_failure_stage = NULL,
-        last_failure_reason = NULL,
-        quarantined_until = NULL
-      ''',
-      [providerId],
-    );
+    await db.transaction((txn) async {
+      final values = <String, Object?>{
+        'consecutive_failures': 0,
+        'last_error': null,
+        'last_failure_stage': null,
+        'last_failure_reason': null,
+        'quarantined_until': null,
+      };
+      final existing = await txn.query(
+        'provider_health',
+        columns: const ['provider_id'],
+        where: 'provider_id = ?',
+        whereArgs: [providerId],
+        limit: 1,
+      );
+      if (existing.isEmpty) {
+        await txn.insert('provider_health', {
+          'provider_id': providerId,
+          'total_failures': 0,
+          ...values,
+        });
+      } else {
+        await txn.update(
+          'provider_health',
+          values,
+          where: 'provider_id = ?',
+          whereArgs: [providerId],
+        );
+      }
+    });
   }
 
   Future<ProviderHealth> recordProviderFailure(
@@ -799,35 +836,29 @@ class TetoTvDatabase {
           ? now.add(duration)
           : null;
       final message = redactDiagnosticValue(error.toString(), maximum: 300);
-      await txn.rawInsert(
-        '''
-        INSERT INTO provider_health
-          (provider_id, consecutive_failures, total_failures, last_success_at,
-           last_failure_at, last_error, last_failure_stage,
-           last_failure_reason, quarantined_until)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(provider_id) DO UPDATE SET
-          consecutive_failures = excluded.consecutive_failures,
-          total_failures = excluded.total_failures,
-          last_success_at = excluded.last_success_at,
-          last_failure_at = excluded.last_failure_at,
-          last_error = excluded.last_error,
-          last_failure_stage = excluded.last_failure_stage,
-          last_failure_reason = excluded.last_failure_reason,
-          quarantined_until = excluded.quarantined_until
-        ''',
-        [
-          providerId,
-          failures,
-          previous.totalFailures + 1,
-          previous.lastSuccessAt?.millisecondsSinceEpoch,
-          now.millisecondsSinceEpoch,
-          message,
-          safeStage,
-          safeReason,
-          quarantine?.millisecondsSinceEpoch,
-        ],
-      );
+      final values = <String, Object?>{
+        'consecutive_failures': failures,
+        'total_failures': previous.totalFailures + 1,
+        'last_success_at': previous.lastSuccessAt?.millisecondsSinceEpoch,
+        'last_failure_at': now.millisecondsSinceEpoch,
+        'last_error': message,
+        'last_failure_stage': safeStage,
+        'last_failure_reason': safeReason,
+        'quarantined_until': quarantine?.millisecondsSinceEpoch,
+      };
+      if (rows.isEmpty) {
+        await txn.insert('provider_health', {
+          'provider_id': providerId,
+          ...values,
+        });
+      } else {
+        await txn.update(
+          'provider_health',
+          values,
+          where: 'provider_id = ?',
+          whereArgs: [providerId],
+        );
+      }
       final updated = await txn.query(
         'provider_health',
         where: 'provider_id = ?',
@@ -860,23 +891,40 @@ class TetoTvDatabase {
       reason,
       maximum: 80,
     ).replaceAll(RegExp(r'[^A-Za-z0-9._-]+'), '_');
-    await db.rawInsert(
-      '''
-      INSERT INTO provider_health
-        (provider_id, consecutive_failures, total_failures,
-         compatibility_tests, compatibility_passes, last_tested_at,
-         last_test_stage, last_test_reason)
-      VALUES (?, 0, 0, 1, ?, ?, ?, ?)
-      ON CONFLICT(provider_id) DO UPDATE SET
-        compatibility_tests = compatibility_tests + 1,
-        compatibility_passes = compatibility_passes + excluded.compatibility_passes,
-        last_tested_at = excluded.last_tested_at,
-        last_test_stage = excluded.last_test_stage,
-        last_test_reason = excluded.last_test_reason
-      ''',
-      [providerId, passed ? 1 : 0, now, safeStage, safeReason],
-    );
-    return (await providerHealth())[providerId]!;
+    return db.transaction((txn) async {
+      final passIncrement = passed ? 1 : 0;
+      final updated = await txn.rawUpdate(
+        '''
+        UPDATE provider_health
+        SET compatibility_tests = compatibility_tests + 1,
+            compatibility_passes = compatibility_passes + ?,
+            last_tested_at = ?,
+            last_test_stage = ?,
+            last_test_reason = ?
+        WHERE provider_id = ?
+        ''',
+        [passIncrement, now, safeStage, safeReason, providerId],
+      );
+      if (updated == 0) {
+        await txn.insert('provider_health', {
+          'provider_id': providerId,
+          'consecutive_failures': 0,
+          'total_failures': 0,
+          'compatibility_tests': 1,
+          'compatibility_passes': passIncrement,
+          'last_tested_at': now,
+          'last_test_stage': safeStage,
+          'last_test_reason': safeReason,
+        });
+      }
+      final rows = await txn.query(
+        'provider_health',
+        where: 'provider_id = ?',
+        whereArgs: [providerId],
+        limit: 1,
+      );
+      return ProviderHealth.fromMap(rows.single);
+    });
   }
 
   Future<ProviderHealth> recordProviderCompatibilityInconclusive(
@@ -891,28 +939,45 @@ class TetoTvDatabase {
       reason,
       maximum: 80,
     ).replaceAll(RegExp(r'[^A-Za-z0-9._-]+'), '_');
-    await db.rawInsert(
-      '''
-      INSERT INTO provider_health
-        (provider_id, consecutive_failures, total_failures,
-         last_tested_at, last_test_stage, last_test_reason)
-      VALUES (?, 0, 0, ?, ?, ?)
-      ON CONFLICT(provider_id) DO UPDATE SET
-        last_tested_at = excluded.last_tested_at,
-        last_test_stage = CASE
-          WHEN provider_health.compatibility_tests > 0
-            THEN provider_health.last_test_stage
-          ELSE excluded.last_test_stage
-        END,
-        last_test_reason = CASE
-          WHEN provider_health.compatibility_tests > 0
-            THEN provider_health.last_test_reason
-          ELSE excluded.last_test_reason
-        END
-      ''',
-      [providerId, now, safeStage, safeReason],
-    );
-    return (await providerHealth())[providerId]!;
+    return db.transaction((txn) async {
+      final rows = await txn.query(
+        'provider_health',
+        where: 'provider_id = ?',
+        whereArgs: [providerId],
+        limit: 1,
+      );
+      if (rows.isEmpty) {
+        await txn.insert('provider_health', {
+          'provider_id': providerId,
+          'consecutive_failures': 0,
+          'total_failures': 0,
+          'last_tested_at': now,
+          'last_test_stage': safeStage,
+          'last_test_reason': safeReason,
+        });
+      } else {
+        final previous = ProviderHealth.fromMap(rows.single);
+        await txn.update(
+          'provider_health',
+          {
+            'last_tested_at': now,
+            if (previous.compatibilityTests == 0) ...{
+              'last_test_stage': safeStage,
+              'last_test_reason': safeReason,
+            },
+          },
+          where: 'provider_id = ?',
+          whereArgs: [providerId],
+        );
+      }
+      final updated = await txn.query(
+        'provider_health',
+        where: 'provider_id = ?',
+        whereArgs: [providerId],
+        limit: 1,
+      );
+      return ProviderHealth.fromMap(updated.single);
+    });
   }
 
   Future<DevicePlaybackProfile> devicePlaybackProfile(String deviceKey) async {
@@ -1246,6 +1311,24 @@ Future<void> upgradeTetoTvDatabaseSchema(
   if (oldVersion < 13 && newVersion >= 13) {
     await createPlaybackPerformanceTable(db);
   }
+  if (oldVersion < 14 && newVersion >= 14) {
+    await createMangaTables(db);
+  }
+  if (oldVersion >= 3 && oldVersion < 15 && newVersion >= 15) {
+    await _upgradeMarketplaceCacheToV15(db);
+  }
+}
+
+Future<void> _upgradeMarketplaceCacheToV15(Database db) async {
+  // A few early/private schemas could be missing the cache table entirely,
+  // while tests and development builds may already have the new column. Make
+  // this migration idempotent across both shapes without discarding caches.
+  await _createAddonTables(db);
+  final columns = await db.rawQuery('PRAGMA table_info(marketplace_cache)');
+  if (columns.any((column) => column['name'] == 'resource_base_url')) return;
+  await db.execute(
+    'ALTER TABLE marketplace_cache ADD COLUMN resource_base_url TEXT',
+  );
 }
 
 /// Durable performance history is independent from the diagnostic event ring.
@@ -1483,7 +1566,7 @@ Future<void> _upgradeAppNotificationsToV12(DatabaseExecutor db) async {
   await db.execute('DROP TABLE app_notifications_v11');
 }
 
-/// Creates the developer-only manga catalog, reading-progress, and offline
+/// Creates the optional manga catalog, reading-progress, and offline
 /// download tables.
 ///
 /// Page URLs and request credentials are deliberately absent. A queued manga
@@ -1660,6 +1743,96 @@ Future<void> createMangaTables(DatabaseExecutor db) async {
       CHECK(length(mime_type) BETWEEN 1 AND 128),
       CHECK(byte_length > 0),
       CHECK(length(sha256) = 64)
+    )
+  ''');
+  await _upgradeMangaLibraryTables(db);
+}
+
+/// Additive migration: the original latest-per-title row remains intact while
+/// every recoverable legacy chapter is copied into durable chapter history.
+Future<void> _upgradeMangaLibraryTables(DatabaseExecutor db) async {
+  final columns = (await db.rawQuery(
+    'PRAGMA table_info(manga_library_entries)',
+  )).map((row) => row['name']).toSet();
+  const additions = <String, String>{
+    'category': "TEXT NOT NULL DEFAULT '' CHECK(length(category) <= 80)",
+    'reading_status':
+        "TEXT NOT NULL DEFAULT 'planToRead' CHECK(reading_status IN ('planToRead','reading','completed','onHold','dropped'))",
+    'chapter_checked_at':
+        'INTEGER CHECK(chapter_checked_at IS NULL OR chapter_checked_at >= 0)',
+    'chapter_updated_at':
+        'INTEGER CHECK(chapter_updated_at IS NULL OR chapter_updated_at >= 0)',
+    'new_chapter_count':
+        'INTEGER NOT NULL DEFAULT 0 CHECK(new_chapter_count >= 0)',
+  };
+  for (final entry in additions.entries) {
+    if (!columns.contains(entry.key)) {
+      await db.execute(
+        'ALTER TABLE manga_library_entries ADD COLUMN ${entry.key} ${entry.value}',
+      );
+    }
+  }
+  await db.execute('''
+    CREATE TABLE IF NOT EXISTS manga_chapter_progress (
+      owner_key TEXT NOT NULL,
+      source_id TEXT NOT NULL,
+      entry_id TEXT NOT NULL,
+      chapter_id TEXT NOT NULL,
+      chapter_number REAL,
+      page_index INTEGER NOT NULL DEFAULT 0,
+      page_offset REAL NOT NULL DEFAULT 0,
+      page_count INTEGER,
+      completed INTEGER NOT NULL DEFAULT 0,
+      bookmarked INTEGER NOT NULL DEFAULT 0,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY(owner_key, source_id, entry_id, chapter_id),
+      CHECK(length(owner_key) BETWEEN 1 AND 128),
+      CHECK(length(source_id) BETWEEN 1 AND 128),
+      CHECK(length(entry_id) BETWEEN 1 AND 512),
+      CHECK(length(chapter_id) BETWEEN 1 AND 512),
+      CHECK(chapter_number IS NULL OR chapter_number >= 0),
+      CHECK(page_index BETWEEN 0 AND 999),
+      CHECK(page_offset BETWEEN 0 AND 1),
+      CHECK(page_count IS NULL OR (page_count BETWEEN 1 AND 1000 AND page_index < page_count)),
+      CHECK(completed IN (0,1)), CHECK(bookmarked IN (0,1)),
+      CHECK(updated_at >= 0)
+    )
+  ''');
+  await db.execute('''
+    INSERT OR IGNORE INTO manga_chapter_progress
+      (owner_key,source_id,entry_id,chapter_id,chapter_number,page_index,page_offset,page_count,completed,updated_at)
+    SELECT owner_key,source_id,entry_id,chapter_id,chapter_number,page_index,page_offset,page_count,completed,updated_at
+    FROM manga_reading_progress
+  ''');
+  await db.execute('''
+    CREATE INDEX IF NOT EXISTS manga_chapter_progress_updated
+    ON manga_chapter_progress(owner_key, updated_at DESC)
+  ''');
+  await db.execute('''
+    CREATE TABLE IF NOT EXISTS manga_chapter_snapshots (
+      owner_key TEXT NOT NULL,
+      source_id TEXT NOT NULL,
+      entry_id TEXT NOT NULL,
+      chapter_id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      chapter_number REAL,
+      ordinal INTEGER NOT NULL,
+      published_at INTEGER,
+      first_seen_at INTEGER NOT NULL,
+      last_seen_at INTEGER NOT NULL,
+      available INTEGER NOT NULL DEFAULT 1,
+      is_new INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY(owner_key,source_id,entry_id,chapter_id),
+      CHECK(length(owner_key) BETWEEN 1 AND 128),
+      CHECK(length(source_id) BETWEEN 1 AND 128),
+      CHECK(length(entry_id) BETWEEN 1 AND 512),
+      CHECK(length(chapter_id) BETWEEN 1 AND 512),
+      CHECK(length(title) BETWEEN 1 AND 512),
+      CHECK(chapter_number IS NULL OR chapter_number >= 0),
+      CHECK(ordinal BETWEEN 0 AND 99999),
+      CHECK(published_at IS NULL OR published_at >= 0),
+      CHECK(first_seen_at >= 0 AND last_seen_at >= 0),
+      CHECK(available IN (0,1)), CHECK(is_new IN (0,1))
     )
   ''');
 }
@@ -1894,6 +2067,7 @@ Future<void> _createAddonTables(Database db) async {
     CREATE TABLE IF NOT EXISTS marketplace_cache (
       repository_url TEXT PRIMARY KEY,
       payload_json TEXT NOT NULL,
+      resource_base_url TEXT,
       fetched_at INTEGER NOT NULL
     )
   ''');
@@ -2016,15 +2190,18 @@ Future<void> persistDiagnosticEvent(
   DateTime? occurredAt,
 }) async {
   final now = (occurredAt ?? DateTime.now()).toUtc();
+  final safeComponent = redactDiagnosticValue(component, maximum: 48);
   await database.insert('diagnostic_events', {
-    'category': redactDiagnosticValue(component, maximum: 48),
+    'category': safeComponent,
     'severity': _safeDiagnosticSeverity(
       severity ?? _defaultDiagnosticSeverity(component),
     ),
     'message': redactDiagnosticValue(message.toString(), maximum: 500),
     'details_json': context == null
         ? null
-        : jsonEncode(sanitizeDiagnosticContext(context)),
+        : jsonEncode(
+            sanitizeDiagnosticContext(context, component: safeComponent),
+          ),
     'created_at': now.millisecondsSinceEpoch,
   });
   await pruneDiagnosticEventHistory(database, now: now);
@@ -2130,7 +2307,10 @@ Future<Map<String, Object?>> loadDiagnosticEventHistory(
         maximum: 500,
       ),
       if (row['details_json'] case final String encoded)
-        'context': _decodeLegacyDiagnosticContext(encoded),
+        'context': _decodeLegacyDiagnosticContext(
+          encoded,
+          component: row['category']?.toString(),
+        ),
     });
   }
   return {
@@ -2175,17 +2355,24 @@ String _defaultDiagnosticSeverity(String component) {
   return 'info';
 }
 
-Object? _decodeLegacyDiagnosticContext(String value) {
+Object? _decodeLegacyDiagnosticContext(String value, {String? component}) {
   try {
-    return sanitizeDiagnosticContext(jsonDecode(value));
+    return sanitizeDiagnosticContext(jsonDecode(value), component: component);
   } catch (_) {
-    return sanitizeDiagnosticContext(value);
+    return sanitizeDiagnosticContext(value, component: component);
   }
 }
 
 /// Produces small, JSON-safe context while removing identity and playback
 /// material. Event context is technical metadata, never a content dump.
-Object? sanitizeDiagnosticContext(Object? value, {int depth = 0}) {
+Object? sanitizeDiagnosticContext(
+  Object? value, {
+  int depth = 0,
+  String? component,
+}) {
+  if (depth == 0 && _isAniyomiDiagnosticComponent(component)) {
+    return _sanitizeAniyomiDiagnosticContext(value);
+  }
   if (depth > 5) return '[DEPTH LIMITED]';
   if (value == null || value is bool || value is num) return value;
   if (value is String) {
@@ -2217,6 +2404,19 @@ Object? sanitizeDiagnosticContext(Object? value, {int depth = 0}) {
         redactedFields++;
         continue;
       }
+      final normalizedKey = _normalizeDiagnosticContextKey(rawKey);
+      if (_externalAudioDiagnosticCountKeys.contains(normalizedKey)) {
+        final count = entry.value;
+        if (count is! num ||
+            !count.isFinite ||
+            count < 0 ||
+            count != count.toInt()) {
+          redactedFields++;
+          continue;
+        }
+        output[key] = count.toInt().clamp(0, 64);
+        continue;
+      }
       if (output.length >= 50) {
         omitted++;
         continue;
@@ -2238,15 +2438,381 @@ Object? sanitizeDiagnosticContext(Object? value, {int depth = 0}) {
   return redactDiagnosticValue(value.toString(), maximum: 500);
 }
 
+bool _isAniyomiDiagnosticComponent(String? value) =>
+    value?.trim().toLowerCase() == 'aniyomi-runtime';
+
+const _aniyomiBooleanDiagnosticKeys = <String>{
+  'search_http_request_limit_hit',
+  'episode_http_request_limit_hit',
+  'video_http_request_limit_hit',
+  'available',
+  'developer_mode_enabled',
+  'isolated_process',
+  'universal_compatibility',
+  'supports_current_hoster_flow',
+  'supports_lazy_video_resolution',
+  'supports_lazy_hoster_deferral',
+  'supports_manga_image_request_resolution',
+  'supports_opaque_manga_image_fetch',
+  'supports_ephemeral_cookies',
+  'supports_redirects',
+  'supports_source_preferences',
+  'supports_javascript_evaluation',
+  'supports_host_owned_hls_bridge',
+  'supports_web_view',
+  'supports_native_libraries',
+};
+
+const _aniyomiCapabilityKeys = <String>{
+  'current_hoster_flow',
+  'lazy_video_resolution',
+  'lazy_hoster_deferral',
+  'manga_image_request_resolution',
+  'opaque_manga_image_fetch',
+  'ephemeral_cookies',
+  'redirects',
+  'source_preferences',
+  'javascript_evaluation',
+  'host_owned_hls_bridge',
+  'web_view',
+  'native_libraries',
+};
+
+const _aniyomiResultLimitMaximums = <String, int>{
+  'reply_bytes': 4 * 1024 * 1024,
+  'http_body_bytes': 4 * 1024 * 1024,
+  'http_metadata_bytes': 16 * 1024,
+  'sources': 256,
+  'search_items': 1000,
+  'episodes_or_chapters': 100000,
+  'targeted_episode_candidates': 4096,
+  'pages': 10000,
+  'image_capability_count': 4096,
+  'image_capability_ttl_seconds': 86400,
+  'image_bytes': 64 * 1024 * 1024,
+  'image_concurrent_requests': 16,
+  'videos': 512,
+  'tracks_per_video': 256,
+  'hosters': 1024,
+  'lazy_hosters_per_request': 64,
+};
+
+const _aniyomiCountMaximums = <String, int>{
+  'search_http_request_count': 16,
+  'search_http_request_limit': 16,
+  'search_http_failure_count': 64,
+  'episode_http_request_count': 16,
+  'episode_http_request_limit': 16,
+  'episode_http_failure_count': 64,
+  'video_http_request_count': 16,
+  'video_http_request_limit': 16,
+  'video_http_failure_count': 64,
+  'extension_version_code': 0x7fffffff,
+  'minimum_android_api': 100,
+  'worker_capacity': 64,
+  'queued_count': 1000,
+  'active_count': 1000,
+  'queue_wait_ms': 60000,
+  'execution_ms': 60000,
+  'total_ms': 60000,
+  'elapsed_ms': 60000,
+  'broker_redirect_count': 3,
+  'count': 100000,
+  'title_alias_count': 100000,
+  'search_query_count': 100000,
+  'search_result_count': 100000,
+  'exact_title_match_count': 100000,
+  'episode_count': 100000,
+  'exact_episode_match_count': 100000,
+  'episode_label_fallback_count': 100000,
+  'details_metadata_mismatch_count': 100000,
+  'raw_video_count': 100000,
+  'playable_video_count': 100000,
+  'rejected_unsupported_playback_count': 100000,
+  'ignored_external_audio_count': 100000,
+  'external_audio_track_count': 100000,
+  'rejected_external_audio_count': 100000,
+  'rejected_invalid_media_url_count': 100000,
+  'rejected_unsafe_media_target_count': 100000,
+  'search_original_count': 100000,
+  'search_returned_count': 100000,
+  'search_filtered_count': 100000,
+  'search_truncated_count': 100000,
+  'search_discarded_count': 100000,
+  'episode_original_count': 100000,
+  'episode_returned_count': 100000,
+  'episode_filtered_count': 100000,
+  'episode_truncated_count': 100000,
+  'episode_discarded_count': 100000,
+  'video_original_count': 262144,
+  'video_returned_count': 100000,
+  'video_filtered_count': 100000,
+  'video_truncated_count': 262144,
+  'video_discarded_count': 262144,
+  'video_original_hoster_count': 100000,
+  'video_visited_hoster_count': 100000,
+  'video_lazy_hoster_count': 100000,
+  'video_attempted_lazy_hoster_count': 100000,
+  'video_resolved_lazy_hoster_count': 100000,
+  'video_failed_lazy_hoster_count': 100000,
+  'video_deferred_hoster_count': 100000,
+  'video_discarded_hoster_count': 100000,
+  'video_truncated_hoster_count': 100000,
+  'video_discarded_track_count': 100000,
+  'video_local_hls_bridge_count': 32,
+};
+
+const _aniyomiTokenDiagnosticKeys = <String>{
+  'event',
+  'status',
+  'kind',
+  'outcome',
+  'code',
+  'stage',
+  'reason_code',
+  'native_code',
+  'native_stage',
+  'native_reason_code',
+};
+
+final _omitAniyomiDiagnosticValue = Object();
+
+/// Closed-schema projection for Aniyomi runtime evidence. This deliberately
+/// excludes titles, search terms, URLs, headers, cookies, source IDs, and all
+/// account/media values. Package names are public extension identities and
+/// remain local until the user explicitly exports a diagnostic report.
+Object? _sanitizeAniyomiDiagnosticContext(Object? value) {
+  if (value is! Map) {
+    return const <String, Object?>{'_redactedFieldCount': 1};
+  }
+  final output = <String, Object?>{};
+  var redacted =
+      _boundedAniyomiDiagnosticInteger(value['_redactedFieldCount'], 100000) ??
+      0;
+  var truncated =
+      _boundedAniyomiDiagnosticInteger(value['_truncatedFieldCount'], 100000) ??
+      0;
+  var scanned = 0;
+  for (final entry in value.entries) {
+    if (scanned >= 100) {
+      truncated += value.length - scanned;
+      break;
+    }
+    scanned++;
+    final key = _normalizeAniyomiDiagnosticKey(entry.key.toString());
+    if (key == 'redacted_field_count' || key == 'truncated_field_count') {
+      continue;
+    }
+    if (output.length >= 80) {
+      truncated++;
+      continue;
+    }
+    final safe = _sanitizeAniyomiDiagnosticField(key, entry.value);
+    if (identical(safe, _omitAniyomiDiagnosticValue)) {
+      redacted++;
+      continue;
+    }
+    output[key] = safe;
+  }
+  if (redacted > 0) {
+    output['_redactedFieldCount'] = redacted.clamp(0, 100000);
+  }
+  if (truncated > 0) {
+    output['_truncatedFieldCount'] = truncated.clamp(0, 100000);
+  }
+  return output;
+}
+
+Object? _sanitizeAniyomiDiagnosticField(String key, Object? value) {
+  if (key == 'extension_package') {
+    if (value == 'unknown') return value;
+    if (value is String &&
+        value.length <= 160 &&
+        RegExp(
+          r'^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)+$',
+        ).hasMatch(value)) {
+      return value;
+    }
+    return _omitAniyomiDiagnosticValue;
+  }
+  if (key == 'api_version') {
+    return const {'14', '16', '1.4', '1.5', 'unknown'}.contains(value)
+        ? value
+        : _omitAniyomiDiagnosticValue;
+  }
+  if (key == 'extension_version') {
+    return value is String &&
+            (value == 'unknown' ||
+                RegExp(r'^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$').hasMatch(value))
+        ? value
+        : _omitAniyomiDiagnosticValue;
+  }
+  if (key == 'source_language') {
+    if (value == 'unknown') return value;
+    if (value is! String) return _omitAniyomiDiagnosticValue;
+    final normalized = value.trim().toLowerCase();
+    return RegExp(r'^[a-z]{2,3}(?:-[a-z]{2})?$').hasMatch(normalized)
+        ? normalized
+        : _omitAniyomiDiagnosticValue;
+  }
+  if (key == 'runtime_revision') {
+    return value is String &&
+            (value == 'unknown' ||
+                RegExp(r'^[a-z0-9._-]{1,80}$').hasMatch(value))
+        ? value
+        : _omitAniyomiDiagnosticValue;
+  }
+  if (key == 'runtime') {
+    return const {'experimental_http_subset', 'unknown'}.contains(value)
+        ? value
+        : _omitAniyomiDiagnosticValue;
+  }
+  if (key == 'operation') {
+    return const {
+          'sources',
+          'search',
+          'details',
+          'seasons',
+          'chapters',
+          'episodes',
+          'pages',
+          'videos',
+          'unknown',
+        }.contains(value)
+        ? value
+        : _omitAniyomiDiagnosticValue;
+  }
+  if (key == 'broker_failure') {
+    return const {'policy', 'network', 'unsupported', 'invalid'}.contains(value)
+        ? value
+        : _omitAniyomiDiagnosticValue;
+  }
+  if (const {
+    'search_http_last_failure',
+    'episode_http_last_failure',
+    'video_http_last_failure',
+  }.contains(key)) {
+    return const {
+          'none',
+          'policy',
+          'network',
+          'unsupported',
+          'invalid',
+        }.contains(value)
+        ? value
+        : _omitAniyomiDiagnosticValue;
+  }
+  if (key == 'broker_response_size_bucket') {
+    return const {
+          'none',
+          'lt64k',
+          '64to128k',
+          '128to256k',
+          'over256k',
+        }.contains(value)
+        ? value
+        : _omitAniyomiDiagnosticValue;
+  }
+  if (key == 'broker_status_class') {
+    return const {'none', '1xx', '2xx', '3xx', '4xx', '5xx'}.contains(value)
+        ? value
+        : _omitAniyomiDiagnosticValue;
+  }
+  if (_aniyomiTokenDiagnosticKeys.contains(key)) {
+    return value is String && RegExp(r'^[a-z][a-z0-9_]{0,79}$').hasMatch(value)
+        ? value
+        : _omitAniyomiDiagnosticValue;
+  }
+  if (_aniyomiBooleanDiagnosticKeys.contains(key)) {
+    return value is bool ? value : _omitAniyomiDiagnosticValue;
+  }
+  if (key == 'anime_api_versions' || key == 'manga_api_versions') {
+    if (value is! List || value.length > 8) return _omitAniyomiDiagnosticValue;
+    final allowed = key == 'anime_api_versions'
+        ? const {'14', '16'}
+        : const {'1.4', '1.5'};
+    if (value.any((item) => item is! String || !allowed.contains(item))) {
+      return _omitAniyomiDiagnosticValue;
+    }
+    return List<String>.unmodifiable(value.cast<String>());
+  }
+  if (key == 'capabilities') {
+    return _sanitizeAniyomiBooleanMap(value, _aniyomiCapabilityKeys);
+  }
+  if (key == 'result_limits') {
+    return _sanitizeAniyomiIntegerMap(value, _aniyomiResultLimitMaximums);
+  }
+  final maximum = _aniyomiCountMaximums[key];
+  if (maximum != null) {
+    return _boundedAniyomiDiagnosticInteger(value, maximum) ??
+        _omitAniyomiDiagnosticValue;
+  }
+  return _omitAniyomiDiagnosticValue;
+}
+
+Object _sanitizeAniyomiBooleanMap(Object? value, Set<String> allowedKeys) {
+  if (value is! Map) return _omitAniyomiDiagnosticValue;
+  final result = <String, bool>{};
+  for (final entry in value.entries.take(24)) {
+    final key = _normalizeAniyomiDiagnosticKey(entry.key.toString());
+    if (allowedKeys.contains(key) && entry.value is bool) {
+      result[key] = entry.value as bool;
+    }
+  }
+  return result;
+}
+
+Object _sanitizeAniyomiIntegerMap(Object? value, Map<String, int> maximums) {
+  if (value is! Map) return _omitAniyomiDiagnosticValue;
+  final result = <String, int>{};
+  for (final entry in value.entries.take(24)) {
+    final key = _normalizeAniyomiDiagnosticKey(entry.key.toString());
+    final maximum = maximums[key];
+    final safe = maximum == null
+        ? null
+        : _boundedAniyomiDiagnosticInteger(entry.value, maximum);
+    if (safe != null) result[key] = safe;
+  }
+  return result;
+}
+
+int? _boundedAniyomiDiagnosticInteger(Object? value, int maximum) {
+  if (value is! num || !value.isFinite || value < 0 || value > maximum) {
+    return null;
+  }
+  final integer = value.toInt();
+  return value == integer ? integer : null;
+}
+
+String _normalizeAniyomiDiagnosticKey(String value) => value
+    .trim()
+    .replaceAllMapped(
+      RegExp(r'([a-z0-9])([A-Z])'),
+      (match) => '${match[1]}_${match[2]}',
+    )
+    .toLowerCase()
+    .replaceAll(RegExp(r'[^a-z0-9]+'), '_')
+    .replaceAll(RegExp(r'^_+|_+$'), '');
+
+String _normalizeDiagnosticContextKey(String key) => key
+    .replaceAllMapped(
+      RegExp(r'([a-z0-9])([A-Z])'),
+      (match) => '${match[1]}_${match[2]}',
+    )
+    .toLowerCase()
+    .replaceAll(RegExp(r'[^a-z0-9]+'), '_')
+    .replaceAll(RegExp(r'^_+|_+$'), '');
+
+const _externalAudioDiagnosticCountKeys = <String>{
+  'requested_count',
+  'attached_count',
+  'failed_count',
+  'stale_count',
+  'preflight_rejected_count',
+};
+
 bool _isSafeDiagnosticContextKey(String key) {
-  final normalized = key
-      .replaceAllMapped(
-        RegExp(r'([a-z0-9])([A-Z])'),
-        (match) => '${match[1]}_${match[2]}',
-      )
-      .toLowerCase()
-      .replaceAll(RegExp(r'[^a-z0-9]+'), '_')
-      .replaceAll(RegExp(r'^_+|_+$'), '');
+  final normalized = _normalizeDiagnosticContextKey(key);
   return const {
     'safe',
     'component',
@@ -2293,6 +2859,11 @@ bool _isSafeDiagnosticContextKey(String key) {
     'audio_preference_source',
     'audio_track_count',
     'audio_preference_matched',
+    'requested_count',
+    'attached_count',
+    'failed_count',
+    'stale_count',
+    'preflight_rejected_count',
     'subtitle_mode',
     'catalog_mapping_available',
     'embedded_marker_count',

@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:anime_tv/core/discord/manga_presence_artwork.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -9,6 +10,7 @@ abstract interface class MangaDiscordPresencePlatform {
     required String chapterLabel,
     required int page,
     required int pageCount,
+    String? artworkUrl,
   });
 
   Future<void> clear();
@@ -26,11 +28,13 @@ class AndroidMangaDiscordPresencePlatform
     required String chapterLabel,
     required int page,
     required int pageCount,
+    String? artworkUrl,
   }) => _bridge.updateDiscordReadingPresence(
     title: title,
     chapterLabel: chapterLabel,
     page: page,
     pageCount: pageCount,
+    artworkUrl: artworkUrl,
   );
 
   @override
@@ -79,6 +83,7 @@ class MangaDiscordPresenceCoordinator {
     required String chapterLabel,
     required int pageIndex,
     required int pageCount,
+    String? artworkUrl,
   }) async {
     if (_disposed) return;
     if (!enabled || !connected) {
@@ -97,6 +102,7 @@ class MangaDiscordPresenceCoordinator {
           : 'Private chapter',
       page: pageCount <= 0 ? 0 : (pageIndex + 1).clamp(1, pageCount),
       pageCount: pageCount.clamp(0, 1000),
+      artworkUrl: shareTitle ? safeMangaPresenceArtworkUrl(artworkUrl) : null,
     );
     if (next == _lastSubmitted || next == _pending) return;
     if (_activeSubmission != null) {
@@ -107,7 +113,8 @@ class MangaDiscordPresenceCoordinator {
     final identityChanged =
         _lastSubmitted == null ||
         _lastSubmitted!.title != next.title ||
-        _lastSubmitted!.chapterLabel != next.chapterLabel;
+        _lastSubmitted!.chapterLabel != next.chapterLabel ||
+        _lastSubmitted!.artworkUrl != next.artworkUrl;
     final elapsed = _submittedAt == null
         ? minimumPageInterval
         : DateTime.now().difference(_submittedAt!);
@@ -135,6 +142,7 @@ class MangaDiscordPresenceCoordinator {
       chapterLabel: value.chapterLabel,
       page: value.page,
       pageCount: value.pageCount,
+      artworkUrl: value.artworkUrl,
     );
     _activeSubmission = submission;
     try {
@@ -153,7 +161,8 @@ class MangaDiscordPresenceCoordinator {
     if (queued == null || queued == value) return;
     final identityChanged =
         queued.title != value.title ||
-        queued.chapterLabel != value.chapterLabel;
+        queued.chapterLabel != value.chapterLabel ||
+        queued.artworkUrl != value.artworkUrl;
     if (identityChanged || minimumPageInterval == Duration.zero) {
       await _submit(queued);
       return;
@@ -211,12 +220,14 @@ class _ReadingPresence {
     required this.chapterLabel,
     required this.page,
     required this.pageCount,
+    this.artworkUrl,
   });
 
   final String title;
   final String chapterLabel;
   final int page;
   final int pageCount;
+  final String? artworkUrl;
 
   @override
   bool operator ==(Object other) =>
@@ -224,8 +235,10 @@ class _ReadingPresence {
       other.title == title &&
       other.chapterLabel == chapterLabel &&
       other.page == page &&
-      other.pageCount == pageCount;
+      other.pageCount == pageCount &&
+      other.artworkUrl == artworkUrl;
 
   @override
-  int get hashCode => Object.hash(title, chapterLabel, page, pageCount);
+  int get hashCode =>
+      Object.hash(title, chapterLabel, page, pageCount, artworkUrl);
 }

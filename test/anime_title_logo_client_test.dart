@@ -34,7 +34,7 @@ void main() {
       expect(logo?.url.toString(), 'https://assets.fanart.tv/title.png');
       expect(logo?.source, AnimeTitleLogoSource.fanartTvHd);
       expect(networkRequests, 0);
-      expect(cache.reads, [(key: 'title-logo:v7:anilist:123', stale: false)]);
+      expect(cache.reads, [(key: 'title-logo:v11:anilist:123', stale: false)]);
       expect(cache.writes, isEmpty);
     });
 
@@ -54,6 +54,100 @@ void main() {
       expect(cache.writes, isEmpty);
     });
 
+    for (final language in <String?>[null, 'ja', '00']) {
+      for (final stale in [false, true]) {
+        test(
+          'English lookup rejects $language cached artwork (stale=$stale)',
+          () async {
+            final value = _positiveCache(
+              url: 'https://artworks.thetvdb.com/not-confirmed-english.png',
+              source: AnimeTitleLogoSource.aniZip,
+              language: language,
+            );
+            final cache = _FakeCacheStore(
+              fresh: stale ? null : value,
+              stale: value,
+            );
+            var requests = 0;
+            final client = AnimeTitleLogoClient(
+              aniZipDio: _failureDio(
+                'https://api.ani.zip/',
+                onRequest: () => requests++,
+              ),
+              cacheStore: cache,
+            );
+            expect(await client.lookup(123), isNull);
+            expect(requests, 1);
+            expect(cache.writes, isEmpty);
+          },
+        );
+      }
+    }
+
+    test(
+      'V10 positives are invalidated before an English network refresh',
+      () async {
+        final cache = _FakeCacheStore(
+          fresh: {
+            ..._positiveCache(
+              url: 'https://artworks.thetvdb.com/old.png',
+              source: AnimeTitleLogoSource.aniZip,
+            ),
+            'schema': 10,
+          },
+        );
+        final client = AnimeTitleLogoClient(
+          aniZipDio: _responseDio(
+            'https://api.ani.zip/',
+            (_) => {
+              'images': [
+                {
+                  'coverType': 'Clearlogo',
+                  'url': 'https://artworks.thetvdb.com/new.png',
+                  'lang': 'en',
+                },
+              ],
+            },
+          ),
+          cacheStore: cache,
+        );
+        expect((await client.lookup(123))?.url.path, '/new.png');
+        expect(cache.reads.single.key, 'title-logo:v11:anilist:123');
+        expect(cache.writes.single.value['schema'], 11);
+      },
+    );
+
+    test('V10 negative misses are invalidated for the new logo source', () async {
+      final cache = _FakeCacheStore(fresh: {'schema': 10, 'found': false});
+      final client = AnimeTitleLogoClient(
+        aniZipDio: _responseDio('https://api.ani.zip/', (request) {
+          if (request.path == 'mappings') {
+            return {
+              'mappings': {'thetvdb_id': 424536},
+              'images': const [],
+            };
+          }
+          return {
+            'logos': [
+              {
+                'file_path':
+                    'https://image.tmdb.org/t/p/original/refreshed-english.png',
+                'iso_639_1': 'en',
+              },
+            ],
+          };
+        }),
+        cacheStore: cache,
+      );
+
+      final logo = await client.lookup(154587);
+
+      expect(cache.reads.single.key, 'title-logo:v11:anilist:154587');
+      expect(logo?.source, AnimeTitleLogoSource.aniZipTmdb);
+      expect(logo?.languageCode, 'en');
+      expect(cache.writes.single.value['schema'], 11);
+    });
+
     test('AniZip direct Clearlogo is returned and positively cached', () async {
       final cache = _FakeCacheStore();
       final aniZipRequests = <RequestOptions>[];
@@ -67,10 +161,12 @@ void main() {
               {
                 'coverType': 'Clearlogo',
                 'url': 'https://artworks.thetvdb.com/lower-priority.webp',
+                'lang': 'en',
               },
               {
                 'coverType': 'Clearlogo',
                 'url': 'https://artworks.thetvdb.com/show-title.png',
+                'lang': 'en',
               },
             ],
           };
@@ -115,6 +211,7 @@ void main() {
               {
                 'coverType': 'Clearlogo',
                 'url': 'https://artworks.thetvdb.com/banners/show-title.png',
+                'lang': 'en',
               },
             ],
           }),
@@ -142,6 +239,7 @@ void main() {
                 {
                   'coverType': 'Clearlogo',
                   'url': 'https://artworks.thetvdb.com/byte-title.webp',
+                  'lang': 'en',
                 },
               ],
             }),
@@ -292,45 +390,98 @@ void main() {
     );
 
     test(
-      'unknown AniZip logo remains fallback when Fanart is not English',
+      'language-aware AniZip artwork replaces its untagged TVDB default',
       () async {
+        final requests = <RequestOptions>[];
         final client = AnimeTitleLogoClient(
-          aniZipDio: _responseDio(
-            'https://api.ani.zip/',
-            (_) => {
-              'mappings': {'thetvdb_id': 780},
-              'images': [
+          aniZipDio: _responseDio('https://api.ani.zip/', (request) {
+            requests.add(request);
+            if (request.path == 'mappings') {
+              return {
+                'mappings': {'thetvdb_id': 424536},
+                'images': [
+                  {
+                    'coverType': 'Clearlogo',
+                    'url': 'https://artworks.thetvdb.com/untagged-japanese.png',
+                  },
+                ],
+              };
+            }
+            expect(request.path, 'v2/images/tmdb');
+            return {
+              'logos': [
                 {
-                  'coverType': 'Clearlogo',
-                  'url': 'https://artworks.thetvdb.com/unknown-language.png',
+                  'file_path':
+                      'https://image.tmdb.org/t/p/original/japanese.png',
+                  'iso_639_1': 'ja',
+                  'width': 4000,
+                  'height': 1600,
+                  'vote_average': 10,
+                },
+                {
+                  'file_path':
+                      'https://image.tmdb.org/t/p/original/english.png',
+                  'iso_639_1': 'en',
+                  'width': 3000,
+                  'height': 1200,
+                  'vote_average': 5,
                 },
               ],
-            },
-          ),
-          fanartDio: _responseDio(
-            'https://webservice.fanart.tv/v3.2/',
-            (_) => {
-              'hdtvlogo': [
-                {
-                  'url': 'https://assets.fanart.tv/also-unknown.png',
-                  'lang': '00',
-                },
-              ],
-            },
-          ),
+            };
+          }),
           cacheStore: _FakeCacheStore(),
-          fanartApiKey: 'project-key',
         );
 
-        final logo = await client.lookup(324);
+        final logo = await client.lookup(154587);
 
+        expect(requests.map((request) => request.path), [
+          'mappings',
+          'v2/images/tmdb',
+        ]);
+        expect(requests.last.queryParameters, {'anilist_id': 154587});
         expect(
           logo?.url.toString(),
-          'https://artworks.thetvdb.com/unknown-language.png',
+          'https://image.tmdb.org/t/p/original/english.png',
         );
-        expect(logo?.languageCode, isNull);
+        expect(logo?.source, AnimeTitleLogoSource.aniZipTmdb);
+        expect(logo?.languageCode, 'en');
+        expect(logo?.tvdbId, 424536);
       },
     );
+
+    test('untagged AniZip and Fanart artwork falls back to text', () async {
+      final client = AnimeTitleLogoClient(
+        aniZipDio: _responseDio(
+          'https://api.ani.zip/',
+          (_) => {
+            'mappings': {'thetvdb_id': 780},
+            'images': [
+              {
+                'coverType': 'Clearlogo',
+                'url': 'https://artworks.thetvdb.com/unknown-language.png',
+              },
+            ],
+          },
+        ),
+        fanartDio: _responseDio(
+          'https://webservice.fanart.tv/v3.2/',
+          (_) => {
+            'hdtvlogo': [
+              {
+                'url': 'https://assets.fanart.tv/also-unknown.png',
+                'lang': '00',
+              },
+            ],
+          },
+        ),
+        cacheStore: _FakeCacheStore(),
+        fanartApiKey: 'project-key',
+      );
+
+      final logo = await client.lookup(324);
+
+      expect(logo, isNull);
+    });
 
     test(
       'Fanart is an optional fallback after AniZip supplies TVDB ID',
@@ -429,8 +580,8 @@ void main() {
         'https://artworks.thetvdb.com/still-safe.png',
       );
       expect(cache.reads, [
-        (key: 'title-logo:v7:anilist:909', stale: false),
-        (key: 'title-logo:v7:anilist:909', stale: true),
+        (key: 'title-logo:v11:anilist:909', stale: false),
+        (key: 'title-logo:v11:anilist:909', stale: true),
       ]);
       expect(cache.writes, isEmpty);
     });
@@ -462,6 +613,35 @@ void main() {
       expect(cache.writes, isEmpty);
     });
 
+    test(
+      'AniZip outage keeps a stale verified-English TMDB logo and source',
+      () async {
+        final cache = _FakeCacheStore(
+          stale: _positiveCache(
+            url: 'https://image.tmdb.org/t/p/original/stale-english.png',
+            source: AnimeTitleLogoSource.aniZipTmdb,
+            tvdbId: 424536,
+            language: 'en',
+          ),
+        );
+        final client = AnimeTitleLogoClient(
+          aniZipDio: _failureDio('https://api.ani.zip/'),
+          cacheStore: cache,
+        );
+
+        final logo = await client.lookup(154587);
+
+        expect(logo?.source, AnimeTitleLogoSource.aniZipTmdb);
+        expect(logo?.languageCode, 'en');
+        expect(logo?.tvdbId, 424536);
+        expect(logo?.url.host, 'image.tmdb.org');
+        expect(cache.reads, [
+          (key: 'title-logo:v11:anilist:154587', stale: false),
+          (key: 'title-logo:v11:anilist:154587', stale: true),
+        ]);
+      },
+    );
+
     test('unsafe stale data is ignored when services fail', () async {
       final cache = _FakeCacheStore(
         stale: _positiveCache(
@@ -488,6 +668,7 @@ void main() {
               {
                 'coverType': 'Clearlogo',
                 'url': 'https://artworks.thetvdb.com/coalesced.png',
+                'lang': 'en',
               },
             ],
           };
@@ -526,6 +707,97 @@ void main() {
   });
 
   group('AniZip clear-logo parsing', () {
+    test('English rejects AniZip single untagged TVDB default', () {
+      final logo = AnimeTitleLogoClient.parseAniZipLogo({
+        'images': [
+          {
+            'coverType': 'Clearlogo',
+            'url': 'https://artworks.thetvdb.com/default-title.png',
+          },
+        ],
+      });
+
+      expect(logo, isNull);
+    });
+
+    test('non-English requests reject AniZip untagged TVDB defaults', () {
+      final logo = AnimeTitleLogoClient.parseAniZipLogo({
+        'images': [
+          {
+            'coverType': 'Clearlogo',
+            'url': 'https://artworks.thetvdb.com/default-title.png',
+          },
+        ],
+      }, preferredLanguage: 'ja');
+
+      expect(logo, isNull);
+    });
+
+    for (final language in <String?>[
+      '',
+      '00',
+      'none',
+      'ja',
+      'jpn',
+      'Japanese',
+    ]) {
+      test('English ignores invalid or Japanese metadata: $language', () {
+        final image = <String, dynamic>{
+          'coverType': 'Clearlogo',
+          'url': 'https://artworks.thetvdb.com/unknown.png',
+          'lang': ?language,
+        };
+        expect(
+          AnimeTitleLogoClient.parseAniZipLogo({
+            'images': [image],
+          }),
+          isNull,
+        );
+        expect(
+          AnimeTitleLogoClient.parseFanartLogo({
+            'hdtvlogo': [image],
+          }, tvdbId: 1),
+          isNull,
+        );
+      });
+    }
+
+    test('English rejects explicitly Japanese AniZip artwork', () {
+      final logo = AnimeTitleLogoClient.parseAniZipLogo({
+        'images': [
+          {
+            'coverType': 'Clearlogo',
+            'url': 'https://artworks.thetvdb.com/japanese.png',
+            'lang': 'ja',
+          },
+        ],
+      });
+
+      expect(logo, isNull);
+    });
+
+    for (final language in ['en', 'en-US', 'eng', 'English']) {
+      test('explicit English language metadata is normalized: $language', () {
+        final image = <String, dynamic>{
+          'coverType': 'Clearlogo',
+          'url': 'https://artworks.thetvdb.com/english.png',
+          'language': {'code': language},
+        };
+        expect(
+          AnimeTitleLogoClient.parseAniZipLogo({
+            'images': [image],
+          })?.languageCode,
+          'en',
+        );
+        expect(
+          AnimeTitleLogoClient.parseFanartLogo({
+            'clearlogo': [image],
+          }, tvdbId: 1)?.languageCode,
+          'en',
+        );
+      });
+    }
+
     test('selects a safe transparent PNG and preserves TVDB mapping', () {
       final logo = AnimeTitleLogoClient.parseAniZipLogo({
         'images': [
@@ -536,6 +808,7 @@ void main() {
           {
             'coverType': 'Clearlogo',
             'url': 'https://artworks.thetvdb.com/show-logo.png',
+            'lang': 'en',
           },
         ],
       }, tvdbId: 123);
@@ -661,7 +934,7 @@ void main() {
         'clearlogo': [
           {
             'url': 'https://assets.fanart.tv/standard.png',
-            'lang': '00',
+            'lang': 'en',
             'likes': '1',
           },
         ],
@@ -718,6 +991,84 @@ void main() {
     });
   });
 
+  group('AniZip TMDB logo parsing', () {
+    test('selects only explicit English artwork and prefers its best vote', () {
+      final logo = AnimeTitleLogoClient.parseAniZipTmdbLogo({
+        'logos': [
+          {
+            'file_path': 'https://image.tmdb.org/t/p/original/japanese.png',
+            'iso_639_1': 'ja',
+            'width': 4000,
+            'height': 1600,
+            'vote_average': 10,
+          },
+          {
+            'file_path': 'https://image.tmdb.org/t/p/original/unknown.png',
+            'iso_639_1': null,
+            'width': 5000,
+            'height': 2000,
+            'vote_average': 10,
+          },
+          {
+            'file_path': 'https://image.tmdb.org/t/p/original/english-low.png',
+            'iso_639_1': 'en',
+            'width': 4000,
+            'height': 1600,
+            'vote_average': 3,
+          },
+          {
+            'file_path': 'https://image.tmdb.org/t/p/original/english-best.png',
+            'iso_639_1': 'en',
+            'width': 3000,
+            'height': 1200,
+            'vote_average': 10,
+          },
+        ],
+      }, tvdbId: 424536);
+
+      expect(logo?.url.path, '/t/p/original/english-best.png');
+      expect(logo?.languageCode, 'en');
+      expect(logo?.source, AnimeTitleLogoSource.aniZipTmdb);
+      expect(logo?.tvdbId, 424536);
+    });
+
+    test('returns text fallback when no explicitly English logo exists', () {
+      expect(
+        AnimeTitleLogoClient.parseAniZipTmdbLogo({
+          'logos': [
+            {
+              'file_path': 'https://image.tmdb.org/t/p/original/japanese.png',
+              'iso_639_1': 'ja',
+            },
+            {
+              'file_path': 'https://image.tmdb.org/t/p/original/unknown.png',
+              'iso_639_1': null,
+            },
+          ],
+        }),
+        isNull,
+      );
+    });
+
+    test('rejects non-TMDB hosts and non-original TMDB paths', () {
+      expect(
+        AnimeTitleLogoClient.parseAniZipTmdbLogo({
+          'logos': [
+            {
+              'file_path': 'https://assets.fanart.tv/tmdb-injected.png',
+              'iso_639_1': 'en',
+            },
+            {
+              'file_path': 'https://image.tmdb.org/t/p/w500/resized.png',
+              'iso_639_1': 'en',
+            },
+          ],
+        }),
+        isNull,
+      );
+    });
+  });
+
   test('cached logo decoder rejects unsafe URLs', () {
     expect(
       AnimeTitleLogo.fromJson({
@@ -740,13 +1091,19 @@ Map<String, dynamic> _positiveCache({
   required String url,
   required AnimeTitleLogoSource source,
   int? tvdbId,
+  String? language = 'en',
 }) => {
-  'schema': 7,
+  'schema': 11,
   'found': true,
-  'logo': {'url': url, 'source': source.name, 'tvdbId': ?tvdbId},
+  'logo': {
+    'url': url,
+    'source': source.name,
+    'tvdbId': ?tvdbId,
+    'languageCode': ?language,
+  },
 };
 
-Map<String, dynamic> _negativeCache() => {'schema': 7, 'found': false};
+Map<String, dynamic> _negativeCache() => {'schema': 11, 'found': false};
 
 Dio _responseDio(
   String baseUrl,

@@ -364,6 +364,10 @@ internal class DirectTorrentManager(
         episode: Int?,
         preferredFileIndex: Int?,
         requestedSeason: Int? = null,
+        requestedAbsoluteEpisode: Int? = null,
+        requestedSpecial: Boolean = false,
+        allowSeasonRelativeBare: Boolean = false,
+        requireNumberingSchemeEvidence: Boolean = false,
     ): DirectTorrentStartResult {
         validateMagnet(magnetUri)
         prepareCacheRoot()
@@ -402,6 +406,10 @@ internal class DirectTorrentManager(
                 episode,
                 preferredFileIndex,
                 requestedSeason,
+                requestedAbsoluteEpisode,
+                requestedSpecial,
+                allowSeasonRelativeBare,
+                requireNumberingSchemeEvidence,
             )
             val port = startLoopbackServer(handle)
             return DirectTorrentStartResult(
@@ -429,6 +437,10 @@ internal class DirectTorrentManager(
         episode: Int?,
         preferredFileIndex: Int?,
         requestedSeason: Int?,
+        requestedAbsoluteEpisode: Int?,
+        requestedSpecial: Boolean,
+        allowSeasonRelativeBare: Boolean,
+        requireNumberingSchemeEvidence: Boolean,
     ) {
         if (info.numFiles() <= 0 || info.numFiles() > DIRECT_TORRENT_MAX_FILE_COUNT) {
             throw DirectTorrentException(
@@ -450,10 +462,21 @@ internal class DirectTorrentManager(
             episode,
             preferredFileIndex,
             requestedSeason,
-        ) ?: throw DirectTorrentException(
-            "DIRECT_TORRENT_NO_VIDEO",
-            "No supported episode video was found in this torrent.",
-        )
+            requestedAbsoluteEpisode,
+            requestedSpecial,
+            allowSeasonRelativeBare,
+            requireNumberingSchemeEvidence,
+        ) ?: if (candidates.any(DirectTorrentPolicy::isSelectableVideo)) {
+            throw DirectTorrentException(
+                "DIRECT_TORRENT_EPISODE_AMBIGUOUS",
+                "TetoTV could not prove which torrent file is the requested episode.",
+            )
+        } else {
+            throw DirectTorrentException(
+                "DIRECT_TORRENT_NO_VIDEO",
+                "No supported episode video was found in this torrent.",
+            )
+        }
         if (selected.size > DIRECT_TORRENT_MAX_FILE_BYTES) {
             throw DirectTorrentException(
                 "DIRECT_TORRENT_FILE_LIMIT",

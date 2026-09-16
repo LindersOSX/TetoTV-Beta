@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:anime_tv/core/preferences/playback_audio_preference.dart';
+import 'package:anime_tv/core/preferences/title_language_preference.dart';
 import 'package:anime_tv/features/player/application/filler_episode_navigation.dart';
 import 'package:anime_tv/features/streaming/application/next_episode_preparation_controller.dart';
 import 'package:anime_tv/features/streaming/domain/debrid_service.dart';
@@ -425,6 +426,38 @@ void main() {
     );
   });
 
+  test(
+    'prepared player route uses Title Language without changing launch identity',
+    () {
+      const release = ReleaseCandidate(
+        infoHash: '3333333333333333333333333333333333333333',
+        magnetUri:
+            'magnet:?xt=urn:btih:3333333333333333333333333333333333333333',
+        releaseName: 'Prepared source',
+        seeders: 1,
+        sourceId: 'prepared',
+      );
+      const episode = EpisodeReference(
+        anilistMediaId: 100,
+        title: 'Canonical provider identity',
+        titleEnglish: 'English display',
+        titleRomaji: 'Romaji display',
+        episode: 2,
+      );
+      final prepared = _prepared(release, episode: episode);
+
+      final location = Uri.parse(
+        preparedNextEpisodePlayerLocation(
+          prepared,
+          titleLanguage: TitleLanguagePreference.romaji,
+        ),
+      );
+
+      expect(location.queryParameters['title'], 'Romaji display • Episode 2');
+      expect(prepared.launch.episode.title, 'Canonical provider identity');
+    },
+  );
+
   test('new episode navigates once despite repeated playback revisions', () {
     final planner = WatchPartyGuestMediaFollowPlanner();
     final initial = _guestState(
@@ -663,18 +696,21 @@ WatchPartyMedia _media({required int anilistId, required int episode}) =>
       year: 2026,
     );
 
-PreparedNextEpisode _prepared(ReleaseCandidate release) => PreparedNextEpisode(
+PreparedNextEpisode _prepared(
+  ReleaseCandidate release, {
+  EpisodeReference episode = const EpisodeReference(
+    anilistMediaId: 100,
+    title: 'Show',
+    episode: 2,
+  ),
+}) => PreparedNextEpisode(
   launch: PlaybackLaunch(
     stream: StreamReady(
       uri: Uri.parse('https://stream.example/video.mkv'),
       displayName: release.releaseName,
       debridService: DebridService.realDebrid,
     ),
-    episode: const EpisodeReference(
-      anilistMediaId: 100,
-      title: 'Show',
-      episode: 2,
-    ),
+    episode: episode,
     selectedRelease: release,
   ),
   fillerDecision: const FillerEpisodeNavigationDecision(episode: 2),

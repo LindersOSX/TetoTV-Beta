@@ -56,15 +56,35 @@ class TrackedAnime {
       );
 }
 
-/// Catalog identifiers that SIMKL can resolve without a separate crosswalk.
+/// Catalog identifiers that a tracker can resolve without title matching.
 class TrackingMediaIds {
-  const TrackingMediaIds({this.simklId, this.anilistId, this.malId});
+  const TrackingMediaIds({
+    this.simklId,
+    this.kitsuId,
+    this.anilistId,
+    this.malId,
+  });
 
   final int? simklId;
+  final int? kitsuId;
   final int? anilistId;
   final int? malId;
 
-  bool get isEmpty => simklId == null && anilistId == null && malId == null;
+  bool get isEmpty =>
+      simklId == null && kitsuId == null && anilistId == null && malId == null;
+}
+
+/// A tracker permanently has no catalog mapping for the supplied stable IDs.
+///
+/// This is deliberately narrower than a generic provider or network failure:
+/// callers may discard queued work for this title, while transient failures
+/// must remain retryable.
+final class TrackingMediaMappingNotFoundException implements Exception {
+  const TrackingMediaMappingNotFoundException();
+
+  @override
+  String toString() =>
+      'The connected tracker has no catalog mapping for this title.';
 }
 
 abstract interface class TrackingRepository {
@@ -87,8 +107,8 @@ abstract interface class TrackingRepository {
 
 /// Optional repository surface for providers that accept multiple catalog IDs.
 ///
-/// SIMKL accepts AniList and MAL IDs directly, so callers must not perform a
-/// lossy or network-heavy ID crosswalk before updating a title.
+/// SIMKL accepts AniList and MAL IDs directly. Kitsu resolves those stable IDs
+/// through its mapping endpoint. Callers must never fall back to title guesses.
 abstract interface class ExternalIdTrackingRepository {
   Future<int?> currentProgressByIds(TrackingMediaIds ids);
 
@@ -112,4 +132,10 @@ abstract interface class ResolvedStatusTrackingRepository {
     required int mediaId,
     required TrackingListStatus status,
   });
+}
+
+/// Optional rating mutation surface. Scores use the app-wide 1–10 scale;
+/// `null` clears a rating.
+abstract interface class RatingTrackingRepository {
+  Future<void> updateRating({required int mediaId, required double? score});
 }

@@ -89,25 +89,42 @@ class AddonStore {
     });
   }
 
-  Future<void> cacheCatalog(String repositoryUrl, String payload) async {
+  Future<void> cacheCatalog(
+    String repositoryUrl,
+    String payload, {
+    Uri? resourceBaseUri,
+  }) async {
     final db = await database.database;
     await db.insert('marketplace_cache', {
       'repository_url': repositoryUrl,
       'payload_json': payload,
+      'resource_base_url': resourceBaseUri?.toString(),
       'fetched_at': DateTime.now().millisecondsSinceEpoch,
     }, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
   Future<String?> cachedCatalog(String repositoryUrl) async {
+    return (await cachedCatalogEntry(repositoryUrl))?.payload;
+  }
+
+  Future<CachedMarketplaceCatalog?> cachedCatalogEntry(
+    String repositoryUrl,
+  ) async {
     final db = await database.database;
     final rows = await db.query(
       'marketplace_cache',
-      columns: ['payload_json'],
+      columns: ['payload_json', 'resource_base_url'],
       where: 'repository_url = ?',
       whereArgs: [repositoryUrl],
       limit: 1,
     );
-    return rows.isEmpty ? null : rows.first['payload_json'] as String?;
+    if (rows.isEmpty) return null;
+    final payload = rows.first['payload_json'] as String?;
+    if (payload == null) return null;
+    return CachedMarketplaceCatalog(
+      payload: payload,
+      resourceBaseUrl: rows.first['resource_base_url'] as String?,
+    );
   }
 
   Future<List<InstalledStreamingAddon>> installedAddons() async {
@@ -161,6 +178,86 @@ class AddonStore {
         'installed_at': addon.installedAt.millisecondsSinceEpoch,
         'updated_at': addon.updatedAt.millisecondsSinceEpoch,
       }, conflictAlgorithm: ConflictAlgorithm.replace);
+    });
+  }
+
+  /// Persists current catalog health metadata without replacing installed
+  /// executable metadata or crossing repository ownership boundaries.
+  ///
+  /// A missing same-provenance candidate intentionally leaves the last known
+  /// advisory in place. This is the conservative fallback when an entry is
+  /// removed, its repository is disabled, or its refresh fails; a different
+  /// repository reusing the same provider ID is never treated as its owner.
+  Future<void> syncInstalledCatalogAdvisories(
+    Iterable<MarketplaceAddon> candidates,
+  ) async {
+    final byProvenance = <(String, String), MarketplaceAddon>{
+      for (final candidate in candidates)
+        (marketplaceAddonIdentityKey(candidate.id), candidate.repositoryUrl):
+            candidate,
+    };
+    final db = await database.database;
+    await db.transaction((txn) async {
+      final rows = await txn.query(
+        'installed_addons',
+        orderBy: 'id COLLATE NOCASE',
+      );
+      for (final row in rows) {
+        InstalledStreamingAddon current;
+        try {
+          current = InstalledStreamingAddon.fromRow(row);
+        } on FormatException {
+          continue;
+        }
+        final advisory =
+            byProvenance[(
+              marketplaceAddonIdentityKey(current.manifest.id),
+              current.manifest.repositoryUrl,
+            )];
+        if (advisory == null ||
+            !marketplaceAddonIdsMatch(current.manifest.id, advisory.id) ||
+            current.manifest.repositoryUrl != advisory.repositoryUrl) {
+          continue;
+        }
+        final nextManifest = current.manifest.withCatalogAdvisoryFrom(advisory);
+        if (!_sameCatalogAdvisory(current.manifest, nextManifest)) {
+          final decoded = jsonDecode(row['manifest_json']! as String);
+          if (decoded is! Map) continue;
+          final manifestJson = decoded.map<String, Object?>(
+            (key, value) => MapEntry('$key', value),
+          );
+          // Remove legacy aliases as well as canonical keys so a cleared
+          // advisory cannot reappear when the manifest is parsed again.
+          manifestJson.removeWhere(
+            (key, _) => const {
+              'workingTag',
+              'isWorking',
+              'working',
+              'brokenTag',
+              'isBroken',
+              'broken',
+              'deprecatedTag',
+              'isDeprecated',
+              'deprecated',
+              'lastWorkingVersion',
+            }.contains(key),
+          );
+          if (advisory.reportedWorking != null) {
+            manifestJson['workingTag'] = advisory.reportedWorking;
+          }
+          if (advisory.reportedBroken) manifestJson['brokenTag'] = true;
+          if (advisory.isDeprecated) manifestJson['deprecatedTag'] = true;
+          if (advisory.lastWorkingVersion != null) {
+            manifestJson['lastWorkingVersion'] = advisory.lastWorkingVersion;
+          }
+          await txn.update(
+            'installed_addons',
+            {'manifest_json': jsonEncode(manifestJson)},
+            where: 'id = ? AND repository_url = ?',
+            whereArgs: [row['id'], current.manifest.repositoryUrl],
+          );
+        }
+      }
     });
   }
 
@@ -225,6 +322,19 @@ class AddonStore {
 
   Future<void> clearProviderHealth(String id) =>
       database.clearProviderHealth(id);
+}
+
+bool _sameCatalogAdvisory(MarketplaceAddon left, MarketplaceAddon right) =>
+    left.reportedWorking == right.reportedWorking &&
+    left.reportedBroken == right.reportedBroken &&
+    left.isDeprecated == right.isDeprecated &&
+    left.lastWorkingVersion == right.lastWorkingVersion;
+
+class CachedMarketplaceCatalog {
+  const CachedMarketplaceCatalog({required this.payload, this.resourceBaseUrl});
+
+  final String payload;
+  final String? resourceBaseUrl;
 }
 
 Map<String, Object> _repositoryRow(AddonRepository repository) => {

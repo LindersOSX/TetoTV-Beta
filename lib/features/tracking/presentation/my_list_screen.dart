@@ -1,3 +1,4 @@
+import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/core/preferences/title_language_preference.dart';
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
@@ -121,8 +122,10 @@ class _MyListScreenState extends ConsumerState<MyListScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              'Could not refresh ${result.failedProviderNames}. '
-              'No tracker data was changed.',
+              context.tr(
+                "Could not refresh {value1}. No tracker data was changed.",
+                {'value1': result.failedProviderNames},
+              ),
             ),
             backgroundColor: const Color(0xFF7D1E32),
           ),
@@ -133,8 +136,10 @@ class _MyListScreenState extends ConsumerState<MyListScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              'Refreshed available data. ${result.failedProviderNames} '
-              'could not be reached.',
+              context.tr(
+                "Refreshed available data. {value1} could not be reached.",
+                {'value1': result.failedProviderNames},
+              ),
             ),
             backgroundColor: const Color(0xFF7A4B00),
           ),
@@ -144,7 +149,9 @@ class _MyListScreenState extends ConsumerState<MyListScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            'Refresh complete. Showing available connected tracker data.',
+            context.tr(
+              "Refresh complete. Showing available connected tracker data.",
+            ),
           ),
           backgroundColor: context.appPalette.accent,
         ),
@@ -153,7 +160,11 @@ class _MyListScreenState extends ConsumerState<MyListScreen> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Could not refresh every tracker: $error'),
+          content: Text(
+            context.tr("Could not refresh every tracker: {value1}", {
+              'value1': error,
+            }),
+          ),
           backgroundColor: const Color(0xFF7D1E32),
         ),
       );
@@ -217,10 +228,16 @@ class _MyListScreenState extends ConsumerState<MyListScreen> {
         SnackBar(
           content: Text(
             selected.remove
-                ? '${item.tracked.displayTitle(titlePreference)} removed from '
-                      '${item.provider.displayName}.'
-                : '${item.tracked.displayTitle(titlePreference)} moved to '
-                      '${(actualStatus ?? selected.status!).displayName}.',
+                ? context.tr("{value1} removed from {value2}.", {
+                    'value1': item.tracked.displayTitle(titlePreference),
+                    'value2': item.provider.displayName,
+                  })
+                : context.tr("{value1} moved to {value2}.", {
+                    'value1': item.tracked.displayTitle(titlePreference),
+                    'value2': context.tr(
+                      (actualStatus ?? selected.status!).displayName,
+                    ),
+                  }),
           ),
           backgroundColor: context.appPalette.accent,
         ),
@@ -229,7 +246,11 @@ class _MyListScreenState extends ConsumerState<MyListScreen> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Could not update the list: $error'),
+          content: Text(
+            context.tr("Could not update the list: {value1}", {
+              'value1': error,
+            }),
+          ),
           backgroundColor: const Color(0xFF7D1E32),
         ),
       );
@@ -252,7 +273,9 @@ class _MyListScreenState extends ConsumerState<MyListScreen> {
     final opened = await AndroidTvBridge.instance.openExternalWebPage(uri);
     if (!opened && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not open SIMKL on this device.')),
+        SnackBar(
+          content: Text(context.tr("Could not open SIMKL on this device.")),
+        ),
       );
     }
   }
@@ -306,7 +329,7 @@ class _MyListScreenState extends ConsumerState<MyListScreen> {
                       children: [
                         Expanded(
                           child: Text(
-                            'My List',
+                            context.tr("My List"),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: Theme.of(context).textTheme.headlineSmall
@@ -349,7 +372,7 @@ class _MyListScreenState extends ConsumerState<MyListScreen> {
               return Row(
                 children: [
                   Text(
-                    'My List',
+                    context.tr("My List"),
                     style: Theme.of(context).textTheme.headlineSmall?.copyWith(
                       fontSize: layout.usesTvRail ? 30 : null,
                       fontWeight: FontWeight.w800,
@@ -388,7 +411,9 @@ class _MyListScreenState extends ConsumerState<MyListScreen> {
                     ),
                     error: (error, _) => _ListMessage(
                       icon: Icons.cloud_off_rounded,
-                      title: 'Could not load ${_status.displayName}',
+                      title: context.tr("Could not load {value1}", {
+                        'value1': context.tr(_status.displayName),
+                      }),
                       body: error.toString(),
                     ),
                     data: (result) {
@@ -402,20 +427,22 @@ class _MyListScreenState extends ConsumerState<MyListScreen> {
                       if (visibleItems.isEmpty && result.allAttemptedFailed) {
                         return _ListMessage(
                           icon: Icons.cloud_off_rounded,
-                          title: 'Trackers could not be refreshed',
-                          body:
-                              '${result.failedProviderNames} could not be '
-                              'reached. Check the connection or account, '
-                              'then choose Refresh.',
+                          title: context.tr("Trackers could not be refreshed"),
+                          body: context.tr(
+                            "{value1} could not be reached. Check the connection or account, then choose Refresh.",
+                            {'value1': result.failedProviderNames},
+                          ),
                         );
                       }
                       if (visibleItems.isEmpty) {
                         return _ListMessage(
                           icon: Icons.video_library_outlined,
-                          title: '${_status.displayName} is empty',
-                          body:
-                              'Connect AniList or MAL, or change '
-                              'a title to this status.',
+                          title: context.tr("{value1} is empty", {
+                            'value1': context.tr(_status.displayName),
+                          }),
+                          body: context.tr(
+                            "Connect an anime tracker, or change a title to this status.",
+                          ),
                         );
                       }
                       return Column(
@@ -424,12 +451,14 @@ class _MyListScreenState extends ConsumerState<MyListScreen> {
                           if (result.hasFailures)
                             _TrackerWarningBanner(
                               message: result.allAttemptedFailed
-                                  ? '${result.failedProviderNames} could not '
-                                        'be refreshed. Showing the previous '
-                                        'results.'
-                                  : '${result.failedProviderNames} could not '
-                                        'be refreshed. Showing data from the '
-                                        'tracker that responded.',
+                                  ? context.tr(
+                                      "{value1} could not be refreshed. Showing the previous results.",
+                                      {'value1': result.failedProviderNames},
+                                    )
+                                  : context.tr(
+                                      "{value1} could not be refreshed. Showing data from the tracker that responded.",
+                                      {'value1': result.failedProviderNames},
+                                    ),
                             ),
                           Expanded(
                             child: _TrackedShelf(
@@ -470,8 +499,9 @@ class _MyListScreenState extends ConsumerState<MyListScreen> {
           Padding(
             padding: EdgeInsets.only(bottom: 18),
             child: Text(
-              'Select to view episodes. Hold OK or press Menu for quick '
-              'watchlist actions.',
+              context.tr(
+                "Select to view episodes. Hold OK or press Menu for quick watchlist actions.",
+              ),
               style: TextStyle(
                 color: context.appPalette.mutedText,
                 fontSize: 12,
@@ -524,7 +554,7 @@ class _StatusTab extends StatelessWidget {
           ),
         ),
         child: Text(
-          status.displayName,
+          context.tr(status.displayName),
           style: TextStyle(
             color: selected
                 ? contrastForeground(context.appPalette.accent)
@@ -581,7 +611,11 @@ class _SortButton extends StatelessWidget {
             if (!iconOnly) ...[
               const SizedBox(width: 7),
               Text(
-                compact ? sort.displayName : 'Sort: ${sort.displayName}',
+                compact
+                    ? context.tr(sort.displayName)
+                    : context.tr("Sort: {value1}", {
+                        'value1': context.tr(sort.displayName),
+                      }),
                 style: const TextStyle(
                   fontWeight: FontWeight.w800,
                   fontSize: 12,
@@ -595,7 +629,12 @@ class _SortButton extends StatelessWidget {
       ),
     );
     if (!iconOnly) return button;
-    return Tooltip(message: 'Sort: ${sort.displayName}', child: button);
+    return Tooltip(
+      message: context.tr("Sort: {value1}", {
+        'value1': context.tr(sort.displayName),
+      }),
+      child: button,
+    );
   }
 }
 
@@ -646,7 +685,7 @@ class _RefreshButton extends StatelessWidget {
             if (!compact) ...[
               const SizedBox(width: 7),
               Text(
-                refreshing ? 'Refreshing' : 'Refresh',
+                refreshing ? context.tr("Refreshing") : context.tr("Refresh"),
                 style: const TextStyle(
                   fontWeight: FontWeight.w800,
                   fontSize: 12,
@@ -683,7 +722,10 @@ class _SortDialog extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Sort My List', style: Theme.of(context).textTheme.titleLarge),
+            Text(
+              context.tr("Sort My List"),
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
             const SizedBox(height: 14),
             for (final sort in MyListSort.values) ...[
               TvFocusable(
@@ -712,7 +754,7 @@ class _SortDialog extends StatelessWidget {
                       ),
                       const SizedBox(width: 12),
                       Text(
-                        sort.displayName,
+                        context.tr(sort.displayName),
                         style: const TextStyle(
                           color: Colors.white,
                           fontWeight: FontWeight.w900,
@@ -936,9 +978,13 @@ class _TrackedShelfState extends State<_TrackedShelf> {
                       padding: const EdgeInsets.symmetric(horizontal: 6),
                       child: Text(
                         item.tracked.totalEpisodes == null
-                            ? 'Episode ${item.tracked.progress}'
-                            : 'Episode ${item.tracked.progress} / '
-                                  '${item.tracked.totalEpisodes}',
+                            ? context.tr("Episode {value1}", {
+                                'value1': item.tracked.progress,
+                              })
+                            : context.tr("Episode {value1} / {value2}", {
+                                'value1': item.tracked.progress,
+                                'value2': item.tracked.totalEpisodes!,
+                              }),
                         style: TextStyle(
                           color: context.appPalette.mutedText,
                           fontSize: 9,
@@ -1036,12 +1082,17 @@ class _StatusDialog extends StatelessWidget {
             ),
             const SizedBox(height: 7),
             Text(
-              '${item.provider.displayName} • Currently '
-              '${item.tracked.status.displayName}',
+              context.tr("{value1} • Currently {value2}", {
+                'value1': item.provider.displayName,
+                'value2': context.tr(item.tracked.status.displayName),
+              }),
               style: Theme.of(context).textTheme.bodyMedium,
             ),
             const SizedBox(height: 20),
-            Text('Move to', style: Theme.of(context).textTheme.titleMedium),
+            Text(
+              context.tr("Move to"),
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
             const SizedBox(height: 12),
             Wrap(
               spacing: 10,
@@ -1062,7 +1113,9 @@ class _StatusDialog extends StatelessWidget {
               children: [
                 Expanded(
                   child: _RemoveButton(
-                    label: 'Remove from ${item.tracked.status.displayName}',
+                    label: context.tr("Remove from {value1}", {
+                      'value1': context.tr(item.tracked.status.displayName),
+                    }),
                     onPressed: () => Navigator.of(
                       context,
                     ).pop(const _MyListSelection.remove()),
@@ -1078,8 +1131,9 @@ class _StatusDialog extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             Text(
-              'Remove deletes the tracker list entry. Dropped keeps the show '
-              'in your list as something you started and stopped.',
+              context.tr(
+                "Remove deletes the tracker list entry. Dropped keeps the show in your list as something you started and stopped.",
+              ),
               style: TextStyle(
                 color: context.appPalette.mutedText,
                 fontSize: 12,
@@ -1121,8 +1175,8 @@ class _SourceButton extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 8),
-            const Text(
-              'View on SIMKL',
+            Text(
+              context.tr("View on SIMKL"),
               style: TextStyle(
                 color: Colors.white,
                 fontWeight: FontWeight.w900,
@@ -1169,7 +1223,7 @@ class _DialogChoice extends StatelessWidget {
             ? context.appPalette.accent
             : context.appPalette.surfaceRaised,
         child: Text(
-          status.displayName,
+          context.tr(status.displayName),
           style: const TextStyle(
             color: Colors.white,
             fontWeight: FontWeight.w800,
@@ -1193,8 +1247,8 @@ class _OpenButton extends StatelessWidget {
       child: Container(
         color: context.appPalette.accent,
         padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 11),
-        child: const Text(
-          'View episodes',
+        child: Text(
+          context.tr("View episodes"),
           style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900),
         ),
       ),

@@ -16,12 +16,22 @@ final class DirectPeerDownloadCapability {
   DirectPeerDownloadCapability._({
     required this._magnet,
     required this.episode,
+    required this.season,
+    required this.absoluteEpisode,
+    required this.requestedSpecial,
+    required this.allowSeasonRelativeBare,
+    required this.requireNumberingSchemeEvidence,
     required this.preferredFileIndex,
   });
 
   factory DirectPeerDownloadCapability({
     required String magnet,
     required int episode,
+    int? season,
+    int? absoluteEpisode,
+    bool requestedSpecial = false,
+    bool allowSeasonRelativeBare = false,
+    bool requireNumberingSchemeEvidence = false,
     int? preferredFileIndex,
   }) {
     if (!_isValidMagnet(magnet)) {
@@ -37,15 +47,32 @@ final class DirectPeerDownloadCapability {
     if (preferredFileIndex != null && preferredFileIndex < 0) {
       throw ArgumentError.value(preferredFileIndex, 'preferredFileIndex');
     }
+    if (season != null && (season < 0 || season > 999)) {
+      throw ArgumentError.value(season, 'season');
+    }
+    if (absoluteEpisode != null &&
+        (absoluteEpisode <= 0 || absoluteEpisode > 100000)) {
+      throw ArgumentError.value(absoluteEpisode, 'absoluteEpisode');
+    }
     return DirectPeerDownloadCapability._(
       magnet: magnet,
       episode: episode,
+      season: season,
+      absoluteEpisode: absoluteEpisode,
+      requestedSpecial: requestedSpecial,
+      allowSeasonRelativeBare: allowSeasonRelativeBare,
+      requireNumberingSchemeEvidence: requireNumberingSchemeEvidence,
       preferredFileIndex: preferredFileIndex,
     );
   }
 
   final String _magnet;
   final int episode;
+  final int? season;
+  final int? absoluteEpisode;
+  final bool requestedSpecial;
+  final bool allowSeasonRelativeBare;
+  final bool requireNumberingSchemeEvidence;
   final int? preferredFileIndex;
 
   @override
@@ -63,6 +90,11 @@ abstract interface class DirectPeerNativePlatform {
     required String requestId,
     required String magnet,
     required int episode,
+    int? season,
+    int? absoluteEpisode,
+    bool requestedSpecial = false,
+    bool allowSeasonRelativeBare = false,
+    bool requireNumberingSchemeEvidence = false,
     int? preferredFileIndex,
   });
 
@@ -92,11 +124,21 @@ final class AndroidDirectPeerNativePlatform
     required String requestId,
     required String magnet,
     required int episode,
+    int? season,
+    int? absoluteEpisode,
+    bool requestedSpecial = false,
+    bool allowSeasonRelativeBare = false,
+    bool requireNumberingSchemeEvidence = false,
     int? preferredFileIndex,
   }) => _resolvedBridge.startDirectTorrent(
     requestId: requestId,
     magnet: magnet,
     episode: episode,
+    season: season,
+    absoluteEpisode: absoluteEpisode,
+    requestedSpecial: requestedSpecial,
+    allowSeasonRelativeBare: allowSeasonRelativeBare,
+    requireNumberingSchemeEvidence: requireNumberingSchemeEvidence,
     preferredFileIndex: preferredFileIndex,
   );
 
@@ -210,6 +252,12 @@ final class AndroidDirectPeerDownloadWorker
           requestId: requestId,
           magnet: capability._magnet,
           episode: capability.episode,
+          season: capability.season,
+          absoluteEpisode: capability.absoluteEpisode,
+          requestedSpecial: capability.requestedSpecial,
+          allowSeasonRelativeBare: capability.allowSeasonRelativeBare,
+          requireNumberingSchemeEvidence:
+              capability.requireNumberingSchemeEvidence,
           preferredFileIndex: capability.preferredFileIndex,
         );
       } finally {
@@ -266,6 +314,14 @@ final class AndroidDirectPeerDownloadWorker
       if (cancellation.isCancelled ||
           error.code.toUpperCase().contains('CANCEL')) {
         throw const DownloadTransferCancelled();
+      }
+      if (error.code.toUpperCase() == 'DIRECT_TORRENT_EPISODE_AMBIGUOUS') {
+        throw const DownloadTransferException(
+          'episode_file_identity_ambiguous',
+          'TetoTV could not prove which torrent file is this episode. '
+              'Choose a different release to avoid downloading the wrong one.',
+          retryable: false,
+        );
       }
       throw DownloadTransferException(
         'direct_peer_start_failed',

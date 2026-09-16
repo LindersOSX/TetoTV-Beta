@@ -49,6 +49,11 @@ class AllDebridStreamResolver implements StreamResolver {
         files,
         episode.episode,
         requestedSeason: catalogSeasonNumber(episode),
+        requestedAbsoluteEpisode: absoluteEpisodeNumber(episode),
+        requestedSpecial: episodeReferenceIsSpecial(episode),
+        containerLabel: release.releaseName,
+        requireNumberingSchemeEvidence:
+            episodeReferenceHasUnresolvedSequelNumbering(episode),
         preferredFileIndex: release.preferredFileIndex,
       );
       final uri = await _client.unlock(selected.link);
@@ -83,6 +88,10 @@ AllDebridTorrentFile selectAllDebridEpisodeFile(
   List<AllDebridTorrentFile> files,
   int episode, {
   int? requestedSeason,
+  int? requestedAbsoluteEpisode,
+  bool requestedSpecial = false,
+  String? containerLabel,
+  bool requireNumberingSchemeEvidence = false,
   int? preferredFileIndex,
 }) {
   final playable = files.where((file) => file.isPlayable).toList();
@@ -97,6 +106,10 @@ AllDebridTorrentFile selectAllDebridEpisodeFile(
     sizes: files.map((file) => file.size).toList(growable: false),
     requestedEpisode: episode,
     requestedSeason: requestedSeason,
+    requestedAbsoluteEpisode: requestedAbsoluteEpisode,
+    requestedSpecial: requestedSpecial,
+    containerLabel: containerLabel,
+    requireNumberingSchemeEvidence: requireNumberingSchemeEvidence,
     preferredFileIndex: preferredFileIndex,
   );
   return files[selectedIndex];

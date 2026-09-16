@@ -1,3 +1,4 @@
+import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'dart:async';
 
 import 'package:anime_tv/core/theme/app_theme.dart';
@@ -70,8 +71,8 @@ class _CopyableQrInteractionState extends State<CopyableQrInteraction> {
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-        const SnackBar(
-          content: Text('Clipboard is unavailable on this device.'),
+        SnackBar(
+          content: Text(context.tr("Clipboard is unavailable on this device.")),
         ),
       );
       return;
@@ -90,7 +91,9 @@ class _CopyableQrInteractionState extends State<CopyableQrInteraction> {
       mainAxisSize: MainAxisSize.min,
       children: [
         Semantics(
-          label: '${widget.semanticsLabel}. Double select to copy link.',
+          label: context.tr("{value1}. Double select to copy link.", {
+            'value1': widget.semanticsLabel,
+          }),
           button: true,
           child: TvFocusable(
             focusNode: widget.focusNode,

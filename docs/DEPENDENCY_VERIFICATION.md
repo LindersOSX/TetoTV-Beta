@@ -13,7 +13,7 @@ bootstrapped by Gradle and still require normal dependency review. Critical
 non-central binaries must be independently compared with their publisher's
 repository before their checksum is accepted.
 
-## QuickJS trust record
+## Seanime add-on QuickJS trust record
 
 TetoTV builds its native engine from reviewed source in
 `third_party/flutter_js/android/src/main/c`; it no longer downloads a QuickJS
@@ -47,6 +47,51 @@ byte, verifies the reviewed local bridge hash, rejects unexpected native
 source files, and compares the packaged MIT notices. A source update requires
 reviewing the API delta and intentionally updating every affected checksum.
 
+## Aniyomi `app.cash.quickjs` trust record
+
+Aniyomi extension bytecode may link directly against the historical
+`app.cash.quickjs` Java/JNI ABI. There is no drop-in Maven upgrade after Cash
+App QuickJS Android 0.9.2: the successor Zipline artifacts use a different
+package, API and JNI surface. The published 0.9.2 AAR also contains 4 KiB-linked
+native libraries, so TetoTV builds the exact 0.9.2 implementation locally with
+16 KiB ELF alignment:
+
+| Source | Immutable identity |
+| --- | --- |
+| Upstream repository | <https://github.com/cashapp/quickjs-java> |
+| Release commit | `a738129cc4aa99206c00ae49e9c5b15cb58ad880` |
+| Commit tree | `6a560c8a1d1da88d2eaa8a9c0755ec677333518b` |
+| GitHub source archive SHA-256 | `b54a2153690533afd0181fc1136ce989eb31e3c39bf2e852b2ff1adf4179d56f` |
+| Reviewed source inventory | `android/cash-quickjs-android/SOURCE_MANIFEST.sha256` |
+| Complete provenance | `third_party/app_cash_quickjs/PROVENANCE.json` |
+
+The sole source adjustment adds the directly required `<functional>` include
+to `Context.h` for current NDK libc++ headers. The library retains Java 8 class
+descriptors, the native name `libquickjs.so`, and all eight 0.9.2 JNI exports.
+Its CMake build sets both `common-page-size` and `max-page-size` to 16384. The
+local module intentionally emits only the app's ARM32 and ARM64 ABIs.
+
+Run the independent source verifier whenever the vendored tree, build module,
+or Aniyomi runtime changes:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File `
+  .\tool\android\verify_vendored_app_cash_quickjs.ps1
+```
+
+The script downloads only the immutable pinned archive when explicitly run,
+checks its SHA-256, rejects source inventory drift, compares every unmodified
+file byte for byte, validates the one documented header patch, and checks the
+local source-manifest hashes. Normal builds never fetch QuickJS source or a
+QuickJS runtime artifact. Gradle also runs `verifyVendoredQuickJs` before every
+local module build.
+
+The release native BOM also pins the exact `libquickjs.so` size and SHA-256 for
+both supported ABIs. `verify_release_apk.ps1` requires the same ten native
+library names for ARM32 and ARM64, rejects duplicate or additional entries, and
+maps both QuickJS binaries back to this provenance record and the bundled
+Apache-2.0/MIT notices.
+
 ## Updating the verification baseline
 
 Never accept a generated checksum merely because Gradle downloaded it. Review
@@ -70,6 +115,7 @@ Validate both debug execution-time tools and the release dependency graph:
 .\gradlew.bat --dependency-verification strict :app:processDebugResources
 .\gradlew.bat --dependency-verification strict :app:compileDebugKotlin
 .\gradlew.bat --dependency-verification strict :flutter_js:assembleDebug
+.\gradlew.bat --dependency-verification strict :cash-quickjs-android:assembleDebug
 .\gradlew.bat --dependency-verification strict :app:dependencies `
   --configuration releaseRuntimeClasspath
 ```

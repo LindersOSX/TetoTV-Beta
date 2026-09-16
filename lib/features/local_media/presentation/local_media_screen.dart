@@ -1,3 +1,4 @@
+import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'dart:async';
 
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
@@ -469,7 +470,9 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
-          '${document.name} was added as an episode-source candidate.',
+          context.tr("{value1} was added as an episode-source candidate.", {
+            'value1': document.name,
+          }),
         ),
       ),
     );
@@ -618,7 +621,9 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
           }
           if (result.failed && mounted) {
             _showMessage(
-              'This library video could not be played by the selected engine.',
+              context.tr(
+                "This library video could not be played by the selected engine.",
+              ),
             );
           }
         },
@@ -636,7 +641,9 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
         );
       }
     } catch (_) {
-      if (mounted) _showMessage('This library video could not be opened.');
+      if (mounted) {
+        _showMessage(context.tr("This library video could not be opened."));
+      }
     } finally {
       if (mounted) setState(() => _openingPlayer = false);
     }
@@ -861,7 +868,7 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
                 children: [
                   if (!layout.usesSideNavigation) ...[
                     _ActionButton(
-                      label: 'Back',
+                      label: context.tr("Back"),
                       icon: Icons.arrow_back_rounded,
                       focusNode: _backFocus,
                       onPressed: context.pop,
@@ -870,7 +877,9 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
                   ],
                   Expanded(
                     child: Text(
-                      widget.managementOnly ? 'Media sources' : 'Your media',
+                      widget.managementOnly
+                          ? context.tr("Media sources")
+                          : context.tr("Your media"),
                       style: Theme.of(context).textTheme.headlineSmall
                           ?.copyWith(
                             fontSize: layout.usesTvRail ? 30 : null,
@@ -907,18 +916,22 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
                       const SizedBox(height: 16),
                     ],
                     _SectionCard(
-                      title: 'LOCAL FILES',
+                      title: context.tr("LOCAL FILES"),
                       subtitle: widget.managementOnly
-                          ? 'Add videos with Android’s secure file picker. Matching episodes appear in the normal source picker.'
-                          : 'Choose a video with Android’s secure file picker. Android does not let apps silently scan your device.',
+                          ? context.tr(
+                              "Add videos with Android’s secure file picker. Matching episodes appear in the normal source picker.",
+                            )
+                          : context.tr(
+                              "Choose a video with Android’s secure file picker. Android does not let apps silently scan your device.",
+                            ),
                       child: Wrap(
                         spacing: 12,
                         runSpacing: 12,
                         children: [
                           _ActionButton(
                             label: widget.managementOnly
-                                ? 'Add local video'
-                                : 'Choose video',
+                                ? context.tr("Add local video")
+                                : context.tr("Choose video"),
                             icon: Icons.video_file_rounded,
                             focusNode: _chooseVideoFocus,
                             autofocus: widget.managementOnly,
@@ -931,7 +944,9 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
                           if (!widget.managementOnly)
                             if (state.recentLocalDocument case final recent?)
                               _ActionButton(
-                                label: 'Play ${recent.name}',
+                                label: context.tr("Play {value1}", {
+                                  'value1': recent.name,
+                                }),
                                 icon: Icons.replay_rounded,
                                 focusNode: _recentVideoFocus,
                                 onPressed: _openingPlayer
@@ -943,10 +958,17 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
                     ),
                     const SizedBox(height: 16),
                     _SectionCard(
-                      title: 'JELLYFIN SERVER',
+                      title: context.tr("JELLYFIN SERVER"),
                       subtitle: state.connection == null
-                          ? 'Connect to a Jellyfin server on your home network or an HTTPS server. Your password is used once and is never saved. HTTPS is recommended.'
-                          : '${state.connection!.serverName} • ${state.connection!.username} • Jellyfin ${state.connection!.serverVersion}',
+                          ? context.tr(
+                              "Connect to a Jellyfin server on your home network or an HTTPS server. Your password is used once and is never saved. HTTPS is recommended.",
+                            )
+                          : context
+                                .tr("{value1} • {value2} • Jellyfin {value3}", {
+                                  'value1': state.connection!.serverName,
+                                  'value2': state.connection!.username,
+                                  'value3': state.connection!.serverVersion,
+                                }),
                       child: state.connection == null
                           ? _buildConnectionForm(state, layout)
                           : widget.managementOnly
@@ -955,10 +977,19 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
                     ),
                     const SizedBox(height: 16),
                     _SectionCard(
-                      title: 'PLEX MEDIA SERVER',
+                      title: context.tr("PLEX MEDIA SERVER"),
                       subtitle: plexState.connection == null
-                          ? 'Connect with a Plex server address and X-Plex-Token. The token is stored in Android secure storage and is never placed in a media or artwork URL.'
-                          : '${plexState.connection!.serverName ?? 'Plex Media Server'} • Plex ${plexState.connection!.serverVersion ?? 'unknown'}',
+                          ? context.tr(
+                              "Connect with a Plex server address and X-Plex-Token. The token is stored in Android secure storage and is never placed in a media or artwork URL.",
+                            )
+                          : context.tr("{value1} • Plex {value2}", {
+                              'value1':
+                                  plexState.connection!.serverName ??
+                                  'Plex Media Server',
+                              'value2':
+                                  plexState.connection!.serverVersion ??
+                                  'unknown',
+                            }),
                       child: plexState.connection == null
                           ? _buildPlexConnectionForm(plexState, layout)
                           : widget.managementOnly
@@ -979,9 +1010,10 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
     UnifiedMediaSearchState searchState,
     TetoTopLevelLayout layout,
   ) => _SectionCard(
-    title: 'SEARCH YOUR MEDIA',
-    subtitle:
-        'Search connected Jellyfin and Plex libraries together. Your recently selected device video is included when its name matches.',
+    title: context.tr("SEARCH YOUR MEDIA"),
+    subtitle: context.tr(
+      "Search connected Jellyfin and Plex libraries together. Your recently selected device video is included when its name matches.",
+    ),
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -991,8 +1023,8 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
               controller: _searchController,
               focusNode: _searchFocus,
               autofocus: true,
-              labelText: 'Title or keyword',
-              keyboardTitle: 'Search your media libraries',
+              labelText: context.tr("Title or keyword"),
+              keyboardTitle: context.tr("Search your media libraries"),
               onSubmitted: (_) => _searchAllMedia(),
             );
             final actions = Wrap(
@@ -1000,14 +1032,14 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
               runSpacing: 10,
               children: [
                 _ActionButton(
-                  label: 'Search',
+                  label: context.tr("Search"),
                   icon: Icons.search_rounded,
                   focusNode: _searchActionFocus,
                   onPressed: searchState.busy ? null : _searchAllMedia,
                 ),
                 if (searchState.query.isNotEmpty)
                   _ActionButton(
-                    label: 'Clear',
+                    label: context.tr("Clear"),
                     icon: Icons.close_rounded,
                     focusNode: _clearSearchFocus,
                     onPressed: searchState.busy
@@ -1096,23 +1128,25 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
       TvTextInput(
         controller: _addressController,
         focusNode: _addressFocus,
-        labelText: 'Server address',
-        hintText: '192.168.1.20:8096 or https://jellyfin.example.com',
-        keyboardTitle: 'Jellyfin server address',
+        labelText: context.tr("Server address"),
+        hintText: context.tr(
+          "192.168.1.20:8096 or https://jellyfin.example.com",
+        ),
+        keyboardTitle: context.tr("Jellyfin server address"),
       ),
       const SizedBox(height: 12),
       TvTextInput(
         controller: _usernameController,
         focusNode: _usernameFocus,
-        labelText: 'Username',
-        keyboardTitle: 'Jellyfin username',
+        labelText: context.tr("Username"),
+        keyboardTitle: context.tr("Jellyfin username"),
       ),
       const SizedBox(height: 12),
       TvTextInput(
         controller: _passwordController,
         focusNode: _passwordFocus,
-        labelText: 'Password',
-        keyboardTitle: 'Jellyfin password',
+        labelText: context.tr("Password"),
+        keyboardTitle: context.tr("Jellyfin password"),
         obscureText: true,
         onSubmitted: (_) => _connectJellyfin(),
       ),
@@ -1120,7 +1154,7 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
       Align(
         alignment: Alignment.centerLeft,
         child: _ActionButton(
-          label: 'Connect Jellyfin',
+          label: context.tr("Connect Jellyfin"),
           icon: Icons.lan_rounded,
           focusNode: _jellyfinConnectFocus,
           onExitLeft: () => _focusNavigationOrBack(layout),
@@ -1138,21 +1172,21 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
         final approved = await showDialog<bool>(
           context: context,
           builder: (dialogContext) => AlertDialog(
-            title: const Text('Use an unencrypted local connection?'),
-            content: const Text(
-              'HTTP is limited to a numeric private-network address, but your '
-              'Jellyfin password and video traffic are not encrypted. Use HTTPS '
-              'when your server supports it.',
+            title: Text(context.tr("Use an unencrypted local connection?")),
+            content: Text(
+              context.tr(
+                "HTTP is limited to a numeric private-network address, but your Jellyfin password and video traffic are not encrypted. Use HTTPS when your server supports it.",
+              ),
             ),
             actions: [
               TextButton(
                 autofocus: true,
                 onPressed: () => Navigator.of(dialogContext).pop(false),
-                child: const Text('Cancel'),
+                child: Text(context.tr("Cancel")),
               ),
               FilledButton(
                 onPressed: () => Navigator.of(dialogContext).pop(true),
-                child: const Text('Connect on private network'),
+                child: Text(context.tr("Connect on private network")),
               ),
             ],
           ),
@@ -1190,7 +1224,7 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
             children: [
               if (state.breadcrumbs.isNotEmpty)
                 _ActionButton(
-                  label: 'Up',
+                  label: context.tr("Up"),
                   icon: Icons.arrow_upward_rounded,
                   focusNode: _jellyfinUpFocus,
                   onExitLeft: () => _focusNavigationOrBack(layout),
@@ -1199,7 +1233,7 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
                       : ref.read(localMediaControllerProvider.notifier).goUp,
                 ),
               _ActionButton(
-                label: 'Refresh',
+                label: context.tr("Refresh"),
                 icon: Icons.refresh_rounded,
                 focusNode: _jellyfinRefreshFocus,
                 onExitLeft: state.breadcrumbs.isEmpty
@@ -1210,7 +1244,7 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
                     : ref.read(localMediaControllerProvider.notifier).refresh,
               ),
               _ActionButton(
-                label: 'Disconnect',
+                label: context.tr("Disconnect"),
                 icon: Icons.link_off_rounded,
                 focusNode: _jellyfinDisconnectFocus,
                 onPressed: state.busy
@@ -1265,7 +1299,10 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
             ),
           if (state.nextStartIndex < state.totalCount)
             _ActionButton(
-              label: 'Load more (${state.items.length} of ${state.totalCount})',
+              label: context.tr("Load more ({value1} of {value2})", {
+                'value1': state.items.length,
+                'value2': state.totalCount,
+              }),
               icon: Icons.expand_more_rounded,
               focusNode: _jellyfinLoadMoreFocus,
               onExitLeft: () => _focusNavigationOrBack(layout),
@@ -1283,7 +1320,10 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
       Text(
-        '${state.totalCount} library items are available to episode matching.',
+        context.tr(
+          "{value1} library items are available to episode matching.",
+          {'value1': state.totalCount},
+        ),
         style: TextStyle(color: context.appPalette.mutedText, fontSize: 12),
       ),
       const SizedBox(height: 12),
@@ -1292,7 +1332,7 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
         runSpacing: 12,
         children: [
           _ActionButton(
-            label: 'Test & refresh',
+            label: context.tr("Test & refresh"),
             icon: Icons.refresh_rounded,
             focusNode: _jellyfinRefreshFocus,
             onExitLeft: () => _focusNavigationOrBack(layout),
@@ -1301,7 +1341,7 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
                 : ref.read(localMediaControllerProvider.notifier).refresh,
           ),
           _ActionButton(
-            label: 'Disconnect',
+            label: context.tr("Disconnect"),
             icon: Icons.link_off_rounded,
             focusNode: _jellyfinDisconnectFocus,
             onPressed: state.busy
@@ -1319,16 +1359,18 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
           TvTextInput(
             controller: _plexAddressController,
             focusNode: _plexAddressFocus,
-            labelText: 'Server address',
-            hintText: '192.168.1.20:32400 or https://plex.example.com',
-            keyboardTitle: 'Plex server address',
+            labelText: context.tr("Server address"),
+            hintText: context.tr(
+              "192.168.1.20:32400 or https://plex.example.com",
+            ),
+            keyboardTitle: context.tr("Plex server address"),
           ),
           const SizedBox(height: 12),
           TvTextInput(
             controller: _plexTokenController,
             focusNode: _plexTokenFocus,
-            labelText: 'X-Plex-Token',
-            keyboardTitle: 'Plex access token',
+            labelText: context.tr("X-Plex-Token"),
+            keyboardTitle: context.tr("Plex access token"),
             obscureText: true,
             onSubmitted: (_) => _connectPlex(),
           ),
@@ -1336,7 +1378,7 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
           Align(
             alignment: Alignment.centerLeft,
             child: _ActionButton(
-              label: 'Connect Plex',
+              label: context.tr("Connect Plex"),
               icon: Icons.connected_tv_rounded,
               focusNode: _plexConnectFocus,
               onExitLeft: () => _focusNavigationOrBack(layout),
@@ -1354,21 +1396,21 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
         final approved = await showDialog<bool>(
           context: context,
           builder: (dialogContext) => AlertDialog(
-            title: const Text('Use an unencrypted local connection?'),
-            content: const Text(
-              'HTTP is limited to a numeric private-network address, but your '
-              'Plex access token and video traffic are not encrypted. Use HTTPS '
-              'when your server supports it.',
+            title: Text(context.tr("Use an unencrypted local connection?")),
+            content: Text(
+              context.tr(
+                "HTTP is limited to a numeric private-network address, but your Plex access token and video traffic are not encrypted. Use HTTPS when your server supports it.",
+              ),
             ),
             actions: [
               TextButton(
                 autofocus: true,
                 onPressed: () => Navigator.of(dialogContext).pop(false),
-                child: const Text('Cancel'),
+                child: Text(context.tr("Cancel")),
               ),
               FilledButton(
                 onPressed: () => Navigator.of(dialogContext).pop(true),
-                child: const Text('Connect on private network'),
+                child: Text(context.tr("Connect on private network")),
               ),
             ],
           ),
@@ -1408,14 +1450,14 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
           children: [
             if (browsingItems)
               _ActionButton(
-                label: 'Up',
+                label: context.tr("Up"),
                 icon: Icons.arrow_upward_rounded,
                 focusNode: _plexUpFocus,
                 onExitLeft: () => _focusNavigationOrBack(layout),
                 onPressed: state.busy ? null : controller.goUp,
               ),
             _ActionButton(
-              label: 'Refresh',
+              label: context.tr("Refresh"),
               icon: Icons.refresh_rounded,
               focusNode: _plexRefreshFocus,
               onExitLeft: browsingItems
@@ -1424,7 +1466,7 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
               onPressed: state.busy ? null : controller.refresh,
             ),
             _ActionButton(
-              label: 'Disconnect',
+              label: context.tr("Disconnect"),
               icon: Icons.link_off_rounded,
               focusNode: _plexDisconnectFocus,
               onPressed: state.busy ? null : controller.disconnect,
@@ -1455,7 +1497,9 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
                     key: ValueKey('plex-library-${library.key}'),
                     focusNode: _plexItemFocusNodes[index],
                     title: library.title,
-                    subtitle: library.isMovieLibrary ? 'Movies' : 'TV shows',
+                    subtitle: context.tr(
+                      library.isMovieLibrary ? 'Movies' : 'TV shows',
+                    ),
                     isFolder: true,
                     imageUri: controller.libraryImageUri(library),
                     imageLoader: controller.imageBytes,
@@ -1493,7 +1537,10 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
         if (browsingItems && state.nextOffset < state.totalCount) ...[
           const SizedBox(height: 12),
           _ActionButton(
-            label: 'Load more (${state.items.length} of ${state.totalCount})',
+            label: context.tr("Load more ({value1} of {value2})", {
+              'value1': state.items.length,
+              'value2': state.totalCount,
+            }),
             icon: Icons.expand_more_rounded,
             focusNode: _plexLoadMoreFocus,
             onExitLeft: () => _focusNavigationOrBack(layout),
@@ -1510,7 +1557,10 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          '${state.totalCount} library items are available to episode matching.',
+          context.tr(
+            "{value1} library items are available to episode matching.",
+            {'value1': state.totalCount},
+          ),
           style: TextStyle(color: context.appPalette.mutedText, fontSize: 12),
         ),
         const SizedBox(height: 12),
@@ -1519,14 +1569,14 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
           runSpacing: 12,
           children: [
             _ActionButton(
-              label: 'Test & refresh',
+              label: context.tr("Test & refresh"),
               icon: Icons.refresh_rounded,
               focusNode: _plexRefreshFocus,
               onExitLeft: () => _focusNavigationOrBack(layout),
               onPressed: state.busy ? null : controller.refresh,
             ),
             _ActionButton(
-              label: 'Disconnect',
+              label: context.tr("Disconnect"),
               icon: Icons.link_off_rounded,
               focusNode: _plexDisconnectFocus,
               onPressed: state.busy ? null : controller.disconnect,

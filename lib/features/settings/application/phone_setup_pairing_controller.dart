@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:anime_tv/core/config/app_config.dart';
+import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/features/auth/application/pairing_controller.dart';
 import 'package:anime_tv/features/settings/application/phone_setup_bundle_importer.dart';
 import 'package:anime_tv/features/settings/application/setup_progress_controller.dart';
@@ -9,6 +10,7 @@ import 'package:anime_tv/features/settings/data/phone_setup_crypto.dart';
 import 'package:anime_tv/features/settings/data/phone_setup_pairing_client.dart';
 import 'package:anime_tv/features/settings/domain/phone_setup_pairing.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 const phoneSetupSessionStorageKey = 'phone_setup_pairing_session_v1';
@@ -34,6 +36,7 @@ class PhoneSetupViewState {
     this.result,
     this.linkDiscordRequested = false,
     this.message,
+    this.retryNotBefore,
   });
 
   final PhoneSetupViewStage stage;
@@ -43,6 +46,7 @@ class PhoneSetupViewState {
   final PhoneSetupApplyResult? result;
   final bool linkDiscordRequested;
   final String? message;
+  final DateTime? retryNotBefore;
 
   bool get isBusy =>
       stage == PhoneSetupViewStage.starting ||
@@ -71,10 +75,18 @@ final phoneSetupPairingControllerProvider =
         ref.watch(phoneSetupCryptographyProvider),
         ref.watch(phoneSetupBundleImporterProvider),
         ref.read(setupProgressProvider.notifier).complete,
+        diagnosticRecorder: (details) =>
+            TetoTvDatabase.instance.recordDiagnosticEvent(
+              category: 'phone-setup',
+              message: 'Secure phone setup startup stage',
+              details: details,
+            ),
       );
     });
 
 typedef PhoneSetupCompleteCallback = Future<void> Function();
+typedef PhoneSetupDiagnosticRecorder =
+    Future<void> Function(Map<String, Object?> details);
 
 class PhoneSetupPairingController extends StateNotifier<PhoneSetupViewState> {
   PhoneSetupPairingController(
@@ -84,6 +96,7 @@ class PhoneSetupPairingController extends StateNotifier<PhoneSetupViewState> {
     this._importer,
     this._markSetupComplete, {
     DateTime Function()? now,
+    this.diagnosticRecorder,
   }) : _now = now ?? DateTime.now,
        super(const PhoneSetupViewState());
 
@@ -93,6 +106,7 @@ class PhoneSetupPairingController extends StateNotifier<PhoneSetupViewState> {
   final PhoneSetupBundleImporter _importer;
   final PhoneSetupCompleteCallback _markSetupComplete;
   final DateTime Function() _now;
+  final PhoneSetupDiagnosticRecorder? diagnosticRecorder;
 
   Timer? _pollTimer;
   bool _operationInProgress = false;
@@ -100,11 +114,95 @@ class PhoneSetupPairingController extends StateNotifier<PhoneSetupViewState> {
   int _lastObservedRevision = -1;
   int? _locallyAppliedRevision;
   bool _locallyRequestedDiscordLink = false;
+  DateTime? _retryNotBefore;
+
+  bool get _retryCoolingDown =>
+      _retryNotBefore?.isAfter(_now().toUtc()) == true;
+
+  /// Uses the same injectable clock as the request guard. The visible screen
+  /// owns countdown repainting; no timer or automatic request runs here.
+  int get retrySecondsRemaining {
+    final milliseconds =
+        _retryNotBefore?.difference(_now().toUtc()).inMilliseconds ?? 0;
+    return ((milliseconds + 999) ~/ 1000).clamp(0, 3600);
+  }
+
+  void _showRetryCooldown() {
+    state = PhoneSetupViewState(
+      stage: PhoneSetupViewStage.failed,
+      session: state.session,
+      message:
+          'Phone setup is temporarily rate-limited. Wait before trying again.',
+      retryNotBefore: _retryNotBefore,
+    );
+  }
+
+  Future<T> _startupStep<T>(String stage, Future<T> Function() action) async {
+    final started = _now();
+    _recordStartup(stage, 'started', started);
+    try {
+      final result = await action();
+      _recordStartup(stage, 'success', started);
+      return result;
+    } catch (error) {
+      _recordStartup(stage, 'failed', started, error: error);
+      rethrow;
+    }
+  }
+
+  void _recordStartup(
+    String stage,
+    String status,
+    DateTime started, {
+    Object? error,
+  }) {
+    final recorder = diagnosticRecorder;
+    if (recorder == null) return;
+    final service = error is PhoneSetupServiceException ? error : null;
+    final reason = switch (error) {
+      null => null,
+      PhoneSetupServiceException() => error.reasonCode,
+      FormatException() => 'invalid_response',
+      MissingPluginException() => 'platform_unavailable',
+      PlatformException() =>
+        stage == 'key-generation'
+            ? 'crypto_unavailable'
+            : 'secure_storage_failure',
+      TimeoutException() => 'timeout',
+      _ => 'initialization_failure',
+    };
+    // Stages are constant app-authored labels; exception text/key material is
+    // deliberately excluded, even if the injected API/crypto/storage fails.
+    final details = <String, Object?>{
+      'stage': stage,
+      'status': status,
+      'reason_code': ?reason,
+      'code': ?service?.httpStatus,
+      if (service?.reasonCode == 'rate_limited')
+        'phase': service!.rateLimitScope.diagnosticCode,
+      'duration_ms': _now().difference(started).inMilliseconds.clamp(0, 120000),
+    };
+    unawaited(Future<void>.sync(() => recorder(details)).catchError((_) {}));
+  }
+
+  String _startupMessage(Object error, String fallback) {
+    if (error is! PhoneSetupServiceException) return fallback;
+    if (error.reasonCode == 'rate_limited') {
+      _retryNotBefore = _now().toUtc().add(
+        error.retryAfter ?? const Duration(seconds: 60),
+      );
+    }
+    return error.message;
+  }
 
   Future<void> startOrResume() async {
     if (_operationInProgress ||
         _regenerationInProgress ||
         state.stage == PhoneSetupViewStage.completed) {
+      return;
+    }
+    if (_retryCoolingDown) {
+      _showRetryCooldown();
       return;
     }
     _operationInProgress = true;
@@ -115,8 +213,8 @@ class PhoneSetupPairingController extends StateNotifier<PhoneSetupViewState> {
       message: 'Preparing secure phone setup…',
     );
     try {
-      await _api.ensureReady();
-      final saved = await _restoreSavedSession();
+      await _startupStep('health', _api.ensureReady);
+      final saved = await _startupStep('session-restore', _restoreSavedSession);
       if (!mounted) return;
       if (saved != null && saved.session.expiresAt.isAfter(_now().toUtc())) {
         _locallyAppliedRevision = saved.appliedRevision;
@@ -139,10 +237,18 @@ class PhoneSetupPairingController extends StateNotifier<PhoneSetupViewState> {
         }
         return;
       }
-      if (saved != null) await _clearSavedSession();
-      final key = await _cryptography.generateKeyMaterial();
-      final session = await _api.createSession(key);
-      await _saveSession(session);
+      if (saved != null) {
+        await _startupStep('session-clear', _clearSavedSession);
+      }
+      final key = await _startupStep(
+        'key-generation',
+        _cryptography.generateKeyMaterial,
+      );
+      final session = await _startupStep(
+        'session-create',
+        () => _api.createSession(key),
+      );
+      await _startupStep('session-persist', () => _saveSession(session));
       if (!mounted) return;
       state = PhoneSetupViewState(
         stage: PhoneSetupViewStage.waiting,
@@ -150,13 +256,17 @@ class PhoneSetupPairingController extends StateNotifier<PhoneSetupViewState> {
         message: 'Scan the QR code or enter the code on your phone.',
       );
       _schedulePoll(Duration.zero);
-    } catch (_) {
+    } catch (error) {
       if (!mounted) return;
+      final message = _startupMessage(
+        error,
+        'Secure phone setup could not start. Check the connection and try again.',
+      );
       state = PhoneSetupViewState(
         stage: PhoneSetupViewStage.failed,
         session: state.session,
-        message:
-            'Secure phone setup could not start. Check the connection and try again.',
+        message: message,
+        retryNotBefore: _retryNotBefore,
       );
     } finally {
       _operationInProgress = false;
@@ -207,6 +317,9 @@ class PhoneSetupPairingController extends StateNotifier<PhoneSetupViewState> {
             session: session,
             message: 'Waiting for your phone to connect…',
           );
+          if (result.retryAfter case final retryAfter?) {
+            _recordRuntimeRateLimit('poll', retryAfter);
+          }
         case PhoneSetupPairingStatus.bound:
           state = PhoneSetupViewState(
             stage: PhoneSetupViewStage.bound,
@@ -276,8 +389,8 @@ class PhoneSetupPairingController extends StateNotifier<PhoneSetupViewState> {
           await _expire();
           return;
       }
-      _schedulePoll(session.pollInterval);
-    } catch (_) {
+      _schedulePoll(result.retryAfter ?? session.pollInterval);
+    } catch (error) {
       if (!mounted) return;
       state = PhoneSetupViewState(
         stage: state.stage == PhoneSetupViewStage.bound
@@ -350,7 +463,7 @@ class PhoneSetupPairingController extends StateNotifier<PhoneSetupViewState> {
         linkDiscordRequested: linkDiscordRequested,
         message: result.message ?? 'Phone setup is complete.',
       );
-    } catch (_) {
+    } catch (error) {
       if (!mounted) return;
       final alreadyApplied = _locallyAppliedRevision == revision;
       state = PhoneSetupViewState(
@@ -364,7 +477,14 @@ class PhoneSetupPairingController extends StateNotifier<PhoneSetupViewState> {
             ? 'Your choices are saved. Reconnecting to confirm completion…'
             : 'Setup could not be applied. Nothing was sent back; try again.',
       );
-      if (alreadyApplied) _schedulePoll(const Duration(seconds: 5));
+      if (alreadyApplied) {
+        final retryAfter = _retryAfterFor(
+          error,
+          fallback: const Duration(seconds: 5),
+        );
+        _recordRuntimeRateLimitIfNeeded('acknowledge', error);
+        _schedulePoll(retryAfter);
+      }
     } finally {
       _operationInProgress = false;
     }
@@ -389,7 +509,7 @@ class PhoneSetupPairingController extends StateNotifier<PhoneSetupViewState> {
         message: 'Make your changes on the phone, then send them again.',
       );
       _schedulePoll(session.pollInterval);
-    } catch (_) {
+    } catch (error) {
       if (!mounted) return;
       state = PhoneSetupViewState(
         stage: PhoneSetupViewStage.review,
@@ -398,6 +518,7 @@ class PhoneSetupPairingController extends StateNotifier<PhoneSetupViewState> {
         revision: revision,
         message: 'Could not return the setup yet. Try again.',
       );
+      _recordRuntimeRateLimitIfNeeded('reject', error);
     } finally {
       _operationInProgress = false;
     }
@@ -435,6 +556,10 @@ class PhoneSetupPairingController extends StateNotifier<PhoneSetupViewState> {
         state.stage == PhoneSetupViewStage.completed) {
       return;
     }
+    if (_retryCoolingDown) {
+      _showRetryCooldown();
+      return;
+    }
     _regenerationInProgress = true;
     _pollTimer?.cancel();
     var scheduleFreshPoll = false;
@@ -459,14 +584,23 @@ class PhoneSetupPairingController extends StateNotifier<PhoneSetupViewState> {
         if (previousSession != null) {
           // Do not issue a second live code unless the broker confirms that
           // the previous pairing is gone (404/410 also count as gone).
-          await _api.cancel(previousSession);
+          await _startupStep(
+            'session-cancel',
+            () => _api.cancel(previousSession),
+          );
         }
-        await _clearSavedSession();
+        await _startupStep('session-clear', _clearSavedSession);
         _lastObservedRevision = -1;
-        await _api.ensureReady();
-        final key = await _cryptography.generateKeyMaterial();
-        final freshSession = await _api.createSession(key);
-        await _saveSession(freshSession);
+        await _startupStep('health', _api.ensureReady);
+        final key = await _startupStep(
+          'key-generation',
+          _cryptography.generateKeyMaterial,
+        );
+        final freshSession = await _startupStep(
+          'session-create',
+          () => _api.createSession(key),
+        );
+        await _startupStep('session-persist', () => _saveSession(freshSession));
         if (!mounted) return;
         state = PhoneSetupViewState(
           stage: PhoneSetupViewStage.waiting,
@@ -474,13 +608,17 @@ class PhoneSetupPairingController extends StateNotifier<PhoneSetupViewState> {
           message: 'A new secure setup code is ready.',
         );
         scheduleFreshPoll = true;
-      } catch (_) {
+      } catch (error) {
         if (!mounted) return;
+        final message = _startupMessage(
+          error,
+          'The old code could not be replaced securely. Check the connection and try again.',
+        );
         state = PhoneSetupViewState(
           stage: PhoneSetupViewStage.failed,
           session: previousSession,
-          message:
-              'The old code could not be replaced securely. Check the connection and try again.',
+          message: message,
+          retryNotBefore: _retryNotBefore,
         );
       } finally {
         _operationInProgress = false;
@@ -507,15 +645,58 @@ class PhoneSetupPairingController extends StateNotifier<PhoneSetupViewState> {
         linkDiscordRequested: linkDiscordRequested,
         message: 'Phone setup is complete.',
       );
-    } catch (_) {
+    } catch (error) {
       if (!mounted) return;
       state = PhoneSetupViewState(
         stage: PhoneSetupViewStage.waiting,
         session: session,
         message: 'Your choices are saved. Reconnecting to confirm completion…',
       );
-      _schedulePoll(const Duration(seconds: 5));
+      _recordRuntimeRateLimitIfNeeded('acknowledge', error);
+      _schedulePoll(
+        _retryAfterFor(error, fallback: const Duration(seconds: 5)),
+      );
     }
+  }
+
+  Duration _retryAfterFor(Object error, {required Duration fallback}) {
+    if (error is PhoneSetupServiceException &&
+        error.reasonCode == 'rate_limited') {
+      return error.retryAfter ?? const Duration(seconds: 60);
+    }
+    return fallback;
+  }
+
+  void _recordRuntimeRateLimitIfNeeded(String stage, Object error) {
+    if (error is PhoneSetupServiceException &&
+        error.reasonCode == 'rate_limited') {
+      _recordRuntimeRateLimit(
+        stage,
+        error.retryAfter ?? const Duration(seconds: 60),
+        scope: error.rateLimitScope,
+      );
+    }
+  }
+
+  void _recordRuntimeRateLimit(
+    String stage,
+    Duration retryAfter, {
+    PhoneSetupRateLimitScope scope = PhoneSetupRateLimitScope.unknown,
+  }) {
+    final recorder = diagnosticRecorder;
+    if (recorder == null) return;
+    unawaited(
+      Future<void>.sync(
+        () => recorder({
+          'stage': stage,
+          'status': 'deferred',
+          'reason_code': 'rate_limited',
+          'code': 429,
+          'phase': scope.diagnosticCode,
+          'retry_after_seconds': retryAfter.inSeconds.clamp(1, 3600),
+        }),
+      ).catchError((_) {}),
+    );
   }
 
   void _schedulePoll(Duration delay) {

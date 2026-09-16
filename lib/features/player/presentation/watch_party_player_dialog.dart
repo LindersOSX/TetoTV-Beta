@@ -1,3 +1,4 @@
+import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'dart:async';
 
 import 'package:anime_tv/core/theme/app_theme.dart';
@@ -299,7 +300,9 @@ class _WatchPartyPlayerDialogState
                       const SizedBox(width: 10),
                       Expanded(
                         child: Text(
-                          hasRoom ? 'Watch Party room' : 'Start Watch Party',
+                          hasRoom
+                              ? context.tr("Watch Party room")
+                              : context.tr("Start Watch Party"),
                           style: Theme.of(context).textTheme.headlineSmall
                               ?.copyWith(fontWeight: FontWeight.w900),
                         ),
@@ -308,7 +311,9 @@ class _WatchPartyPlayerDialogState
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    'Playback keeps running. Closing this panel does not end the room.',
+                    context.tr(
+                      "Playback keeps running. Closing this panel does not end the room.",
+                    ),
                     style: TextStyle(color: palette.mutedText),
                   ),
                   SizedBox(height: compact ? 14 : 20),
@@ -322,7 +327,9 @@ class _WatchPartyPlayerDialogState
                           readyCount: snapshot?.readyCount ?? 0,
                           participants: participants,
                           participantFocusNodes: _participantFocusNodes,
-                          timelineDetail: watchPartyTimelineDetail(state),
+                          timelineDetail: context.tr(
+                            watchPartyTimelineDetail(state),
+                          ),
                           guestSyncOffset: state.guestSyncOffset,
                           canManageParticipants: canManageParticipants,
                           onManageParticipant: (participant) =>
@@ -331,7 +338,7 @@ class _WatchPartyPlayerDialogState
                       ),
                     )
                   else if (_creating || state.isBusy)
-                    const Padding(
+                    Padding(
                       padding: EdgeInsets.symmetric(vertical: 24),
                       child: Row(
                         children: [
@@ -340,7 +347,7 @@ class _WatchPartyPlayerDialogState
                             child: CircularProgressIndicator(strokeWidth: 3),
                           ),
                           SizedBox(width: 14),
-                          Text('Creating a private room…'),
+                          Text(context.tr("Creating a private room…")),
                         ],
                       ),
                     )
@@ -348,7 +355,7 @@ class _WatchPartyPlayerDialogState
                     Padding(
                       padding: const EdgeInsets.symmetric(vertical: 12),
                       child: Text(
-                        failureMessage ?? 'Preparing Watch Party…',
+                        failureMessage ?? context.tr('Preparing Watch Party…'),
                         key: const ValueKey('player-watch-party-error'),
                         style: TextStyle(color: palette.accentBright),
                       ),
@@ -382,7 +389,9 @@ class _WatchPartyPlayerDialogState
                             focusNode: _resyncFocus,
                             autofocus: false,
                             icon: Icons.sync_rounded,
-                            label: _resyncing ? 'Resyncing…' : 'Resync party',
+                            label: _resyncing
+                                ? context.tr("Resyncing…")
+                                : context.tr("Resync party"),
                             onPressed: _resyncing
                                 ? () {}
                                 : () => unawaited(_resyncParty()),
@@ -398,7 +407,7 @@ class _WatchPartyPlayerDialogState
                             focusNode: _earlierFocus,
                             autofocus: false,
                             icon: Icons.fast_rewind_rounded,
-                            label: '5s earlier',
+                            label: context.tr("5s earlier"),
                             onPressed: () =>
                                 _adjustGuestSync(const Duration(seconds: -5)),
                           ),
@@ -411,7 +420,7 @@ class _WatchPartyPlayerDialogState
                             ),
                             focusNode: _laterFocus,
                             icon: Icons.fast_forward_rounded,
-                            label: '5s later',
+                            label: context.tr("5s later"),
                             onPressed: () =>
                                 _adjustGuestSync(const Duration(seconds: 5)),
                           ),
@@ -424,7 +433,7 @@ class _WatchPartyPlayerDialogState
                                 'player-watch-party-sync-reset',
                               ),
                               icon: Icons.restore_rounded,
-                              label: 'Reset sync',
+                              label: context.tr("Reset sync"),
                               onPressed: () => ref
                                   .read(watchPartyControllerProvider.notifier)
                                   .resetGuestSyncOffset(),
@@ -439,7 +448,7 @@ class _WatchPartyPlayerDialogState
                             focusNode: _copyFocus,
                             autofocus: true,
                             icon: Icons.copy_rounded,
-                            label: 'Copy code',
+                            label: context.tr("Copy code"),
                             onPressed: () =>
                                 unawaited(_copyCode(session.roomCode)),
                           ),
@@ -452,7 +461,7 @@ class _WatchPartyPlayerDialogState
                             focusNode: _retryFocus,
                             autofocus: true,
                             icon: Icons.refresh_rounded,
-                            label: 'Try again',
+                            label: context.tr("Try again"),
                             onPressed: () => unawaited(_createRoom()),
                           ),
                         ),
@@ -463,7 +472,7 @@ class _WatchPartyPlayerDialogState
                           focusNode: _closeFocus,
                           autofocus: !hasRoom && (_creating || state.isBusy),
                           icon: Icons.close_rounded,
-                          label: 'Close',
+                          label: context.tr("Close"),
                           onPressed: () => Navigator.of(context).pop(),
                         ),
                       ),
@@ -477,10 +486,10 @@ class _WatchPartyPlayerDialogState
                                 ? Icons.stop_circle_outlined
                                 : Icons.logout_rounded,
                             label: _leaving
-                                ? 'Leaving…'
+                                ? context.tr("Leaving…")
                                 : session.role == WatchPartyRole.host
-                                ? 'End room'
-                                : 'Leave room',
+                                ? context.tr("End room")
+                                : context.tr("Leave room"),
                             onPressed: _leaving
                                 ? () {}
                                 : () => unawaited(_leaveRoom(session.role)),
@@ -559,17 +568,19 @@ class _ActivePlayerParty extends StatelessWidget {
         ),
         const SizedBox(height: 8),
         Text(
-          '${watchPartyViewerCountLabel(participantCount)} • '
-          '${watchPartyReadyGuestCountLabel(readyCount)}',
+          '${context.tr(participantCount == 1 ? '{count} person watching' : '{count} people watching', {'count': participantCount < 0 ? 0 : participantCount})} • '
+          '${context.tr(readyCount == 1 ? '{count} guest ready' : '{count} guests ready', {'count': readyCount < 0 ? 0 : readyCount})}',
           style: TextStyle(color: palette.mutedText),
         ),
         const SizedBox(height: 6),
         Text(
           guestSyncOffset == Duration.zero
               ? timelineDetail
-              : '$timelineDetail • local adjustment '
-                    '${guestSyncOffset.isNegative ? '-' : '+'}'
-                    '${guestSyncOffset.abs().inSeconds}s',
+              : context.tr('{timeline} • local adjustment {offset}s', {
+                  'timeline': timelineDetail,
+                  'offset':
+                      '${guestSyncOffset.isNegative ? '-' : '+'}${guestSyncOffset.abs().inSeconds}',
+                }),
           key: const ValueKey('player-watch-party-timeline-status'),
           style: TextStyle(
             color: palette.accentBright,
@@ -586,7 +597,9 @@ class _ActivePlayerParty extends StatelessWidget {
         ),
         const SizedBox(height: 10),
         Text(
-          'Share this room code to invite someone from TetoTV or the Watch Party website.',
+          context.tr(
+            "Share this room code to invite someone from TetoTV or the Watch Party website.",
+          ),
           style: const TextStyle(fontWeight: FontWeight.w700),
         ),
         const SizedBox(height: 6),
@@ -598,7 +611,9 @@ class _ActivePlayerParty extends StatelessWidget {
         ),
         const SizedBox(height: 8),
         Text(
-          'Room timing, public show identity, and a privacy-preserving source hint are synchronized. Stream URLs, tokens, headers, and video data stay on each viewer’s device.',
+          context.tr(
+            "Room timing, public show identity, and a privacy-preserving source hint are synchronized. Stream URLs, tokens, headers, and video data stay on each viewer’s device.",
+          ),
           style: TextStyle(color: palette.mutedText, fontSize: 12),
         ),
       ],
@@ -625,7 +640,7 @@ class _CompactParticipantPreview extends StatelessWidget {
     final palette = context.appPalette;
     if (participants.isEmpty) {
       return Text(
-        'Participant profiles will appear here as people join.',
+        context.tr("Participant profiles will appear here as people join."),
         key: const ValueKey('player-watch-party-participants-empty'),
         style: TextStyle(color: palette.mutedText, fontSize: 12),
       );
@@ -742,7 +757,7 @@ class _ParticipantChip extends StatelessWidget {
     if (onPressed == null) return chip;
     return Semantics(
       button: true,
-      label: 'Manage ${participant.displayName}',
+      label: context.tr("Manage {value1}", {'value1': participant.displayName}),
       child: TvFocusable(
         focusNode: focusNode,
         onPressed: onPressed!,
@@ -763,22 +778,26 @@ class _ManageParticipantDialog extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => AlertDialog(
-    title: Text('Manage ${participant.displayName}'),
-    content: const Text(
-      'Transfer makes this person the only playback host. Remove disconnects them from this room.',
+    title: Text(
+      context.tr("Manage {value1}", {'value1': participant.displayName}),
+    ),
+    content: Text(
+      context.tr(
+        "Transfer makes this person the only playback host. Remove disconnects them from this room.",
+      ),
     ),
     actions: [
       _DialogAction(
         key: const ValueKey('player-watch-party-manage-cancel'),
         icon: Icons.close_rounded,
-        label: 'Cancel',
+        label: context.tr("Cancel"),
         autofocus: true,
         onPressed: () => Navigator.of(context).pop(),
       ),
       _DialogAction(
         key: const ValueKey('player-watch-party-transfer-host'),
         icon: Icons.manage_accounts_rounded,
-        label: 'Make host',
+        label: context.tr("Make host"),
         onPressed: () => Navigator.of(
           context,
         ).pop(_ParticipantManagementAction.transferHost),
@@ -786,7 +805,7 @@ class _ManageParticipantDialog extends StatelessWidget {
       _DialogAction(
         key: const ValueKey('player-watch-party-kick'),
         icon: Icons.person_remove_rounded,
-        label: 'Remove',
+        label: context.tr("Remove"),
         onPressed: () =>
             Navigator.of(context).pop(_ParticipantManagementAction.kick),
       ),
@@ -803,22 +822,30 @@ class _ConfirmLeaveRoomDialog extends StatelessWidget {
   Widget build(BuildContext context) {
     final host = role == WatchPartyRole.host;
     return AlertDialog(
-      title: Text(host ? 'End Watch Party room?' : 'Leave this room?'),
+      title: Text(
+        host
+            ? context.tr("End Watch Party room?")
+            : context.tr("Leave this room?"),
+      ),
       content: Text(
         host
-            ? 'This ends the room for every participant. Playback on your device keeps running.'
-            : 'You will stop following the host. Playback on your device keeps running.',
+            ? context.tr(
+                "This ends the room for every participant. Playback on your device keeps running.",
+              )
+            : context.tr(
+                "You will stop following the host. Playback on your device keeps running.",
+              ),
       ),
       actions: [
         _DialogAction(
           icon: Icons.close_rounded,
-          label: 'Cancel',
+          label: context.tr("Cancel"),
           autofocus: true,
           onPressed: () => Navigator.of(context).pop(false),
         ),
         _DialogAction(
           icon: host ? Icons.stop_circle_outlined : Icons.logout_rounded,
-          label: host ? 'End room' : 'Leave room',
+          label: host ? context.tr("End room") : context.tr("Leave room"),
           onPressed: () => Navigator.of(context).pop(true),
         ),
       ],

@@ -1,10 +1,10 @@
 # Built-in Android playback engines
 
-MPV remains the default. On Android, choose **Settings → Playback → Default player → Media3 (Built in)** to use AndroidX Media3/ExoPlayer for the next playback session. Choose MPV again to switch back. Existing preferences are not migrated to an external player.
+Media3 is the default built-in player on Android. New and reset installs use AndroidX Media3/ExoPlayer for the next playback session; valid saved choices remain unchanged, including an explicit MPV choice. Choose **Settings → Playback → Default player** to switch engines. Existing preferences are never migrated to an external player.
 
-Android Playback settings also include **Media3 SurfaceView** (experimental, off by default). Off uses the existing TextureView video output. Enabling it selects Media3 as the default player and uses SurfaceView for the next playback session. Disabling it returns Media3 to TextureView without changing the selected player. A later explicit choice of MPV is respected; the rendering preference never changes MPV's output or decoder configuration.
+Android Playback settings also include **Media3 SurfaceView**, which is on by default. Turning it off uses TextureView for the next Media3 session without changing the selected player. Turning it on selects Media3 and uses SurfaceView for the next playback session. A later explicit choice of MPV is respected; the rendering preference never changes MPV's output or decoder configuration.
 
-SurfaceView uses native hierarchy composition beneath the shared Flutter HUD. It is an optional device-comparison setting, not a guarantee of higher FPS. Both modes retain the same controls, native captions, fit/zoom options, and screenshot API. Rendering mode does not change in the middle of an active playback session. Media3 scrubbing shows only the timestamp bubble, without scene thumbnails.
+SurfaceView uses native hierarchy composition beneath the shared Flutter HUD. TextureView remains available as a device-compatibility comparison; neither mode guarantees higher FPS on every device. Both modes retain the same controls, native captions, fit/zoom options, and screenshot API. Rendering mode does not change in the middle of an active playback session. Media3 scrubbing shows only the timestamp bubble, without scene thumbnails.
 
 The SurfaceView option was checked on the Android TV API 36 emulator in both modes: playback, seeking, caption/audio selection, decoder changes, HUD input, view recreation, sizing, screenshots, and bounded playback end passed. Settings tests cover persistence, startup races, reset, automatic Media3 selection, and later explicit MPV selection. These checks do not establish an FPS improvement on the customer's physical TV.
 

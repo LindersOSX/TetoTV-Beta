@@ -5,12 +5,9 @@
 
 ## What's changed
 
-- Added **Settings → Playback → Media3 SurfaceView**, an experimental rendering toggle for Android. Off uses TextureView (the default). Turning it on automatically selects **Media3 (Built in)** for the next video.
-- Turning it off returns Media3 to TextureView without changing your selected player. You can still select MPV independently; MPV playback and rendering are unchanged.
-- Both Media3 modes use the same TetoTV HUD, captions, seeking and sizing controls. Rendering changes apply when you next open a video, not during playback.
-- Removed the Media3 scrubbing scene-preview window. The seek timestamp bubble remains.
-- SurfaceView is an optional device-specific comparison, not a guaranteed fix for low FPS.
-- AI tools assisted with implementation, testing and documentation. The project owner remains responsible for the release.
+- Added **Media3 SurfaceView** in **Settings → Playback** to try if videos stutter. Results vary by device.
+- Switching this option on uses Media3 for the next video. Your familiar player controls stay the same; MPV is unchanged.
+- Removed the small video-preview window when seeking in Media3. The time bubble stays.
 
 ## Install
 
@@ -24,5 +21,10 @@ Download **TetoTV-v2.0.74-universal.apk** for supported Android phones, tablets,
 - Physical-TV performance improvement has not been established. Existing engine differences, including MPV-only manual audio/subtitle timing offsets, remain.
 - Beta only, Android build code **410051**. No Public APK is being published.
 - No repository, provider, catalog or media content is bundled or recommended by this update.
+
+## Developer notes
+
+- Turning SurfaceView off returns Media3 to TextureView without changing the selected player. Rendering changes apply to the next video, not during playback.
+- AI tools assisted with implementation, testing and documentation. The project owner remains responsible for the release.
 
 <!-- tetotv-android-version-code: 410051 -->

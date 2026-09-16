@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:anime_tv/core/preferences/playback_audio_preference.dart';
 import 'package:anime_tv/core/storage/tetotv_database.dart';
+import 'package:anime_tv/features/aniyomi/application/aniyomi_controller.dart';
 import 'package:anime_tv/features/marketplace/application/marketplace_controller.dart';
 import 'package:anime_tv/features/marketplace/data/addon_store.dart';
 import 'package:anime_tv/features/marketplace/data/seanime_javascript_provider.dart';
@@ -12,10 +14,12 @@ import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 const defaultWebProviderDeadline = Duration(seconds: 12);
+const defaultAdditionalWebProviderDeadline = Duration(seconds: 30);
 const defaultWebProviderInteractiveBudget = Duration(seconds: 8);
 const defaultWebProviderBackgroundBudget = Duration(seconds: 45);
 const defaultMaxConcurrentWebProviders = 3;
 const defaultWebProviderCleanupBudget = Duration(seconds: 9);
+const defaultAdditionalProviderLoadBudget = Duration(milliseconds: 250);
 
 var _webProviderSearchDiagnosticSequence = 0;
 final String _webProviderSearchDiagnosticBootNonce = (() {
@@ -59,6 +63,15 @@ final webStreamAggregatorProvider = Provider<WebStreamAggregator>(
         (preferences) => preferences.preferredCaptionLanguage,
       ),
     ),
+    preferredAudio: ref.watch(
+      settingsPreferencesProvider.select(
+        (preferences) => preferences.preferredAudio,
+      ),
+    ),
+    additionalProvidersLoader: ref.watch(aniyomiWebProvidersLoaderProvider),
+    additionalProviderSnapshotGeneration: () => ref
+        .read(aniyomiControllerProvider.notifier)
+        .animeProviderSnapshotGeneration,
   ),
 );
 
@@ -102,6 +115,9 @@ class WebStreamAggregator {
     this.cleanupBudget = defaultWebProviderCleanupBudget,
     this.sharedSessionGrace = const Duration(seconds: 2),
     this.preferredSubtitleLanguage = 'eng',
+    this.preferredAudio,
+    this.additionalProvidersLoader,
+    this.additionalProviderSnapshotGeneration,
   });
 
   final AddonStore _store;
@@ -112,6 +128,17 @@ class WebStreamAggregator {
   final Duration cleanupBudget;
   final Duration sharedSessionGrace;
   final String preferredSubtitleLanguage;
+  final PlaybackAudioPreference? preferredAudio;
+
+  /// Optional native providers are loaded independently; default construction
+  /// preserves Seanime-only discovery. Production rechecks developer opt-in.
+  final FutureOr<List<WebStreamingProvider>> Function()?
+  additionalProvidersLoader;
+
+  /// Changes only when the optional provider identities or metadata change.
+  /// A completed shared search created from an earlier snapshot must not hide
+  /// providers that finished cold-start discovery just after its load budget.
+  final int Function()? additionalProviderSnapshotGeneration;
   final Map<String, _SharedWebSearchSession> _sharedSessions = {};
 
   /// Replays and shares one provider search per episode across resolver and
@@ -124,6 +151,8 @@ class WebStreamAggregator {
   }) {
     final key = _episodeSearchKey(episode);
     final existing = _sharedSessions[key];
+    final providerSnapshotGeneration = additionalProviderSnapshotGeneration
+        ?.call();
     final expired =
         existing != null &&
         existing.isComplete &&
@@ -133,6 +162,9 @@ class WebStreamAggregator {
         existing == null ||
         existing.wasAbandoned ||
         expired ||
+        (existing.isComplete &&
+            existing.providerSnapshotGeneration !=
+                providerSnapshotGeneration) ||
         (refresh && existing.isComplete);
     final obsoleteSessions = _sharedSessions.entries
         .where(
@@ -144,7 +176,12 @@ class WebStreamAggregator {
         .map((entry) => entry.value)
         .toList(growable: false);
     final session = shouldReplace
-        ? _startSharedSession(key, episode, obsoleteSessions: obsoleteSessions)
+        ? _startSharedSession(
+            key,
+            episode,
+            providerSnapshotGeneration: providerSnapshotGeneration,
+            obsoleteSessions: obsoleteSessions,
+          )
         : existing;
     if (!shouldReplace && obsoleteSessions.isNotEmpty) {
       // A retained route can still be mounted briefly after navigation. Only
@@ -160,10 +197,12 @@ class WebStreamAggregator {
   _SharedWebSearchSession _startSharedSession(
     String key,
     EpisodeReference episode, {
+    required int? providerSnapshotGeneration,
     List<_SharedWebSearchSession> obsoleteSessions = const [],
   }) {
     final session = _SharedWebSearchSession(
       zeroListenerGrace: sharedSessionGrace,
+      providerSnapshotGeneration: providerSnapshotGeneration,
     );
     session.prepare();
     _sharedSessions[key] = session;
@@ -247,6 +286,7 @@ class WebStreamAggregator {
         const WebStreamSearchProgress(foregroundComplete: true);
     final replacement = _SharedWebSearchSession(
       zeroListenerGrace: sharedSessionGrace,
+      providerSnapshotGeneration: additionalProviderSnapshotGeneration?.call(),
     );
     replacement.prepare();
     _sharedSessions[key] = replacement;
@@ -308,7 +348,11 @@ class WebStreamAggregator {
   }) async* {
     final searchStopwatch = Stopwatch()..start();
     final diagnosticSessionId = nextWebProviderSearchDiagnosticSessionId();
-    final health = await _store.providerHealth();
+    final storedHealth = await _store.providerHealth();
+    final health = <String, ProviderHealth>{
+      for (final entry in storedHealth.entries)
+        entry.key.trim().toLowerCase(): entry.value,
+    };
     final allInstalledAddons = await _store.installedStreamingAddons();
     final installedAddons = onlyProviderIds == null
         ? allInstalledAddons
@@ -325,14 +369,70 @@ class WebStreamAggregator {
     final availabilityFailures = <WebProviderFailure>[];
     final searchable = <InstalledStreamingAddon>[];
     var blockedProviders = 0;
+    final additionalProviders = <WebStreamingProvider>[];
+    var additionalLoaderFailures = 0;
+    final loader = additionalProvidersLoader;
+    final shouldLoadAdditionalProviders =
+        loader != null &&
+        (onlyProviderIds == null ||
+            onlyProviderIds.any((id) => id.startsWith('aniyomi:')));
+    if (shouldLoadAdditionalProviders) {
+      try {
+        final requested = loader();
+        final loaded = requested is Future<List<WebStreamingProvider>>
+            ? await requested.timeout(defaultAdditionalProviderLoadBudget)
+            : requested;
+        if (loaded.length > 128) {
+          throw const FormatException(
+            'Too many experimental native providers.',
+          );
+        }
+        final identities = allInstalledAddons
+            .map((addon) => addon.manifest.id.trim().toLowerCase())
+            .toSet();
+        for (final provider in loaded) {
+          final identity = provider.id.trim().toLowerCase();
+          if (identity.isEmpty ||
+              !identities.add(identity) ||
+              (onlyProviderIds != null &&
+                  !onlyProviderIds.contains(identity))) {
+            continue;
+          }
+          additionalProviders.add(provider);
+        }
+      } catch (_) {
+        // A disabled/unavailable native backend cannot suppress Seanime peers.
+        additionalLoaderFailures = 1;
+        blockedProviders++;
+        availabilityFailures.add(
+          const WebProviderFailure(
+            providerId: 'aniyomi:loader',
+            providerName: 'Aniyomi experimental',
+            message: 'Experimental native sources could not be loaded.',
+            status: WebProviderFailureStatus.unavailable,
+            stage: 'availability',
+            reason: 'native_provider_loader_unavailable',
+          ),
+        );
+      }
+    }
+    final installedProviderCount =
+        installedAddons.length +
+        additionalProviders.length +
+        additionalLoaderFailures;
+    final enabledProviderCount =
+        enabledAddons.length +
+        additionalProviders.length +
+        additionalLoaderFailures;
     for (final addon in enabledAddons) {
       final provider = SeanimeJavascriptProvider(
         addon,
         preferredSubtitleLanguage: preferredSubtitleLanguage,
+        preferredAudio: preferredAudio,
       );
       final availabilityFailure = installedWebProviderAvailabilityFailure(
         addon,
-        health[addon.manifest.id],
+        health[addon.manifest.id.trim().toLowerCase()],
       );
       final failure =
           retryTemporarilyDeprioritized &&
@@ -359,20 +459,25 @@ class WebStreamAggregator {
       }
     }
     final addons = orderInstalledProvidersByHealth(searchable, health);
-    final providers = addons
-        .map(
-          (addon) => SeanimeJavascriptProvider(
-            addon,
-            preferredSubtitleLanguage: preferredSubtitleLanguage,
-          ),
-        )
-        .toList();
+    final providers =
+        addons
+            .map<WebStreamingProvider>(
+              (addon) => SeanimeJavascriptProvider(
+                addon,
+                preferredSubtitleLanguage: preferredSubtitleLanguage,
+                preferredAudio: preferredAudio,
+              ),
+            )
+            .toList()
+          ..addAll(additionalProviders);
+    final additionalProviderIdentities = Set<WebStreamingProvider>.identity()
+      ..addAll(additionalProviders);
     _recordProviderSearchSummary(
       webProviderSearchSummaryDiagnosticDetails(
         phase: 'start',
         diagnosticSessionId: diagnosticSessionId,
-        installedProviders: installedAddons.length,
-        enabledProviders: enabledAddons.length,
+        installedProviders: installedProviderCount,
+        enabledProviders: enabledProviderCount,
         searchableProviders: providers.length,
         blockedProviders: blockedProviders,
         completedProviders: blockedProviders,
@@ -396,6 +501,10 @@ class WebStreamAggregator {
         providers,
         episode,
         deadline: providerDeadline,
+        providerDeadlineSelector: (provider) =>
+            additionalProviderIdentities.contains(provider)
+            ? defaultAdditionalWebProviderDeadline
+            : providerDeadline,
         maxConcurrentProviders: maxConcurrentProviders,
         interactiveBudget: interactiveBudget,
         backgroundBudget: backgroundBudget,
@@ -466,7 +575,7 @@ class WebStreamAggregator {
         ]);
         final completedProviders =
             progress.completedProviders + blockedProviders;
-        final isComplete = completedProviders >= enabledAddons.length;
+        final isComplete = completedProviders >= enabledProviderCount;
         final returnedProviders = aggregation.streams
             .map(webStreamProviderIdentity)
             .toSet()
@@ -481,8 +590,8 @@ class WebStreamAggregator {
             webProviderSearchSummaryDiagnosticDetails(
               phase: phase,
               diagnosticSessionId: diagnosticSessionId,
-              installedProviders: installedAddons.length,
-              enabledProviders: enabledAddons.length,
+              installedProviders: installedProviderCount,
+              enabledProviders: enabledProviderCount,
               searchableProviders: providers.length,
               blockedProviders: blockedProviders,
               completedProviders: completedProviders,
@@ -509,7 +618,7 @@ class WebStreamAggregator {
         yield WebStreamSearchProgress(
           aggregation: aggregation,
           completedProviders: completedProviders,
-          totalProviders: enabledAddons.length,
+          totalProviders: enabledProviderCount,
           pendingProviderNames: progress.pendingProviderNames,
           diagnosticSessionId: diagnosticSessionId,
           foregroundComplete: progress.foregroundComplete,
@@ -524,8 +633,8 @@ class WebStreamAggregator {
         webProviderSearchSummaryDiagnosticDetails(
           phase: 'error',
           diagnosticSessionId: diagnosticSessionId,
-          installedProviders: installedAddons.length,
-          enabledProviders: enabledAddons.length,
+          installedProviders: installedProviderCount,
+          enabledProviders: enabledProviderCount,
           searchableProviders: providers.length,
           blockedProviders: blockedProviders,
           completedProviders: lastCompletedProviders,
@@ -538,8 +647,8 @@ class WebStreamAggregator {
             lastAggregation.failures,
           ),
           elapsedMs: searchStopwatch.elapsedMilliseconds,
-          pendingProviders: (enabledAddons.length - lastCompletedProviders)
-              .clamp(0, enabledAddons.length),
+          pendingProviders: (enabledProviderCount - lastCompletedProviders)
+              .clamp(0, enabledProviderCount),
         ),
       );
       rethrow;
@@ -549,8 +658,8 @@ class WebStreamAggregator {
           webProviderSearchSummaryDiagnosticDetails(
             phase: 'canceled',
             diagnosticSessionId: diagnosticSessionId,
-            installedProviders: installedAddons.length,
-            enabledProviders: enabledAddons.length,
+            installedProviders: installedProviderCount,
+            enabledProviders: enabledProviderCount,
             searchableProviders: providers.length,
             blockedProviders: blockedProviders,
             completedProviders: lastCompletedProviders,
@@ -563,8 +672,8 @@ class WebStreamAggregator {
               lastAggregation.failures,
             ),
             elapsedMs: searchStopwatch.elapsedMilliseconds,
-            pendingProviders: (enabledAddons.length - lastCompletedProviders)
-                .clamp(0, enabledAddons.length),
+            pendingProviders: (enabledProviderCount - lastCompletedProviders)
+                .clamp(0, enabledProviderCount),
           ),
         );
       }
@@ -665,10 +774,14 @@ String _episodeSearchKey(EpisodeReference episode) {
 }
 
 class _SharedWebSearchSession {
-  _SharedWebSearchSession({required this.zeroListenerGrace});
+  _SharedWebSearchSession({
+    required this.zeroListenerGrace,
+    this.providerSnapshotGeneration,
+  });
 
   final startedAt = DateTime.now();
   final Duration zeroListenerGrace;
+  final int? providerSnapshotGeneration;
   final StreamController<WebStreamSearchProgress> _updates =
       StreamController<WebStreamSearchProgress>.broadcast(sync: true);
   WebStreamSearchProgress? _latest;
@@ -771,8 +884,12 @@ List<InstalledStreamingAddon> orderInstalledProvidersByHealth(
       .map((item) => (index: item.$1, addon: item.$2))
       .toList();
   indexed.sort((left, right) {
-    final leftHealth = health[left.addon.manifest.id];
-    final rightHealth = health[right.addon.manifest.id];
+    final advisory = _providerManifestPriorityBucket(
+      left.addon,
+    ).compareTo(_providerManifestPriorityBucket(right.addon));
+    if (advisory != 0) return advisory;
+    final leftHealth = health[left.addon.manifest.id.trim().toLowerCase()];
+    final rightHealth = health[right.addon.manifest.id.trim().toLowerCase()];
     final bucket = _providerHealthBucket(
       leftHealth,
     ).compareTo(_providerHealthBucket(rightHealth));
@@ -793,12 +910,21 @@ List<InstalledStreamingAddon> orderInstalledProvidersByHealth(
 }
 
 int _providerHealthBucket(ProviderHealth? health) {
-  if (health?.lastSuccessAt != null && health!.consecutiveFailures == 0) {
+  // One transient miss should not erase a provider's proven affinity. The
+  // repeated-failure quarantine remains the point where it moves behind
+  // unknown providers and continues only in the background.
+  if (health?.lastSuccessAt != null && health!.consecutiveFailures <= 1) {
     return 0;
   }
   if (health == null) return 1;
   if (health.consecutiveFailures == 0) return 2;
   return 3;
+}
+
+int _providerManifestPriorityBucket(InstalledStreamingAddon addon) {
+  if (addon.manifest.reportedBroken) return 2;
+  if (addon.manifest.isDeprecated) return 1;
+  return 0;
 }
 
 WebProviderFailure? installedWebProviderAvailabilityFailure(
@@ -829,9 +955,10 @@ WebProviderFailure? installedWebProviderAvailabilityFailure(
       message: 'Unavailable because this provider runtime is not supported.',
     );
   }
-  final permanentReason =
-      health?.lastFailureReason == 'runtime_api' ||
-          health?.lastTestReason == 'runtime_api'
+  // Only an explicit compatibility test can establish a missing runtime API.
+  // Discovery-time upstream TypeErrors remain searchable and use the normal
+  // repeated-failure circuit; one bad payload must not hide the provider.
+  final permanentReason = health?.lastTestReason == 'runtime_api'
       ? 'runtime_api'
       : health?.lastFailureReason == 'unsafe_target' ||
             health?.lastTestReason == 'unsafe_target'
@@ -1058,6 +1185,10 @@ String _safeWebProviderFailureReason(String value) {
   if (RegExp(r'^http_[1-5][0-9]{2}$').hasMatch(value)) return value;
   return const {
         'timeout',
+        'request_limit',
+        'response_limit',
+        'redirect_limit',
+        'invalid_payload',
         'empty_sources',
         'unsafe_target',
         'invalid_response',
@@ -1093,8 +1224,9 @@ String webProviderSearchDiagnosticMessage(
   }
 
   final seanime = provider is SeanimeJavascriptProvider ? provider : null;
+  final providerIdentity = _webProviderDiagnosticIdentity(provider.id);
   return [
-    'provider=${field(provider.id)}',
+    'provider=${field(providerIdentity)}',
     'version=${field(seanime?.version)}',
     'repositoryHost=${field(seanime?.repositoryHost)}',
     'executableHost=${field(seanime?.executableHost)}',
@@ -1103,6 +1235,26 @@ String webProviderSearchDiagnosticMessage(
     'count=${count.clamp(0, 9999)}',
     'reason=${field(reason)}',
   ].join(' ');
+}
+
+String _webProviderDiagnosticIdentity(String raw) {
+  final value = raw.trim();
+  // Colons make the explicit-report sanitizer correctly treat arbitrary text
+  // as a possible URI. Native source IDs have one fixed, non-URL grammar, so
+  // encode only that trusted shape without colons and retain the source-level
+  // identity needed to correlate repeated failures. Marketplace IDs already
+  // use the stricter manifest grammar below. Everything else fails closed.
+  final native = RegExp(
+    r'^aniyomi:(anime|manga):source:(-?[0-9]{1,20})$',
+    caseSensitive: false,
+  ).firstMatch(value);
+  if (native != null) {
+    return 'aniyomi_${native.group(1)!.toLowerCase()}_source_'
+        '${native.group(2)}';
+  }
+  return RegExp(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$').hasMatch(value)
+      ? value
+      : 'unknown';
 }
 
 typedef WebProviderSuccessCallback =
@@ -1143,6 +1295,9 @@ typedef WebProviderOutcomeCallback =
       WebProviderExecutionOutcome outcome,
     );
 
+typedef WebProviderDeadlineSelector =
+    Duration Function(WebStreamingProvider provider);
+
 /// Searches providers through a small worker pool and emits an accumulated
 /// result whenever one finishes. Each provider has its own deadline, so one
 /// abandoned or incompatible add-on cannot hold the entire stream picker open
@@ -1151,6 +1306,7 @@ Stream<WebStreamSearchProgress> aggregateWebStreamingProvidersIncrementally(
   List<WebStreamingProvider> providers,
   EpisodeReference episode, {
   Duration deadline = defaultWebProviderDeadline,
+  WebProviderDeadlineSelector? providerDeadlineSelector,
   int maxConcurrentProviders = defaultMaxConcurrentWebProviders,
   Duration interactiveBudget = defaultWebProviderInteractiveBudget,
   Duration backgroundBudget = defaultWebProviderBackgroundBudget,
@@ -1235,10 +1391,12 @@ Stream<WebStreamSearchProgress> aggregateWebStreamingProvidersIncrementally(
             active.length < concurrency &&
             nextIndex < available.length) {
           final index = nextIndex++;
+          final selectedDeadline =
+              providerDeadlineSelector?.call(available[index]) ?? deadline;
           final task = _startWebProviderSearch(
             available[index],
             episode,
-            deadline,
+            selectedDeadline,
             cancellation: cancellation,
             queuedFor: searchClock.elapsed,
             cleanupBudget: cleanupBudget,
@@ -1272,7 +1430,26 @@ Stream<WebStreamSearchProgress> aggregateWebStreamingProvidersIncrementally(
         if (!backgroundDeadlineReached || listenerCancelled) return;
         for (var index = 0; index < available.length; index++) {
           if (!completedIndexes.add(index)) continue;
-          outcomes.add(_webProviderBackgroundDeadlineOutcome(available[index]));
+          final outcome = _webProviderBackgroundDeadlineOutcome(
+            available[index],
+          );
+          outcomes.add(outcome);
+          final task = active[index];
+          final queuedFor = task?.queuedFor ?? searchClock.elapsed;
+          final elapsed = task == null
+              ? Duration.zero
+              : searchClock.elapsed - queuedFor;
+          // Scheduler cutoffs are intentionally excluded from provider
+          // health, but they still need one per-provider diagnostic outcome.
+          // Otherwise the exact providers which exhausted the overall search
+          // window disappear from an exported report.
+          _invokeWebProviderOutcome(
+            onOutcome,
+            available[index],
+            outcome,
+            queuedFor: queuedFor,
+            elapsed: elapsed,
+          );
         }
         nextIndex = available.length;
         foregroundComplete = true;
@@ -1378,7 +1555,11 @@ class _IndexedWebProviderTaskEvent {
 }
 
 class _WebProviderTask {
-  const _WebProviderTask({required this.outcome, required this.settled});
+  const _WebProviderTask({
+    required this.outcome,
+    required this.settled,
+    required this.queuedFor,
+  });
 
   /// Completes at the user-visible provider deadline or cancellation signal.
   final Future<_WebProviderOutcome> outcome;
@@ -1386,6 +1567,9 @@ class _WebProviderTask {
   /// Completes only after the provider future has unwound its runtime, or the
   /// bounded forced-cleanup window has elapsed for a non-conforming provider.
   final Future<void> settled;
+
+  /// Time this provider spent waiting for a worker slot.
+  final Duration queuedFor;
 }
 
 List<String> _pendingWebProviderNames(
@@ -1457,6 +1641,7 @@ _WebProviderTask _startWebProviderSearch(
     // blocks. The second branch prevents a broken third-party implementation
     // from deadlocking every future provider wave after cancellation.
     settled: Future.any<void>([providerSettled, boundedCleanup]),
+    queuedFor: queuedFor,
   );
 }
 
@@ -1587,6 +1772,11 @@ Future<_WebProviderOutcome> _resolveWebProviderOutcome(
           )
         : error;
     final details = seanimeProviderFailureDetails(failureError);
+    final failureStage =
+        details?.stage ?? (failureError is TimeoutException ? 'runtime' : null);
+    final failureReason =
+        details?.reason ??
+        (failureError is TimeoutException ? 'timeout' : null);
     // Only search/title/episode/server lookup empties are neutral no-matches.
     // Extraction-stage empties mean a selected episode failed to produce a
     // playable stream and must remain actionable provider failures.
@@ -1605,8 +1795,8 @@ Future<_WebProviderOutcome> _resolveWebProviderOutcome(
           status: noMatch
               ? WebProviderFailureStatus.noMatch
               : WebProviderFailureStatus.failed,
-          stage: details?.stage,
-          reason: details?.reason,
+          stage: failureStage,
+          reason: failureReason,
           message: noMatch
               ? 'No matching title or episode from this provider.'
               : failureError is TimeoutException
@@ -1764,8 +1954,7 @@ WebStreamAggregation mergeWebProviderOutcomes(
       // Different providers may intentionally return the same CDN URI with
       // different headers, subtitles, or server identity. Deduplicate only
       // within one provider so provider B is not erased before fair ordering.
-      final providerIdentity = webStreamProviderIdentity(stream);
-      final key = '$providerIdentity\u0000${stream.uri}';
+      final key = webStreamPlaybackVariantKey(stream);
       final existing = unique[key];
       if (existing == null) {
         unique[key] = stream;
@@ -1774,11 +1963,12 @@ WebStreamAggregation mergeWebProviderOutcomes(
       final winner = _compareDuplicateWebStream(stream, existing) < 0
           ? stream
           : existing;
-      unique[key] = winner.withAudioCapability(
-        mergeWebStreamAudioCapabilities(
-          existing.effectiveAudioCapability,
-          stream.effectiveAudioCapability,
-        ),
+      unique[key] = winner.withAudioMetadata(
+        capability: winner.effectiveAudioCapability,
+        languages: <String>{
+          ...existing.audioLanguages,
+          ...stream.audioLanguages,
+        },
       );
     }
   }
@@ -1888,6 +2078,7 @@ Future<WebStreamAggregation> aggregateWebStreamingProviders(
   List<WebStreamingProvider> providers,
   EpisodeReference episode, {
   Duration deadline = defaultWebProviderDeadline,
+  WebProviderDeadlineSelector? providerDeadlineSelector,
   int maxConcurrentProviders = defaultMaxConcurrentWebProviders,
   Duration interactiveBudget = defaultWebProviderInteractiveBudget,
   Duration backgroundBudget = defaultWebProviderBackgroundBudget,
@@ -1898,6 +2089,7 @@ Future<WebStreamAggregation> aggregateWebStreamingProviders(
     providers,
     episode,
     deadline: deadline,
+    providerDeadlineSelector: providerDeadlineSelector,
     maxConcurrentProviders: maxConcurrentProviders,
     interactiveBudget: interactiveBudget,
     backgroundBudget: backgroundBudget,

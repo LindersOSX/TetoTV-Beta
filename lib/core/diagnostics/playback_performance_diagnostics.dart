@@ -208,6 +208,7 @@ const _booleanFields = <String>{
   'inForeground',
   'cacheUnderrun',
   'pausedForCache',
+  'externalAudioFallback',
   'videoParametersAvailable',
 };
 const _eventDurationFields = <String>{
@@ -235,6 +236,7 @@ const _latestSummaryFields = <String>{
   'estimatedDisplayFps',
   'androidDisplayFps',
   'videoParametersAvailable',
+  'externalAudioFallback',
   'openState',
   ..._eventDurationFields,
   ..._eventCountFields,
@@ -261,6 +263,7 @@ const _metricFields = <String>{
   'inputBytesPerSecond',
   'cacheUnderrun',
   'pausedForCache',
+  'externalAudioFallback',
   'videoParametersAvailable',
   ..._eventDurationFields,
   ..._eventCountFields,

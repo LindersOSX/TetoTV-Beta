@@ -1,3 +1,4 @@
+import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'dart:async';
 
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
@@ -143,19 +144,19 @@ class _InitialSetupScreenState extends ConsumerState<InitialSetupScreen> {
       context: context,
       builder: (context) => AlertDialog(
         backgroundColor: context.appPalette.surface,
-        title: const Text('Leave setup?'),
-        content: const Text(
+        title: const LocalizedText('Leave setup?'),
+        content: const LocalizedText(
           'You can finish these choices later from Settings.',
         ),
         actions: [
           TextButton(
             autofocus: true,
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('Keep setting up'),
+            child: const LocalizedText('Keep setting up'),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('Set up later'),
+            child: const LocalizedText('Set up later'),
           ),
         ],
       ),
@@ -193,7 +194,7 @@ class _InitialSetupScreenState extends ConsumerState<InitialSetupScreen> {
                   ),
                   const SizedBox(width: 10),
                   Expanded(
-                    child: Text(
+                    child: LocalizedText(
                       'Set up TetoTV',
                       style: Theme.of(context).textTheme.headlineSmall,
                     ),
@@ -410,6 +411,38 @@ class _TvExperienceStep extends ConsumerWidget {
                       ],
                     ),
                   ),
+                  block(
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _SetupChoiceRow(
+                          label: 'Manga reader',
+                          children: [
+                            _SetupChoice(
+                              label: 'Enable',
+                              selected: preferences.mangaReaderEnabled,
+                              onPressed: () =>
+                                  controller.setMangaReaderEnabled(true),
+                            ),
+                            _SetupChoice(
+                              label: 'Disable',
+                              selected: !preferences.mangaReaderEnabled,
+                              onPressed: () =>
+                                  controller.setMangaReaderEnabled(false),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 6),
+                        LocalizedText(
+                          'You can change this later in Settings.',
+                          style: TextStyle(
+                            color: context.appPalette.mutedText,
+                            fontSize: 10,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 ],
               ),
             ],
@@ -482,7 +515,7 @@ class _TvExperiencePreview extends StatelessWidget {
             children: [
               Row(
                 children: [
-                  Text(
+                  LocalizedText(
                     preferences.homeLayout.displayName,
                     style: const TextStyle(
                       fontSize: 8,
@@ -866,11 +899,12 @@ class _AccountsStep extends ConsumerWidget {
                 context.push(switch (preferences.trackingProvider) {
                   TrackingProvider.anilist => '/pair/anilist',
                   TrackingProvider.myAnimeList => '/pair/myanimelist',
+                  TrackingProvider.kitsu => '/pair/kitsu',
                   TrackingProvider.simkl => '/pair/simkl',
                 }),
           ),
           const SizedBox(height: 18),
-          const Text(
+          const LocalizedText(
             'Discord presence',
             style: TextStyle(fontWeight: FontWeight.w900),
           ),
@@ -906,7 +940,7 @@ class _AccountsStep extends ConsumerWidget {
                     },
             ),
           const SizedBox(height: 9),
-          Text(
+          LocalizedText(
             'Connections are optional. TetoTV never sees or stores your account passwords.',
             textAlign: TextAlign.center,
             style: TextStyle(color: context.appPalette.mutedText, fontSize: 10),
@@ -954,7 +988,7 @@ class _StreamingStep extends ConsumerWidget {
           'Choose a debrid provider if you use one. Connecting it now is optional.',
       child: Column(
         children: [
-          const Text(
+          const LocalizedText(
             'Debrid provider',
             style: TextStyle(fontWeight: FontWeight.w900),
           ),
@@ -994,12 +1028,12 @@ class _StreamingStep extends ConsumerWidget {
             }),
           ),
           const SizedBox(height: 20),
-          const Text(
+          const LocalizedText(
             'Your sources',
             style: TextStyle(fontWeight: FontWeight.w900),
           ),
           const SizedBox(height: 5),
-          Text(
+          LocalizedText(
             'Add only repositories and manifests you trust and are authorized to use. TetoTV does not bundle or recommend sources.',
             textAlign: TextAlign.center,
             style: TextStyle(color: context.appPalette.mutedText, fontSize: 10),
@@ -1086,8 +1120,8 @@ class _PrivacyStep extends ConsumerWidget {
             ],
           ),
           const SizedBox(height: 10),
-          Text(
-            'Reports may include the app version, Android version, device class, error type, time, and a redacted trace. They never include what you watch, accounts, device IDs, sources, or URLs.',
+          LocalizedText(
+            'Anonymous crash reports start enabled on new installs and are optional. Existing installs keep their current choice. You can turn them off here or anytime in Settings. Reports contain only the app/build, error type and time, Android version, CPU architecture, device class, and a redacted technical trace. They never include a show, episode, account, device ID, source, or URL.',
             textAlign: TextAlign.center,
             style: TextStyle(color: context.appPalette.mutedText, fontSize: 10),
           ),
@@ -1110,7 +1144,7 @@ class _PrivacyStep extends ConsumerWidget {
               ],
             ),
             const SizedBox(height: 8),
-            Text(
+            LocalizedText(
               'Shares only whether this Beta app process is active or has an '
               'MPV player open. A paused or loading player can still count as '
               'watching. No profile, title, episode, source, device ID, URL, or media '
@@ -1159,7 +1193,7 @@ class _SourceCount extends StatelessWidget {
       children: [
         Icon(icon, size: 18, color: context.appPalette.secondaryAccent),
         const SizedBox(width: 7),
-        Text(
+        LocalizedText(
           '$count',
           style: TextStyle(
             color: context.appPalette.accentBright,
@@ -1168,7 +1202,11 @@ class _SourceCount extends StatelessWidget {
         ),
         const SizedBox(width: 5),
         Flexible(
-          child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
+          child: LocalizedText(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
         ),
       ],
     ),
@@ -1207,13 +1245,13 @@ class _SetupPage extends StatelessWidget {
             children: [
               Icon(icon, color: context.appPalette.accentBright, size: 40),
               const SizedBox(height: 8),
-              Text(
+              LocalizedText(
                 title,
                 textAlign: TextAlign.center,
                 style: Theme.of(context).textTheme.headlineSmall,
               ),
               const SizedBox(height: 5),
-              Text(
+              LocalizedText(
                 subtitle,
                 textAlign: TextAlign.center,
                 style: TextStyle(color: context.appPalette.mutedText),
@@ -1262,13 +1300,14 @@ class _SetupProgress extends StatelessWidget {
     children: [
       Row(
         children: [
-          Text(
+          LocalizedText(
             label,
             style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w900),
           ),
           const Spacer(),
-          Text(
-            '${step + 1} of $count',
+          LocalizedText(
+            '{step} of {count}',
+            arguments: {'step': step + 1, 'count': count},
             style: TextStyle(color: context.appPalette.mutedText, fontSize: 11),
           ),
         ],
@@ -1307,7 +1346,7 @@ class _SetupChoiceRow extends StatelessWidget {
   Widget build(BuildContext context) => Column(
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
-      Text(label, style: const TextStyle(fontWeight: FontWeight.w900)),
+      LocalizedText(label, style: const TextStyle(fontWeight: FontWeight.w900)),
       const SizedBox(height: 8),
       Wrap(
         spacing: 8,
@@ -1368,7 +1407,10 @@ class _SetupChoice extends StatelessWidget {
         children: [
           Icon(selected ? Icons.check_rounded : Icons.add_rounded, size: 17),
           const SizedBox(width: 6),
-          Text(label, style: const TextStyle(fontWeight: FontWeight.w900)),
+          LocalizedText(
+            label,
+            style: const TextStyle(fontWeight: FontWeight.w900),
+          ),
         ],
       ),
     ),
@@ -1394,7 +1436,7 @@ class _FeaturePill extends StatelessWidget {
       children: [
         Icon(icon, size: 18, color: context.appPalette.secondaryAccent),
         const SizedBox(width: 7),
-        Flexible(child: Text(label)),
+        Flexible(child: LocalizedText(label)),
       ],
     ),
   );
@@ -1421,7 +1463,7 @@ class _SetupNote extends StatelessWidget {
         Icon(icon, size: 20, color: context.appPalette.secondaryAccent),
         const SizedBox(width: 10),
         Flexible(
-          child: Text(
+          child: LocalizedText(
             text,
             style: const TextStyle(fontWeight: FontWeight.w700),
           ),
@@ -1468,7 +1510,7 @@ class _SetupButton extends StatelessWidget {
           Icon(icon, size: 19, color: primary ? Colors.white : null),
           const SizedBox(width: 7),
           Flexible(
-            child: Text(
+            child: LocalizedText(
               label,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,

@@ -1,8 +1,11 @@
+import 'package:anime_tv/core/localization/app_language.dart';
+import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'package:anime_tv/core/widgets/tv_text_input.dart';
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
@@ -160,6 +163,52 @@ void main() {
 
     expect(controller.text, 'q1-_');
     expect(submitted, 'q1-_');
+  });
+
+  testWidgets('non-English UI keeps the built-in keyboard QWERTY', (
+    tester,
+  ) async {
+    FlutterSecureStorage.setMockInitialValues({
+      'input_use_built_in_keyboard': 'true',
+    });
+    final controller = TextEditingController();
+    addTearDown(controller.dispose);
+    final spanish = const TetoLocalizations(AppLanguage.spanish);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(
+          locale: AppLanguage.spanish.locale,
+          supportedLocales: TetoLocalizations.supportedLocales,
+          localizationsDelegates: const [
+            TetoLocalizations.delegate,
+            GlobalMaterialLocalizations.delegate,
+            GlobalWidgetsLocalizations.delegate,
+            GlobalCupertinoLocalizations.delegate,
+          ],
+          home: Scaffold(
+            body: TvTextInput(
+              controller: controller,
+              labelText: 'Search',
+              keyboardTitle: 'Search anime',
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text(spanish.text('Search')).first);
+    await tester.pumpAndSettle();
+    for (final key in const ['q', 'w', 'e', 'a', 's', 'd', 'z', 'x', 'c']) {
+      expect(_keyboardText(key), findsOneWidget);
+    }
+    expect(_keyboardText('ñ'), findsNothing);
+
+    await tester.tap(_keyboardText('q'));
+    await tester.tap(_keyboardText(spanish.text('Search')));
+    await tester.pumpAndSettle();
+    expect(controller.text, 'q');
   });
 
   testWidgets('physical Enter commits the TV keyboard value', (tester) async {

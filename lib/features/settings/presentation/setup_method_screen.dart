@@ -1,9 +1,13 @@
+import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'dart:async';
 
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
+import 'package:anime_tv/core/tv/tv_navigation.dart';
 import 'package:anime_tv/features/settings/application/setup_progress_controller.dart';
+import 'package:anime_tv/features/settings/presentation/language_selection_screen.dart';
+import 'package:anime_tv/features/settings/presentation/setup_brand_header.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -24,10 +28,13 @@ class SetupMethodScreen extends ConsumerStatefulWidget {
 }
 
 class _SetupMethodScreenState extends ConsumerState<SetupMethodScreen> {
+  final _backFocusNode = FocusNode(debugLabel: 'setup-method.back');
   final _televisionFocusNode = FocusNode(debugLabel: 'setup-method.tv');
   final _phoneFocusNode = FocusNode(debugLabel: 'setup-method.phone');
+  _SetupMethod _methodBeforeBack = _SetupMethod.television;
   bool _ready = false;
   bool _navigating = false;
+  bool _choosingLanguage = false;
 
   @override
   void initState() {
@@ -40,18 +47,19 @@ class _SetupMethodScreenState extends ConsumerState<SetupMethodScreen> {
     if (!mounted) return;
     setState(() => _ready = true);
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
+      if (!mounted || _choosingLanguage) return;
       final node = widget.focusPhoneOnReady
           ? _phoneFocusNode
           : _televisionFocusNode;
       if (node.canRequestFocus) {
-        node.requestFocus();
+        requestTvFocusAndReveal(node, towardEnd: true);
       }
     });
   }
 
   @override
   void dispose() {
+    _backFocusNode.dispose();
     _televisionFocusNode.dispose();
     _phoneFocusNode.dispose();
     super.dispose();
@@ -61,6 +69,32 @@ class _SetupMethodScreenState extends ConsumerState<SetupMethodScreen> {
     if (!_ready || _navigating) return;
     setState(() => _navigating = true);
     unawaited(GoRouter.of(context).pushReplacement<void>(route));
+  }
+
+  void _backToLanguage() {
+    if (_navigating || _choosingLanguage) return;
+    // Revisiting a step is local navigation, not a reset of stored preferences.
+    setState(() => _choosingLanguage = true);
+  }
+
+  void _returnToMethods() {
+    setState(() => _choosingLanguage = false);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _ready && _televisionFocusNode.canRequestFocus) {
+        requestTvFocusAndReveal(_televisionFocusNode, towardEnd: true);
+      }
+    });
+  }
+
+  KeyEventResult _handleBackKey(FocusNode _, KeyEvent event) {
+    final key = event.logicalKey;
+    if (key != LogicalKeyboardKey.escape &&
+        key != LogicalKeyboardKey.goBack &&
+        key != LogicalKeyboardKey.browserBack) {
+      return KeyEventResult.ignored;
+    }
+    if (event is KeyDownEvent) _backToLanguage();
+    return KeyEventResult.handled;
   }
 
   KeyEventResult _handleChoiceKey(
@@ -80,6 +114,13 @@ class _SetupMethodScreenState extends ConsumerState<SetupMethodScreen> {
         key == LogicalKeyboardKey.arrowDown;
     if (!isDirectional) return KeyEventResult.ignored;
 
+    if (key == LogicalKeyboardKey.arrowUp &&
+        (horizontal || method == _SetupMethod.television)) {
+      _methodBeforeBack = method;
+      requestTvFocusAndReveal(_backFocusNode);
+      return KeyEventResult.handled;
+    }
+
     final moveForward = horizontal
         ? key == LogicalKeyboardKey.arrowRight
         : key == LogicalKeyboardKey.arrowDown;
@@ -87,19 +128,57 @@ class _SetupMethodScreenState extends ConsumerState<SetupMethodScreen> {
         ? key == LogicalKeyboardKey.arrowLeft
         : key == LogicalKeyboardKey.arrowUp;
     if (method == _SetupMethod.television && moveForward) {
-      _phoneFocusNode.requestFocus();
+      requestTvFocusAndReveal(_phoneFocusNode, towardEnd: true);
     } else if (method == _SetupMethod.phone && moveBack) {
-      _televisionFocusNode.requestFocus();
+      requestTvFocusAndReveal(_televisionFocusNode);
     }
 
-    // Consume every directional key. At either edge, and on the cross axis,
-    // focus deliberately stays put instead of relying on geometry-based
-    // traversal that can vary between TV launchers and phone orientations.
+    // Back is explicitly above the choices. Other edges remain stable instead
+    // of relying on geometry that varies between launchers and orientations.
     return KeyEventResult.handled;
+  }
+
+  KeyEventResult _handleBackButtonKey(FocusNode _, KeyEvent event) {
+    if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
+      return KeyEventResult.ignored;
+    }
+    final key = event.logicalKey;
+    if (key == LogicalKeyboardKey.arrowDown ||
+        key == LogicalKeyboardKey.arrowRight) {
+      if (_ready && !_navigating) {
+        final target = _methodBeforeBack == _SetupMethod.phone
+            ? _phoneFocusNode
+            : _televisionFocusNode;
+        requestTvFocusAndReveal(target, towardEnd: true);
+      }
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.arrowUp ||
+        key == LogicalKeyboardKey.arrowLeft) {
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
   }
 
   @override
   Widget build(BuildContext context) {
+    if (_choosingLanguage) {
+      return LanguageSelectionScreen(onLanguageSelected: _returnToMethods);
+    }
+    return PopScope<void>(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _backToLanguage();
+      },
+      child: Focus(
+        canRequestFocus: false,
+        onKeyEvent: _handleBackKey,
+        child: _buildMethodScreen(context),
+      ),
+    );
+  }
+
+  Widget _buildMethodScreen(BuildContext context) {
     final palette = context.appPalette;
     return Scaffold(
       key: const ValueKey('setup-method-screen'),
@@ -133,15 +212,36 @@ class _SetupMethodScreenState extends ConsumerState<SetupMethodScreen> {
                 padding: padding,
                 child: ConstrainedBox(
                   constraints: BoxConstraints(minHeight: minHeight),
-                  child: Center(
+                  child: Align(
+                    alignment: Alignment.topCenter,
                     child: ConstrainedBox(
                       constraints: const BoxConstraints(maxWidth: 1080),
                       child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
+                        mainAxisAlignment: MainAxisAlignment.start,
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
-                          _BrandHeader(
-                            showStatus: horizontal && !shortLandscape,
+                          Row(
+                            children: [
+                              Focus(
+                                canRequestFocus: false,
+                                onKeyEvent: _handleBackButtonKey,
+                                child: IconButton.filledTonal(
+                                  key: const ValueKey('setup-method-back'),
+                                  focusNode: _backFocusNode,
+                                  tooltip: context.tr('Back'),
+                                  onPressed: _navigating
+                                      ? null
+                                      : _backToLanguage,
+                                  icon: const Icon(Icons.arrow_back_rounded),
+                                ),
+                              ),
+                              const SizedBox(width: 16),
+                              Expanded(
+                                child: SetupBrandHeader(
+                                  showStatus: horizontal && !shortLandscape,
+                                ),
+                              ),
+                            ],
                           ),
                           SizedBox(
                             height: shortLandscape
@@ -150,7 +250,7 @@ class _SetupMethodScreenState extends ConsumerState<SetupMethodScreen> {
                                 ? 28
                                 : 36,
                           ),
-                          Text(
+                          LocalizedText(
                             'How would you like to set up TetoTV?',
                             textAlign: horizontal
                                 ? TextAlign.left
@@ -166,7 +266,7 @@ class _SetupMethodScreenState extends ConsumerState<SetupMethodScreen> {
                                 ),
                           ),
                           SizedBox(height: shortLandscape ? 6 : 10),
-                          Text(
+                          LocalizedText(
                             'Choose the setup method that works best for you.',
                             textAlign: horizontal
                                 ? TextAlign.left
@@ -287,7 +387,7 @@ class _SetupMethodScreenState extends ConsumerState<SetupMethodScreen> {
                           AnimatedSwitcher(
                             duration: const Duration(milliseconds: 140),
                             child: _ready
-                                ? Text(
+                                ? LocalizedText(
                                     'You can adjust these choices later in Settings.',
                                     key: const ValueKey(
                                       'setup-method-ready-message',
@@ -311,11 +411,13 @@ class _SetupMethodScreenState extends ConsumerState<SetupMethodScreen> {
                                         ),
                                       ),
                                       const SizedBox(width: 10),
-                                      Text(
-                                        'Preparing setup…',
-                                        style: Theme.of(
-                                          context,
-                                        ).textTheme.bodyMedium,
+                                      Flexible(
+                                        child: LocalizedText(
+                                          'Preparing setup…',
+                                          style: Theme.of(
+                                            context,
+                                          ).textTheme.bodyMedium,
+                                        ),
                                       ),
                                     ],
                                   ),
@@ -330,67 +432,6 @@ class _SetupMethodScreenState extends ConsumerState<SetupMethodScreen> {
           },
         ),
       ),
-    );
-  }
-}
-
-class _BrandHeader extends StatelessWidget {
-  const _BrandHeader({required this.showStatus});
-
-  final bool showStatus;
-
-  @override
-  Widget build(BuildContext context) {
-    final palette = context.appPalette;
-    return Row(
-      children: [
-        Container(
-          width: 46,
-          height: 46,
-          clipBehavior: Clip.hardEdge,
-          decoration: BoxDecoration(borderRadius: BorderRadius.circular(11)),
-          child: Image.asset(
-            'assets/branding/tetotv_icon.png',
-            fit: BoxFit.cover,
-          ),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Text(
-            'TetoTV',
-            style: Theme.of(
-              context,
-            ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w900),
-          ),
-        ),
-        if (showStatus)
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            decoration: BoxDecoration(
-              color: palette.surface.withValues(alpha: .78),
-              borderRadius: BorderRadius.circular(99),
-              border: Border.all(
-                color: palette.primaryText.withValues(alpha: .1),
-              ),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.tune_rounded, size: 17, color: palette.accentBright),
-                const SizedBox(width: 7),
-                Text(
-                  'FIRST-RUN SETUP',
-                  style: TextStyle(
-                    color: palette.primaryText,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: .8,
-                  ),
-                ),
-              ],
-            ),
-          ),
-      ],
     );
   }
 }
@@ -544,7 +585,7 @@ class _MethodCopy extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
-        Text(
+        LocalizedText(
           title,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
@@ -554,7 +595,7 @@ class _MethodCopy extends StatelessWidget {
           ),
         ),
         SizedBox(height: compact ? 6 : 8),
-        Text(
+        LocalizedText(
           description,
           maxLines: compact ? 2 : 3,
           overflow: TextOverflow.ellipsis,
@@ -563,7 +604,7 @@ class _MethodCopy extends StatelessWidget {
           ).textTheme.bodyMedium?.copyWith(color: palette.mutedText),
         ),
         const SizedBox(height: 8),
-        Text(
+        LocalizedText(
           detail.toUpperCase(),
           style: TextStyle(
             color: palette.accentBright,

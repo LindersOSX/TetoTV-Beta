@@ -1,6 +1,7 @@
 // ignore_for_file: prefer_initializing_formals
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:anime_tv/features/downloads/application/offline_download_keep_alive.dart';
@@ -30,10 +31,12 @@ enum MangaAcquisitionPhase {
   completed,
   failed,
   cancelled,
+  paused,
 }
 
 enum MangaAcquisitionFailureCode {
   cancelled,
+  paused,
   invalidRequest,
   unsafeTarget,
   redirectRejected,
@@ -241,7 +244,17 @@ class MangaAcquisitionOperation {
         jobId: request.jobId,
         phase: MangaAcquisitionPhase.queued,
         pageCount: request.acquisition.knownPageCount,
-      );
+      ) {
+    // Bulk/recovery callers may observe after durable enqueue completes. Keep
+    // an early failed attempt from becoming an unhandled asynchronous error;
+    // the original completion future still reports failure to every caller.
+    unawaited(
+      _completion.future.then<void>(
+        (_) {},
+        onError: (Object _, StackTrace _) {},
+      ),
+    );
+  }
 
   final MangaAcquisitionRequest request;
   final StreamController<MangaAcquisitionProgress> _progressController;
@@ -253,6 +266,16 @@ class MangaAcquisitionOperation {
   Future<MangaReaderRequest> get completed => _completion.future;
   MangaAcquisitionProgress get currentProgress => _current;
   bool get isCancelled => _cancellation.isCancelled;
+  bool _pauseRequested = false;
+
+  Future<void> pause() async {
+    _requestPause();
+  }
+
+  void _requestPause() {
+    _pauseRequested = true;
+    _cancellation.cancel();
+  }
 
   Future<void> cancel() async => _cancellation.cancel();
 
@@ -445,7 +468,7 @@ class MangaStoreAcquisitionPersistence implements MangaAcquisitionPersistence {
   Future<MangaDownloadJob?> job(String jobId) => store.downloadJob(jobId);
 
   @override
-  Future<List<MangaDownloadJob>> listJobs() => store.downloadJobs();
+  Future<List<MangaDownloadJob>> listJobs() => store.allDownloadJobs();
 
   @override
   Future<List<MangaDownloadPage>> pages(String jobId) =>
@@ -474,6 +497,11 @@ typedef MangaCredentialHeaders =
     Future<Map<String, String>> Function(String sourceId);
 typedef MangaAcquisitionTargetValidator = Future<void> Function(Uri uri);
 
+/// Resolves a fresh, user-authorized capability from safe durable identity only.
+/// Implementations must enforce source availability and current profile ownership.
+typedef MangaAcquisitionRequestResolver =
+    Future<MangaAcquisitionRequest> Function(MangaDownloadJob job);
+
 class MangaAcquisitionService {
   factory MangaAcquisitionService({
     required MangaStore store,
@@ -485,6 +513,8 @@ class MangaAcquisitionService {
     OfflineDownloadKeepAlive? keepAlive,
     Duration receiveTimeout = const Duration(seconds: 20),
     DateTime Function()? clock,
+    int maximumQueuedJobs = 100,
+    int maximumStoredBytes = 4 * 1024 * 1024 * 1024,
   }) => MangaAcquisitionService.withDependencies(
     persistence: MangaStoreAcquisitionPersistence(store),
     storageRoots: storageRoots,
@@ -495,6 +525,8 @@ class MangaAcquisitionService {
     keepAlive: keepAlive ?? AndroidOfflineDownloadKeepAlive(),
     receiveTimeout: receiveTimeout,
     clock: clock,
+    maximumQueuedJobs: maximumQueuedJobs,
+    maximumStoredBytes: maximumStoredBytes,
   );
 
   MangaAcquisitionService.withDependencies({
@@ -507,6 +539,8 @@ class MangaAcquisitionService {
     OfflineDownloadKeepAlive keepAlive = const NoopOfflineDownloadKeepAlive(),
     this.receiveTimeout = const Duration(seconds: 20),
     DateTime Function()? clock,
+    this.maximumQueuedJobs = 100,
+    this.maximumStoredBytes = 4 * 1024 * 1024 * 1024,
   }) : _persistence = persistence,
        _storageRoots = storageRoots,
        _credentialHeaders = credentialHeaders ?? _noCredentialHeaders,
@@ -517,6 +551,11 @@ class MangaAcquisitionService {
        _clock = clock ?? DateTime.now {
     if (receiveTimeout <= Duration.zero) {
       throw ArgumentError.value(receiveTimeout, 'receiveTimeout');
+    }
+    if (maximumQueuedJobs < 1 ||
+        maximumQueuedJobs > 500 ||
+        maximumStoredBytes < 1) {
+      throw ArgumentError('Invalid manga download queue or storage limit.');
     }
   }
 
@@ -529,8 +568,186 @@ class MangaAcquisitionService {
   final OfflineDownloadKeepAlive _keepAlive;
   final DateTime Function() _clock;
   final Duration receiveTimeout;
+  final int maximumQueuedJobs;
+  final int maximumStoredBytes;
   final Map<String, MangaAcquisitionOperation> _active =
       <String, MangaAcquisitionOperation>{};
+  final List<({MangaAcquisitionOperation operation, bool isRetry})> _waiting =
+      [];
+  Future<void> _queueEdits = Future<void>.value();
+  Future<void> _availabilityEdits = Future<void>.value();
+  MangaAcquisitionOperation? _running;
+  MangaAcquisitionRequestResolver? _requestResolver;
+  bool _featureAvailable = true;
+  bool _requestedFeatureAvailable = true;
+
+  bool get featureAvailable => _featureAvailable;
+
+  /// Applies the user-facing Manga availability boundary to in-session work.
+  ///
+  /// Disabling is fail-closed immediately: active and queued operations are
+  /// signalled synchronously, then their durable rows are settled as paused.
+  /// Re-enabling only admits future explicit actions; it never resumes a job.
+  Future<void> setFeatureAvailable(bool available) {
+    _requestedFeatureAvailable = available;
+    if (!available) {
+      _featureAvailable = false;
+      _requestResolver = null;
+      for (final operation in List<MangaAcquisitionOperation>.of(
+        _active.values,
+      )) {
+        operation._requestPause();
+      }
+    }
+    final transition = _availabilityEdits.then((_) async {
+      if (!available) {
+        _featureAvailable = false;
+        await _pauseAllForFeatureDisable();
+      } else if (_requestedFeatureAvailable) {
+        _featureAvailable = true;
+      }
+    });
+    // Keep later transitions moving even if durable cleanup reports an error;
+    // the individual caller still receives the original failure.
+    _availabilityEdits = transition.then<void>((_) {}, onError: (_, _) {});
+    return transition;
+  }
+
+  void _requireFeatureAvailable() {
+    if (_featureAvailable) return;
+    throw const MangaAcquisitionException(
+      MangaAcquisitionFailureCode.invalidRequest,
+      'Manga is disabled in Settings.',
+    );
+  }
+
+  Future<void> _pauseAllForFeatureDisable() async {
+    await _queueEdits;
+    final waiting =
+        List<({MangaAcquisitionOperation operation, bool isRetry})>.of(
+          _waiting,
+        );
+    _waiting.clear();
+    for (final entry in waiting) {
+      final operation = entry.operation;
+      operation._requestPause();
+      final job = await _persistence.job(operation.request.jobId);
+      if (job != null) await _persistStopped(operation, job);
+      if (identical(_active[operation.request.jobId], operation)) {
+        _active.remove(operation.request.jobId);
+      }
+      await operation._fail(_stoppedError(operation), StackTrace.current);
+    }
+
+    final running = _running;
+    if (running != null) {
+      try {
+        await running.completed;
+      } catch (_) {
+        // The running operation records its paused row and releases keep-alive
+        // in its normal cancellation path.
+      }
+    }
+  }
+
+  void setRequestResolver(MangaAcquisitionRequestResolver resolver) {
+    _requireFeatureAvailable();
+    _requestResolver = resolver;
+  }
+
+  Future<List<MangaAcquisitionOperation>> enqueueAll(
+    Iterable<MangaAcquisitionRequest> requests,
+  ) async {
+    _requireFeatureAvailable();
+    final batch = requests.take(maximumQueuedJobs + 1).toList();
+    if (batch.length > maximumQueuedJobs ||
+        {..._active.keys, ...batch.map((request) => request.jobId)}.length >
+            maximumQueuedJobs) {
+      throw const MangaAcquisitionException(
+        MangaAcquisitionFailureCode.invalidRequest,
+        'The manga download queue is full. Wait for downloads to finish.',
+      );
+    }
+    final operations = batch.map(start).toList(growable: false);
+    await _queueEdits;
+    return operations;
+  }
+
+  Future<MangaAcquisitionOperation> resume(
+    String jobId, {
+    MangaAcquisitionRequestResolver? resolver,
+    void Function()? validateAdmission,
+  }) async {
+    _requireFeatureAvailable();
+    validateAdmission?.call();
+    final active = _active[jobId];
+    if (active != null) return active;
+    final job = await _persistence.job(jobId);
+    _requireFeatureAvailable();
+    validateAdmission?.call();
+    final resolve = resolver ?? _requestResolver;
+    if (job == null || resolve == null) {
+      throw const MangaAcquisitionException(
+        MangaAcquisitionFailureCode.invalidRequest,
+        'Reconnect to the manga source before resuming this download.',
+      );
+    }
+    final MangaAcquisitionRequest request;
+    try {
+      request = await resolve(job);
+    } on MangaAcquisitionException {
+      rethrow;
+    } catch (_) {
+      throw const MangaAcquisitionException(
+        MangaAcquisitionFailureCode.invalidRequest,
+        'This manga source is unavailable. Reconnect to it and try again.',
+      );
+    }
+    _requireFeatureAvailable();
+    validateAdmission?.call();
+    _requireMatchingIdentity(request, job);
+    return retry(request);
+  }
+
+  /// Explicit user action only: never called by startup recovery. Paused jobs
+  /// remain paused; resuming those requires selecting the individual job.
+  Future<List<MangaAcquisitionOperation>> resumePending({
+    MangaAcquisitionRequestResolver? resolver,
+    void Function()? validateAdmission,
+  }) async {
+    _requireFeatureAvailable();
+    validateAdmission?.call();
+    final pending =
+        (await jobs())
+            .where(
+              (job) =>
+                  job.status == MangaDownloadJobStatus.needsReauthorization ||
+                  job.status == MangaDownloadJobStatus.queued,
+            )
+            .toList()
+          ..sort(
+            (left, right) => left.queuePosition.compareTo(right.queuePosition),
+          );
+    _requireFeatureAvailable();
+    final operations = <MangaAcquisitionOperation>[];
+    for (final job in pending.take(maximumQueuedJobs)) {
+      _requireFeatureAvailable();
+      validateAdmission?.call();
+      try {
+        operations.add(
+          await resume(
+            job.id,
+            resolver: resolver,
+            validateAdmission: validateAdmission,
+          ),
+        );
+      } on MangaAcquisitionException {
+        if (!_featureAvailable) rethrow;
+        // An unavailable/disabled source does not block other authorized jobs.
+      }
+    }
+    return operations;
+  }
 
   MangaAcquisitionOperation start(MangaAcquisitionRequest request) =>
       _start(request, isRetry: false);
@@ -540,29 +757,58 @@ class MangaAcquisitionService {
 
   MangaAcquisitionOperation? activeOperation(String jobId) => _active[jobId];
 
-  Future<void> cancel(String jobId) async => _active[jobId]?.cancel();
+  Future<void> cancel(String jobId) => _stop(jobId, pause: false);
+
+  Future<void> pause(String jobId) => _stop(jobId, pause: true);
+
+  Future<void> _stop(String jobId, {required bool pause}) async {
+    final operation = _active[jobId];
+    if (operation == null) return;
+    if (pause) {
+      await operation.pause();
+    } else {
+      await operation.cancel();
+    }
+    await _queueEdits;
+    if (identical(_running, operation)) {
+      try {
+        await operation.completed;
+      } catch (_) {
+        // The stopped attempt has already recorded its durable state.
+      }
+      return;
+    }
+    final removed = _waiting
+        .where((entry) => identical(entry.operation, operation))
+        .isNotEmpty;
+    _waiting.removeWhere((entry) => identical(entry.operation, operation));
+    if (!removed) return;
+    final job = await _persistence.job(jobId);
+    if (job != null) await _persistStopped(operation, job);
+    _active.remove(jobId);
+    await operation._fail(_stoppedError(operation), StackTrace.current);
+  }
 
   Future<List<MangaDownloadJob>> jobs() => _persistence.listJobs();
 
-  /// Converts transfers interrupted by process death into explicit, retryable
-  /// rows. Remote URLs and credentials are intentionally not durable, so a
-  /// fresh user-authorized acquisition request is required to retry them.
+  /// Reconciles committed page files without issuing network requests. Only
+  /// verified pages survive; request URLs and credentials are never durable.
   Future<List<MangaDownloadJob>> recoverStaleJobs() async {
+    if (_active.isEmpty) await _cleanupInterruptedArchives();
     final existing = await _persistence.listJobs();
     for (final job in existing) {
       if (_active.containsKey(job.id) || !_isInterruptedStatus(job.status)) {
         continue;
       }
-      await _cleanupFailedDownload(
-        job.id,
-        _ownedJobDirectory(job.relativeDirectory),
-      );
+      final pages = await _retainVerifiedPages(job);
       await _persistence.putJob(
         _updatedJob(
           job,
-          status: MangaDownloadJobStatus.needsReauthorization,
-          completedPages: 0,
-          receivedBytes: 0,
+          status: job.status == MangaDownloadJobStatus.paused
+              ? MangaDownloadJobStatus.paused
+              : MangaDownloadJobStatus.needsReauthorization,
+          completedPages: pages.length,
+          receivedBytes: _pageBytes(pages),
           errorCode: 'interrupted',
           errorMessage: 'Reconnect to the manga source to retry this download.',
           updatedAt: _clock(),
@@ -620,7 +866,7 @@ class MangaAcquisitionService {
   Future<void> delete(String jobId) async {
     final operation = _active[jobId];
     if (operation != null) {
-      await operation.cancel();
+      await cancel(jobId);
       try {
         await operation.completed;
       } catch (_) {
@@ -664,12 +910,77 @@ class MangaAcquisitionService {
     MangaAcquisitionRequest request, {
     required bool isRetry,
   }) {
+    _requireFeatureAvailable();
     final existing = _active[request.jobId];
     if (existing != null) return existing;
+    if (_active.length >= maximumQueuedJobs) {
+      throw const MangaAcquisitionException(
+        MangaAcquisitionFailureCode.invalidRequest,
+        'The manga download queue is full. Wait for downloads to finish.',
+      );
+    }
     final operation = MangaAcquisitionOperation._(request);
     _active[request.jobId] = operation;
-    unawaited(_runOperation(operation, isRetry: isRetry));
+    // Persistence is serialized, but transfer work is not awaited here. This
+    // makes the entire queue durable even while the first chapter is loading.
+    _queueEdits = _queueEdits.then((_) async {
+      try {
+        final previous = await _persistence.job(request.jobId);
+        if (previous != null) _requireMatchingIdentity(request, previous);
+        final jobs = await _persistence.listJobs();
+        final position =
+            jobs.fold<int>(
+              0,
+              (value, job) =>
+                  job.queuePosition > value ? job.queuePosition : value,
+            ) +
+            1;
+        if (previous?.status != MangaDownloadJobStatus.completed) {
+          final now = _clock();
+          await _persistence.putJob(
+            MangaDownloadJob(
+              id: request.jobId,
+              sourceId: request.sourceId,
+              entryId: request.publicationId,
+              chapterId: request.chapterId,
+              seriesTitle: request.seriesTitle,
+              chapterLabel: request.chapterTitle,
+              status: MangaDownloadJobStatus.queued,
+              relativeDirectory:
+                  previous?.relativeDirectory ??
+                  _jobRelativeDirectory(request.jobId),
+              pageCount:
+                  previous?.pageCount ?? request.acquisition.knownPageCount,
+              completedPages: previous?.completedPages ?? 0,
+              receivedBytes: previous?.receivedBytes ?? 0,
+              manifestFingerprint: previous?.manifestFingerprint,
+              queuePosition: position,
+              retryCount: (previous?.retryCount ?? 0) + (isRetry ? 1 : 0),
+              createdAt: previous?.createdAt ?? now,
+              updatedAt: now,
+            ),
+          );
+        }
+        _waiting.add((operation: operation, isRetry: isRetry));
+        _drainQueue();
+      } catch (error, stackTrace) {
+        _active.remove(request.jobId);
+        await operation._fail(_safeStorageError(error), stackTrace);
+      }
+    });
     return operation;
+  }
+
+  void _drainQueue() {
+    if (!_featureAvailable || _running != null || _waiting.isEmpty) return;
+    final next = _waiting.removeAt(0);
+    _running = next.operation;
+    unawaited(
+      _runOperation(next.operation, isRetry: next.isRetry).whenComplete(() {
+        _running = null;
+        _drainQueue();
+      }),
+    );
   }
 
   Future<void> _runOperation(
@@ -678,13 +989,19 @@ class MangaAcquisitionService {
   }) async {
     try {
       final result = await _run(operation, isRetry: isRetry);
-      _active.remove(operation.request.jobId);
+      if (identical(_active[operation.request.jobId], operation)) {
+        _active.remove(operation.request.jobId);
+      }
       await operation._succeed(result);
     } catch (error, stackTrace) {
-      _active.remove(operation.request.jobId);
-      await operation._fail(error, stackTrace);
+      if (identical(_active[operation.request.jobId], operation)) {
+        _active.remove(operation.request.jobId);
+      }
+      await operation._fail(_safeStorageError(error), stackTrace);
     } finally {
-      _active.remove(operation.request.jobId);
+      if (identical(_active[operation.request.jobId], operation)) {
+        _active.remove(operation.request.jobId);
+      }
     }
   }
 
@@ -694,6 +1011,7 @@ class MangaAcquisitionService {
   }) async {
     final request = operation.request;
     final previous = await _persistence.job(request.jobId);
+    if (previous != null) _requireMatchingIdentity(request, previous);
     if (previous?.status == MangaDownloadJobStatus.completed) {
       final restored = await _restoreCompletedRequest(request, previous!);
       if (restored != null) {
@@ -710,14 +1028,24 @@ class MangaAcquisitionService {
       }
     }
 
-    final relativeDirectory = _jobRelativeDirectory(request.jobId);
+    if (operation.isCancelled && previous != null) {
+      await _persistStopped(operation, previous);
+      throw _stoppedError(operation);
+    }
+    final relativeDirectory =
+        previous?.relativeDirectory ?? _jobRelativeDirectory(request.jobId);
     final jobDirectory = _ownedJobDirectory(relativeDirectory);
-    await _resetPartialDownload(request.jobId, jobDirectory);
+    final fingerprint = _acquisitionFingerprint(request);
+    final canReuse =
+        request.acquisition is MangaReadingOrderAcquisition &&
+        previous?.manifestFingerprint == fingerprint;
+    final retained = canReuse && previous != null
+        ? await _retainVerifiedPages(previous)
+        : <MangaDownloadPage>[];
+    if (!canReuse) await _resetPartialDownload(request.jobId, jobDirectory);
 
     final now = _clock();
-    final retryCount = previous == null
-        ? 0
-        : previous.retryCount + (isRetry ? 1 : 0);
+    final retryCount = previous?.retryCount ?? 0;
     var job = MangaDownloadJob(
       id: request.jobId,
       sourceId: request.sourceId,
@@ -728,9 +1056,10 @@ class MangaAcquisitionService {
       status: MangaDownloadJobStatus.queued,
       relativeDirectory: relativeDirectory,
       pageCount: request.acquisition.knownPageCount,
-      completedPages: 0,
-      receivedBytes: 0,
-      queuePosition: 0,
+      completedPages: retained.length,
+      receivedBytes: _pageBytes(retained),
+      manifestFingerprint: fingerprint,
+      queuePosition: previous?.queuePosition ?? 1,
       retryCount: retryCount,
       createdAt: previous?.createdAt ?? now,
       updatedAt: now,
@@ -756,6 +1085,12 @@ class MangaAcquisitionService {
 
       await jobDirectory.create(recursive: true);
       final credentials = await _credentialsFor(request);
+      final otherJobs = await _persistence.listJobs();
+      final otherBytes = otherJobs
+          .where((value) => value.id != request.jobId)
+          .fold<int>(0, (sum, value) => sum + value.receivedBytes);
+      final byteBudget = maximumStoredBytes - otherBytes;
+      if (byteBudget <= 0) throw _storageQuotaError;
       final pages = switch (request.acquisition) {
         MangaCbzDownloadAcquisition acquisition => await _downloadCbz(
           operation,
@@ -764,6 +1099,7 @@ class MangaAcquisitionService {
           credentials,
           jobDirectory,
           job,
+          byteBudget,
         ),
         MangaReadingOrderAcquisition acquisition => await _downloadPages(
           operation,
@@ -772,6 +1108,8 @@ class MangaAcquisitionService {
           credentials,
           jobDirectory,
           job,
+          retained,
+          byteBudget,
         ),
       };
       operation._cancellation.throwIfCancelled();
@@ -800,45 +1138,60 @@ class MangaAcquisitionService {
       );
       return _readerRequest(request, pages);
     } on MangaAcquisitionException catch (error) {
-      await _cleanupFailedDownload(request.jobId, jobDirectory);
       final cancelled =
           error.code == MangaAcquisitionFailureCode.cancelled ||
           operation.isCancelled;
+      final paused = operation._pauseRequested;
+      final keepPages = paused || !cancelled;
+      final retained = keepPages
+          ? await _retainVerifiedPages(job)
+          : <MangaDownloadPage>[];
+      if (!keepPages) await _cleanupFailedDownload(request.jobId, jobDirectory);
       await _persistence.putJob(
         _updatedJob(
           job,
-          status: cancelled
+          status: paused
+              ? MangaDownloadJobStatus.paused
+              : cancelled
               ? MangaDownloadJobStatus.cancelled
               : MangaDownloadJobStatus.failed,
-          completedPages: 0,
-          receivedBytes: 0,
-          errorCode: cancelled ? 'cancelled' : error.code.name,
-          errorMessage: error.message,
+          completedPages: retained.length,
+          receivedBytes: _pageBytes(retained),
+          errorCode: paused
+              ? 'paused'
+              : cancelled
+              ? 'cancelled'
+              : error.code.name,
+          errorMessage: paused
+              ? _stoppedError(operation).message
+              : error.message,
           updatedAt: _clock(),
         ),
       );
       operation._emit(
         MangaAcquisitionProgress(
           jobId: request.jobId,
-          phase: cancelled
+          phase: paused
+              ? MangaAcquisitionPhase.paused
+              : cancelled
               ? MangaAcquisitionPhase.cancelled
               : MangaAcquisitionPhase.failed,
           pageCount: request.acquisition.knownPageCount,
+          completedPages: retained.length,
+          receivedBytes: _pageBytes(retained),
         ),
       );
+      if (paused) throw _stoppedError(operation);
       rethrow;
-    } catch (_) {
-      await _cleanupFailedDownload(request.jobId, jobDirectory);
-      const error = MangaAcquisitionException(
-        MangaAcquisitionFailureCode.unknown,
-        'The manga download could not be completed.',
-      );
+    } catch (cause) {
+      final error = _safeStorageError(cause);
+      final retained = await _retainVerifiedPages(job);
       await _persistence.putJob(
         _updatedJob(
           job,
           status: MangaDownloadJobStatus.failed,
-          completedPages: 0,
-          receivedBytes: 0,
+          completedPages: retained.length,
+          receivedBytes: _pageBytes(retained),
           errorCode: error.code.name,
           errorMessage: error.message,
           updatedAt: _clock(),
@@ -886,6 +1239,7 @@ class MangaAcquisitionService {
     _CredentialCapability credentials,
     Directory jobDirectory,
     MangaDownloadJob job,
+    int byteBudget,
   ) async {
     await _storageRoots.extractedArchives.create(recursive: true);
     final temporaryDirectory = await _storageRoots.extractedArchives.createTemp(
@@ -907,7 +1261,10 @@ class MangaAcquisitionService {
         uri: acquisition.uri,
         credentials: credentials,
         partFile: partFile,
-        maximumBytes: maximumMangaArchiveUncompressedBytes,
+        maximumBytes: byteBudget < maximumMangaArchiveUncompressedBytes
+            ? byteBudget
+            : maximumMangaArchiveUncompressedBytes,
+        storageLimited: byteBudget < maximumMangaArchiveUncompressedBytes,
         onProgress: (received) {
           operation._emit(
             MangaAcquisitionProgress(
@@ -942,12 +1299,36 @@ class MangaAcquisitionService {
         }
       });
       try {
-        extraction = await _archiveService.extract(
+        final limits = _archiveService.limits;
+        final boundedArchiveService =
+            byteBudget < limits.maximumUncompressedBytes
+            ? MangaArchiveService(
+                limits: MangaArchiveLimits(
+                  maximumPages: limits.maximumPages,
+                  maximumPageBytes: limits.maximumPageBytes,
+                  maximumUncompressedBytes: byteBudget,
+                  maximumCompressionRatio: limits.maximumCompressionRatio,
+                  maximumEntries: limits.maximumEntries,
+                ),
+                workerStartDelay: _archiveService.workerStartDelay,
+              )
+            : _archiveService;
+        extraction = await boundedArchiveService.extract(
           archiveFile: archiveFile,
           stagingDirectory: jobDirectory,
           cancellation: extractionCancellation.future,
         );
       } on MangaArchiveException catch (error) {
+        if (error.code == MangaArchiveFailureCode.stagingFailure) {
+          throw const MangaAcquisitionException(
+            MangaAcquisitionFailureCode.storageFailure,
+            'Manga pages could not be saved. Free device storage and resume the download.',
+          );
+        }
+        if (error.code == MangaArchiveFailureCode.archiveTooLarge &&
+            byteBudget < _archiveService.limits.maximumUncompressedBytes) {
+          throw _storageQuotaError;
+        }
         if (error.code == MangaArchiveFailureCode.cancelled ||
             operation.isCancelled) {
           throw const MangaAcquisitionException(
@@ -963,6 +1344,10 @@ class MangaAcquisitionService {
         removeExtractionCancellation();
       }
       final pages = <MangaDownloadPage>[];
+      if (extraction.pages.fold<int>(0, (sum, page) => sum + page.byteLength) >
+          byteBudget) {
+        throw _storageQuotaError;
+      }
       for (final extracted in extraction.pages) {
         operation._cancellation.throwIfCancelled();
         final relativePath = _relativeDownloadedPath(extracted.file);
@@ -1018,33 +1403,50 @@ class MangaAcquisitionService {
     _CredentialCapability credentials,
     Directory jobDirectory,
     MangaDownloadJob job,
+    List<MangaDownloadPage> retained,
+    int byteBudget,
   ) async {
-    var totalBytes = 0;
+    var totalBytes = _pageBytes(retained);
+    if (totalBytes > byteBudget) throw _storageQuotaError;
+    final retainedByIndex = {for (final page in retained) page.pageIndex: page};
+    var completedCount = retained.length;
     final pages = <MangaDownloadPage>[];
     operation._emit(
       MangaAcquisitionProgress(
         jobId: request.jobId,
         phase: MangaAcquisitionPhase.downloading,
         pageCount: acquisition.pages.length,
+        completedPages: retained.length,
+        receivedBytes: totalBytes,
       ),
     );
 
     for (var index = 0; index < acquisition.pages.length; index++) {
       operation._cancellation.throwIfCancelled();
+      final existing = retainedByIndex[index];
+      if (existing != null) {
+        pages.add(existing);
+        continue;
+      }
       final sourcePage = acquisition.pages[index];
       final partFile = File(
         path.join(jobDirectory.path, '${_pageBase(index)}.part'),
       );
       final remaining = maximumMangaArchiveUncompressedBytes - totalBytes;
+      final quotaRemaining = byteBudget - totalBytes;
+      if (quotaRemaining <= 0) throw _storageQuotaError;
       if (remaining <= 0) {
         throw const MangaAcquisitionException(
           MangaAcquisitionFailureCode.responseTooLarge,
           'The chapter exceeds the download size limit.',
         );
       }
-      final maximum = remaining < maximumMangaArchivePageBytes
+      final pageMaximum = remaining < maximumMangaArchivePageBytes
           ? remaining
           : maximumMangaArchivePageBytes;
+      final maximum = quotaRemaining < pageMaximum
+          ? quotaRemaining
+          : pageMaximum;
       final response = await _openResponse(
         sourcePage.uri,
         sourcePage.headers.isEmpty
@@ -1058,6 +1460,10 @@ class MangaAcquisitionService {
       );
       var bodyStarted = false;
       try {
+        final declaredLength = _contentLength(response);
+        if (declaredLength != null && declaredLength > quotaRemaining) {
+          throw _storageQuotaError;
+        }
         final declaredType = _declaredImageType(
           response.header(HttpHeaders.contentTypeHeader),
         );
@@ -1077,6 +1483,7 @@ class MangaAcquisitionService {
           response: response,
           partFile: partFile,
           maximumBytes: maximum,
+          storageLimited: quotaRemaining < pageMaximum,
           expectedType: declaredType,
           onBodyStarted: () => bodyStarted = true,
           onProgress: (pageBytes) {
@@ -1085,7 +1492,7 @@ class MangaAcquisitionService {
                 jobId: request.jobId,
                 phase: MangaAcquisitionPhase.downloading,
                 pageCount: acquisition.pages.length,
-                completedPages: pages.length,
+                completedPages: completedCount,
                 receivedBytes: totalBytes + pageBytes,
                 currentPageIndex: index,
               ),
@@ -1103,6 +1510,7 @@ class MangaAcquisitionService {
         final page = MangaDownloadPage(
           jobId: request.jobId,
           pageIndex: index,
+          stableKeyHash: _pageCapabilityFingerprint(sourcePage),
           relativePath: _relativeDownloadedPath(finalFile),
           mimeType: downloaded.type.mimeType,
           byteLength: downloaded.byteLength,
@@ -1110,12 +1518,13 @@ class MangaAcquisitionService {
         );
         await _persistence.putPage(page);
         pages.add(page);
+        completedCount++;
         await _persistence.putJob(
           _updatedJob(
             job,
             status: MangaDownloadJobStatus.downloading,
             pageCount: acquisition.pages.length,
-            completedPages: pages.length,
+            completedPages: completedCount,
             receivedBytes: totalBytes,
             updatedAt: _clock(),
           ),
@@ -1137,6 +1546,7 @@ class MangaAcquisitionService {
     required _CredentialCapability credentials,
     required File partFile,
     required int maximumBytes,
+    bool storageLimited = false,
     required void Function(int receivedBytes) onProgress,
   }) async {
     final response = await _openResponse(
@@ -1150,6 +1560,7 @@ class MangaAcquisitionService {
     try {
       final declaredLength = _contentLength(response);
       if (declaredLength != null && declaredLength > maximumBytes) {
+        if (storageLimited) throw _storageQuotaError;
         throw const MangaAcquisitionException(
           MangaAcquisitionFailureCode.responseTooLarge,
           'The manga response exceeds the download size limit.',
@@ -1161,6 +1572,7 @@ class MangaAcquisitionService {
         operation._cancellation.throwIfCancelled();
         received += chunk.length;
         if (received > maximumBytes) {
+          if (storageLimited) throw _storageQuotaError;
           throw const MangaAcquisitionException(
             MangaAcquisitionFailureCode.responseTooLarge,
             'The manga response exceeds the download size limit.',
@@ -1197,6 +1609,7 @@ class MangaAcquisitionService {
     required MangaAcquisitionHttpResponse response,
     required File partFile,
     required int maximumBytes,
+    bool storageLimited = false,
     required MangaArchiveImageType? expectedType,
     required void Function() onBodyStarted,
     required void Function(int receivedBytes) onProgress,
@@ -1207,6 +1620,7 @@ class MangaAcquisitionService {
     try {
       final declaredLength = _contentLength(response);
       if (declaredLength != null && declaredLength > maximumBytes) {
+        if (storageLimited) throw _storageQuotaError;
         throw const MangaAcquisitionException(
           MangaAcquisitionFailureCode.responseTooLarge,
           'A manga page exceeds the per-page size limit.',
@@ -1218,6 +1632,7 @@ class MangaAcquisitionService {
         operation._cancellation.throwIfCancelled();
         received += chunk.length;
         if (received > maximumBytes) {
+          if (storageLimited) throw _storageQuotaError;
           throw const MangaAcquisitionException(
             MangaAcquisitionFailureCode.responseTooLarge,
             'A manga page exceeds the per-page size limit.',
@@ -1372,6 +1787,10 @@ class MangaAcquisitionService {
     MangaAcquisitionRequest request,
     MangaDownloadJob job,
   ) async {
+    if (job.manifestFingerprint != null &&
+        job.manifestFingerprint != _acquisitionFingerprint(request)) {
+      return null;
+    }
     final pages = await _persistence.pages(request.jobId);
     if (pages.isEmpty ||
         job.pageCount != pages.length ||
@@ -1380,19 +1799,145 @@ class MangaAcquisitionService {
     }
     for (var index = 0; index < pages.length; index++) {
       final page = pages[index];
-      if (page.pageIndex != index ||
-          !await _storageRoots
-              .resolvePage(
-                MangaTrustedLocalPageResource(
-                  area: MangaLocalStorageArea.downloadedPages,
-                  relativePath: page.relativePath,
-                ),
-              )
-              .exists()) {
+      if (page.pageIndex != index || !await _isVerifiedPage(job, page)) {
         return null;
       }
     }
     return _readerRequest(request, pages);
+  }
+
+  Future<bool> _isVerifiedPage(
+    MangaDownloadJob job,
+    MangaDownloadPage page,
+  ) async {
+    try {
+      if (page.jobId != job.id ||
+          page.pageIndex < 0 ||
+          page.pageIndex >= (job.pageCount ?? maximumMangaArchivePages) ||
+          page.byteLength <= 0 ||
+          page.byteLength > maximumMangaArchivePageBytes) {
+        return false;
+      }
+      final file = _storageRoots.resolvePage(
+        MangaTrustedLocalPageResource(
+          area: MangaLocalStorageArea.downloadedPages,
+          relativePath: page.relativePath,
+        ),
+      );
+      final directory = _ownedJobDirectory(job.relativeDirectory);
+      if (!path.isWithin(directory.path, file.absolute.path) ||
+          !await file.exists() ||
+          await file.length() != page.byteLength) {
+        return false;
+      }
+      final actualRoot = await _storageRoots.downloadedPages
+          .resolveSymbolicLinks();
+      final actualDirectory = await directory.resolveSymbolicLinks();
+      final actualFile = await file.resolveSymbolicLinks();
+      if (!path.isWithin(actualRoot, actualDirectory) ||
+          !path.isWithin(actualDirectory, actualFile)) {
+        return false;
+      }
+      final digest = await sha256.bind(file.openRead()).first;
+      if (digest.toString() != page.sha256) return false;
+      // Retained disk bytes receive the same decoder/container checks as a
+      // newly fetched page, not merely a checksum equality check.
+      inspectMangaImage(await file.readAsBytes());
+      return true;
+    } on FileSystemException {
+      return false;
+    } on MangaImageValidationException {
+      return false;
+    } on ArgumentError {
+      return false;
+    }
+  }
+
+  Future<List<MangaDownloadPage>> _retainVerifiedPages(
+    MangaDownloadJob job,
+  ) async {
+    final pages = await _persistence.pages(job.id);
+    final retained = <MangaDownloadPage>[];
+    final seen = <int>{};
+    for (final page in pages) {
+      if (seen.add(page.pageIndex) && await _isVerifiedPage(job, page)) {
+        retained.add(page);
+      }
+    }
+    final directory = _ownedJobDirectory(job.relativeDirectory);
+    if (retained.isEmpty) {
+      await _cleanupFailedDownload(job.id, directory);
+      return retained;
+    }
+    if (retained.length != pages.length) {
+      await _persistence.clearPages(job.id);
+      for (final page in retained) {
+        await _persistence.putPage(page);
+      }
+    }
+    final ownedPaths = retained
+        .map(
+          (page) => path.normalize(
+            path.join(
+              _storageRoots.downloadedPages.absolute.path,
+              page.relativePath,
+            ),
+          ),
+        )
+        .toSet();
+    if (await directory.exists()) {
+      await for (final entity in directory.list(
+        recursive: true,
+        followLinks: false,
+      )) {
+        if (entity is File &&
+            !ownedPaths.contains(path.normalize(entity.absolute.path))) {
+          await entity.delete();
+        }
+      }
+    }
+    retained.sort((left, right) => left.pageIndex.compareTo(right.pageIndex));
+    return retained;
+  }
+
+  Future<void> _persistStopped(
+    MangaAcquisitionOperation operation,
+    MangaDownloadJob job,
+  ) async {
+    final paused = operation._pauseRequested;
+    final retained = paused
+        ? await _retainVerifiedPages(job)
+        : <MangaDownloadPage>[];
+    if (!paused) {
+      await _cleanupFailedDownload(
+        job.id,
+        _ownedJobDirectory(job.relativeDirectory),
+      );
+    }
+    await _persistence.putJob(
+      _updatedJob(
+        job,
+        status: paused
+            ? MangaDownloadJobStatus.paused
+            : MangaDownloadJobStatus.cancelled,
+        completedPages: retained.length,
+        receivedBytes: _pageBytes(retained),
+        errorCode: paused ? 'paused' : 'cancelled',
+        errorMessage: _stoppedError(operation).message,
+        updatedAt: _clock(),
+      ),
+    );
+    operation._emit(
+      MangaAcquisitionProgress(
+        jobId: job.id,
+        phase: paused
+            ? MangaAcquisitionPhase.paused
+            : MangaAcquisitionPhase.cancelled,
+        pageCount: job.pageCount,
+        completedPages: retained.length,
+        receivedBytes: _pageBytes(retained),
+      ),
+    );
   }
 
   MangaReaderRequest _readerRequest(
@@ -1473,6 +2018,24 @@ class MangaAcquisitionService {
     if (await jobDirectory.exists()) await jobDirectory.delete(recursive: true);
   }
 
+  Future<void> _cleanupInterruptedArchives() async {
+    final root = _storageRoots.extractedArchives.absolute;
+    if (!await root.exists()) return;
+    final resolvedRoot = await root.resolveSymbolicLinks();
+    final candidates = await root.list(followLinks: false).toList();
+    if (_active.isNotEmpty) return;
+    for (final entity in candidates) {
+      if (entity is! Directory ||
+          !path.basename(entity.path).startsWith('manga-acquire-')) {
+        continue;
+      }
+      final resolvedTarget = await entity.resolveSymbolicLinks();
+      if (path.isWithin(resolvedRoot, resolvedTarget)) {
+        await entity.delete(recursive: true);
+      }
+    }
+  }
+
   Future<void> _cleanupFailedDownload(
     String jobId,
     Directory jobDirectory,
@@ -1514,6 +2077,101 @@ class MangaAcquisitionService {
     }
     return path.relative(absolute.path, from: root.path).replaceAll('\\', '/');
   }
+}
+
+void _requireMatchingIdentity(
+  MangaAcquisitionRequest request,
+  MangaDownloadJob job,
+) {
+  if (request.jobId != job.id ||
+      request.sourceId != job.sourceId ||
+      request.publicationId != job.entryId ||
+      request.chapterId != job.chapterId) {
+    throw const MangaAcquisitionException(
+      MangaAcquisitionFailureCode.invalidRequest,
+      'The manga source returned a different chapter. Start a new download.',
+    );
+  }
+}
+
+String _pageCapabilityFingerprint(MangaReadingOrderPage page) => sha256
+    .convert(
+      utf8.encode(
+        jsonEncode([
+          page.uri.toString(),
+          _orderedHeaders(page.headers),
+          page.pixelWidth,
+          page.pixelHeight,
+          page.isCover,
+        ]),
+      ),
+    )
+    .toString();
+
+List<List<String>> _orderedHeaders(Map<String, String> headers) {
+  final keys = headers.keys.toList()..sort();
+  return [
+    for (final key in keys) [key, headers[key]!],
+  ];
+}
+
+/// Fingerprints are opaque one-way digests. Never store a normalized/raw URL,
+/// query string, header, or token. A changed capability graph invalidates reuse.
+String _acquisitionFingerprint(MangaAcquisitionRequest request) => sha256
+    .convert(
+      utf8.encode(
+        jsonEncode([
+          request.sourceId,
+          request.publicationId,
+          request.chapterId,
+          request.credentialOrigin?.toString(),
+          switch (request.acquisition) {
+            MangaReadingOrderAcquisition acquisition => [
+              'pages',
+              ...acquisition.pages.map(_pageCapabilityFingerprint),
+            ],
+            MangaCbzDownloadAcquisition acquisition => [
+              'cbz',
+              acquisition.uri.toString(),
+              _orderedHeaders(acquisition.headers),
+            ],
+          },
+        ]),
+      ),
+    )
+    .toString();
+
+int _pageBytes(Iterable<MangaDownloadPage> pages) =>
+    pages.fold<int>(0, (total, page) => total + page.byteLength);
+
+MangaAcquisitionException _stoppedError(MangaAcquisitionOperation operation) =>
+    operation._pauseRequested
+    ? const MangaAcquisitionException(
+        MangaAcquisitionFailureCode.paused,
+        'The manga download is paused. Resume it when you are ready.',
+      )
+    : const MangaAcquisitionException(
+        MangaAcquisitionFailureCode.cancelled,
+        'The manga download was cancelled.',
+      );
+
+const _storageQuotaError = MangaAcquisitionException(
+  MangaAcquisitionFailureCode.storageFailure,
+  'Manga download storage is full. Delete downloaded chapters and try again.',
+);
+
+MangaAcquisitionException _safeStorageError(Object error) {
+  if (error is MangaAcquisitionException) return error;
+  if (error is FileSystemException) {
+    return const MangaAcquisitionException(
+      MangaAcquisitionFailureCode.storageFailure,
+      'Manga pages could not be saved. Free device storage and resume the download.',
+    );
+  }
+  return const MangaAcquisitionException(
+    MangaAcquisitionFailureCode.unknown,
+    'The manga download could not be completed.',
+  );
 }
 
 class _DownloadedImage {

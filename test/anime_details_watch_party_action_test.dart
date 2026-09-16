@@ -1,11 +1,13 @@
 import 'dart:async';
 
+import 'package:anime_tv/core/preferences/title_language_preference.dart';
 import 'package:anime_tv/core/widgets/network_artwork.dart';
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
 import 'package:anime_tv/core/storage/storage_providers.dart';
 import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
 import 'package:anime_tv/features/catalog/presentation/anime_details_screen.dart';
+import 'package:anime_tv/features/settings/application/display_preferences_controller.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:anime_tv/features/tracking/application/tracking_home_provider.dart';
 import 'package:anime_tv/features/watch_together/application/watch_party_controller.dart';
@@ -302,54 +304,67 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('an active guest sees the episode and can leave inline', (
-    tester,
-  ) async {
-    final client = _DetailsWatchPartyClient(role: WatchPartyRole.guest);
-    final controller = WatchPartyController(client);
-    expect(await controller.create(), isTrue);
-    await _pumpDetails(tester, client: client, controller: controller);
+  testWidgets(
+    'an active guest sees Title Language media and can leave inline',
+    (tester) async {
+      final client = _DetailsWatchPartyClient(role: WatchPartyRole.guest);
+      final controller = WatchPartyController(client);
+      expect(await controller.create(), isTrue);
+      await _pumpDetails(
+        tester,
+        client: client,
+        controller: controller,
+        titlePreference: TitleLanguagePreference.romaji,
+      );
 
-    expect(find.text('23456789'), findsOneWidget);
-    expect(find.text('Watch Party Details Test • Episode 4'), findsOneWidget);
-    expect(find.text('4 of 12'), findsOneWidget);
-    expect(find.byKey(const ValueKey('episode-action-resume')), findsNothing);
-    expect(find.byKey(const ValueKey('episode-action-restart')), findsNothing);
-    expect(find.byKey(const ValueKey('episode-action-selected')), findsNothing);
-    expect(
-      find.descendant(
-        of: find.byKey(const ValueKey('episode-manual-selector')),
-        matching: find.byType(FocusableActionDetector),
-      ),
-      findsNothing,
-      reason: 'a Watch Party guest cannot change the host-controlled episode',
-    );
-    expect(
-      find.byKey(const ValueKey('episode-watch-party-leave')),
-      findsOneWidget,
-    );
+      expect(find.text('23456789'), findsOneWidget);
+      expect(find.text('Watch Party Romaji Title • Episode 4'), findsOneWidget);
+      expect(find.text('Watch Party Details Test • Episode 4'), findsNothing);
+      expect(find.text('4 of 12'), findsOneWidget);
+      expect(find.byKey(const ValueKey('episode-action-resume')), findsNothing);
+      expect(
+        find.byKey(const ValueKey('episode-action-restart')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const ValueKey('episode-action-selected')),
+        findsNothing,
+      );
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('episode-manual-selector')),
+          matching: find.byType(FocusableActionDetector),
+        ),
+        findsNothing,
+        reason: 'a Watch Party guest cannot change the host-controlled episode',
+      );
+      expect(
+        find.byKey(const ValueKey('episode-watch-party-leave')),
+        findsOneWidget,
+      );
 
-    final skipFillerDetector = tester.widget<FocusableActionDetector>(
-      find
-          .descendant(
-            of: find.byKey(const ValueKey('episode-action-skip-filler')),
-            matching: find.byType(FocusableActionDetector),
-          )
-          .first,
-    );
-    skipFillerDetector.focusNode!.requestFocus();
-    await tester.pump();
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
-    await tester.pump();
-    expect(_watchPartyDetector(tester).focusNode?.hasFocus, isTrue);
+      final skipFillerDetector = tester.widget<FocusableActionDetector>(
+        find
+            .descendant(
+              of: find.byKey(const ValueKey('episode-action-skip-filler')),
+              matching: find.byType(FocusableActionDetector),
+            )
+            .first,
+      );
+      skipFillerDetector.focusNode!.requestFocus();
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pump();
+      expect(_watchPartyDetector(tester).focusNode?.hasFocus, isTrue);
 
-    await tester.tap(find.byKey(const ValueKey('episode-watch-party-leave')));
-    await tester.pump();
+      await tester.tap(find.byKey(const ValueKey('episode-watch-party-leave')));
+      await tester.pump();
 
-    expect(client.leaveCalls, 1);
-    expect(find.text('Start Watch Party'), findsOneWidget);
-    expect(tester.takeException(), isNull);
-  });
+      expect(client.leaveCalls, 1);
+      expect(find.text('Start Watch Party'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets('Watch Party action is absent when the feature is disabled', (
     tester,
@@ -440,6 +455,7 @@ Future<void> _pumpDetails(
   required WatchPartyController controller,
   WatchPartyPublicIdentity? identity,
   bool showWatchParty = true,
+  TitleLanguagePreference titlePreference = TitleLanguagePreference.english,
   Size size = const Size(1280, 720),
   Widget? app,
 }) async {
@@ -447,6 +463,8 @@ Future<void> _pumpDetails(
     id: 317,
     idMal: 731,
     title: 'Watch Party Details Test',
+    titleEnglish: 'Watch Party Details Test',
+    titleRomaji: 'Watch Party Romaji Title',
     description: 'A test series.',
     episodes: 12,
     score: 8,
@@ -473,6 +491,9 @@ Future<void> _pumpDetails(
         ).overrideWith((_) async => const SeriesPlaybackPreferences()),
         settingsPreferencesProvider.overrideWith(
           (_) => _DetailsSettingsController(showWatchParty: showWatchParty),
+        ),
+        titleLanguagePreferenceProvider.overrideWith(
+          (_) => _DetailsTitleLanguageController(titlePreference),
         ),
         watchPartyClientProvider.overrideWithValue(client),
         watchPartyControllerProvider.overrideWith((_) => controller),
@@ -556,6 +577,8 @@ class _DetailsWatchPartyClient extends WatchPartyClient {
         media: const WatchPartyMedia(
           kind: 'anilist',
           title: 'Watch Party Details Test',
+          titleEnglish: 'Watch Party Details Test',
+          titleRomaji: 'Watch Party Romaji Title',
           anilistId: 317,
           episode: 4,
         ),
@@ -576,6 +599,17 @@ class _DetailsSettingsController extends SettingsPreferencesController {
       showFillerIndicators: false,
       showWatchTogether: showWatchParty,
     );
+  }
+
+  @override
+  Future<void> load() async {}
+}
+
+class _DetailsTitleLanguageController
+    extends TitleLanguagePreferenceController {
+  _DetailsTitleLanguageController(TitleLanguagePreference initial)
+    : super(const FlutterSecureStorage()) {
+    state = initial;
   }
 
   @override

@@ -241,11 +241,12 @@ void main() {
       readSettings: () => const SettingsPreferences(loaded: true),
       readDirectCapability: () async =>
           const DirectTorrentCapability.unsupported(),
-      webPreflight: (uri, headers, {subtitleUri}) async => ValidatedWebStream(
-        uri: Uri.parse('http://127.0.0.1:1234/session'),
-        headers: const {},
-        contentType: 'application/vnd.apple.mpegurl',
-      ),
+      webPreflight: (uri, headers, {audioTracks, subtitleUri}) async =>
+          ValidatedWebStream(
+            uri: Uri.parse('http://127.0.0.1:1234/session'),
+            headers: const {},
+            contentType: 'application/vnd.apple.mpegurl',
+          ),
     );
     final resolved = await resolver.resolve(
       plan: SeasonDownloadPlan(
@@ -309,7 +310,7 @@ void main() {
       readSettings: () => const SettingsPreferences(loaded: true),
       readDirectCapability: () async =>
           const DirectTorrentCapability.unsupported(),
-      webPreflight: (uri, headers, {subtitleUri}) async {
+      webPreflight: (uri, headers, {audioTracks, subtitleUri}) async {
         preflightUris.add(uri);
         return ValidatedWebStream(
           uri: Uri.parse('http://127.0.0.1:1234/session'),
@@ -461,11 +462,12 @@ CatalogSeasonEpisodeDownloadResolver _rateLimitedSeasonResolver({
     onResolver();
     return const _RateLimitedResolver();
   },
-  webPreflight: (uri, headers, {subtitleUri}) async => ValidatedWebStream(
-    uri: Uri.parse('http://127.0.0.1:1234/session'),
-    headers: const {},
-    contentType: 'video/mp4',
-  ),
+  webPreflight: (uri, headers, {audioTracks, subtitleUri}) async =>
+      ValidatedWebStream(
+        uri: Uri.parse('http://127.0.0.1:1234/session'),
+        headers: const {},
+        contentType: 'video/mp4',
+      ),
 );
 
 class _RateLimitedResolver implements StreamResolver {

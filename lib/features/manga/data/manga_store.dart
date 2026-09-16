@@ -12,6 +12,8 @@ typedef MangaDatabaseProvider = Future<DatabaseExecutor> Function();
 
 enum StoredMangaSourceKind { repository, opds1, opds2 }
 
+enum MangaLibraryStatus { planToRead, reading, completed, onHold, dropped }
+
 enum MangaDownloadJobStatus {
   queued,
   resolving,
@@ -65,6 +67,11 @@ class MangaLibraryEntry {
     required Map<String, Object?> metadata,
     required this.updatedAt,
     this.coverUri,
+    this.category = '',
+    this.status = MangaLibraryStatus.planToRead,
+    this.chapterCheckedAt,
+    this.chapterUpdatedAt,
+    this.newChapterCount = 0,
   }) : metadata = Map<String, Object?>.unmodifiable(metadata);
 
   final String ownerKey;
@@ -74,6 +81,11 @@ class MangaLibraryEntry {
   final Map<String, Object?> metadata;
   final Uri? coverUri;
   final DateTime updatedAt;
+  final String category;
+  final MangaLibraryStatus status;
+  final DateTime? chapterCheckedAt;
+  final DateTime? chapterUpdatedAt;
+  final int newChapterCount;
 }
 
 class MangaReadingProgress {
@@ -88,6 +100,7 @@ class MangaReadingProgress {
     required this.updatedAt,
     this.chapterNumber,
     this.pageCount,
+    this.bookmarked = false,
   });
 
   final String ownerKey;
@@ -99,7 +112,41 @@ class MangaReadingProgress {
   final double pageOffset;
   final int? pageCount;
   final bool completed;
+  final bool bookmarked;
   final DateTime updatedAt;
+}
+
+/// Public chapter metadata only; never a chapter/page URL or request header.
+class MangaChapterSnapshot {
+  const MangaChapterSnapshot({
+    required this.chapterId,
+    required this.title,
+    required this.ordinal,
+    this.chapterNumber,
+    this.publishedAt,
+    this.firstSeenAt,
+    this.lastSeenAt,
+    this.available = true,
+    this.isNew = false,
+  });
+  final String chapterId;
+  final String title;
+  final int ordinal;
+  final double? chapterNumber;
+  final DateTime? publishedAt;
+  final DateTime? firstSeenAt;
+  final DateTime? lastSeenAt;
+  final bool available;
+  final bool isNew;
+}
+
+class MangaChapterSnapshotUpdate {
+  const MangaChapterSnapshotUpdate({
+    required this.addedChapterIds,
+    required this.checkedAt,
+  });
+  final List<String> addedChapterIds;
+  final DateTime checkedAt;
 }
 
 class MangaDownloadJob {
@@ -164,7 +211,7 @@ class MangaDownloadPage {
   final String sha256;
 }
 
-/// Typed persistence for the developer-only reader.
+/// Typed persistence for the optional public manga reader.
 ///
 /// This class uses the manga tables already owned by [TetoTvDatabase]. It does
 /// not create or migrate tables. Secrets are delegated to protected storage,
@@ -179,6 +226,17 @@ class MangaStore {
 
   final MangaDatabaseProvider _databaseProvider;
   final MangaSourceCredentialStore? _credentials;
+
+  /// All work uses the same SQLite transaction. Nested calls reuse its executor.
+  Future<T> transaction<T>(Future<T> Function(MangaStore store) action) async {
+    final db = await _databaseProvider();
+    if (db is Database) {
+      return db.transaction(
+        (tx) => action(MangaStore(databaseProvider: () async => tx)),
+      );
+    }
+    return action(this);
+  }
 
   Future<void> upsertSource(StoredMangaSource value) async {
     _validateSource(value);
@@ -309,6 +367,11 @@ class MangaStore {
       ),
       'cover_url': value.coverUri?.toString(),
       'updated_at': _epoch(value.updatedAt, 'library.updatedAt'),
+      'category': value.category,
+      'reading_status': value.status.name,
+      'chapter_checked_at': value.chapterCheckedAt?.millisecondsSinceEpoch,
+      'chapter_updated_at': value.chapterUpdatedAt?.millisecondsSinceEpoch,
+      'new_chapter_count': value.newChapterCount,
     }, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
@@ -347,6 +410,53 @@ class MangaStore {
     return rows.map(_libraryFromRow).toList(growable: false);
   }
 
+  /// Update sweeps page through stable extension identities, independently of
+  /// the library UI's 500-row cap. Legacy catalog sources use `source.*`, not
+  /// the reserved `extension.*` namespace. Callers still validate entry kind.
+  /// [remaining] includes the returned rows and uses the same cursor predicate.
+  Future<({List<MangaLibraryEntry> entries, int remaining})>
+  extensionLibraryUpdatePage(
+    String ownerKey, {
+    String? afterSourceId,
+    String? afterEntryId,
+    int limit = 100,
+  }) async {
+    final owner = _boundedText(ownerKey, 'library.ownerKey', 128);
+    if ((afterSourceId == null) != (afterEntryId == null)) {
+      throw const FormatException(
+        'A complete library update cursor is required.',
+      );
+    }
+    final cursorSource = afterSourceId == null
+        ? null
+        : _sourceId(afterSourceId);
+    final cursorEntry = afterEntryId == null
+        ? null
+        : _boundedText(afterEntryId, 'library.entryId', 512);
+    final where =
+        "owner_key = ? AND source_id GLOB 'extension.*'${cursorSource == null ? '' : ' AND (source_id > ? OR (source_id = ? AND entry_id > ?))'}";
+    final args = <Object?>[
+      owner,
+      if (cursorSource != null) ...[cursorSource, cursorSource, cursorEntry],
+    ];
+    final db = await _databaseProvider();
+    final count = await db.rawQuery(
+      'SELECT COUNT(*) AS count FROM manga_library_entries WHERE $where',
+      args,
+    );
+    final rows = await db.query(
+      'manga_library_entries',
+      where: where,
+      whereArgs: args,
+      orderBy: 'source_id ASC, entry_id ASC',
+      limit: limit.clamp(1, 100),
+    );
+    return (
+      entries: rows.map(_libraryFromRow).toList(growable: false),
+      remaining: (count.single['count']! as num).toInt(),
+    );
+  }
+
   Future<void> deleteLibraryEntry({
     required String ownerKey,
     required String sourceId,
@@ -364,21 +474,57 @@ class MangaStore {
     );
   }
 
+  Future<void> setLibraryOrganization({
+    required String ownerKey,
+    required String sourceId,
+    required String entryId,
+    required String category,
+    required MangaLibraryStatus status,
+  }) async {
+    _category(category);
+    final db = await _databaseProvider();
+    await db.update(
+      'manga_library_entries',
+      {'category': category, 'reading_status': status.name},
+      where: _titleWhere,
+      whereArgs: _titleArgs(ownerKey, sourceId, entryId),
+    );
+  }
+
   Future<void> upsertProgress(MangaReadingProgress value) async {
     _validateProgress(value);
-    final db = await _databaseProvider();
-    await db.insert('manga_reading_progress', <String, Object?>{
-      'owner_key': value.ownerKey,
-      'source_id': value.sourceId,
-      'entry_id': value.entryId,
-      'chapter_id': value.chapterId,
-      'chapter_number': value.chapterNumber,
-      'page_index': value.pageIndex,
-      'page_offset': value.pageOffset,
-      'page_count': value.pageCount,
-      'completed': value.completed ? 1 : 0,
-      'updated_at': _epoch(value.updatedAt, 'progress.updatedAt'),
-    }, conflictAlgorithm: ConflictAlgorithm.replace);
+    await transaction((store) async {
+      final db = await store._databaseProvider();
+      final old = await store.chapterProgress(
+        ownerKey: value.ownerKey,
+        sourceId: value.sourceId,
+        entryId: value.entryId,
+        chapterId: value.chapterId,
+      );
+      if (old != null && old.updatedAt.isAfter(value.updatedAt)) return;
+      final row = _progressToRow(value)
+        ..['completed'] = value.completed || (old?.completed ?? false) ? 1 : 0
+        ..['bookmarked'] = value.bookmarked || (old?.bookmarked ?? false)
+            ? 1
+            : 0;
+      await db.insert(
+        'manga_chapter_progress',
+        row,
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+      final latest = await store.progress(
+        ownerKey: value.ownerKey,
+        sourceId: value.sourceId,
+        entryId: value.entryId,
+      );
+      if (latest == null || !latest.updatedAt.isAfter(value.updatedAt)) {
+        await db.insert(
+          'manga_reading_progress',
+          Map<String, Object?>.from(row)..remove('bookmarked'),
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
+      }
+    });
   }
 
   Future<MangaReadingProgress?> progress({
@@ -415,21 +561,352 @@ class MangaStore {
     return rows.map(_progressFromRow).toList(growable: false);
   }
 
-  Future<void> deleteProgress({
+  /// One bounded query for library sorting/filtering, without per-title reads.
+  Future<List<MangaReadingProgress>> latestProgressForOwner(String ownerKey) =>
+      recentProgress(ownerKey, limit: 500);
+
+  /// Complete bounded backup/history query; never silently applies UI limits.
+  Future<List<MangaReadingProgress>> chapterHistoryForOwner(String ownerKey) =>
+      _historyForOwner(ownerKey, 'manga_chapter_progress');
+
+  /// Latest pointers for all titles, including unsaved titles, for backups.
+  Future<List<MangaReadingProgress>> latestHistoryForOwner(String ownerKey) =>
+      _historyForOwner(ownerKey, 'manga_reading_progress');
+
+  Future<List<MangaReadingProgress>> _historyForOwner(
+    String ownerKey,
+    String table,
+  ) async {
+    final db = await _databaseProvider();
+    final rows = await db.query(
+      table,
+      where: 'owner_key = ?',
+      whereArgs: [_boundedText(ownerKey, 'progress.ownerKey', 128)],
+      orderBy: 'source_id ASC, entry_id ASC, chapter_id ASC',
+      limit: 50001,
+    );
+    if (rows.length > 50000) {
+      throw StateError(
+        'This profile exceeds the backup chapter-history limit.',
+      );
+    }
+    return rows.map(_progressFromRow).toList(growable: false);
+  }
+
+  Future<MangaReadingProgress?> chapterProgress({
+    required String ownerKey,
+    required String sourceId,
+    required String entryId,
+    required String chapterId,
+  }) async {
+    final db = await _databaseProvider();
+    final rows = await db.query(
+      'manga_chapter_progress',
+      where: '$_titleWhere AND chapter_id = ?',
+      whereArgs: [
+        ..._titleArgs(ownerKey, sourceId, entryId),
+        _boundedText(chapterId, 'chapter.id', 512),
+      ],
+      limit: 1,
+    );
+    return rows.isEmpty ? null : _progressFromRow(rows.single);
+  }
+
+  Future<List<MangaReadingProgress>> chapterProgressForEntry({
     required String ownerKey,
     required String sourceId,
     required String entryId,
   }) async {
     final db = await _databaseProvider();
-    await db.delete(
-      'manga_reading_progress',
-      where: 'owner_key = ? AND source_id = ? AND entry_id = ?',
-      whereArgs: <Object?>[
-        _boundedText(ownerKey, 'progress.ownerKey', 128),
-        _sourceId(sourceId),
-        _boundedText(entryId, 'progress.entryId', 512),
-      ],
+    final rows = await db.query(
+      'manga_chapter_progress',
+      where: _titleWhere,
+      whereArgs: _titleArgs(ownerKey, sourceId, entryId),
+      orderBy: 'chapter_number ASC, chapter_id ASC',
+      limit: 10001,
     );
+    if (rows.length > 10000) {
+      throw StateError('This title exceeds the chapter-history limit.');
+    }
+    return rows.map(_progressFromRow).toList(growable: false);
+  }
+
+  Future<void> setChapterRead({
+    required String ownerKey,
+    required String sourceId,
+    required String entryId,
+    required String chapterId,
+    required bool completed,
+    double? chapterNumber,
+    DateTime? updatedAt,
+  }) => _setChapterFlag(
+    ownerKey: ownerKey,
+    sourceId: sourceId,
+    entryId: entryId,
+    chapterId: chapterId,
+    completed: completed,
+    chapterNumber: chapterNumber,
+    updatedAt: updatedAt,
+  );
+
+  Future<void> setChapterBookmark({
+    required String ownerKey,
+    required String sourceId,
+    required String entryId,
+    required String chapterId,
+    required bool bookmarked,
+    double? chapterNumber,
+    DateTime? updatedAt,
+  }) => _setChapterFlag(
+    ownerKey: ownerKey,
+    sourceId: sourceId,
+    entryId: entryId,
+    chapterId: chapterId,
+    bookmarked: bookmarked,
+    chapterNumber: chapterNumber,
+    updatedAt: updatedAt,
+  );
+
+  Future<void> _setChapterFlag({
+    required String ownerKey,
+    required String sourceId,
+    required String entryId,
+    required String chapterId,
+    bool? completed,
+    bool? bookmarked,
+    double? chapterNumber,
+    DateTime? updatedAt,
+  }) => transaction((store) async {
+    final old = await store.chapterProgress(
+      ownerKey: ownerKey,
+      sourceId: sourceId,
+      entryId: entryId,
+      chapterId: chapterId,
+    );
+    final value = MangaReadingProgress(
+      ownerKey: ownerKey,
+      sourceId: sourceId,
+      entryId: entryId,
+      chapterId: chapterId,
+      chapterNumber: old?.chapterNumber ?? chapterNumber,
+      pageIndex: old?.pageIndex ?? 0,
+      pageOffset: old?.pageOffset ?? 0,
+      pageCount: old?.pageCount,
+      completed: completed ?? old?.completed ?? false,
+      bookmarked: bookmarked ?? old?.bookmarked ?? false,
+      updatedAt: updatedAt ?? DateTime.now().toUtc(),
+    );
+    _validateProgress(value);
+    if (old != null && old.updatedAt.isAfter(value.updatedAt)) return;
+    final db = await store._databaseProvider();
+    await db.insert(
+      'manga_chapter_progress',
+      _progressToRow(value),
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+    if (completed != null) {
+      await db.update(
+        'manga_reading_progress',
+        {'completed': completed ? 1 : 0},
+        where: '$_titleWhere AND chapter_id = ?',
+        whereArgs: [..._titleArgs(ownerKey, sourceId, entryId), chapterId],
+      );
+    }
+  });
+
+  /// Exact, validated restore for an explicitly confirmed backup/migration.
+  /// Normal reader checkpoints must use [upsertProgress] instead.
+  Future<void> restoreChapterProgress(
+    MangaReadingProgress value, {
+    bool latest = false,
+  }) async {
+    _validateProgress(value);
+    await transaction((store) async {
+      final db = await store._databaseProvider();
+      final row = _progressToRow(value);
+      await db.insert(
+        'manga_chapter_progress',
+        row,
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+      if (latest) {
+        await db.insert(
+          'manga_reading_progress',
+          Map<String, Object?>.from(row)..remove('bookmarked'),
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
+      }
+    });
+  }
+
+  Future<List<MangaChapterSnapshot>> chapterSnapshots({
+    required String ownerKey,
+    required String sourceId,
+    required String entryId,
+    bool includeUnavailable = true,
+  }) async {
+    final db = await _databaseProvider();
+    final rows = await db.query(
+      'manga_chapter_snapshots',
+      where: '$_titleWhere${includeUnavailable ? '' : ' AND available = 1'}',
+      whereArgs: _titleArgs(ownerKey, sourceId, entryId),
+      orderBy: 'ordinal ASC, chapter_id ASC',
+      limit: 10001,
+    );
+    if (rows.length > 10000) {
+      throw StateError('This title exceeds the chapter-snapshot limit.');
+    }
+    return rows.map(_snapshotFromRow).toList(growable: false);
+  }
+
+  /// First successful check establishes a baseline, not thousands of "new"
+  /// chapters. Later absent chapters are retained as unavailable, never erased.
+  Future<MangaChapterSnapshotUpdate> replaceChapterSnapshot({
+    required String ownerKey,
+    required String sourceId,
+    required String entryId,
+    required List<MangaChapterSnapshot> chapters,
+    required DateTime checkedAt,
+  }) async {
+    if (chapters.length > 10000) {
+      throw const FormatException('Too many chapter snapshots.');
+    }
+    final ids = <String>{};
+    for (final chapter in chapters) {
+      _validateSnapshot(chapter);
+      if (!ids.add(chapter.chapterId)) {
+        throw const FormatException('Duplicate chapter identity.');
+      }
+    }
+    _epoch(checkedAt, 'snapshot.checkedAt');
+    return transaction((store) async {
+      final db = await store._databaseProvider();
+      final entry = await store.libraryEntry(
+        ownerKey: ownerKey,
+        sourceId: sourceId,
+        entryId: entryId,
+      );
+      if (entry == null) {
+        throw StateError(
+          'Save the title to your library before tracking updates.',
+        );
+      }
+      if (entry.chapterCheckedAt?.isAfter(checkedAt) == true) {
+        return MangaChapterSnapshotUpdate(
+          addedChapterIds: const [],
+          checkedAt: entry.chapterCheckedAt!,
+        );
+      }
+      final previous = {
+        for (final item in await store.chapterSnapshots(
+          ownerKey: ownerKey,
+          sourceId: sourceId,
+          entryId: entryId,
+        ))
+          item.chapterId: item,
+      };
+      final added = <String>[];
+      await db.update(
+        'manga_chapter_snapshots',
+        {'available': 0},
+        where: _titleWhere,
+        whereArgs: _titleArgs(ownerKey, sourceId, entryId),
+      );
+      for (final item in chapters) {
+        final old = previous[item.chapterId];
+        final isNew = old?.isNew ?? entry.chapterCheckedAt != null;
+        if (old == null && entry.chapterCheckedAt != null) {
+          added.add(item.chapterId);
+        }
+        await db.insert('manga_chapter_snapshots', {
+          ..._snapshotToRow(item, ownerKey, sourceId, entryId, checkedAt),
+          'first_seen_at':
+              (old?.firstSeenAt ?? checkedAt).millisecondsSinceEpoch,
+          'last_seen_at': checkedAt.millisecondsSinceEpoch,
+          'available': 1,
+          'is_new': isNew ? 1 : 0,
+        }, conflictAlgorithm: ConflictAlgorithm.replace);
+      }
+      final count = await db.rawQuery(
+        'SELECT count(*) AS count FROM manga_chapter_snapshots WHERE $_titleWhere AND available = 1 AND is_new = 1',
+        _titleArgs(ownerKey, sourceId, entryId),
+      );
+      await db.update(
+        'manga_library_entries',
+        {
+          'chapter_checked_at': checkedAt.millisecondsSinceEpoch,
+          'chapter_updated_at': added.isNotEmpty
+              ? checkedAt.millisecondsSinceEpoch
+              : entry.chapterUpdatedAt?.millisecondsSinceEpoch,
+          'new_chapter_count': count.single['count'],
+        },
+        where: _titleWhere,
+        whereArgs: _titleArgs(ownerKey, sourceId, entryId),
+      );
+      return MangaChapterSnapshotUpdate(
+        addedChapterIds: List.unmodifiable(added),
+        checkedAt: checkedAt,
+      );
+    });
+  }
+
+  Future<void> restoreChapterSnapshot({
+    required String ownerKey,
+    required String sourceId,
+    required String entryId,
+    required MangaChapterSnapshot chapter,
+    required DateTime fallbackTime,
+  }) async {
+    _titleArgs(ownerKey, sourceId, entryId);
+    _validateSnapshot(chapter);
+    final db = await _databaseProvider();
+    await db.insert(
+      'manga_chapter_snapshots',
+      _snapshotToRow(chapter, ownerKey, sourceId, entryId, fallbackTime),
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  Future<void> acknowledgeChapterUpdates({
+    required String ownerKey,
+    required String sourceId,
+    required String entryId,
+  }) => transaction((store) async {
+    final db = await store._databaseProvider();
+    final args = _titleArgs(ownerKey, sourceId, entryId);
+    await db.update(
+      'manga_chapter_snapshots',
+      {'is_new': 0},
+      where: _titleWhere,
+      whereArgs: args,
+    );
+    await db.update(
+      'manga_library_entries',
+      {'new_chapter_count': 0},
+      where: _titleWhere,
+      whereArgs: args,
+    );
+  });
+
+  Future<void> deleteProgress({
+    required String ownerKey,
+    required String sourceId,
+    required String entryId,
+  }) async {
+    await transaction((store) async {
+      final db = await store._databaseProvider();
+      final args = _titleArgs(ownerKey, sourceId, entryId);
+      await db.delete(
+        'manga_reading_progress',
+        where: _titleWhere,
+        whereArgs: args,
+      );
+      await db.delete(
+        'manga_chapter_progress',
+        where: _titleWhere,
+        whereArgs: args,
+      );
+    });
   }
 
   Future<void> upsertDownloadJob(MangaDownloadJob value) async {
@@ -481,6 +958,17 @@ class MangaStore {
       where: 'id = ?',
       whereArgs: <Object?>[_boundedText(jobId, 'download.id', 128)],
     );
+  }
+
+  /// Maintenance must account for the whole durable queue, not the UI's first
+  /// page: storage quotas, restart recovery and source deletion use this API.
+  Future<List<MangaDownloadJob>> allDownloadJobs() async {
+    final db = await _databaseProvider();
+    final rows = await db.query(
+      'manga_download_jobs',
+      orderBy: 'queue_position ASC, created_at ASC',
+    );
+    return rows.map(_jobFromRow).toList(growable: false);
   }
 
   Future<void> upsertDownloadPage(MangaDownloadPage value) async {
@@ -557,6 +1045,16 @@ Future<void> _deleteSourceRows(DatabaseExecutor db, String id) async {
     whereArgs: <Object?>[id],
   );
   await db.delete(
+    'manga_chapter_progress',
+    where: 'source_id = ?',
+    whereArgs: [id],
+  );
+  await db.delete(
+    'manga_chapter_snapshots',
+    where: 'source_id = ?',
+    whereArgs: [id],
+  );
+  await db.delete(
     'manga_library_entries',
     where: 'source_id = ?',
     whereArgs: <Object?>[id],
@@ -605,6 +1103,14 @@ void _validateLibraryEntry(MangaLibraryEntry value) {
     );
   }
   _epoch(value.updatedAt, 'library.updatedAt');
+  _category(value.category);
+  if (value.chapterCheckedAt != null) {
+    _epoch(value.chapterCheckedAt!, 'library.chapterCheckedAt');
+  }
+  if (value.chapterUpdatedAt != null) {
+    _epoch(value.chapterUpdatedAt!, 'library.chapterUpdatedAt');
+  }
+  _boundedInt(value.newChapterCount, 'library.newChapterCount', 0, 10000);
 }
 
 void _validateLibraryCatalogPath(Map<String, Object?> metadata) {
@@ -644,6 +1150,19 @@ MangaLibraryEntry _libraryFromRow(Map<String, Object?> row) {
             field: 'library.coverUri',
           ),
     updatedAt: _date(row, 'updated_at'),
+    category: row['category'] as String? ?? '',
+    status: MangaLibraryStatus.values.byName(
+      row['reading_status'] as String? ?? 'planToRead',
+    ),
+    chapterCheckedAt: row['chapter_checked_at'] == null
+        ? null
+        : _date(row, 'chapter_checked_at'),
+    chapterUpdatedAt: row['chapter_updated_at'] == null
+        ? null
+        : _date(row, 'chapter_updated_at'),
+    newChapterCount: row['new_chapter_count'] == null
+        ? 0
+        : _rowInt(row, 'new_chapter_count'),
   );
   _validateLibraryEntry(entry);
   return entry;
@@ -684,10 +1203,89 @@ MangaReadingProgress _progressFromRow(Map<String, Object?> row) {
     pageOffset: _rowNum(row, 'page_offset').toDouble(),
     pageCount: row['page_count'] == null ? null : _rowInt(row, 'page_count'),
     completed: _rowBool(row, 'completed'),
+    bookmarked: row['bookmarked'] == null ? false : _rowBool(row, 'bookmarked'),
     updatedAt: _date(row, 'updated_at'),
   );
   _validateProgress(progress);
   return progress;
+}
+
+const _titleWhere = 'owner_key = ? AND source_id = ? AND entry_id = ?';
+
+List<Object?> _titleArgs(String owner, String source, String entry) => [
+  _boundedText(owner, 'title.ownerKey', 128),
+  _sourceId(source),
+  _boundedText(entry, 'title.entryId', 512),
+];
+
+void _category(String value) {
+  if (value.isNotEmpty) _boundedText(value, 'library.category', 80);
+}
+
+Map<String, Object?> _progressToRow(MangaReadingProgress value) => {
+  'owner_key': value.ownerKey,
+  'source_id': value.sourceId,
+  'entry_id': value.entryId,
+  'chapter_id': value.chapterId,
+  'chapter_number': value.chapterNumber,
+  'page_index': value.pageIndex,
+  'page_offset': value.pageOffset,
+  'page_count': value.pageCount,
+  'completed': value.completed ? 1 : 0,
+  'bookmarked': value.bookmarked ? 1 : 0,
+  'updated_at': value.updatedAt.millisecondsSinceEpoch,
+};
+
+void _validateSnapshot(MangaChapterSnapshot value) {
+  _boundedText(value.chapterId, 'snapshot.chapterId', 512);
+  _boundedText(value.title, 'snapshot.title', 512);
+  _boundedInt(value.ordinal, 'snapshot.ordinal', 0, 99999);
+  if (value.chapterNumber != null &&
+      (!value.chapterNumber!.isFinite || value.chapterNumber! < 0)) {
+    throw const FormatException('snapshot.chapterNumber is invalid.');
+  }
+  for (final date in [value.publishedAt, value.firstSeenAt, value.lastSeenAt]) {
+    if (date != null) _epoch(date, 'snapshot.timestamp');
+  }
+}
+
+Map<String, Object?> _snapshotToRow(
+  MangaChapterSnapshot value,
+  String owner,
+  String source,
+  String entry,
+  DateTime fallback,
+) => {
+  'owner_key': owner,
+  'source_id': source,
+  'entry_id': entry,
+  'chapter_id': value.chapterId,
+  'title': value.title,
+  'chapter_number': value.chapterNumber,
+  'ordinal': value.ordinal,
+  'published_at': value.publishedAt?.millisecondsSinceEpoch,
+  'first_seen_at': (value.firstSeenAt ?? fallback).millisecondsSinceEpoch,
+  'last_seen_at': (value.lastSeenAt ?? fallback).millisecondsSinceEpoch,
+  'available': value.available ? 1 : 0,
+  'is_new': value.isNew ? 1 : 0,
+};
+
+MangaChapterSnapshot _snapshotFromRow(Map<String, Object?> row) {
+  final result = MangaChapterSnapshot(
+    chapterId: _rowString(row, 'chapter_id'),
+    title: _rowString(row, 'title'),
+    ordinal: _rowInt(row, 'ordinal'),
+    chapterNumber: (row['chapter_number'] as num?)?.toDouble(),
+    publishedAt: row['published_at'] == null
+        ? null
+        : _date(row, 'published_at'),
+    firstSeenAt: _date(row, 'first_seen_at'),
+    lastSeenAt: _date(row, 'last_seen_at'),
+    available: _rowBool(row, 'available'),
+    isNew: _rowBool(row, 'is_new'),
+  );
+  _validateSnapshot(result);
+  return result;
 }
 
 void _validateJob(MangaDownloadJob value) {

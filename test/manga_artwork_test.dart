@@ -42,6 +42,12 @@ void main() {
 
     expect(find.byKey(const ValueKey('manga-artwork-loading')), findsOneWidget);
     expect(client.resources, hasLength(1));
+    expect(
+      client.resources.single.allowPlatformArtworkTranscode,
+      isTrue,
+      reason:
+          'Only cover artwork opts into the bounded Android codec fallback.',
+    );
     completer.complete(_onePixelPng);
     await tester.pumpAndSettle();
 
@@ -49,6 +55,41 @@ void main() {
     expect(image.fit, BoxFit.contain);
     expect(image.image, isA<ResizeImage>());
     expect((image.image as ResizeImage).width, 321);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('loads an opaque cover resource without a URL or headers', (
+    tester,
+  ) async {
+    var nativeLoads = 0;
+    final client = _OpaquePageClient();
+    final identity = Object();
+
+    await _pumpArtwork(
+      tester,
+      client: client,
+      child: MangaArtwork(
+        uri: null,
+        resource: MangaOpaquePageResource(
+          cacheIdentity: identity,
+          allowPlatformArtworkTranscode: true,
+          loadImage: () async {
+            nativeLoads++;
+            return _onePixelPng;
+          },
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(client.resource, isA<MangaOpaquePageResource>());
+    expect(
+      (client.resource! as MangaOpaquePageResource).cacheIdentity,
+      same(identity),
+    );
+    expect(client.resource!.allowPlatformArtworkTranscode, isTrue);
+    expect(nativeLoads, 1);
+    expect(find.byType(Image), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -249,9 +290,26 @@ class _RecordingPageClient extends MangaPageFetchClient {
   final List<MangaRemotePageResource> resources = <MangaRemotePageResource>[];
 
   @override
-  Future<Uint8List> fetch(MangaRemotePageResource resource) {
-    resources.add(resource);
-    return _load(resource);
+  Future<Uint8List> fetch(MangaFetchablePageResource resource) {
+    final remote = resource as MangaRemotePageResource;
+    resources.add(remote);
+    return _load(remote);
+  }
+
+  @override
+  void close() {}
+}
+
+class _OpaquePageClient extends MangaPageFetchClient {
+  MangaFetchablePageResource? resource;
+
+  @override
+  Future<Uint8List> fetch(MangaFetchablePageResource resource) {
+    this.resource = resource;
+    if (resource is! MangaOpaquePageResource) {
+      throw StateError('Expected an opaque artwork resource.');
+    }
+    return resource.loadImage();
   }
 
   @override

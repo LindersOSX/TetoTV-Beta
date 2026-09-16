@@ -1,4 +1,4 @@
-enum AnimeTitleLogoSource { aniZip, fanartTvHd, fanartTv }
+enum AnimeTitleLogoSource { aniZip, aniZipTmdb, fanartTvHd, fanartTv }
 
 /// Transparent show-title artwork used only on a show's detail experience.
 ///
@@ -48,7 +48,11 @@ bool _isSafeArtworkUri(Uri? uri) {
   if (uri == null || uri.scheme != 'https' || uri.host.isEmpty) return false;
   if (uri.userInfo.isNotEmpty || uri.hasFragment) return false;
   if (uri.hasPort && uri.port != 443) return false;
-  const artworkHosts = <String>{'artworks.thetvdb.com', 'assets.fanart.tv'};
+  const artworkHosts = <String>{
+    'artworks.thetvdb.com',
+    'assets.fanart.tv',
+    'image.tmdb.org',
+  };
   if (!artworkHosts.contains(uri.host.toLowerCase())) return false;
   final path = uri.path.toLowerCase();
   return path.endsWith('.png') ||

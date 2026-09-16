@@ -33,6 +33,161 @@ void main() {
   });
 
   group('PhoneSetupPairingClient contract', () {
+    test(
+      'rate-limit scope accepts only one fixed header value on HTTP 429',
+      () async {
+        for (final (status, values, expected)
+            in <(int, List<String>?, PhoneSetupRateLimitScope)>[
+              (
+                429,
+                ['active_pairings'],
+                PhoneSetupRateLimitScope.activePairings,
+              ),
+              (429, ['request_rate'], PhoneSetupRateLimitScope.requestRate),
+              (429, null, PhoneSetupRateLimitScope.unknown),
+              (429, ['unknown'], PhoneSetupRateLimitScope.unknown),
+              (429, ['secret_token'], PhoneSetupRateLimitScope.unknown),
+              (
+                429,
+                ['active_pairings,request_rate'],
+                PhoneSetupRateLimitScope.unknown,
+              ),
+              (
+                429,
+                ['active_pairings', 'request_rate'],
+                PhoneSetupRateLimitScope.unknown,
+              ),
+              (503, ['active_pairings'], PhoneSetupRateLimitScope.unknown),
+            ]) {
+          final dio = Dio(BaseOptions(baseUrl: 'https://setup.example/'));
+          dio.interceptors.add(
+            InterceptorsWrapper(
+              onRequest: (request, handler) {
+                handler.reject(
+                  DioException(
+                    requestOptions: request,
+                    type: DioExceptionType.badResponse,
+                    response: Response<Object?>(
+                      requestOptions: request,
+                      statusCode: status,
+                      headers: Headers.fromMap({
+                        'X-TetoTV-Setup-Limit': ?values,
+                      }),
+                      data: {
+                        'scope': 'active_pairings',
+                        'error': 'secret_body',
+                      },
+                    ),
+                  ),
+                );
+              },
+            ),
+          );
+          final client = PhoneSetupPairingClient(
+            baseUrl: 'https://setup.example',
+            dio: dio,
+          );
+          try {
+            await client.createSession(_keyMaterial());
+            fail('A rejected request must not create a pairing.');
+          } on PhoneSetupServiceException catch (error) {
+            expect(error.rateLimitScope, expected);
+            expect(error.toString(), isNot(contains('secret')));
+          } finally {
+            dio.close(force: true);
+          }
+        }
+      },
+    );
+
+    test(
+      '429 preserves safe metadata and a bounded retry delay, not the body',
+      () async {
+        for (final (header, expectedSeconds) in <(String?, int)>[
+          ('60', 60),
+          ('180', 180),
+          (null, 60),
+          ('secret-token', 60),
+          ('999999999', 3600),
+        ]) {
+          final dio = Dio(BaseOptions(baseUrl: 'https://setup.example/'));
+          dio.interceptors.add(
+            InterceptorsWrapper(
+              onRequest: (request, handler) {
+                handler.reject(
+                  DioException(
+                    requestOptions: request,
+                    type: DioExceptionType.badResponse,
+                    response: Response<Object?>(
+                      requestOptions: request,
+                      statusCode: 429,
+                      headers: Headers.fromMap({
+                        if (header != null) 'retry-after': [header],
+                      }),
+                      data: {
+                        'error':
+                            'secret-token https://secret.example/?code=secret-code',
+                      },
+                    ),
+                  ),
+                );
+              },
+            ),
+          );
+          final client = PhoneSetupPairingClient(
+            baseUrl: 'https://setup.example',
+            dio: dio,
+          );
+          try {
+            await client.createSession(_keyMaterial());
+            fail('The rate-limited response must not create a session.');
+          } on PhoneSetupServiceException catch (error) {
+            expect(error.reasonCode, 'rate_limited');
+            expect(error.httpStatus, 429);
+            expect(error.retryAfter, Duration(seconds: expectedSeconds));
+            expect(error.message, contains('rate-limited'));
+            expect(error.toString(), isNot(contains('secret-token')));
+            expect(error.toString(), isNot(contains('secret.example')));
+          } finally {
+            dio.close(force: true);
+          }
+        }
+      },
+    );
+
+    test('polling 429 remains pending and preserves Retry-After', () async {
+      final dio = Dio(BaseOptions(baseUrl: 'https://setup.example/'));
+      dio.interceptors.add(
+        InterceptorsWrapper(
+          onRequest: (request, handler) {
+            handler.reject(
+              DioException(
+                requestOptions: request,
+                type: DioExceptionType.badResponse,
+                response: Response<Object?>(
+                  requestOptions: request,
+                  statusCode: 429,
+                  headers: Headers.fromMap({
+                    'retry-after': ['37'],
+                  }),
+                ),
+              ),
+            );
+          },
+        ),
+      );
+      addTearDown(() => dio.close(force: true));
+      final client = PhoneSetupPairingClient(
+        baseUrl: 'https://setup.example',
+        dio: dio,
+      );
+
+      final result = await client.poll(_session());
+
+      expect(result.status, PhoneSetupPairingStatus.pending);
+      expect(result.retryAfter, const Duration(seconds: 37));
+    });
+
     test('health requires versioned end-to-end phone setup', () async {
       final good = _Harness(
         (_) => {

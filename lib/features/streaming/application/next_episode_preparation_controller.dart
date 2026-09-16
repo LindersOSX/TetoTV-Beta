@@ -6,6 +6,7 @@ import 'dart:async';
 
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/core/preferences/playback_audio_preference.dart';
+import 'package:anime_tv/core/preferences/title_language_preference.dart';
 import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
 import 'package:anime_tv/features/catalog/application/filler_episode_providers.dart';
@@ -26,6 +27,7 @@ import 'package:anime_tv/features/streaming/application/episode_release_search_c
 import 'package:anime_tv/features/streaming/data/composite_release_source.dart';
 import 'package:anime_tv/features/streaming/domain/debrid_service.dart';
 import 'package:anime_tv/features/streaming/domain/episode_identity_guard.dart';
+import 'package:anime_tv/features/streaming/domain/external_audio_track.dart';
 import 'package:anime_tv/features/streaming/domain/release_audio_preference.dart';
 import 'package:anime_tv/features/streaming/domain/stream_ranking_preferences.dart';
 import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
@@ -61,6 +63,57 @@ typedef NextEpisodeDebridResolverFactory =
       required String token,
       required ReleaseSource source,
     });
+
+WebStreamAudioCapability _webAudioCapabilityForPreparedLaunch(
+  ReleaseCandidate release,
+) => switch (release.audioIntent) {
+  ReleaseAudioIntent.sub => WebStreamAudioCapability.sub,
+  ReleaseAudioIntent.dub => WebStreamAudioCapability.dub,
+  ReleaseAudioIntent.multi => WebStreamAudioCapability.subAndDub,
+  ReleaseAudioIntent.unknown when release.isDubbed =>
+    WebStreamAudioCapability.dub,
+  ReleaseAudioIntent.unknown => WebStreamAudioCapability.unknown,
+};
+
+String _preparedLaunchPlaybackVariantKey(PlaybackLaunch launch) {
+  final stream = launch.stream;
+  final providerIdentity =
+      [
+            stream.providerId,
+            launch.selectedRelease.sourceId,
+            stream.providerName,
+            launch.selectedRelease.provider,
+          ]
+          .whereType<String>()
+          .map((value) => value.trim())
+          .firstWhere((value) => value.isNotEmpty, orElse: () => 'unknown');
+  return webPlaybackVariantKey(
+    providerIdentity: providerIdentity,
+    uri: stream.uri,
+    audioCapability: _webAudioCapabilityForPreparedLaunch(
+      launch.selectedRelease,
+    ),
+    headers: stream.headers,
+    subtitleUri: stream.externalSubtitle,
+    subtitleLanguage: stream.externalSubtitleLanguage,
+    externalAudioTracks: [
+      for (final track in stream.pendingExternalAudioTracks)
+        (
+          uri: track.uri,
+          language: track.language,
+          label: track.label,
+          headers: track.headers,
+        ),
+      for (final track in stream.externalAudioTracks)
+        (
+          uri: track.uri,
+          language: track.language,
+          label: track.label,
+          headers: const <String, String>{},
+        ),
+    ],
+  );
+}
 
 final nextEpisodePreparationControllerProvider =
     Provider<NextEpisodePreparationController>((ref) {
@@ -177,6 +230,7 @@ class NextEpisodePreparationRequest {
       title: episode.title,
       episode: episode.episode,
       episodeCount: episode.episodeCount,
+      absoluteSeasonOffset: episode.absoluteSeasonOffset,
     );
     return NextEpisodePreparationRequest(
       currentLaunch: PlaybackLaunch(
@@ -287,6 +341,7 @@ bool isEpisodeAvailableForPlayback(AnimeSummary details, int episode) {
 String preparedNextEpisodePlayerLocation(
   PreparedNextEpisode prepared, {
   String? watchPartyTargetSourceKey,
+  TitleLanguagePreference titleLanguage = TitleLanguagePreference.english,
 }) {
   if (prepared.isPrivateLibrary) {
     throw StateError(
@@ -299,7 +354,7 @@ String preparedNextEpisodePlayerLocation(
     path: '/player',
     queryParameters: {
       'source': stream.uri.toString(),
-      'title': '${launch.episode.title} • Episode ${launch.episode.episode}',
+      'title': launch.episode.playbackDisplayTitle(titleLanguage),
       'anilistId': '${launch.episode.anilistMediaId}',
       if (launch.episode.malMediaId != null)
         'malId': '${launch.episode.malMediaId}',
@@ -616,7 +671,11 @@ class NextEpisodePreparationController {
         terminalReason: NextEpisodePreparationTerminalReason.noNextEpisode,
       );
     }
-    final episode = _episodeReference(details, episodeNumber);
+    final episode = _episodeReference(
+      details,
+      episodeNumber,
+      absoluteSeasonOffset: request.currentLaunch.episode.absoluteSeasonOffset,
+    );
     final preferredAudio = preferredAudioPreferenceForRelease(
       release: request.currentLaunch.selectedRelease,
       globalPreference: settings.preferredAudio,
@@ -877,7 +936,7 @@ class NextEpisodePreparationController {
       final preferredWebKeys = <String>{
         for (final stream in tierWebStreams)
           if (webStreamQualityHeight(stream) == preferredQualityHeight)
-            '${stream.providerId}\u0000${stream.uri}',
+            webStreamPlaybackVariantKey(stream),
       };
       if (preferredReleaseHashes.isEmpty && preferredWebKeys.isEmpty) {
         return [(releases: tierReleases, webStreams: tierWebStreams)];
@@ -894,7 +953,7 @@ class NextEpisodePreparationController {
           webStreams: tierWebStreams
               .where(
                 (stream) => preferredWebKeys.contains(
-                  '${stream.providerId}\u0000${stream.uri}',
+                  webStreamPlaybackVariantKey(stream),
                 ),
               )
               .toList(growable: false),
@@ -910,7 +969,7 @@ class NextEpisodePreparationController {
           webStreams: tierWebStreams
               .where(
                 (stream) => !preferredWebKeys.contains(
-                  '${stream.providerId}\u0000${stream.uri}',
+                  webStreamPlaybackVariantKey(stream),
                 ),
               )
               .toList(growable: false),
@@ -1062,8 +1121,8 @@ class NextEpisodePreparationController {
         .where(
           (stream) => !exactWeb.any(
             (exact) =>
-                exact.providerId == stream.providerId &&
-                exact.uri == stream.uri,
+                webStreamPlaybackVariantKey(exact) ==
+                webStreamPlaybackVariantKey(stream),
           ),
         )
         .toList(growable: false);
@@ -1261,6 +1320,7 @@ class NextEpisodePreparationController {
           candidate.uri,
           candidate.headers,
           subtitleUri: candidate.subtitleUri,
+          audioTracks: candidate.externalAudioTracks,
         );
         if (_disposed || slot.cancelled) {
           await validated.session?.close();
@@ -1276,6 +1336,8 @@ class NextEpisodePreparationController {
           mediaContentType: validated.contentType,
           subtitleContentType: validated.subtitleContentType,
           externalSubtitleRejected: validated.subtitleRejected,
+          externalAudioTracks: validated.audioTracks,
+          rejectedExternalAudioTrackCount: validated.rejectedAudioTrackCount,
           playbackLease: validated.session,
           providerId: candidate.providerId,
           providerName: '${candidate.providerName} web stream',
@@ -1297,7 +1359,11 @@ class NextEpisodePreparationController {
           requestedAudio: requestedAudio,
           alternatives: releaseAlternatives,
           directAlternatives: allWebCandidates
-              .where((stream) => stream.uri != candidate.uri)
+              .where(
+                (stream) =>
+                    webStreamPlaybackVariantKey(stream) !=
+                    webStreamPlaybackVariantKey(candidate),
+              )
               .map(_optionForWebStream)
               .toList(growable: false),
         );
@@ -1463,9 +1529,8 @@ class _PreparationSlot {
           other.currentLaunch.selectedRelease.sourceId &&
       request.currentLaunch.selectedRelease.provider ==
           other.currentLaunch.selectedRelease.provider &&
-      request.currentLaunch.stream.uri == other.currentLaunch.stream.uri &&
-      request.currentLaunch.stream.providerId ==
-          other.currentLaunch.stream.providerId &&
+      _preparedLaunchPlaybackVariantKey(request.currentLaunch) ==
+          _preparedLaunchPlaybackVariantKey(other.currentLaunch) &&
       request.currentLaunch.requestedAudio ==
           other.currentLaunch.requestedAudio &&
       request.seriesPreferences.audioLanguage ==
@@ -1550,7 +1615,11 @@ class _DiscoverySnapshot {
 
 String _key(int mediaId, int currentEpisode) => '$mediaId:$currentEpisode';
 
-EpisodeReference _episodeReference(AnimeSummary details, int episode) {
+EpisodeReference _episodeReference(
+  AnimeSummary details,
+  int episode, {
+  int? absoluteSeasonOffset,
+}) {
   final alternatives = <String?>{
     details.titleEnglish,
     details.titleRomaji,
@@ -1570,6 +1639,7 @@ EpisodeReference _episodeReference(AnimeSummary details, int episode) {
     status: details.status,
     format: details.format,
     episodeCount: details.episodes,
+    absoluteSeasonOffset: absoluteSeasonOffset,
     isAdult: details.isAdult,
     coverImageUrl: details.coverImageUrl,
     autoPlay: true,
@@ -1664,6 +1734,16 @@ PlaybackStreamOption _optionForWebStream(WebStreamResult result) {
       headers: result.headers,
       externalSubtitle: result.subtitleUri,
       externalSubtitleLanguage: result.subtitleLanguage,
+      pendingExternalAudioTracks: result.externalAudioTracks
+          .map(
+            (track) => PendingExternalAudioTrack(
+              uri: track.uri,
+              label: track.label,
+              language: track.language,
+              headers: track.headers,
+            ),
+          )
+          .toList(growable: false),
       providerId: result.providerId,
       providerName: '${result.providerName} web stream',
       providerEpisodeIdentity: ProviderEpisodeIdentity.fromFields(

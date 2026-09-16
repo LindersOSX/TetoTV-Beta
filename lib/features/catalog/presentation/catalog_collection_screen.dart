@@ -1,3 +1,4 @@
+import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
@@ -51,8 +52,8 @@ class CatalogCollectionScreen extends ConsumerWidget {
                 const SizedBox(width: 12),
                 Text(
                   type == CatalogCollectionType.studio
-                      ? 'Studio titles'
-                      : 'Anime credits',
+                      ? context.tr("Studio titles")
+                      : context.tr("Anime credits"),
                   style: TextStyle(color: context.appPalette.mutedText),
                 ),
               ],
@@ -65,8 +66,13 @@ class CatalogCollectionScreen extends ConsumerWidget {
                     color: context.appPalette.accentBright,
                   ),
                 ),
-                error: (error, _) =>
-                    Center(child: Text('Could not load titles: $error')),
+                error: (error, _) => Center(
+                  child: Text(
+                    context.tr("Could not load titles: {value1}", {
+                      'value1': error,
+                    }),
+                  ),
+                ),
                 data: (List<AnimeSummary> items) => CatalogGrid(
                   items: items,
                   titlePreference: preference,

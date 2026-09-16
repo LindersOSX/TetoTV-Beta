@@ -6,6 +6,7 @@ import 'package:anime_tv/features/auth/application/tracking_token_service.dart';
 import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
 import 'package:anime_tv/features/settings/application/simkl_account_controller.dart';
 import 'package:anime_tv/features/tracking/data/anilist_tracking_repository.dart';
+import 'package:anime_tv/features/tracking/data/kitsu_tracking_repository.dart';
 import 'package:anime_tv/features/tracking/data/myanimelist_tracking_repository.dart';
 import 'package:anime_tv/features/tracking/data/simkl_account_session.dart';
 import 'package:anime_tv/features/tracking/data/simkl_tracking_repository.dart';
@@ -134,30 +135,36 @@ class TrackingSyncService with WidgetsBindingObserver {
     }
     await _mutateOutbox((current) => [...current, ...pending]);
 
-    try {
-      final simklToken = await _tokenLookup(TrackingProvider.simkl);
-      if (simklToken != null && simklToken.isNotEmpty) {
-        final simklProfile = _normalizeProfileId(
-          await _verifiedProfileLookup(TrackingProvider.simkl, simklToken),
-        );
-        // Never persist a SIMKL update under an unverified or stale account
-        // slot. A later playback update can enqueue it once pairing has bound
-        // the token to its non-secret profile identity.
-        if (simklProfile != null) {
-          final simklPending = _PendingProgress(
-            provider: TrackingProvider.simkl,
-            profileId: simklProfile,
-            mediaId: anilistMediaId ?? malMediaId!,
-            anilistMediaId: anilistMediaId,
-            malMediaId: malMediaId,
-            completedEpisodes: completedEpisodes,
+    for (final provider in const [
+      TrackingProvider.kitsu,
+      TrackingProvider.simkl,
+    ]) {
+      try {
+        final token = await _tokenLookup(provider);
+        if (token != null && token.isNotEmpty) {
+          final profile = _normalizeProfileId(
+            await _verifiedProfileLookup(provider, token),
           );
-          pending.add(simklPending);
-          await _mutateOutbox((current) => [...current, simklPending]);
+          // Never persist an externally mapped update under an unverified or
+          // stale account slot. A later playback update can enqueue it once
+          // pairing has bound the token to its non-secret profile identity.
+          if (profile != null) {
+            final externalPending = _PendingProgress(
+              provider: provider,
+              profileId: profile,
+              mediaId: anilistMediaId ?? malMediaId!,
+              anilistMediaId: anilistMediaId,
+              malMediaId: malMediaId,
+              completedEpisodes: completedEpisodes,
+            );
+            pending.add(externalPending);
+            await _mutateOutbox((current) => [...current, externalPending]);
+          }
         }
+      } catch (_) {
+        // One temporarily unreadable external tracker must not block the
+        // direct AniList/MAL updates or the other linked tracker.
       }
-    } catch (_) {
-      // A temporarily unreadable SIMKL token must not block AniList/MAL.
     }
 
     _cancelScheduledFlush();
@@ -212,7 +219,7 @@ class TrackingSyncService with WidgetsBindingObserver {
 
     for (final item in pending) {
       String? token;
-      if (item.provider == TrackingProvider.simkl) {
+      if (_usesExternalIds(item.provider)) {
         try {
           token = await _tokenLookup(item.provider);
           if (token == null || token.isEmpty) continue;
@@ -230,7 +237,7 @@ class TrackingSyncService with WidgetsBindingObserver {
       }
 
       String? activeProfile;
-      if (item.provider == TrackingProvider.simkl) {
+      if (_usesExternalIds(item.provider)) {
         // The token-bound check above replaces the generic active-slot check.
         activeProfile = item.profileId;
       } else if (activeProfiles.containsKey(item.provider)) {
@@ -259,12 +266,11 @@ class TrackingSyncService with WidgetsBindingObserver {
         // the slot again before using that token and retain the queued row if
         // the account changed.
         final verifiedProfile = _normalizeProfileId(
-          item.provider == TrackingProvider.simkl
+          _usesExternalIds(item.provider)
               ? await _verifiedProfileLookup(item.provider, token)
               : await _profileLookup(item.provider),
         );
-        if (item.provider == TrackingProvider.simkl &&
-            verifiedProfile == null) {
+        if (_usesExternalIds(item.provider) && verifiedProfile == null) {
           continue;
         }
         if (!_sameProfile(item.profileId, verifiedProfile)) continue;
@@ -274,8 +280,7 @@ class TrackingSyncService with WidgetsBindingObserver {
           ExternalIdTrackingRepository value => value,
           _ => null,
         };
-        if (item.provider == TrackingProvider.simkl &&
-            externalRepository != null) {
+        if (_usesExternalIds(item.provider) && externalRepository != null) {
           await externalRepository.updateProgressByIds(
             ids: TrackingMediaIds(
               anilistId: item.anilistMediaId,
@@ -289,6 +294,12 @@ class TrackingSyncService with WidgetsBindingObserver {
             completedEpisodes: item.completedEpisodes,
           );
         }
+        completed[item.outboxKey] = item.completedEpisodes;
+      } on TrackingMediaMappingNotFoundException {
+        // Kitsu has authoritatively reported that neither stable catalog ID
+        // maps to a title. Retrying cannot change that response, so remove
+        // this row instead of waking the app forever. Network/API failures
+        // still take the retryable path below.
         completed[item.outboxKey] = item.completedEpisodes;
       } catch (_) {
         retryableFailure = true;
@@ -322,6 +333,7 @@ class TrackingSyncService with WidgetsBindingObserver {
       TrackingProvider.myAnimeList => MyAnimeListTrackingRepository(
         accessToken: token,
       ),
+      TrackingProvider.kitsu => KitsuTrackingRepository(accessToken: token),
       TrackingProvider.simkl => SimklTrackingRepository(
         accessToken: token,
         clientIdLoader: () => _storage.read(key: simklClientIdStorageKey),
@@ -485,7 +497,7 @@ class _PendingProgress {
   final int completedEpisodes;
 
   String get outboxKey {
-    final identity = provider == TrackingProvider.simkl
+    final identity = _usesExternalIds(provider)
         ? anilistMediaId != null
               ? 'anilist:$anilistMediaId'
               : 'mal:${malMediaId ?? mediaId}'
@@ -545,3 +557,6 @@ class _PendingProgress {
     'completed_episodes': completedEpisodes,
   };
 }
+
+bool _usesExternalIds(TrackingProvider provider) =>
+    provider == TrackingProvider.kitsu || provider == TrackingProvider.simkl;

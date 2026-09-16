@@ -1,5 +1,5 @@
+import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:anime_tv/core/diagnostics/anonymous_crash_reporter.dart';
@@ -27,6 +27,7 @@ import 'package:anime_tv/features/marketplace/data/web_stream_validator.dart';
 import 'package:anime_tv/features/marketplace/domain/addon_models.dart';
 import 'package:anime_tv/features/player/domain/library_playback_request.dart';
 import 'package:anime_tv/features/player/presentation/library_tv_player_screen.dart';
+import 'package:anime_tv/features/settings/application/display_preferences_controller.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:anime_tv/features/streaming/application/debrid_resolver_factory.dart';
 import 'package:anime_tv/features/streaming/application/debrid_token_service.dart';
@@ -37,6 +38,7 @@ import 'package:anime_tv/features/streaming/data/direct_torrent_stream_resolver.
 import 'package:anime_tv/features/streaming/data/real_debrid_client.dart';
 import 'package:anime_tv/features/streaming/domain/debrid_service.dart';
 import 'package:anime_tv/features/streaming/domain/episode_identity_guard.dart';
+import 'package:anime_tv/features/streaming/domain/external_audio_track.dart';
 import 'package:anime_tv/features/streaming/domain/release_audio_preference.dart';
 import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
 import 'package:anime_tv/features/streaming/domain/stream_ranking_preferences.dart';
@@ -46,7 +48,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
-import 'package:crypto/crypto.dart';
 
 export 'package:anime_tv/features/streaming/application/episode_release_search_cache.dart'
     show configuredReleaseSourceProvider;
@@ -81,7 +82,8 @@ final directTorrentCapabilityReaderProvider =
     });
 
 String offlineDownloadPreparationMessage(Object error) {
-  if (error is DebridProviderFailure ||
+  if (error is EpisodeIdentityMismatchException ||
+      error is DebridProviderFailure ||
       error is DebridCacheMissException ||
       error is DebridCleanupFailureException) {
     return error.toString();
@@ -97,6 +99,7 @@ String offlineDownloadPreparationMessage(Object error) {
 /// bounded provider/playback diagnostics, but must not be mislabeled as an app
 /// process crash by the anonymous handled-error reporter.
 bool shouldRecordResolveCrashReport(Object error) =>
+    error is! EpisodeIdentityMismatchException &&
     error is! DebridProviderFailure &&
     error is! DebridCacheMissException &&
     error is! DebridCleanupFailureException &&
@@ -117,6 +120,7 @@ class WebStreamPreflightFailure implements Exception {
 }
 
 String offlineDownloadPreparationReasonCode(Object error) {
+  if (error is EpisodeIdentityMismatchException) return error.reasonCode;
   if (error is RealDebridException) {
     return 'real_debrid_${error.kind.name}';
   }
@@ -134,11 +138,8 @@ final webStreamPreflightProvider = Provider<WebStreamPreflight>(
   (_) => const WebStreamValidator().validate,
 );
 
-String _opaqueWebStreamIdentity(WebStreamResult stream) => sha256
-    .convert(
-      utf8.encode('${webStreamProviderIdentity(stream)}\u0000${stream.uri}'),
-    )
-    .toString();
+String _opaqueWebStreamIdentity(WebStreamResult stream) =>
+    webStreamPlaybackVariantKey(stream);
 
 String _boundedDiagnosticField(Object? value) {
   final safe = '${value ?? 'unknown'}'
@@ -418,11 +419,10 @@ String completedDownloadRevisionForEpisode(
   return '${state.initialized}|${revisions.join(';')}';
 }
 
-/// External caption sidecars are not yet materialized by the offline worker.
-/// Block these sources instead of saving an apparently subtitled video that
-/// becomes unwatchable without its remote VTT/ASS file.
+/// External caption/audio sidecars are not materialized by the offline worker.
+/// Block these sources instead of saving an incomplete media file.
 bool webStreamRequiresExternalSubtitleDownload(WebStreamResult stream) =>
-    stream.subtitleUri != null;
+    stream.subtitleUri != null || stream.externalAudioTracks.isNotEmpty;
 
 /// Ranks automatic next-episode web candidates without changing the manual
 /// picker order. The viewer's audio choice remains authoritative; within the
@@ -590,6 +590,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
   Set<DebridService> _connectedServices = const {};
   DebridService _debridService = DebridService.realDebrid;
   _StreamLanguageFilter _languageFilter = _StreamLanguageFilter.dub;
+  bool _languageFilterSelectedInPicker = false;
   _StreamQualityFilter _qualityFilter = _StreamQualityFilter.any;
   _StreamCodecFilter _codecFilter = _StreamCodecFilter.any;
   _StreamHdrFilter _hdrFilter = _StreamHdrFilter.any;
@@ -797,6 +798,25 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
         _StreamLanguageFilter.dub => PlaybackAudioPreference.dub,
       };
 
+  _StreamLanguageFilter get _pickerLanguageFilter {
+    if (_languageFilterSelectedInPicker || !_webSearchEnabled) {
+      return _languageFilter;
+    }
+    final hasTorrentForEpisode = _releases.any(
+      (release) =>
+          releaseCodecIsPlayableOnDevice(release, device: _deviceProfile) &&
+          _releaseMatchesEpisodeIdentity(release),
+    );
+    // A Web-only search opens on All regardless of the preferred audio mode.
+    // Sub and Dub are torrent filters; Web providers do not reliably label
+    // every stream's available tracks.
+    if (!_canPlayTorrentReleases ||
+        (_debridSearchFinished && !hasTorrentForEpisode)) {
+      return _StreamLanguageFilter.all;
+    }
+    return _languageFilter;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -942,6 +962,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
       _languageFilter = _preferredAudio == PlaybackAudioPreference.dub
           ? _StreamLanguageFilter.dub
           : _StreamLanguageFilter.sub;
+      _languageFilterSelectedInPicker = false;
       _qualityFilter = _enumByName(
         _StreamQualityFilter.values,
         preferences.preferredQuality,
@@ -1394,9 +1415,9 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
               path: '/player',
               queryParameters: {
                 'source': state.uri.toString(),
-                'title':
-                    '${widget.episode.title} • Episode '
-                    '${widget.episode.episode}',
+                'title': widget.episode.playbackDisplayTitle(
+                  ref.read(titleLanguagePreferenceProvider),
+                ),
                 'anilistId': '${widget.episode.anilistMediaId}',
                 if (widget.episode.malMediaId != null)
                   'malId': '${widget.episode.malMediaId}',
@@ -1439,10 +1460,9 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
                     }));
             final directAlternatives =
                 _autoplayWebCandidates(
-                      _webStreams,
+                      _webStreams.where((stream) => stream.uri != state.uri),
                       preferredQualityHeight: releaseQualityHeight(selected),
                     )
-                    .where((stream) => stream.uri != state.uri)
                     .map(
                       (stream) => PlaybackStreamOption(
                         stream: _readyForWebStream(stream),
@@ -2108,6 +2128,8 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
     setState(() {
       _autoPickManualFallback = true;
       _autoPickNotice = fallbackNotice;
+      _languageFilter = _StreamLanguageFilter.all;
+      _languageFilterSelectedInPicker = true;
       if (widget.episode.autoPlay) _autoplayManualFallback = true;
       _autoPlayStarted = false;
       _resolving = false;
@@ -2246,12 +2268,12 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
     Iterable<WebStreamResult> input, {
     bool ignoreOptionalFilters = false,
   }) {
+    if (!ignoreOptionalFilters &&
+        _pickerLanguageFilter != _StreamLanguageFilter.all) {
+      return const <WebStreamResult>[];
+    }
     final result = input.where((stream) {
       if (!_webStreamMatchesEpisodeIdentity(stream)) return false;
-      if (!ignoreOptionalFilters &&
-          !webStreamMatchesAudioFilter(stream, _languageFilter.name)) {
-        return false;
-      }
       final quality = (stream.quality ?? stream.title).toLowerCase();
       if (ignoreOptionalFilters) return true;
       return switch (_qualityFilter) {
@@ -2268,6 +2290,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
         right,
         quality: _streamPreferences.webStreamQuality,
         preferredAudio: _preferredAudio,
+        useAudioPreference: false,
       ),
     );
     return _providerFairManualWebStreams(result);
@@ -2312,7 +2335,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
       _webStreams.length,
       visibleProviderCount,
       visibleStreams.length,
-      _languageFilter.name,
+      _pickerLanguageFilter.name,
       _qualityFilter.name,
       rawUnknownAudioResults,
       rawSubAudioResults,
@@ -2335,7 +2358,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
           rawResults: _webStreams.length,
           visibleProviders: visibleProviderCount,
           visibleResults: visibleStreams.length,
-          audioFilter: _languageFilter.name,
+          audioFilter: _pickerLanguageFilter.name,
           qualityFilter: _qualityFilter.name,
           rawUnknownAudioResults: rawUnknownAudioResults,
           rawSubAudioResults: rawSubAudioResults,
@@ -2413,6 +2436,8 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
     String? mediaContentType,
     String? subtitleContentType,
     bool externalSubtitleRejected = false,
+    List<ExternalAudioTrack> externalAudioTracks = const [],
+    int rejectedExternalAudioTrackCount = 0,
     PlaybackResourceLease? playbackLease,
   }) {
     final release = _releaseForWebStream(stream);
@@ -2424,6 +2449,20 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
           ? stream.subtitleUri
           : validatedSubtitleUri,
       externalSubtitleLanguage: stream.subtitleLanguage,
+      externalAudioTracks: externalAudioTracks,
+      pendingExternalAudioTracks: validatedUri == null
+          ? stream.externalAudioTracks
+                .map(
+                  (track) => PendingExternalAudioTrack(
+                    uri: track.uri,
+                    label: track.label,
+                    language: track.language,
+                    headers: track.headers,
+                  ),
+                )
+                .toList(growable: false)
+          : const [],
+      rejectedExternalAudioTrackCount: rejectedExternalAudioTrackCount,
       mediaContentType: mediaContentType,
       subtitleContentType: subtitleContentType,
       externalSubtitleRejected: externalSubtitleRejected,
@@ -2448,25 +2487,26 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
           barrierDismissible: false,
           builder: (dialogContext) => AlertDialog(
             icon: const Icon(Icons.download_for_offline_rounded),
-            title: const Text('Download this episode?'),
+            title: Text(context.tr("Download this episode?")),
             content: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 620),
               child: Text(
-                '$source\n\n$details\n\nThe episode will appear in Download '
-                'Manager and, once finished, as the first source for this '
-                'episode.',
+                context.tr(
+                  '{source}\n\n{details}\n\nThe episode will appear in Download Manager and, once finished, as the first source for this episode.',
+                  {'source': source, 'details': details},
+                ),
               ),
             ),
             actions: [
               TextButton(
                 autofocus: true,
                 onPressed: () => Navigator.of(dialogContext).pop(false),
-                child: const Text('Cancel'),
+                child: Text(context.tr("Cancel")),
               ),
               FilledButton.icon(
                 onPressed: () => Navigator.of(dialogContext).pop(true),
                 icon: const Icon(Icons.download_rounded),
-                label: const Text('Download'),
+                label: Text(context.tr("Download")),
               ),
             ],
           ),
@@ -2481,27 +2521,24 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
           barrierDismissible: false,
           builder: (dialogContext) => AlertDialog(
             icon: const Icon(Icons.public_rounded),
-            title: const Text('Download from public torrent peers?'),
+            title: Text(context.tr("Download from public torrent peers?")),
             content: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 640),
               child: Text(
-                '${debridFailed ? 'Your Debrid service could not prepare this release. ' : ''}'
-                'A direct torrent download makes your public IP address '
-                'visible to peers and trackers and may upload data while the '
-                'download runs. Only continue for content you are legally '
-                'allowed to access.',
+                '${debridFailed ? '${context.tr('Your Debrid service could not prepare this release.')} ' : ''}'
+                '${context.tr('A direct torrent download makes your public IP address visible to peers and trackers and may upload data while the download runs. Only continue for content you are legally allowed to access.')}',
               ),
             ),
             actions: [
               TextButton(
                 autofocus: true,
                 onPressed: () => Navigator.of(dialogContext).pop(false),
-                child: const Text('Cancel'),
+                child: Text(context.tr("Cancel")),
               ),
               FilledButton.icon(
                 onPressed: () => Navigator.of(dialogContext).pop(true),
                 icon: const Icon(Icons.public_rounded),
-                label: const Text('Download directly'),
+                label: Text(context.tr("Download directly")),
               ),
             ],
           ),
@@ -2636,6 +2673,15 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
           directPeerCapability: DirectPeerDownloadCapability(
             magnet: release.magnetUri,
             episode: widget.episode.episode,
+            season: catalogSeasonNumber(widget.episode),
+            absoluteEpisode: absoluteEpisodeNumber(widget.episode),
+            requestedSpecial: episodeReferenceIsSpecial(widget.episode),
+            allowSeasonRelativeBare: torrentContainerScopesRequestedSeason(
+              release.releaseName,
+              catalogSeasonNumber(widget.episode),
+            ),
+            requireNumberingSchemeEvidence:
+                episodeReferenceHasUnresolvedSequelNumbering(widget.episode),
             preferredFileIndex: release.preferredFileIndex,
           ),
         ),
@@ -2666,7 +2712,9 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
     if (_preparingDownload) return;
     if (webStreamRequiresExternalSubtitleDownload(stream)) {
       _showDownloadMessage(
-        'This source uses separate captions that cannot be saved in this beta. Choose another source.',
+        context.tr(
+          "This source uses separate audio or captions that cannot be saved in this beta. Choose another source.",
+        ),
       );
       return;
     }
@@ -2691,6 +2739,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
         stream.uri,
         stream.headers,
         subtitleUri: stream.subtitleUri,
+        audioTracks: stream.externalAudioTracks,
       );
       if (!mounted) return;
       await _enqueueOfflineDownload(
@@ -2730,7 +2779,9 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
       );
       if (mounted) {
         _showDownloadMessage(
-          'This web source could not be prepared for download. Try another source.',
+          context.tr(
+            "This web source could not be prepared for download. Try another source.",
+          ),
         );
       }
     } finally {
@@ -2746,7 +2797,9 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
     unawaited(_saveOfflineEpisodeMetadata(job));
     if (!mounted) return;
     _showDownloadMessage(
-      'Episode ${widget.episode.episode} was added to Download Manager.',
+      context.tr("Episode {value1} was added to Download Manager.", {
+        'value1': widget.episode.episode,
+      }),
       showManager: true,
     );
   }
@@ -2810,7 +2863,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
         content: Text(message),
         action: showManager
             ? SnackBarAction(
-                label: 'OPEN',
+                label: context.tr("OPEN"),
                 onPressed: () => router?.push('/downloads'),
               )
             : null,
@@ -2883,7 +2936,9 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
         path: '/player',
         queryParameters: {
           'source': launch.stream.uri.toString(),
-          'title': launch.stream.displayName,
+          'title': widget.episode.playbackDisplayTitle(
+            ref.read(titleLanguagePreferenceProvider),
+          ),
           'anilistId': '${widget.episode.anilistMediaId}',
           if (widget.episode.malMediaId != null)
             'malId': '${widget.episode.malMediaId}',
@@ -3080,7 +3135,9 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
       LibraryWatchPartyIdentity(
         anilistMediaId: widget.episode.anilistMediaId,
         episode: widget.episode.episode,
-        title: widget.episode.title,
+        title: widget.episode.displayTitle(
+          ref.read(titleLanguagePreferenceProvider),
+        ),
         episodeCount: widget.episode.episodeCount,
       );
 
@@ -3168,6 +3225,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
           candidate.uri,
           candidate.headers,
           subtitleUri: candidate.subtitleUri,
+          audioTracks: candidate.externalAudioTracks,
         );
         try {
           await addonStore.recordProviderSuccess(candidate.providerId);
@@ -3213,6 +3271,8 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
           mediaContentType: validated.contentType,
           subtitleContentType: validated.subtitleContentType,
           externalSubtitleRejected: validated.subtitleRejected,
+          externalAudioTracks: validated.audioTracks,
+          rejectedExternalAudioTrackCount: validated.rejectedAudioTrackCount,
           playbackLease: validated.session,
         );
         verifyPlaybackEpisodeIdentity(
@@ -3224,7 +3284,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
         final directAlternatives = <WebStreamResult>[];
         for (final alternative in [...discoveredStreams, ...candidates]) {
           final key = _webStreamKey(alternative);
-          if (alternative.uri == candidate.uri || !alternativeSeen.add(key)) {
+          if (key == _webStreamKey(candidate) || !alternativeSeen.add(key)) {
             continue;
           }
           directAlternatives.add(alternative);
@@ -3243,7 +3303,9 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
           path: '/player',
           queryParameters: {
             'source': validated.uri.toString(),
-            'title': '${episode.title} / Episode ${episode.episode}',
+            'title': episode.playbackDisplayTitle(
+              ref.read(titleLanguagePreferenceProvider),
+            ),
             'anilistId': '${episode.anilistMediaId}',
             if (episode.malMediaId != null) 'malId': '${episode.malMediaId}',
             'episode': '${episode.episode}',
@@ -3498,7 +3560,9 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
           _releaseMatchesEpisodeIdentity(release) &&
           releaseMatchesStreamFilters(
             release,
-            language: ignoreOptionalFilters ? 'all' : _languageFilter.name,
+            language: ignoreOptionalFilters
+                ? 'all'
+                : _pickerLanguageFilter.name,
             quality: ignoreOptionalFilters ? 'any' : _qualityFilter.name,
             codec: ignoreOptionalFilters ? 'any' : _codecFilter.name,
             hdr: ignoreOptionalFilters ? 'any' : _hdrFilter.name,
@@ -3589,10 +3653,10 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
   }
 
   void _updatePicker(VoidCallback update) {
-    final previousLanguage = _languageFilter;
+    final previousLanguage = _pickerLanguageFilter;
     final previousQuality = _qualityFilter;
     setState(update);
-    if (previousLanguage != _languageFilter ||
+    if (previousLanguage != _pickerLanguageFilter ||
         previousQuality != _qualityFilter) {
       _recordWebProviderVisibilityDiagnostic(phase: 'filter_changed');
     }
@@ -3636,16 +3700,20 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
       );
     }
     if (_webProvidersTotal > 0) {
-      final background = _webForegroundSearchFinished && !_webSearchFinished
-          ? ' background'
-          : '';
       progress.add(
-        'Web $_webProvidersCompleted/$_webProvidersTotal$background',
+        context.tr(
+          _webForegroundSearchFinished && !_webSearchFinished
+              ? 'Web {done}/{total} background'
+              : 'Web {done}/{total}',
+          {'done': _webProvidersCompleted, 'total': _webProvidersTotal},
+        ),
       );
     }
     if (_librarySearchEnabled) {
       progress.add(
-        _librarySearchFinished ? 'Local sources ready' : 'Local sources',
+        context.tr(
+          _librarySearchFinished ? 'Local sources ready' : 'Local sources',
+        ),
       );
     }
     final pending = [..._pendingDebridSources, ..._pendingWebProviders];
@@ -3654,9 +3722,9 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
     final detail = pendingLabel.isEmpty
         ? ''
         : _webForegroundSearchFinished && !_webSearchFinished
-        ? ' • Still checking $pendingLabel${remaining > 0 ? ' +$remaining' : ''}'
-        : ' • Waiting for $pendingLabel${remaining > 0 ? ' +$remaining' : ''}';
-    return '${progress.isEmpty ? 'Starting providers' : progress.join(' • ')}$detail';
+        ? ' • ${context.tr('Still checking {providers}', {'providers': '$pendingLabel${remaining > 0 ? ' +$remaining' : ''}'})}'
+        : ' • ${context.tr('Waiting for {providers}', {'providers': '$pendingLabel${remaining > 0 ? ' +$remaining' : ''}'})}';
+    return '${progress.isEmpty ? context.tr('Starting providers') : progress.join(' • ')}$detail';
   }
 
   @override
@@ -3672,6 +3740,9 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final displayTitle = widget.episode.playbackDisplayTitle(
+      ref.watch(titleLanguagePreferenceProvider),
+    );
     return Scaffold(
       resizeToAvoidBottomInset: true,
       body: SafeArea(
@@ -3685,8 +3756,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
                 const SizedBox(width: 18),
                 Expanded(
                   child: Text(
-                    '${widget.episode.title} • Episode '
-                    '${widget.episode.episode}',
+                    displayTitle,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: Theme.of(context).textTheme.headlineSmall,
@@ -3732,7 +3802,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
             ),
             const SizedBox(height: 12),
             Text(
-              'Cached releases normally complete in a few seconds.',
+              context.tr("Cached releases normally complete in a few seconds."),
               style: Theme.of(context).textTheme.bodyMedium,
             ),
           ],
@@ -3804,7 +3874,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
     if (autoplayHasNoResult) {
       return _Message(
         icon: Icons.error_outline_rounded,
-        title: 'No playable stream found',
+        title: context.tr("No playable stream found"),
         body: widget.watchPartyFollow
             ? 'The host changed episodes, but TetoTV could not choose a '
                   'playable source automatically. Choose a source manually '
@@ -3816,14 +3886,14 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
           mainAxisSize: MainAxisSize.min,
           children: [
             _ActionButton(
-              label: 'Back',
+              label: context.tr("Back"),
               icon: Icons.arrow_back_rounded,
               onPressed: _returnFromResolver,
             ),
             const SizedBox(width: 12),
             if (widget.watchPartyFollow) ...[
               _ActionButton(
-                label: 'Choose source',
+                label: context.tr("Choose source"),
                 icon: Icons.list_rounded,
                 onPressed: () => setState(() {
                   _autoplayManualFallback = true;
@@ -3833,7 +3903,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
               const SizedBox(width: 12),
             ],
             _ActionButton(
-              label: 'Retry',
+              label: context.tr("Retry"),
               icon: Icons.refresh_rounded,
               onPressed: () {
                 setState(() => _autoplayManualFallback = false);
@@ -3855,7 +3925,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
             ),
             const SizedBox(height: 22),
             Text(
-              'Opening the selected stream…',
+              context.tr("Opening the selected stream…"),
               style: Theme.of(context).textTheme.headlineSmall,
               textAlign: TextAlign.center,
             ),
@@ -3922,7 +3992,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
         failedDebridSources: _releaseFailures.length,
         isSearching: _loadingReleases || _retryingWebProviders,
         searchStatus: _retryingWebProviders
-            ? 'Retrying failed Web providers'
+            ? context.tr('Retrying failed Web providers')
             : _sourceSearchStatus,
         debridEnabled: _canPlayTorrentReleases,
         directTorrentMode: _useDirectTorrent,
@@ -3930,9 +4000,11 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
         connectedServices: _connectedServices,
         selectedService: _debridService,
         onServiceChanged: (value) => setState(() => _debridService = value),
-        filter: _languageFilter,
-        onFilterChanged: (value) =>
-            _updatePicker(() => _languageFilter = value),
+        filter: _pickerLanguageFilter,
+        onFilterChanged: (value) => _updatePicker(() {
+          _languageFilter = value;
+          _languageFilterSelectedInPicker = true;
+        }),
         qualityFilter: _qualityFilter,
         onQualityChanged: (value) =>
             _updatePicker(() => _qualityFilter = value),
@@ -4002,13 +4074,15 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
       return _Message(
         icon: localOnly ? Icons.video_library_outlined : Icons.stream_rounded,
         title: localUnavailable
-            ? 'A local media server is unavailable'
+            ? context.tr("A local media server is unavailable")
             : localOnly
-            ? 'This episode is not in your local sources'
-            : 'No stream source is ready',
+            ? context.tr("This episode is not in your local sources")
+            : context.tr("No stream source is ready"),
         body: localUnavailable
-            ? 'TetoTV could not search ${_libraryFailures.join(' or ')}. '
-                  'Check the connection in Media sources and try again.'
+            ? context.tr(
+                'TetoTV could not search {servers}. Check the connection in Media sources and try again.',
+                {'servers': _libraryFailures.join(', ')},
+              )
             : localOnly
             ? 'TetoTV checked the connected Jellyfin/Plex libraries using '
                   'the catalog title aliases and exact episode number. Check '
@@ -4024,12 +4098,12 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
                   'default and shows a privacy warning before it is enabled.',
         action: _ActionButton(
           label: localOnly
-              ? 'Manage media sources'
+              ? context.tr("Manage media sources")
               : directTorrentUnavailable
-              ? 'Open accounts'
+              ? context.tr("Open accounts")
               : sourcePreferences.webStreamsEnabled
-              ? 'Open marketplace'
-              : 'Open accounts',
+              ? context.tr("Open marketplace")
+              : context.tr("Open accounts"),
           icon: localOnly
               ? Icons.video_library_rounded
               : Icons.settings_rounded,
@@ -4069,19 +4143,24 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              _releases.isNotEmpty ? 'Paste a magnet' : 'Add a release',
+              _releases.isNotEmpty
+                  ? context.tr("Paste a magnet")
+                  : context.tr("Add a release"),
               style: Theme.of(context).textTheme.headlineSmall,
             ),
             const SizedBox(height: 8),
             Text(
               _releases.isNotEmpty
-                  ? 'Use a magnet for content you are authorized to access.'
+                  ? context.tr(
+                      "Use a magnet for content you are authorized to access.",
+                    )
                   : ref.read(configuredReleaseSourceProvider) != null
-                  ? 'Automatic matching did not return a playable stream. '
-                        'You can provide a magnet manually.'
-                  : 'No torrent source is configured. Add a source manifest '
-                        'in Marketplace, or paste a magnet for content you are '
-                        'authorized to access.',
+                  ? context.tr(
+                      "Automatic matching did not return a playable stream. You can provide a magnet manually.",
+                    )
+                  : context.tr(
+                      "No torrent source is configured. Add a source manifest in Marketplace, or paste a magnet for content you are authorized to access.",
+                    ),
               style: Theme.of(context).textTheme.bodyMedium,
             ),
             if (_error case final error?) ...[
@@ -4091,7 +4170,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
             const SizedBox(height: 20),
             if (_releases.isNotEmpty) ...[
               _ActionButton(
-                label: 'Back to streams',
+                label: context.tr("Back to streams"),
                 icon: Icons.view_list_rounded,
                 onPressed: () => setState(() => _showManual = false),
               ),
@@ -4102,15 +4181,17 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
                 final input = TvTextInput(
                   controller: _magnetController,
                   autofocus: true,
-                  labelText: 'Magnet URI',
-                  hintText: 'Select to type or paste a magnet link',
-                  keyboardTitle: 'Enter magnet URI',
+                  labelText: context.tr("Magnet URI"),
+                  hintText: context.tr("Select to type or paste a magnet link"),
+                  keyboardTitle: context.tr("Enter magnet URI"),
                   onSubmitted: (_) => _resolveManual(),
                 );
                 final action = _ActionButton(
                   label: _useDirectTorrent
-                      ? 'Play direct torrent'
-                      : 'Send to ${_debridService.displayName}',
+                      ? context.tr("Play direct torrent")
+                      : context.tr("Send to {value1}", {
+                          'value1': _debridService.displayName,
+                        }),
                   icon: Icons.play_arrow_rounded,
                   onPressed: _resolveManual,
                 );
@@ -4548,15 +4629,15 @@ class _StreamPicker extends StatelessWidget {
     ].join('\n');
     final providerStatusItems = [
       for (final failure in orderedWebFailures.take(4))
-        '${failure.providerName}: ${switch (failure.status) {
+        '${failure.providerName}: ${context.tr(switch (failure.status) {
           WebProviderFailureStatus.noMatch => 'no match',
           WebProviderFailureStatus.advisory => 'repository warning',
           WebProviderFailureStatus.unavailable => 'unavailable',
           WebProviderFailureStatus.paused => 'paused',
           WebProviderFailureStatus.failed => 'error',
-        }}',
+        })}',
       if (orderedWebFailures.length > 4)
-        '+${orderedWebFailures.length - 4} more',
+        context.tr('+{count} more', {'count': orderedWebFailures.length - 4}),
     ];
     final activeAdvancedFilters = [
       qualityFilter != _StreamQualityFilter.any,
@@ -4575,14 +4656,21 @@ class _StreamPicker extends StatelessWidget {
               final summaryParts = <String>[
                 debridEnabled
                     ? directTorrentMode
-                          ? '$totalCount Direct torrent'
+                          ? context.tr('{count} Direct torrent', {
+                              'count': totalCount,
+                            })
                           : '$totalCount Debrid'
-                    : 'Torrent releases off',
-                webEnabled ? '$webTotalCount Web' : 'Web off',
-                if (libraryEnabled) '$libraryTotalCount Local',
-                if (hasDownloadedSource) '1 Offline',
-                if (sourceIssueCount > 0) '$sourceIssueCount issue(s)',
-                if (providerNoticeCount > 0) '$providerNoticeCount notice(s)',
+                    : context.tr('Torrent releases off'),
+                webEnabled ? '$webTotalCount Web' : context.tr('Web off'),
+                if (libraryEnabled)
+                  context.tr('{count} Local', {'count': libraryTotalCount}),
+                if (hasDownloadedSource) context.tr('1 Offline'),
+                if (sourceIssueCount > 0)
+                  context.tr('{count} issue(s)', {'count': sourceIssueCount}),
+                if (providerNoticeCount > 0)
+                  context.tr('{count} notice(s)', {
+                    'count': providerNoticeCount,
+                  }),
               ];
               final summary = summaryParts.join(' • ');
               final heading = SizedBox(
@@ -4591,7 +4679,7 @@ class _StreamPicker extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Choose your stream',
+                      context.tr("Choose your stream"),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: Theme.of(context).textTheme.headlineSmall,
@@ -4615,9 +4703,9 @@ class _StreamPicker extends StatelessWidget {
                   key: const ValueKey('stream-picker-search-input'),
                   controller: searchController,
                   focusNode: searchFocusNode,
-                  labelText: 'Search sources',
-                  hintText: 'Release, group, quality, codec…',
-                  keyboardTitle: 'Search this stream list',
+                  labelText: context.tr("Search sources"),
+                  hintText: context.tr("Release, group, quality, codec…"),
+                  keyboardTitle: context.tr("Search this stream list"),
                   onChanged: onSearchChanged,
                   onSubmitted: onSearchChanged,
                 ),
@@ -4700,7 +4788,10 @@ class _StreamPicker extends StatelessWidget {
                   const SizedBox(width: 10),
                   Expanded(
                     child: Text(
-                      '$searchStatus • Available results can be selected now.',
+                      context.tr(
+                        "{value1} • Available results can be selected now.",
+                        {'value1': searchStatus},
+                      ),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
@@ -4733,7 +4824,7 @@ class _StreamPicker extends StatelessWidget {
                   for (final value in _StreamQualityFilter.values)
                     _FilterButton(
                       label: switch (value) {
-                        _StreamQualityFilter.any => 'ANY',
+                        _StreamQualityFilter.any => context.tr("ANY"),
                         _StreamQualityFilter.p2160 => '4K',
                         _StreamQualityFilter.p1080 => '1080P',
                         _StreamQualityFilter.p720 => '720P',
@@ -4745,10 +4836,10 @@ class _StreamPicker extends StatelessWidget {
                   for (final value in _StreamCodecFilter.values)
                     _FilterButton(
                       label: switch (value) {
-                        _StreamCodecFilter.any => 'ANY',
+                        _StreamCodecFilter.any => context.tr("ANY"),
                         _StreamCodecFilter.h264 => 'H.264',
-                        _StreamCodecFilter.hevc => 'HEVC',
-                        _StreamCodecFilter.av1 => 'AV1',
+                        _StreamCodecFilter.hevc => context.tr("HEVC"),
+                        _StreamCodecFilter.av1 => context.tr("AV1"),
                       },
                       selected: codecFilter == value,
                       onPressed: () => onCodecChanged(value),
@@ -4761,7 +4852,9 @@ class _StreamPicker extends StatelessWidget {
                       onPressed: () => onHdrChanged(value),
                     ),
                   _FilterButton(
-                    label: allowBatchStreams ? 'BATCHES ON' : 'BATCHES OFF',
+                    label: allowBatchStreams
+                        ? context.tr("BATCHES ON")
+                        : context.tr("BATCHES OFF"),
                     selected: allowBatchStreams,
                     onPressed: () => onBatchChanged(!allowBatchStreams),
                   ),
@@ -4769,10 +4862,10 @@ class _StreamPicker extends StatelessWidget {
                   for (final value in _StreamSortMode.values)
                     _FilterButton(
                       label: switch (value) {
-                        _StreamSortMode.compatibility => 'BEST',
-                        _StreamSortMode.seeders => 'SEEDERS',
-                        _StreamSortMode.largest => 'LARGEST',
-                        _StreamSortMode.size => 'SMALLEST',
+                        _StreamSortMode.compatibility => context.tr("BEST"),
+                        _StreamSortMode.seeders => context.tr("SEEDERS"),
+                        _StreamSortMode.largest => context.tr("LARGEST"),
+                        _StreamSortMode.size => context.tr("SMALLEST"),
                       },
                       selected: sortMode == value,
                       onPressed: () => onSortChanged(value),
@@ -4839,7 +4932,9 @@ class _StreamPicker extends StatelessWidget {
                   const SizedBox(width: 12),
                   Expanded(
                     child: Text(
-                      'Could not start this stream: $message',
+                      context.tr("Could not start this stream: {value1}", {
+                        'value1': message,
+                      }),
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(color: Color(0xFFFFC4C9)),
@@ -4849,7 +4944,7 @@ class _StreamPicker extends StatelessWidget {
                     const SizedBox(width: 16),
                     _CompactAction(
                       icon: Icons.refresh_rounded,
-                      label: 'Retry',
+                      label: context.tr("Retry"),
                       onPressed: retry,
                     ),
                   ],
@@ -4889,7 +4984,9 @@ class _StreamPicker extends StatelessWidget {
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
-                        'PROVIDERS • ${providerStatusItems.join(' • ')}',
+                        context.tr("PROVIDERS • {value1}", {
+                          'value1': providerStatusItems.join(' • '),
+                        }),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
@@ -4919,7 +5016,9 @@ class _StreamPicker extends StatelessWidget {
                               const Icon(Icons.replay_rounded, size: 15),
                               const SizedBox(width: 5),
                               Text(
-                                'Retry failed ($retryableWebProviders)',
+                                context.tr("Retry failed ({value1})", {
+                                  'value1': retryableWebProviders,
+                                }),
                                 style: const TextStyle(
                                   fontSize: 11,
                                   fontWeight: FontWeight.w800,
@@ -5029,9 +5128,9 @@ class _StreamPickerPrimaryControlsState
         _FilterButton(
           key: ValueKey('stream-picker-${value.name}'),
           label: switch (value) {
-            _StreamLanguageFilter.all => 'ALL',
-            _StreamLanguageFilter.sub => 'SUB',
-            _StreamLanguageFilter.dub => 'DUB',
+            _StreamLanguageFilter.all => context.tr("ALL"),
+            _StreamLanguageFilter.sub => context.tr("SUB"),
+            _StreamLanguageFilter.dub => context.tr("DUB"),
           },
           selected: widget.filter == value,
           onPressed: () => widget.onFilterChanged(value),
@@ -5046,7 +5145,9 @@ class _StreamPickerPrimaryControlsState
             : Icons.tune_outlined,
         label: widget.activeAdvancedFilters == 0
             ? (widget.showAdvancedFilters ? 'Hide filters' : 'More filters')
-            : 'Filters (${widget.activeAdvancedFilters})',
+            : context.tr("Filters ({value1})", {
+                'value1': widget.activeAdvancedFilters,
+              }),
         badge: widget.activeAdvancedFilters,
         onPressed: () =>
             widget.onAdvancedFiltersChanged(!widget.showAdvancedFilters),
@@ -5056,7 +5157,7 @@ class _StreamPickerPrimaryControlsState
       _CompactIconAction(
         key: const ValueKey('stream-picker-refresh'),
         icon: Icons.refresh_rounded,
-        label: 'Refresh',
+        label: context.tr("Refresh"),
         onPressed: widget.onRefresh,
         enabled: widget.onRefresh != null,
         focusNode: _focusNodes[4],
@@ -5104,7 +5205,7 @@ class _StreamSectionHeader extends StatelessWidget {
           Icon(icon, size: 18, color: context.appPalette.accentBright),
           const SizedBox(width: 8),
           Text(
-            title,
+            context.tr(title),
             style: TextStyle(
               color: context.appPalette.primaryText.withValues(alpha: .7),
               fontSize: 13,
@@ -5167,7 +5268,9 @@ class _DownloadedStreamCard extends StatelessWidget {
                   Text(
                     job.episodeTitle?.trim().isNotEmpty == true
                         ? job.episodeTitle!
-                        : 'Downloaded episode ${job.episode}',
+                        : context.tr("Downloaded episode {value1}", {
+                            'value1': job.episode,
+                          }),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: Theme.of(context).textTheme.titleMedium,
@@ -5437,8 +5540,8 @@ class _ReleaseCard extends StatelessWidget {
                           runSpacing: 6,
                           children: [
                             if (recommended)
-                              const _MetaPill(
-                                label: 'RECOMMENDED',
+                              _MetaPill(
+                                label: context.tr("RECOMMENDED"),
                                 color: Color(0xFF67D49B),
                               ),
                             _MetaPill(
@@ -5448,24 +5551,24 @@ class _ReleaseCard extends StatelessWidget {
                                   : palette.secondaryAccent,
                             ),
                             if (isTvSafeRelease(release))
-                              const _MetaPill(
-                                label: 'TV SAFE',
+                              _MetaPill(
+                                label: context.tr("TV SAFE"),
                                 color: Color(0xFF67D49B),
                               ),
                             if (release.hasSubtitles && release.isDubbed)
                               _MetaPill(
-                                label: 'SUBTITLES',
+                                label: context.tr("SUBTITLES"),
                                 color: palette.secondaryAccent,
                               ),
                             if (release.codec case final codec?)
                               _MetaPill(label: codec),
                             if (release.isHdr)
-                              const _MetaPill(
-                                label: 'HDR',
+                              _MetaPill(
+                                label: context.tr("HDR"),
                                 color: Color(0xFFFFD166),
                               ),
                             if (release.isBatch)
-                              const _MetaPill(label: 'BATCH'),
+                              _MetaPill(label: context.tr("BATCH")),
                           ],
                         ),
                     ],
@@ -5570,7 +5673,7 @@ class _FilterLabel extends StatelessWidget {
   Widget build(BuildContext context) => Padding(
     padding: const EdgeInsets.only(left: 7, right: 1),
     child: Text(
-      label,
+      context.tr(label),
       style: TextStyle(
         color: context.appPalette.mutedText,
         fontSize: 10,
@@ -5770,7 +5873,7 @@ class _Message extends StatelessWidget {
         SizedBox(
           width: 560,
           child: Text(
-            body,
+            context.tr(body),
             textAlign: TextAlign.center,
             style: Theme.of(context).textTheme.bodyLarge,
           ),

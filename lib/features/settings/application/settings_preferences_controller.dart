@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:anime_tv/core/localization/app_language.dart';
 import 'package:anime_tv/features/auth/application/pairing_controller.dart';
 import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
 import 'package:anime_tv/core/preferences/caption_language.dart';
@@ -11,6 +12,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 const _debridProviderKey = 'settings_selected_debrid_provider';
+const interfaceLanguageStorageKey = 'appearance_interface_language';
+const interfaceLanguageChosenStorageKey =
+    'appearance_interface_language_chosen_v1';
 const _trackingProviderKey = 'settings_selected_tracking_provider';
 const _captionTextColorKey = 'appearance_caption_text_color';
 const _captionBackgroundColorKey = 'appearance_caption_background_color';
@@ -71,6 +75,7 @@ const _showTitleStyleKey = 'appearance_show_title_style';
 const _subEpisodeNotificationsKey = 'notifications_calendar_sub_releases';
 const _dubEpisodeNotificationsKey = 'notifications_calendar_dub_releases';
 const _offlineDownloadsEnabledKey = 'streaming_offline_downloads_enabled';
+const mangaReaderEnabledStorageKey = 'features_manga_reader_enabled';
 
 /// AniList and MyAnimeList only accept a whole number of completed episodes.
 /// This setting controls how much of the current episode must be watched before
@@ -204,8 +209,8 @@ enum TopNavigationDestination {
   manga,
 }
 
-/// Controls the title shown on featured, show-detail, and episode experiences.
-/// Catalog cards keep their existing text treatment in either mode.
+/// Controls the title shown on show-detail and episode experiences.
+/// The featured Home hero and catalog cards always keep their text treatment.
 enum ShowTitleStyle { englishLogo, text }
 
 extension ShowTitleStyleLabel on ShowTitleStyle {
@@ -232,6 +237,7 @@ const defaultTopNavigationOrder = <TopNavigationDestination>[
   TopNavigationDestination.discover,
   TopNavigationDestination.calendar,
   TopNavigationDestination.watchTogether,
+  TopNavigationDestination.manga,
   TopNavigationDestination.downloads,
   TopNavigationDestination.settings,
 ];
@@ -426,6 +432,8 @@ extension AutoPickAudioLabel on AutoPickAudio {
 
 class SettingsPreferences {
   const SettingsPreferences({
+    this.interfaceLanguage = AppLanguage.english,
+    this.languageChoiceCompleted = false,
     this.debridProvider = DebridService.realDebrid,
     this.trackingProvider = TrackingProvider.anilist,
     this.captionTextColor = 0xFFFFFFFF,
@@ -453,6 +461,7 @@ class SettingsPreferences {
     this.showDiscover = true,
     this.showCalendar = true,
     this.showWatchTogether = true,
+    this.mangaReaderEnabled = true,
     this.showDownloads = true,
     this.offlineDownloadsEnabled = true,
     this.showSettings = true,
@@ -467,8 +476,8 @@ class SettingsPreferences {
     this.navigationSounds = true,
     this.clickSounds = true,
     this.defaultLandingPage = LandingPage.home,
-    this.preferredPlayer = PreferredPlayer.mpv,
-    this.media3SurfaceViewEnabled = false,
+    this.preferredPlayer = PreferredPlayer.media3,
+    this.media3SurfaceViewEnabled = true,
     this.preferredAudio = PlaybackAudioPreference.dub,
     this.preferredAudioLanguage = 'auto',
     this.preferredCaptionMode = PreferredCaptionMode.automatic,
@@ -504,6 +513,8 @@ class SettingsPreferences {
   });
 
   final DebridService debridProvider;
+  final AppLanguage interfaceLanguage;
+  final bool languageChoiceCompleted;
   final TrackingProvider trackingProvider;
   final int captionTextColor;
   final int captionBackgroundColor;
@@ -528,6 +539,7 @@ class SettingsPreferences {
   final bool showDiscover;
   final bool showCalendar;
   final bool showWatchTogether;
+  final bool mangaReaderEnabled;
   final bool showDownloads;
   final bool offlineDownloadsEnabled;
   final bool showSettings;
@@ -590,6 +602,8 @@ class SettingsPreferences {
       ]);
 
   SettingsPreferences copyWith({
+    AppLanguage? interfaceLanguage,
+    bool? languageChoiceCompleted,
     DebridService? debridProvider,
     TrackingProvider? trackingProvider,
     int? captionTextColor,
@@ -615,6 +629,7 @@ class SettingsPreferences {
     bool? showDiscover,
     bool? showCalendar,
     bool? showWatchTogether,
+    bool? mangaReaderEnabled,
     bool? showDownloads,
     bool? offlineDownloadsEnabled,
     bool? showSettings,
@@ -654,6 +669,9 @@ class SettingsPreferences {
     bool? dubEpisodeNotificationsEnabled,
     bool? loaded,
   }) => SettingsPreferences(
+    interfaceLanguage: interfaceLanguage ?? this.interfaceLanguage,
+    languageChoiceCompleted:
+        languageChoiceCompleted ?? this.languageChoiceCompleted,
     debridProvider: debridProvider ?? this.debridProvider,
     trackingProvider: trackingProvider ?? this.trackingProvider,
     captionTextColor: captionTextColor ?? this.captionTextColor,
@@ -681,6 +699,7 @@ class SettingsPreferences {
     showDiscover: showDiscover ?? this.showDiscover,
     showCalendar: showCalendar ?? this.showCalendar,
     showWatchTogether: showWatchTogether ?? this.showWatchTogether,
+    mangaReaderEnabled: mangaReaderEnabled ?? this.mangaReaderEnabled,
     showDownloads: showDownloads ?? this.showDownloads,
     offlineDownloadsEnabled:
         offlineDownloadsEnabled ?? this.offlineDownloadsEnabled,
@@ -749,9 +768,7 @@ class SettingsPreferences {
     TopNavigationDestination.watchTogether => showWatchTogether,
     TopNavigationDestination.downloads =>
       offlineDownloadsEnabled && showDownloads,
-    // Manga is a runtime-gated Developer Mode destination. It deliberately
-    // has no persisted visibility bit in the general settings snapshot.
-    TopNavigationDestination.manga => true,
+    TopNavigationDestination.manga => mangaReaderEnabled,
     // Settings is the permanent recovery path for navigation customization.
     TopNavigationDestination.settings => true,
   };
@@ -759,8 +776,7 @@ class SettingsPreferences {
   /// Settings is always available so every other destination can be hidden.
   bool canHideTopNavigationDestination(TopNavigationDestination destination) {
     return switch (destination) {
-      TopNavigationDestination.settings ||
-      TopNavigationDestination.manga => false,
+      TopNavigationDestination.settings => false,
       _ => true,
     };
   }
@@ -908,6 +924,15 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
   }
 
   Future<void> _load() async {
+    // Home can reload immediately after the first language choice publishes
+    // its optimistic state. Never snapshot storage halfway through that batch.
+    // Recheck the tail because another preference can be queued while waiting.
+    while (true) {
+      final pendingWrites = _storageTail;
+      await pendingWrites;
+      if (identical(pendingWrites, _storageTail)) break;
+    }
+    if (!mounted) return;
     final revisionAtStart = _revision;
     final wasInitialLoad = !_initialLoadComplete;
     final values = await Future.wait<Object?>([
@@ -993,18 +1018,30 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
       // Preferred audio language is append-only. `auto` preserves the legacy
       // Dub/Sub behavior until the viewer explicitly chooses a language.
       _safeRead(_preferredAudioLanguageKey),
-      // Media3 rendering is append-only; missing values keep TextureView.
+      // Media3 rendering is append-only. Missing values adopt the current
+      // SurfaceView default while an explicit saved opt-out remains durable.
       _safeRead(_media3SurfaceViewEnabledKey),
+      _safeRead(interfaceLanguageStorageKey),
+      _safeRead(interfaceLanguageChosenStorageKey),
+      _safeRead(initialSetupStartedStorageKey),
+      // The Manga opt-out is append-only and enabled by default. Disabling it
+      // hides core Manga while preserving the user's library, downloads, and
+      // reader progress. Developer Mode is only required for Aniyomi.
+      _safeRead(mangaReaderEnabledStorageKey),
     ]);
 
-    bool canRestore(String key, int index) {
-      if (identical(values[index], _preferenceReadFailed)) return false;
+    bool canRestoreRevision(String key) {
       if (wasInitialLoad && _preloadMutations.contains(key)) return false;
       return (_keyRevisions[key] ?? 0) <= revisionAtStart;
     }
 
+    bool canRestore(String key, int index) =>
+        !identical(values[index], _preferenceReadFailed) &&
+        canRestoreRevision(key);
+
     String? valueAt(int index) => values[index] as String?;
     var restored = state;
+    var persistFreshCrashReportingDefault = false;
     if (canRestore(_debridProviderKey, 0)) {
       restored = restored.copyWith(
         debridProvider:
@@ -1148,18 +1185,72 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
         ),
       );
     }
-    if (canRestore(_preferredPlayerKey, 28)) {
+    if (identical(values[28], _preferenceReadFailed)) {
+      // A storage outage is not the same as a missing preference. Retain the
+      // compatibility engine for this session rather than potentially
+      // overriding an explicit MPV choice that could not be read.
+      if (canRestoreRevision(_preferredPlayerKey)) {
+        restored = restored.copyWith(preferredPlayer: PreferredPlayer.mpv);
+      }
+    } else if (canRestore(_preferredPlayerKey, 28)) {
+      final storedPlayer = valueAt(28);
       restored = restored.copyWith(
         preferredPlayer: PreferredPlayer.values.firstWhere(
-          (player) => player.name == valueAt(28),
-          orElse: () => PreferredPlayer.mpv,
+          (player) => player.name == storedPlayer,
+          // Missing and retired values follow the current built-in default.
+          // Explicit `mpv`, `media3`, and valid external choices are retained.
+          orElse: () => PreferredPlayer.media3,
         ),
       );
     }
-    if (canRestore(_anonymousCrashReportingKey, 29)) {
-      restored = restored.copyWith(
-        anonymousCrashReportingEnabled: valueAt(29) == 'true',
-      );
+    if (canRestoreRevision(_anonymousCrashReportingKey)) {
+      final storedCrashReporting = values[29];
+      if (identical(storedCrashReporting, _preferenceReadFailed)) {
+        // An unreadable preference might be an existing opt-out. Fail closed
+        // instead of treating a storage outage as a new installation.
+        restored = restored.copyWith(anonymousCrashReportingEnabled: false);
+      } else {
+        final savedValue = storedCrashReporting as String?;
+        final installationEvidenceReadFailed = values.indexed.any(
+          (entry) =>
+              entry.$1 != 29 && identical(entry.$2, _preferenceReadFailed),
+        );
+        final setupAlreadyCompleted =
+            !identical(values[31], _preferenceReadFailed) &&
+            valueAt(31) == 'true';
+        final setupStarted =
+            !identical(values[64], _preferenceReadFailed) &&
+            valueAt(64) == 'true';
+        final legacyInstallationWithoutCrashChoice =
+            savedValue == null &&
+            (setupAlreadyCompleted ||
+                (!setupStarted &&
+                    values
+                        // Every preference before the explicit setup-started
+                        // marker is legacy-install evidence, including an
+                        // already-saved UI language or language-choice flag.
+                        .take(64)
+                        .indexed
+                        .any(
+                          (entry) =>
+                              entry.$1 != 29 &&
+                              entry.$1 != 31 &&
+                              entry.$2 is String,
+                        )));
+        final enabled = savedValue == null
+            // Absence is a fresh-install signal only when every other
+            // installation-evidence read succeeded. A partial secure-storage
+            // outage could otherwise make an existing opt-out-less upgrade
+            // look like a brand-new install and silently enroll it.
+            ? !installationEvidenceReadFailed &&
+                  !legacyInstallationWithoutCrashChoice
+            : savedValue == 'true';
+        restored = restored.copyWith(anonymousCrashReportingEnabled: enabled);
+        persistFreshCrashReportingDefault =
+            savedValue == null &&
+            enabled &&
+            !legacyInstallationWithoutCrashChoice;
+      }
     }
     if (canRestore(_preferredAudioKey, 30)) {
       restored = restored.copyWith(
@@ -1372,26 +1463,64 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
         preferredAudioLanguage: _normalizePreferredAudioLanguage(valueAt(60)),
       );
     }
-    if (canRestore(_media3SurfaceViewEnabledKey, 61)) {
+    if (identical(values[61], _preferenceReadFailed)) {
+      // Do not turn on a renderer when a saved opt-out may be temporarily
+      // unreadable. A genuine missing value follows the new default below.
+      if (canRestoreRevision(_media3SurfaceViewEnabledKey)) {
+        restored = restored.copyWith(media3SurfaceViewEnabled: false);
+      }
+    } else if (canRestore(_media3SurfaceViewEnabledKey, 61)) {
       restored = restored.copyWith(
-        media3SurfaceViewEnabled: valueAt(61) == 'true',
+        media3SurfaceViewEnabled: switch (valueAt(61)) {
+          'false' => false,
+          _ => true,
+        },
       );
+    }
+    if (canRestore(interfaceLanguageStorageKey, 62)) {
+      restored = restored.copyWith(
+        interfaceLanguage: AppLanguage.fromCode(valueAt(62)),
+      );
+    }
+    if (canRestoreRevision(interfaceLanguageChosenStorageKey)) {
+      // Upgrades retain their previous English UI and independent media
+      // preferences. Fresh installs choose a language before any home/setup
+      // widgets mount; an interrupted first setup is not treated as an upgrade.
+      final existingInstallation =
+          values[31] == 'true' ||
+          (values[64] != 'true' &&
+              values.take(62).any((value) => value is String));
+      final hasChosenLanguage = values[62] is String || existingInstallation;
+      if (canRestore(interfaceLanguageChosenStorageKey, 63) ||
+          hasChosenLanguage) {
+        restored = restored.copyWith(
+          languageChoiceCompleted: values[63] == 'true' || hasChosenLanguage,
+        );
+      }
+    }
+    if (canRestore(mangaReaderEnabledStorageKey, 65)) {
+      restored = restored.copyWith(mangaReaderEnabled: valueAt(65) != 'false');
     }
     if (restored.preferredPlayer == PreferredPlayer.external &&
         (!restored.externalPlayerEnabled ||
             restored.selectedExternalPlayerPackage == null)) {
-      restored = restored.copyWith(preferredPlayer: PreferredPlayer.mpv);
+      restored = restored.copyWith(preferredPlayer: PreferredPlayer.media3);
     }
     state = restored.copyWith(loaded: true);
     _initialLoadComplete = true;
     _preloadMutations.clear();
-    if (repairHiddenSettings || repairRetiredInterfaceMode) {
+    if (repairHiddenSettings ||
+        repairRetiredInterfaceMode ||
+        persistFreshCrashReportingDefault) {
       await _enqueueStorage(() async {
         if (repairHiddenSettings) {
           await _write(_showSettingsKey, 'true');
         }
         if (repairRetiredInterfaceMode) {
           await _write(_interfaceModeKey, InterfaceMode.automatic.name);
+        }
+        if (persistFreshCrashReportingDefault) {
+          await _write(_anonymousCrashReportingKey, 'true');
         }
       });
     }
@@ -1416,6 +1545,43 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
   Future<void> setDebridProvider(DebridService value) => _update(
     state.copyWith(debridProvider: value),
     {_debridProviderKey: value.slug},
+  );
+
+  /// An explicit language choice seeds audio and CC together; those playback
+  /// preferences stay independently editable afterward. Anime title language
+  /// and title presentation are separate appearance preferences and are never
+  /// changed here. Startup migration never invokes this setter and cannot
+  /// replace choices.
+  Future<void> setInterfaceLanguage(
+    AppLanguage value, {
+    bool updateMediaPreferences = true,
+  }) => _update(
+    state.copyWith(
+      interfaceLanguage: value,
+      languageChoiceCompleted: true,
+      preferredAudio: updateMediaPreferences
+          ? PlaybackAudioPreference.dub
+          : null,
+      preferredAudioLanguage: updateMediaPreferences
+          ? value.mediaLanguage
+          : null,
+      preferredCaptionMode: updateMediaPreferences
+          ? PreferredCaptionMode.enabled
+          : null,
+      preferredCaptionLanguage: updateMediaPreferences
+          ? value.mediaLanguage
+          : null,
+    ),
+    {
+      interfaceLanguageStorageKey: value.code,
+      interfaceLanguageChosenStorageKey: 'true',
+      if (updateMediaPreferences) ...{
+        _preferredAudioKey: PlaybackAudioPreference.dub.name,
+        _preferredAudioLanguageKey: value.mediaLanguage,
+        _preferredCaptionsKey: PreferredCaptionMode.enabled.name,
+        _preferredCaptionLanguageKey: value.mediaLanguage,
+      },
+    },
   );
 
   Future<void> setTrackingProvider(TrackingProvider value) => _update(
@@ -1537,6 +1703,9 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
         value,
       );
 
+  Future<void> setMangaReaderEnabled(bool value) =>
+      setTopNavigationDestinationVisible(TopNavigationDestination.manga, value);
+
   Future<void> setShowDownloads(bool value) =>
       setTopNavigationDestinationVisible(
         TopNavigationDestination.downloads,
@@ -1558,9 +1727,6 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
     TopNavigationDestination destination,
     bool visible,
   ) {
-    if (destination == TopNavigationDestination.manga) {
-      return Future<void>.value();
-    }
     if (!visible && !state.canHideTopNavigationDestination(destination)) {
       return Future<void>.value();
     }
@@ -1580,12 +1746,14 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
       TopNavigationDestination.downloads => state.copyWith(
         showDownloads: visible,
       ),
+      TopNavigationDestination.manga => state.copyWith(
+        mangaReaderEnabled: visible,
+      ),
       TopNavigationDestination.settings => state.copyWith(
         showSettings: visible,
       ),
-      TopNavigationDestination.manga => state,
     };
-    final String? visibilityKey = switch (destination) {
+    final visibilityKey = switch (destination) {
       TopNavigationDestination.search => _showSearchKey,
       TopNavigationDestination.home => _showHomeKey,
       TopNavigationDestination.myList => _showMyListKey,
@@ -1593,15 +1761,15 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
       TopNavigationDestination.calendar => _showCalendarKey,
       TopNavigationDestination.watchTogether => _showWatchTogetherKey,
       TopNavigationDestination.downloads => _showDownloadsKey,
+      TopNavigationDestination.manga => mangaReaderEnabledStorageKey,
       TopNavigationDestination.settings => _showSettingsKey,
-      TopNavigationDestination.manga => null,
     };
     final landingPage = _landingPageForTopDestination(destination);
     final nextLandingPage = !visible && state.defaultLandingPage == landingPage
         ? LandingPage.home
         : state.defaultLandingPage;
     return _update(next.copyWith(defaultLandingPage: nextLandingPage), {
-      ?visibilityKey: visible.toString(),
+      visibilityKey: visible.toString(),
       if (nextLandingPage != state.defaultLandingPage)
         _defaultLandingPageKey: nextLandingPage.name,
     });
@@ -1732,7 +1900,7 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
     );
   }
 
-  Future<void> fallBackToMpvAndClearExternalPlayer() {
+  Future<void> fallBackToBuiltInPlayerAndClearExternalPlayer() {
     const keys = [
       _preferredPlayerKey,
       _externalPlayerPackageKey,
@@ -1740,15 +1908,20 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
     ];
     _markMutated(keys);
     state = state.copyWith(
-      preferredPlayer: PreferredPlayer.mpv,
+      preferredPlayer: PreferredPlayer.media3,
       clearSelectedExternalPlayer: true,
     );
     return _enqueueStorage(() async {
-      await _write(_preferredPlayerKey, PreferredPlayer.mpv.name);
+      await _write(_preferredPlayerKey, PreferredPlayer.media3.name);
       await _delete(_externalPlayerPackageKey);
       await _delete(_externalPlayerLabelKey);
     });
   }
+
+  /// Kept for source compatibility with playback call sites from older
+  /// builds. The current built-in fallback follows the Media3 default.
+  Future<void> fallBackToMpvAndClearExternalPlayer() =>
+      fallBackToBuiltInPlayerAndClearExternalPlayer();
 
   Future<void> setPreferredAudio(PlaybackAudioPreference value) => _update(
     state.copyWith(preferredAudio: value),
@@ -1940,10 +2113,11 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
       );
     }
 
-    // An external default must return to MPV when handoff is disabled. An
-    // explicitly selected built-in engine is independent of that feature gate.
+    // An external default returns to the current built-in default when
+    // handoff is disabled. An explicitly selected built-in engine is
+    // independent of that feature gate.
     final preferredPlayer = state.preferredPlayer == PreferredPlayer.external
-        ? PreferredPlayer.mpv
+        ? PreferredPlayer.media3
         : state.preferredPlayer;
     const keys = [
       _externalPlayerEnabledKey,
@@ -2332,6 +2506,7 @@ List<TopNavigationDestination> _normalizeTopNavigationOrder(
     // new destinations immediately before it without disturbing the relative
     // order of any destination the viewer customized.
     if (destination == TopNavigationDestination.watchTogether ||
+        destination == TopNavigationDestination.manga ||
         destination == TopNavigationDestination.downloads) {
       final settingsIndex = normalized.indexOf(
         TopNavigationDestination.settings,

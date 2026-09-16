@@ -1,10 +1,13 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
+import 'package:anime_tv/core/preferences/playback_audio_preference.dart';
 import 'package:anime_tv/features/marketplace/data/seanime_javascript_provider.dart';
 import 'package:anime_tv/features/marketplace/domain/addon_models.dart';
 import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
+import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -18,6 +21,9 @@ void main() {
       'Authorization': 'Bearer provider-session',
       'X-Api-Key': 'provider-api-secret',
       'X-Auth-Token': 'provider-auth-secret',
+      'Sec-Fetch-Dest': 'empty',
+      'Sec-Fetch-Mode': 'cors',
+      'Sec-Fetch-Site': 'same-site',
     });
 
     expect(headers['Referer'], 'https://example.com/');
@@ -32,6 +38,25 @@ void main() {
     expect(redirected, isNot(contains('X-Auth-Token')));
     expect(redirected['Referer'], 'https://example.com/');
     expect(redirected['Origin'], 'https://media.example.com');
+    expect(redirected['Sec-Fetch-Dest'], 'empty');
+    expect(redirected['Sec-Fetch-Mode'], 'cors');
+    expect(redirected['Sec-Fetch-Site'], 'same-site');
+
+    for (final invalidFetchMetadata in const {
+      'Sec-Fetch-Dest': 'document',
+      'Sec-Fetch-Mode': 'websocket',
+      'Sec-Fetch-Site': 'provider-secret',
+    }.entries) {
+      expect(
+        sanitizeAddonHeaders({
+          invalidFetchMetadata.key: invalidFetchMetadata.value,
+        }),
+        isNot(contains(invalidFetchMetadata.key)),
+      );
+    }
+    expect(sanitizeAddonHeaders(const {'Sec-Fetch-Dest': 'VIDEO'}), const {
+      'Sec-Fetch-Dest': 'video',
+    });
 
     for (final unsafeOrigin in const [
       'http://media.example.com',
@@ -74,6 +99,149 @@ void main() {
     },
   );
 
+  test('runtime cookies accept safe parent domains with RFC path matching', () {
+    final jar = AddonRuntimeCookieJar();
+    jar.capture(
+      Uri.parse('https://api.media.example.com/foo/login'),
+      Headers.fromMap({
+        HttpHeaders.setCookieHeader: [
+          'session=parent; Domain=.example.com; Path=/foo; Secure',
+          'host_only=private; Path=/',
+          'unrelated=blocked; Domain=attacker.example; Path=/',
+        ],
+      }),
+    );
+
+    final sibling = <String, String>{};
+    jar.apply(Uri.parse('https://cdn.example.com/foo/episode'), sibling);
+    expect(
+      sibling,
+      isNot(contains(HttpHeaders.cookieHeader)),
+      reason: 'domain cookies cannot widen to siblings without a PSL',
+    );
+
+    final originalPath = <String, String>{};
+    jar.apply(
+      Uri.parse('https://api.media.example.com/foo/episode'),
+      originalPath,
+    );
+    expect(
+      originalPath[HttpHeaders.cookieHeader],
+      'session=parent; host_only=private',
+    );
+
+    final falsePrefix = <String, String>{};
+    jar.apply(Uri.parse('https://api.media.example.com/foobar'), falsePrefix);
+    expect(falsePrefix[HttpHeaders.cookieHeader], 'host_only=private');
+
+    final originalHost = <String, String>{};
+    jar.apply(Uri.parse('https://api.media.example.com/'), originalHost);
+    expect(originalHost[HttpHeaders.cookieHeader], 'host_only=private');
+
+    final unrelated = <String, String>{};
+    jar.apply(Uri.parse('https://example.com.attacker.test/foo'), unrelated);
+    expect(unrelated, isNot(contains(HttpHeaders.cookieHeader)));
+
+    final insecure = <String, String>{};
+    jar.apply(Uri.parse('http://api.media.example.com/foo'), insecure);
+    expect(insecure, isNot(contains(HttpHeaders.cookieHeader)));
+
+    final publicSuffixJar = AddonRuntimeCookieJar();
+    publicSuffixJar.capture(
+      Uri.parse('https://a.co.uk/login'),
+      Headers.fromMap({
+        HttpHeaders.setCookieHeader: ['unsafe=secret; Domain=co.uk; Path=/'],
+      }),
+    );
+    final publicSuffixSibling = <String, String>{};
+    publicSuffixJar.apply(
+      Uri.parse('https://b.co.uk/redirect'),
+      publicSuffixSibling,
+    );
+    expect(publicSuffixSibling, isNot(contains(HttpHeaders.cookieHeader)));
+  });
+
+  test('cookie domain and path helpers reject lookalike boundaries', () {
+    expect(
+      addonRuntimeCookieDomainMatches('video.example.com', '.example.com'),
+      isTrue,
+    );
+    expect(
+      addonRuntimeCookieDomainMatches('example.com', 'example.com'),
+      isTrue,
+    );
+    expect(
+      addonRuntimeCookieDomainMatches('notexample.com', 'example.com'),
+      isFalse,
+    );
+    expect(
+      addonRuntimeCookieDomainMatches(
+        'example.com.attacker.test',
+        'example.com',
+      ),
+      isFalse,
+    );
+    expect(addonRuntimeCookieDomainMatches('example.com', 'com'), isFalse);
+    expect(addonRuntimeCookiePathMatches('/foo', '/foo'), isTrue);
+    expect(addonRuntimeCookiePathMatches('/foo/bar', '/foo'), isTrue);
+    expect(addonRuntimeCookiePathMatches('/foobar', '/foo'), isFalse);
+  });
+
+  test(
+    'runtime response wire preserves arbitrary bounded bytes and text',
+    () async {
+      final bytes = Uint8List.fromList([0, 255, 128, 65, 10]);
+      final body = await readBoundedAddonRuntimeResponseBody(
+        ResponseBody(Stream.value(bytes), 200),
+        16,
+      );
+      final wire = addonRuntimeResponseBodyWireFields(body);
+
+      expect(body.bytes, bytes);
+      expect(base64Decode(wire['bodyBase64']! as String), bytes);
+      expect(wire['bodyByteLength'], bytes.length);
+      expect(wire['body'], body.text);
+
+      await expectLater(
+        readBoundedAddonRuntimeResponseBody(
+          ResponseBody(Stream.value(bytes), 200),
+          bytes.length - 1,
+        ),
+        throwsA(isA<FormatException>()),
+      );
+    },
+  );
+
+  test(
+    'runtime classification distinguishes host gaps from payload TypeErrors',
+    () {
+      for (final message in [
+        'TypeError: Cannot read properties of undefined (reading map)',
+        'TypeError: undefined is not a function',
+        'ReferenceError: providerLocalHelper is not defined',
+        'Upstream payload was undefined',
+      ]) {
+        expect(
+          classifySeanimeProviderFailureReason(message),
+          'provider_error',
+          reason: message,
+        );
+      }
+      for (final message in [
+        'ReferenceError: fetch is not defined',
+        'ReferenceError: Buffer is not defined',
+        r'ReferenceError: $sleep is not defined',
+        'TypeError: TextEncoder is not a function',
+      ]) {
+        expect(
+          classifySeanimeProviderFailureReason(message),
+          'runtime_api',
+          reason: message,
+        );
+      }
+    },
+  );
+
   test(
     'bounds addon network concurrency, request count, and responses',
     () async {
@@ -99,6 +267,17 @@ void main() {
       );
       budget.release();
       await expectLater(budget.acquire(), throwsA(isA<FormatException>()));
+
+      final byteBudget = AddonRuntimeNetworkBudget(maximumResponseBytes: 4);
+      byteBudget.recordResponseBytes(4);
+      expect(
+        () => byteBudget.recordResponseBytes(1),
+        throwsA(isA<FormatException>()),
+      );
+      expect(
+        () => byteBudget.recordResponseBytes(-1),
+        throwsA(isA<FormatException>()),
+      );
 
       final requestBudget = AddonRuntimeNetworkBudget(
         maximumRequests: 1,
@@ -334,6 +513,109 @@ void main() {
     );
   });
 
+  test(
+    'Seanime external audio uses public targets and origin-scoped headers',
+    () async {
+      final checked = <Uri>[];
+      final tracks = await normalizeSeanimeExternalAudioTracks(
+        [
+          {
+            'url': 'https://video.example/audio-ja.m4a',
+            'label': ' Japanese \u202eAudio ',
+            'language': 'Japanese',
+            'headers': {
+              'authorization': 'Bearer track-token',
+              'Host': 'blocked.example',
+            },
+          },
+          {
+            'url': 'https://audio.example/audio-es.aac',
+            'label': 'Latino',
+            'language': 'es-MX',
+            'requestHeaders': {
+              'Authorization': 'Bearer audio-token',
+              'X-Audio-Key': 'audio-secret',
+              'Content-Length': '99',
+            },
+          },
+          {'url': 'http://insecure.example/audio.aac', 'language': 'English'},
+          {'url': 'https://blocked.example/audio.aac', 'language': 'English'},
+          {
+            'url': 'https://video.example/audio-ja.m4a',
+            'label': ' Japanese \u202eAudio ',
+            'language': 'Japanese',
+            'headers': {
+              'authorization': 'Bearer track-token',
+              'Host': 'blocked.example',
+            },
+          },
+        ],
+        primaryUri: Uri.parse('https://video.example/main.m3u8'),
+        primaryHeaders: const {
+          'Authorization': 'Bearer video-token',
+          'X-Video-Key': 'video-secret',
+          'Referer': 'https://catalog.example/watch',
+        },
+        isAllowed: (uri) async {
+          checked.add(uri);
+          return uri.host != 'blocked.example';
+        },
+      );
+
+      expect(tracks, hasLength(2));
+      expect(checked.map((uri) => uri.host), [
+        'video.example',
+        'audio.example',
+        'blocked.example',
+      ]);
+      expect(tracks.first.label, 'Japanese Audio');
+      expect(tracks.first.language, 'jpn');
+      expect(tracks.first.headers, {
+        'authorization': 'Bearer track-token',
+        'X-Video-Key': 'video-secret',
+        'Referer': 'https://catalog.example/watch',
+      });
+      expect(tracks.last.language, 'spa');
+      expect(tracks.last.headers, {
+        'Referer': 'https://catalog.example/watch',
+        'Authorization': 'Bearer audio-token',
+        'X-Audio-Key': 'audio-secret',
+      });
+    },
+  );
+
+  test(
+    'Seanime external audio is bounded and independently salvageable',
+    () async {
+      var validationCount = 0;
+      final tracks = await normalizeSeanimeExternalAudioTracks(
+        List.generate(
+          12,
+          (index) => {
+            'url': 'https://audio$index.example/track.aac',
+            'language': index.isEven ? 'English' : 'Japanese',
+          },
+        ),
+        primaryUri: Uri.parse('https://video.example/main.mp4'),
+        primaryHeaders: const {},
+        isAllowed: (uri) async {
+          validationCount++;
+          if (uri.host == 'audio1.example') {
+            throw const FormatException('blocked target');
+          }
+          return uri.host != 'audio2.example';
+        },
+      );
+
+      expect(validationCount, seanimeMaximumExternalAudioTracks);
+      expect(tracks, hasLength(6));
+      expect(
+        tracks.map((track) => track.uri.host),
+        isNot(containsAll(['audio1.example', 'audio2.example'])),
+      );
+    },
+  );
+
   test('HLS inspection detects language tracks used by the master', () {
     const playlist = '''#EXTM3U
 #EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",NAME="Japanese",LANGUAGE="jpn",URI="ja.m3u8"
@@ -464,6 +746,40 @@ video-720.m3u8
     );
   });
 
+  test('HLS inspection preserves same URL with distinct request headers', () {
+    final selected = selectHlsInspectionCandidates([
+      {
+        'url': 'https://cdn.example/one.m3u8',
+        'headers': {'Referer': 'https://first.example/'},
+      },
+      {
+        'url': 'https://cdn.example/one.m3u8',
+        'headers': {'Referer': 'https://second.example/'},
+      },
+    ]);
+
+    expect(selected, hasLength(2));
+  });
+
+  test('HLS inspection preserves same URL with distinct audio sidecars', () {
+    final selected = selectHlsInspectionCandidates([
+      {
+        'url': 'https://cdn.example/master.m3u8',
+        'externalAudioTracks': [
+          {'url': 'https://audio.example/japanese.aac', 'language': 'ja'},
+        ],
+      },
+      {
+        'url': 'https://cdn.example/master.m3u8',
+        'externalAudioTracks': [
+          {'url': 'https://audio.example/english.aac', 'language': 'en'},
+        ],
+      },
+    ]);
+
+    expect(selected, hasLength(2));
+  });
+
   test(
     'optional HLS enrichment times out fail-open with raw streams',
     () async {
@@ -495,6 +811,39 @@ video-720.m3u8
         cancellationObserved.future.timeout(const Duration(seconds: 1)),
         completes,
       );
+    },
+  );
+
+  test(
+    'HLS enrichment replaces metadata while preserving audio sidecars',
+    () async {
+      final sidecars = [
+        {'url': 'https://audio.example/english.aac', 'language': 'English'},
+      ];
+      final raw = [
+        {
+          'url': 'https://cdn.example/master.m3u8',
+          'quality': 'Auto',
+          'audioCapability': 'sub',
+          'externalAudioTracks': sidecars,
+        },
+      ];
+
+      final enriched = await expandHlsVariantsWithinBudget(
+        raw,
+        null,
+        inspectItem: (item, _) async => [
+          {
+            ...item,
+            'audioCapability': 'sub_and_dub',
+            'audioLanguages': ['jpn', 'eng'],
+          },
+        ],
+      );
+
+      expect(enriched, hasLength(1));
+      expect(enriched.single['audioCapability'], 'sub_and_dub');
+      expect(enriched.single['externalAudioTracks'], sidecars);
     },
   );
 
@@ -578,7 +927,7 @@ video-720.m3u8
     },
   );
 
-  test('duplicate Sub and Dub provider results merge into dual audio', () {
+  test('same URL does not turn exclusive Sub and Dub into dual audio', () {
     final merged = mergeDuplicateWebStreamItems([
       {
         'url': 'https://cdn.example.com/shared.m3u8',
@@ -594,11 +943,14 @@ video-720.m3u8
       },
     ]);
 
-    expect(merged, hasLength(1));
-    expect(merged.single['audioCapability'], 'sub_and_dub');
+    expect(merged, hasLength(2));
+    expect(merged.map((item) => item['audioCapability']).toSet(), {
+      'sub',
+      'dub',
+    });
   });
 
-  test('duplicate legacy wire audio evidence merges into dual audio', () {
+  test('legacy same-URL Sub and Dub evidence remains mode-distinct', () {
     final merged = mergeDuplicateWebStreamItems([
       {
         'url': 'https://cdn.example.com/shared.mp4',
@@ -612,8 +964,68 @@ video-720.m3u8
       },
     ]);
 
+    expect(merged, hasLength(2));
+  });
+
+  test('duplicate independently dual-audio results still deduplicate', () {
+    final merged = mergeDuplicateWebStreamItems([
+      {
+        'url': 'https://cdn.example.com/shared.m3u8',
+        'quality': '1080p',
+        'audioCapability': 'sub_and_dub',
+        'audioLanguages': ['jpn'],
+      },
+      {
+        'url': 'https://cdn.example.com/shared.m3u8',
+        'quality': '1080p',
+        'audioCapability': 'both',
+        'audioLanguages': ['eng'],
+      },
+    ]);
+
     expect(merged, hasLength(1));
     expect(merged.single['audioCapability'], 'sub_and_dub');
+    expect(merged.single['audioLanguages'], containsAll(['jpn', 'eng']));
+  });
+
+  test('same video with different external audio remains mode-distinct', () {
+    final merged = mergeDuplicateWebStreamItems([
+      {
+        'url': 'https://cdn.example.com/shared.mp4',
+        'quality': '1080p',
+        'audioCapability': 'sub_and_dub',
+        'externalAudioTracks': [
+          {'url': 'https://audio.example/japanese.aac', 'language': 'ja'},
+        ],
+      },
+      {
+        'url': 'https://cdn.example.com/shared.mp4',
+        'quality': '1080p',
+        'audioCapability': 'sub_and_dub',
+        'externalAudioTracks': [
+          {'url': 'https://audio.example/english.aac', 'language': 'en'},
+        ],
+      },
+      {
+        'url': 'https://cdn.example.com/shared.mp4',
+        'quality': '1080p',
+        'audioCapability': 'both',
+        'externalAudioTracks': [
+          {'url': 'https://audio.example/english.aac', 'language': 'English'},
+        ],
+      },
+    ]);
+
+    expect(merged, hasLength(2));
+    expect(
+      merged
+          .map((item) => (item['externalAudioTracks']! as List).single['url'])
+          .toSet(),
+      {
+        'https://audio.example/japanese.aac',
+        'https://audio.example/english.aac',
+      },
+    );
   });
 
   test('keeps all bounded media synonyms beyond the search-attempt cap', () {
@@ -757,6 +1169,13 @@ video-720.m3u8
   });
 
   test('bounds Seanime request timeouts to the remaining runtime', () {
+    final serializedAbortSignal = jsonDecode(
+      jsonEncode({'__tetoTimeoutMilliseconds': 8000, 'aborted': false}),
+    );
+    expect(
+      addonRuntimeAbortSignalTimeoutMilliseconds(serializedAbortSignal),
+      8000,
+    );
     expect(addonRequestTimeout(0.05), const Duration(milliseconds: 100));
     expect(addonRequestTimeout(2), const Duration(seconds: 2));
     expect(
@@ -772,6 +1191,30 @@ video-720.m3u8
       const Duration(seconds: 6),
       reason: 'one dead host must leave time for provider fallback endpoints',
     );
+    expect(
+      addonRequestTimeout(
+        10,
+        abortSignal: const {'__tetoTimeoutMilliseconds': 500, 'aborted': false},
+      ),
+      const Duration(milliseconds: 500),
+    );
+    expect(
+      addonRequestTimeout(
+        null,
+        abortSignal: const {'__tetoTimeoutMilliseconds': 8000},
+        maximum: const Duration(seconds: 6),
+      ),
+      const Duration(seconds: 6),
+      reason: 'the Dart hard ceiling remains authoritative',
+    );
+    expect(
+      addonRequestTimeout(
+        10,
+        abortSignal: const {'__tetoTimeoutMilliseconds': 25},
+      ),
+      const Duration(milliseconds: 100),
+    );
+    expect(addonRuntimeAbortSignalIsAborted(const {'aborted': true}), isTrue);
   });
 
   test('bounds Seanime sleep without extending the runtime deadline', () {
@@ -799,6 +1242,113 @@ video-720.m3u8
       Duration.zero,
     );
   });
+
+  test(
+    'runtime provides bounded timers and AbortSignal compatibility',
+    () async {
+      final provider = SeanimeJavascriptProvider(
+        _javascriptAddon(
+          id: 'timer-abort-signal-provider',
+          payload: r'''
+            class Provider {
+              getSettings() { return {episodeServers: ['Fixture'], supportsDub: false}; }
+              async search(input) {
+                const binary = __tetoCreateFetchResponse({
+                  status: 200,
+                  body: 'legacy text projection',
+                  bodyBase64: 'AP+AQQo=',
+                  bodyByteLength: 5,
+                });
+                const bytes = Uint8Array.from(binary.body);
+                if (bytes.length !== 5 || bytes[0] !== 0 ||
+                    bytes[1] !== 255 || bytes[2] !== 128 ||
+                    bytes[3] !== 65 || bytes[4] !== 10 ||
+                    binary.text() !== 'legacy text projection' ||
+                    String(binary.body) !== 'legacy text projection') {
+                  throw new Error('binary FetchResponse bridge is invalid');
+                }
+                const signal = AbortSignal.timeout(8000);
+                if (signal.__tetoTimeoutMilliseconds !== 8000 || signal.aborted) {
+                  throw new Error('AbortSignal timeout bridge is invalid');
+                }
+                const controller = new AbortController();
+                controller.abort();
+                if (!controller.signal.aborted) {
+                  throw new Error('AbortController bridge is invalid');
+                }
+                return [{id: 'show', title: input.query, subOrDub: 'sub'}];
+              }
+              async findEpisodes(id) {
+                return [{id: 'episode', number: 1, url: 'episode'}];
+              }
+              async findEpisodeServer(episode, server) {
+                let cancelledTimerFired = false;
+                const cancelled = setTimeout(() => { cancelledTimerFired = true; }, 1);
+                clearTimeout(cancelled);
+                await new Promise(resolve => setTimeout(resolve, 20));
+                if (cancelledTimerFired) throw new Error('clearTimeout failed');
+                return {server, sources: [{url: 'https://cdn.example.com/timer.mp4'}]};
+              }
+            }
+          ''',
+        ),
+        validateResultTarget: (_) async {},
+      );
+
+      final results = await provider.streams(
+        const EpisodeReference(
+          anilistMediaId: 101,
+          title: 'Timer Fixture',
+          episode: 1,
+        ),
+      );
+
+      expect(results.single.uri.path, '/timer.mp4');
+    },
+    timeout: const Timeout(Duration(seconds: 15)),
+    skip: Platform.isWindows
+        ? 'flutter_js loads its bridge from the packaged Windows app.'
+        : false,
+  );
+
+  test(
+    'payload undefined TypeError remains retryable provider_error',
+    () async {
+      final provider = SeanimeJavascriptProvider(
+        _javascriptAddon(
+          id: 'payload-type-error-provider',
+          payload: r'''
+            class Provider {
+              getSettings() { return {supportsDub: false}; }
+              async search(input) {
+                throw new TypeError("Cannot read properties of undefined (reading 'map')");
+              }
+            }
+          ''',
+        ),
+      );
+
+      Object? failure;
+      try {
+        await provider.streams(
+          const EpisodeReference(
+            anilistMediaId: 102,
+            title: 'Payload Error Fixture',
+            episode: 1,
+          ),
+        );
+      } catch (error) {
+        failure = error;
+      }
+
+      expect(failure, isNotNull);
+      expect(seanimeProviderFailureDetails(failure!)?.reason, 'provider_error');
+    },
+    timeout: const Timeout(Duration(seconds: 15)),
+    skip: Platform.isWindows
+        ? 'flutter_js loads its bridge from the packaged Windows app.'
+        : false,
+  );
 
   test(
     'isolated JavaScript provider resolves a typed web stream',
@@ -856,6 +1406,107 @@ video-720.m3u8
       expect(results.single.headers['Referer'], 'https://example.com/');
       expect(results.single.subtitleUri?.path, '/episode-3-es.vtt');
       expect(results.single.subtitleLanguage, 'es-MX');
+    },
+    timeout: const Timeout(Duration(seconds: 15)),
+    skip: Platform.isWindows
+        ? 'flutter_js loads its bridge from the packaged Windows app.'
+        : false,
+  );
+
+  test(
+    'isolated provider carries explicit audio sidecars without mixing CC',
+    () async {
+      final provider = SeanimeJavascriptProvider(
+        _javascriptAddon(
+          id: 'external-audio-provider',
+          payload: r'''
+            class Provider {
+              getSettings() {
+                return {episodeServers: ['Fixture'], supportsDub: false};
+              }
+              async search(input) {
+                return [{id: 'show', title: input.query, subOrDub: 'sub'}];
+              }
+              async findEpisodes(id) {
+                return [{id: 'episode', number: 1, url: 'episode'}];
+              }
+              async findEpisodeServer(episode, server) {
+                return {
+                  server,
+                  baseUrl: 'https://video.example/assets/',
+                  headers: {
+                    Referer: 'https://catalog.example/watch',
+                    Authorization: 'Bearer video-token'
+                  },
+                  audioStreams: {items: [{
+                    src: '/shared/spanish.aac',
+                    name: 'Spanish',
+                    locale: 'es-MX'
+                  }]},
+                  videoSources: [{
+                    url: 'https://video.example/assets/episode.mp4',
+                    audioTracks: [],
+                    availableAudioTracks: [{
+                      file: 'japanese.m4a',
+                      label: 'Japanese',
+                      lang: 'ja'
+                    }],
+                    tracks: [
+                      {
+                        kind: 'subtitles',
+                        file: 'english.vtt',
+                        language: 'English'
+                      },
+                      {
+                        kind: 'audio',
+                        url: 'https://audio.example/english.aac',
+                        label: 'English Dub',
+                        language: 'en',
+                        headers: {'X-Audio-Key': 'audio-token'}
+                      }
+                    ]
+                  }]
+                };
+              }
+            }
+          ''',
+        ),
+        validateResultTarget: (_) async {},
+      );
+
+      final results = await provider.streams(
+        const EpisodeReference(
+          anilistMediaId: 77,
+          title: 'External Audio Fixture',
+          episode: 1,
+        ),
+      );
+
+      expect(results, hasLength(1));
+      final stream = results.single;
+      expect(stream.subtitleUri?.path, '/assets/english.vtt');
+      expect(stream.externalAudioTracks, hasLength(3));
+      expect(stream.externalAudioTracks.map((track) => track.language), [
+        'jpn',
+        'eng',
+        'spa',
+      ]);
+      expect(
+        stream.externalAudioTracks.first.headers['Authorization'],
+        'Bearer video-token',
+      );
+      expect(stream.externalAudioTracks[1].headers, {
+        'Referer': 'https://catalog.example/watch',
+        'X-Audio-Key': 'audio-token',
+      });
+      expect(
+        stream.externalAudioTracks.last.headers['Authorization'],
+        'Bearer video-token',
+      );
+      expect(
+        stream.effectiveAudioCapability,
+        WebStreamAudioCapability.subAndDub,
+      );
     },
     timeout: const Timeout(Duration(seconds: 15)),
     skip: Platform.isWindows
@@ -1273,6 +1924,51 @@ video-720.m3u8
   );
 
   test(
+    'passes a trusted absolute episode offset to Seanime media options',
+    () async {
+      final provider = SeanimeJavascriptProvider(
+        _javascriptAddon(
+          id: 'absolute-season-provider',
+          payload: r'''
+            class Provider {
+              getSettings() { return {episodeServers: ['Fixture'], supportsDub: false}; }
+              async search(input) {
+                if (input.media.absoluteSeasonOffset !== 24) return [];
+                return [{id: 'named-sequel', title: input.query, subOrDub: 'sub'}];
+              }
+              async findEpisodes(id) {
+                return [{id: 'episode-1', number: 1}];
+              }
+              async findEpisodeServer(episode, server) {
+                return {server, videoSources: [{
+                  url: 'https://cdn.example.com/named-sequel.mp4'
+                }]};
+              }
+            }
+          ''',
+        ),
+        validateResultTarget: (_) async {},
+      );
+
+      final results = await provider.streams(
+        const EpisodeReference(
+          anilistMediaId: 36,
+          title: 'Example: New Arc',
+          episode: 1,
+          absoluteSeasonOffset: 24,
+        ),
+      );
+
+      expect(results, hasLength(1));
+      expect(results.single.uri.path, endsWith('/named-sequel.mp4'));
+    },
+    timeout: const Timeout(Duration(seconds: 15)),
+    skip: Platform.isWindows
+        ? 'flutter_js loads its bridge from the packaged Windows app.'
+        : false,
+  );
+
+  test(
     'explicit Dub server overrides a stale Sub search label',
     () async {
       final provider = SeanimeJavascriptProvider(
@@ -1314,6 +2010,130 @@ video-720.m3u8
         WebStreamAudioCapability.sub,
         WebStreamAudioCapability.dub,
       });
+    },
+    timeout: const Timeout(Duration(seconds: 15)),
+    skip: Platform.isWindows
+        ? 'flutter_js loads its bridge from the packaged Windows app.'
+        : false,
+  );
+
+  test(
+    'resolved fallback server overrides the requested AnimeGG-style mode',
+    () async {
+      final provider = SeanimeJavascriptProvider(
+        _javascriptAddon(
+          id: 'resolved-fallback-server-provider',
+          payload: r'''
+            class Provider {
+              getSettings() {
+                return {
+                  episodeServers: ['GG-SUB', 'GG-DUB'],
+                  supportsDub: true
+                };
+              }
+              async search(input) {
+                return [{
+                  id: 'show',
+                  title: input.query,
+                  subOrDub: input.dub ? 'dub' : 'sub'
+                }];
+              }
+              async findEpisodes(id) {
+                return [{id: 'episode', number: 1, url: 'episode'}];
+              }
+              async findEpisodeServer(episode, server) {
+                if (server !== 'GG-DUB') return null;
+                return {
+                  server: 'GG-SUB',
+                  videoSources: [{
+                    url: 'https://cdn.example.com/fallback-sub.mp4',
+                    quality: '1080p'
+                  }]
+                };
+              }
+            }
+          ''',
+        ),
+        preferredAudio: PlaybackAudioPreference.dub,
+        validateResultTarget: (_) async {},
+      );
+
+      final results = await provider.streams(
+        const EpisodeReference(
+          anilistMediaId: 41,
+          title: 'Fallback Server Fixture',
+          episode: 1,
+        ),
+      );
+
+      expect(results, hasLength(1));
+      expect(
+        results.single.effectiveAudioCapability,
+        WebStreamAudioCapability.sub,
+      );
+      expect(results.single.title, startsWith('GG-SUB'));
+    },
+    timeout: const Timeout(Duration(seconds: 15)),
+    skip: Platform.isWindows
+        ? 'flutter_js loads its bridge from the packaged Windows app.'
+        : false,
+  );
+
+  test(
+    'aggregate both result keeps locale-labelled child streams exclusive',
+    () async {
+      final provider = SeanimeJavascriptProvider(
+        _javascriptAddon(
+          id: 'locale-labelled-audio-provider',
+          payload: r'''
+            class Provider {
+              getSettings() {
+                return {episodeServers: ['Default'], supportsDub: true};
+              }
+              async search(input) {
+                return [{id: 'show', title: input.query, subOrDub: 'both'}];
+              }
+              async findEpisodes(id) {
+                return [{id: 'episode', number: 1, url: 'episode'}];
+              }
+              async findEpisodeServer(episode, server) {
+                return {
+                  server,
+                  videoSources: [
+                    {
+                      url: 'https://cdn.example.com/japanese.m3u8',
+                      quality: 'ja-JP (No Subs)'
+                    },
+                    {
+                      url: 'https://cdn.example.com/english.m3u8',
+                      quality: 'en-US'
+                    }
+                  ]
+                };
+              }
+            }
+          ''',
+        ),
+        validateResultTarget: (_) async {},
+      );
+
+      final results = await provider.streams(
+        const EpisodeReference(
+          anilistMediaId: 42,
+          title: 'Locale Audio Fixture',
+          episode: 1,
+        ),
+      );
+
+      expect(results, hasLength(2));
+      expect(results.map((item) => item.effectiveAudioCapability).toSet(), {
+        WebStreamAudioCapability.sub,
+        WebStreamAudioCapability.dub,
+      });
+      expect(
+        results.expand((item) => item.audioLanguages).toSet(),
+        containsAll(<String>{'jpn', 'eng'}),
+      );
     },
     timeout: const Timeout(Duration(seconds: 15)),
     skip: Platform.isWindows
@@ -1719,6 +2539,49 @@ video-720.m3u8
   );
 
   test(
+    'provider slug can corroborate a bare title for the requested season',
+    () async {
+      final provider = SeanimeJavascriptProvider(
+        _javascriptAddon(
+          id: 'slug-season-provider',
+          payload: r'''
+            class Provider {
+              getSettings() { return {supportsDub: false}; }
+              async search(input) {
+                return [{id: 'show-season-4', slug: 'show-season-4', title: 'Show'}];
+              }
+              async findEpisodes(id) {
+                return [{id: 'episode-1', number: 1}];
+              }
+              async findEpisodeServer(episode, server) {
+                return {sources: [{url: 'https://cdn.example.com/season-4.mp4'}]};
+              }
+            }
+          ''',
+        ),
+        validateResultTarget: (_) async {},
+      );
+
+      final results = await provider.streams(
+        const EpisodeReference(
+          anilistMediaId: 4004,
+          title: 'Show Season 4',
+          titleEnglish: 'Show Season 4',
+          alternativeTitles: ['Show'],
+          episode: 1,
+        ),
+      );
+
+      expect(results, hasLength(1));
+      expect(results.single.uri.path, endsWith('/season-4.mp4'));
+    },
+    timeout: const Timeout(Duration(seconds: 15)),
+    skip: Platform.isWindows
+        ? 'flutter_js loads its bridge from the packaged Windows app.'
+        : false,
+  );
+
+  test(
     'successful legacy empty search remains a genuine no-match',
     () async {
       final provider = SeanimeJavascriptProvider(
@@ -1950,6 +2813,195 @@ video-720.m3u8
       expect(failure, isNotNull);
       expect(seanimeProviderFailureDetails(failure!)?.stage, 'server_lookup');
       expect(seanimeProviderFailureDetails(failure)?.reason, 'empty_sources');
+    },
+    timeout: const Timeout(Duration(seconds: 15)),
+    skip: Platform.isWindows
+        ? 'flutter_js loads its bridge from the packaged Windows app.'
+        : false,
+  );
+
+  test(
+    'finds episodes beyond the old 200-item compatibility prefix',
+    () async {
+      final provider = SeanimeJavascriptProvider(
+        _javascriptAddon(
+          id: 'long-episode-list-provider',
+          payload: r'''
+            class Provider {
+              getSettings() { return {episodeServers: ['Fixture'], supportsDub: false}; }
+              async search(input) {
+                return [{id: 'show', title: input.query, subOrDub: 'sub'}];
+              }
+              async findEpisodes(id) {
+                return Array.from({length: 600}, (_, index) => ({
+                  id: 'episode-' + (index + 1),
+                  number: index + 1,
+                }));
+              }
+              async findEpisodeServer(episode, server) {
+                return {sources: [{
+                  url: 'https://cdn.example.com/' + episode.id + '.mp4'
+                }]};
+              }
+            }
+          ''',
+        ),
+        validateResultTarget: (_) async {},
+      );
+
+      final results = await provider.streams(
+        const EpisodeReference(
+          anilistMediaId: 500,
+          title: 'Long Episode Fixture',
+          episode: 500,
+        ),
+      );
+
+      expect(results, hasLength(1));
+      expect(results.single.uri.path, endsWith('/episode-500.mp4'));
+      expect(results.single.matchedEpisodeNumber, 500);
+    },
+    timeout: const Timeout(Duration(seconds: 15)),
+    skip: Platform.isWindows
+        ? 'flutter_js loads its bridge from the packaged Windows app.'
+        : false,
+  );
+
+  test(
+    'continues past six configured servers to find a working server',
+    () async {
+      final provider = SeanimeJavascriptProvider(
+        _javascriptAddon(
+          id: 'long-server-list-provider',
+          payload: r'''
+            class Provider {
+              getSettings() {
+                return {
+                  episodeServers: Array.from(
+                    {length: 8}, (_, index) => 'Server ' + (index + 1)
+                  ),
+                  supportsDub: false
+                };
+              }
+              async search(input) {
+                return [{id: 'show', title: input.query, subOrDub: 'sub'}];
+              }
+              async findEpisodes(id) { return [{id: 'episode-1', number: 1}]; }
+              async findEpisodeServer(episode, server) {
+                if (server !== 'Server 8') return null;
+                return {sources: [{url: 'https://cdn.example.com/server-8.mp4'}]};
+              }
+            }
+          ''',
+        ),
+        validateResultTarget: (_) async {},
+      );
+
+      final results = await provider.streams(
+        const EpisodeReference(
+          anilistMediaId: 8,
+          title: 'Server List Fixture',
+          episode: 1,
+        ),
+      );
+
+      expect(results, hasLength(1));
+      expect(results.single.uri.path, endsWith('/server-8.mp4'));
+    },
+    timeout: const Timeout(Duration(seconds: 15)),
+    skip: Platform.isWindows
+        ? 'flutter_js loads its bridge from the packaged Windows app.'
+        : false,
+  );
+
+  test(
+    'preferred Dub runs first and explicit dual audio skips duplicate mode work',
+    () async {
+      final provider = SeanimeJavascriptProvider(
+        _javascriptAddon(
+          id: 'preferred-dub-provider',
+          payload: r'''
+            class Provider {
+              searchCalls = 0;
+              getSettings() { return {episodeServers: ['Dual Audio'], supportsDub: true}; }
+              async search(input) {
+                this.searchCalls += 1;
+                if (!input.dub || !input.opts.dub || this.searchCalls !== 1) {
+                  throw new Error('unexpected duplicate or Sub-first search');
+                }
+                return [{id: 'show', title: input.query, subOrDub: 'both'}];
+              }
+              async findEpisodes(id) { return [{id: 'episode-1', number: 1}]; }
+              async findEpisodeServer(episode, server) {
+                return {sources: [{
+                  url: 'https://cdn.example.com/dual.m3u8',
+                  audioCapability: 'both'
+                }]};
+              }
+            }
+          ''',
+        ),
+        preferredAudio: PlaybackAudioPreference.dub,
+        validateResultTarget: (_) async {},
+      );
+
+      final results = await provider.streams(
+        const EpisodeReference(
+          anilistMediaId: 9,
+          title: 'Preferred Dub Fixture',
+          episode: 1,
+        ),
+      );
+
+      expect(results, hasLength(1));
+      expect(
+        results.single.effectiveAudioCapability,
+        WebStreamAudioCapability.subAndDub,
+      );
+    },
+    timeout: const Timeout(Duration(seconds: 15)),
+    skip: Platform.isWindows
+        ? 'flutter_js loads its bridge from the packaged Windows app.'
+        : false,
+  );
+
+  test(
+    'preferred Sub does not perform an undeclared Dub compatibility probe',
+    () async {
+      final provider = SeanimeJavascriptProvider(
+        _javascriptAddon(
+          id: 'preferred-sub-provider',
+          payload: r'''
+            class Provider {
+              getSettings() { return {episodeServers: ['Fixture']}; }
+              async search(input) {
+                if (input.dub) throw new Error('unexpected Dub probe');
+                return [{id: 'show', title: input.query, subOrDub: 'sub'}];
+              }
+              async findEpisodes(id) { return [{id: 'episode-1', number: 1}]; }
+              async findEpisodeServer(episode, server) {
+                return {sources: [{url: 'https://cdn.example.com/sub.mp4'}]};
+              }
+            }
+          ''',
+        ),
+        preferredAudio: PlaybackAudioPreference.sub,
+        validateResultTarget: (_) async {},
+      );
+
+      final results = await provider.streams(
+        const EpisodeReference(
+          anilistMediaId: 10,
+          title: 'Preferred Sub Fixture',
+          episode: 1,
+        ),
+      );
+
+      expect(results, hasLength(1));
+      expect(
+        results.single.effectiveAudioCapability,
+        WebStreamAudioCapability.sub,
+      );
     },
     timeout: const Timeout(Duration(seconds: 15)),
     skip: Platform.isWindows

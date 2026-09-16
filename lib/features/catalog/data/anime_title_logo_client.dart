@@ -37,9 +37,10 @@ class TetoTvAnimeTitleLogoCacheStore implements AnimeTitleLogoCacheStore {
 /// Resolves transparent anime title artwork without making details dependent
 /// on a single artwork service.
 ///
-/// AniZip is used as the AniList -> TVDB crosswalk and can itself expose a
-/// TVDB ClearLogo. Fanart.tv is then an optional higher-coverage fallback when
-/// the app is built with `--dart-define=FANART_TV_API_KEY=...`.
+/// AniZip is used as the AniList -> TVDB crosswalk and exposes TMDB artwork
+/// metadata with explicit language tags. Fanart.tv is then an optional
+/// higher-coverage fallback when the app is built with
+/// `--dart-define=FANART_TV_API_KEY=...`.
 class AnimeTitleLogoClient {
   AnimeTitleLogoClient({
     Dio? aniZipDio,
@@ -59,10 +60,11 @@ class AnimeTitleLogoClient {
   static const _compiledFanartClientKey = String.fromEnvironment(
     'FANART_TV_CLIENT_KEY',
   );
-  // V7 invalidates device-side misses from the first ClearLogo rollout. That
-  // release could silently retain a transport/CDN failure as text for hours,
-  // making newly available artwork look permanently unsupported.
-  static const _cacheSchema = 7;
+  // V11 invalidates earlier positive assumptions and negative misses now that
+  // AniZip's language-aware TMDB logo endpoint is part of the lookup. A
+  // language-unknown image must never be labelled English: use explicitly
+  // tagged English artwork or the normal text title.
+  static const _cacheSchema = 11;
   static const _positiveCacheAge = Duration(days: 14);
   static const _negativeCacheAge = Duration(hours: 12);
   static const maximumMetadataResponseBytes = 8 * 1024 * 1024;
@@ -99,7 +101,10 @@ class AnimeTitleLogoClient {
   }) async {
     final languageKey = preferredLanguage == 'en' ? '' : ':$preferredLanguage';
     final cacheKey = 'title-logo:v$_cacheSchema$languageKey:anilist:$aniListId';
-    final cached = await _readCache(cacheKey);
+    final cached = await _readCache(
+      cacheKey,
+      preferredLanguage: preferredLanguage,
+    );
     if (cached.found) {
       _recordTitleLogoDiagnostic(
         aniListId: aniListId,
@@ -140,6 +145,34 @@ class AnimeTitleLogoClient {
             : 'logo_missing',
         source: logo?.source,
       );
+      Object? languageAwareLookupError;
+      StackTrace? languageAwareLookupStack;
+      if (logo == null) {
+        try {
+          logo = await _lookupAniZipTmdb(
+            aniListId,
+            tvdbId: tvdbId,
+            preferredLanguage: preferredLanguage,
+          );
+          _recordTitleLogoDiagnostic(
+            aniListId: aniListId,
+            language: preferredLanguage,
+            stage: 'anizip_tmdb',
+            outcome: logo == null ? 'logo_missing' : 'candidate',
+            source: logo?.source,
+          );
+        } catch (error, stackTrace) {
+          languageAwareLookupError = error;
+          languageAwareLookupStack = stackTrace;
+          _recordTitleLogoDiagnostic(
+            aniListId: aniListId,
+            language: preferredLanguage,
+            stage: 'anizip_tmdb',
+            outcome: 'failed',
+            reason: _safeTitleLogoFailureReason(error),
+          );
+        }
+      }
       // Fanart is the preferred logo source, while AniZip remains the
       // crosswalk and an outage-safe fallback. Always ask Fanart when the
       // release has a project key; otherwise a matching but lower-resolution
@@ -155,6 +188,17 @@ class AnimeTitleLogoClient {
           // Keep a safe AniZip fallback when optional Fanart lookup fails.
           if (logo == null) rethrow;
         }
+      }
+      // Do not turn a transient outage of the language-aware endpoint into a
+      // 12-hour negative cache entry. A verified logo from either fallback is
+      // still safe to retain.
+      if (logo == null &&
+          languageAwareLookupError != null &&
+          languageAwareLookupStack != null) {
+        Error.throwWithStackTrace(
+          languageAwareLookupError,
+          languageAwareLookupStack,
+        );
       }
       await _writeCache(cacheKey, logo);
       _recordTitleLogoDiagnostic(
@@ -175,7 +219,11 @@ class AnimeTitleLogoClient {
       );
       // Artwork is decorative. A stale safe URL is better than blocking or
       // replacing the normal text title when either metadata service is down.
-      final stale = await _readCache(cacheKey, allowExpired: true);
+      final stale = await _readCache(
+        cacheKey,
+        preferredLanguage: preferredLanguage,
+        allowExpired: true,
+      );
       return stale.logo;
     }
   }
@@ -201,8 +249,30 @@ class AnimeTitleLogoClient {
           );
   }
 
+  Future<AnimeTitleLogo?> _lookupAniZipTmdb(
+    int aniListId, {
+    required int? tvdbId,
+    required String preferredLanguage,
+  }) async {
+    final response = await _aniZipDio.get<Object?>(
+      'v2/images/tmdb',
+      queryParameters: {'anilist_id': aniListId},
+      options: Options(responseType: ResponseType.plain),
+    );
+    final body = decodeMetadataResponse(response.data);
+    if (body == null) {
+      throw const FormatException('Invalid AniZip image response.');
+    }
+    return parseAniZipTmdbLogo(
+      body,
+      tvdbId: tvdbId,
+      preferredLanguage: preferredLanguage,
+    );
+  }
+
   Future<_CachedLogo> _readCache(
     String cacheKey, {
+    required String preferredLanguage,
     bool allowExpired = false,
   }) async {
     try {
@@ -216,7 +286,8 @@ class AnimeTitleLogoClient {
       if (cached['found'] != true) return const _CachedLogo.negative();
       final value = _map(cached['logo']);
       final logo = value == null ? null : AnimeTitleLogo.fromJson(value);
-      return logo == null
+      return logo == null ||
+              !_matchesRequestedLanguage(logo.languageCode, preferredLanguage)
           ? const _CachedLogo.missing()
           : _CachedLogo.positive(logo);
     } catch (_) {
@@ -252,6 +323,9 @@ class AnimeTitleLogoClient {
         .map((image) {
           final url = Uri.tryParse(image['url']?.toString() ?? '');
           if (!isSafeAnimeTitleLogoUri(url)) return null;
+          // AniZip's one TVDB default can change independently and does not
+          // identify its language. Never infer English from missing metadata;
+          // doing so can display Japanese artwork in an English interface.
           final language = _artworkLanguage(image);
           if (!_matchesRequestedLanguage(language, normalizedPreference)) {
             return null;
@@ -365,6 +439,48 @@ class AnimeTitleLogoClient {
     return null;
   }
 
+  /// Selects only explicitly language-tagged logos from AniZip's TMDB image
+  /// metadata. Unlike the legacy TVDB default, this endpoint can distinguish
+  /// English artwork from Japanese artwork deterministically.
+  static AnimeTitleLogo? parseAniZipTmdbLogo(
+    Map<String, dynamic> body, {
+    int? tvdbId,
+    String preferredLanguage = 'en',
+  }) {
+    final normalizedPreference = _normalizeRequestedLanguage(preferredLanguage);
+    final candidates = _list(body['logos'])
+        .map(_map)
+        .whereType<Map<String, dynamic>>()
+        .map((item) {
+          final url = Uri.tryParse(item['file_path']?.toString() ?? '');
+          if (!isSafeAnimeTitleLogoUri(url) ||
+              url!.host.toLowerCase() != 'image.tmdb.org' ||
+              !url.path.startsWith('/t/p/original/')) {
+            return null;
+          }
+          final language = _artworkLanguage(item);
+          if (!_matchesRequestedLanguage(language, normalizedPreference)) {
+            return null;
+          }
+          return (
+            url: url,
+            language: language!,
+            score: _tmdbLogoPreference(item),
+          );
+        })
+        .whereType<({Uri url, String language, int score})>()
+        .toList(growable: false);
+    if (candidates.isEmpty) return null;
+    candidates.sort((left, right) => right.score.compareTo(left.score));
+    final selected = candidates.first;
+    return AnimeTitleLogo(
+      url: selected.url,
+      source: AnimeTitleLogoSource.aniZipTmdb,
+      tvdbId: tvdbId,
+      languageCode: selected.language,
+    );
+  }
+
   static Dio _defaultAniZipDio() => Dio(
     BaseOptions(
       baseUrl: 'https://api.ani.zip/',
@@ -474,8 +590,9 @@ AnimeTitleLogo? _preferLogo(
 }
 
 int _logoSourcePreference(AnimeTitleLogoSource source) => switch (source) {
-  AnimeTitleLogoSource.fanartTvHd => 3,
-  AnimeTitleLogoSource.fanartTv => 2,
+  AnimeTitleLogoSource.fanartTvHd => 4,
+  AnimeTitleLogoSource.fanartTv => 3,
+  AnimeTitleLogoSource.aniZipTmdb => 2,
   AnimeTitleLogoSource.aniZip => 1,
 };
 
@@ -487,8 +604,7 @@ int _languagePreference(String? language, String preferredLanguage) =>
     };
 
 bool _matchesRequestedLanguage(String? language, String preferredLanguage) =>
-    language == preferredLanguage ||
-    (preferredLanguage == 'en' && language == null);
+    language != null && language == preferredLanguage;
 
 String _normalizeRequestedLanguage(String value) {
   final normalized = _normalizeArtworkLanguage(value);
@@ -497,6 +613,17 @@ String _normalizeRequestedLanguage(String value) {
 
 int _artworkLikes(Map<String, dynamic> item) =>
     int.tryParse(item['likes']?.toString() ?? '') ?? 0;
+
+int _tmdbLogoPreference(Map<String, dynamic> item) {
+  final voteAverage = double.tryParse(item['vote_average']?.toString() ?? '');
+  final voteCount = _positiveInt(item['vote_count']) ?? 0;
+  final width = _positiveInt(item['width']) ?? 0;
+  final height = _positiveInt(item['height']) ?? 0;
+  final pixels = width * height;
+  return ((voteAverage ?? 0) * 100000000).round() +
+      voteCount * 1000000 +
+      pixels.clamp(0, 999999);
+}
 
 String? _artworkLanguage(Map<String, dynamic> item) {
   for (final key in const [

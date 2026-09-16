@@ -1,0 +1,13 @@
+TetoTV experimental Aniyomi compatibility subset
+
+Includes adapted runtime API sources from Aniyomi v0.18.1.2, commit
+39e9a749590b89b432f04b83725aaa12591371b2, under Apache License 2.0.
+Aniyomi, Tachiyomi and Mihon contributors retain their rights.
+See LICENSE-ANIYOMI, README.md and PROVENANCE.json.
+
+Includes Injekt registry patch sources from mihonapp/injekt, commit
+91edab2317f605afcee2df94f59a49883fd5cdd0, under the MIT License.
+Copyright (c) 2015 Jayson Minard and Collokia. See LICENSE-INJEKT.
+
+This notice was added by TetoTV. It does not imply affiliation, endorsement,
+or full compatibility with Aniyomi or any third-party content provider.

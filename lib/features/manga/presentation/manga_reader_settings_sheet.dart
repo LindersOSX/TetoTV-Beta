@@ -1,3 +1,4 @@
+import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'dart:async';
 import 'dart:math' as math;
 
@@ -39,22 +40,22 @@ class _MangaReaderSettingsSheetState
       context: context,
       builder: (context) => AlertDialog(
         scrollable: true,
-        title: const Text('Reset reader settings?'),
-        content: const Text(
-          'This restores reader settings for all manga and removes the saved '
-          'layout for this manga. Saved layouts for other manga, downloads, '
-          'and reading progress are kept.',
+        title: Text(context.tr("Reset reader settings?")),
+        content: Text(
+          context.tr(
+            "This restores reader settings for all manga and removes the saved layout for this manga. Saved layouts for other manga, downloads, and reading progress are kept.",
+          ),
         ),
         actions: [
           TextButton(
             autofocus: true,
             onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Keep settings'),
+            child: Text(context.tr("Keep settings")),
           ),
           FilledButton(
             key: const ValueKey('manga-settings-confirm-reset'),
             onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Reset settings'),
+            child: Text(context.tr("Reset settings")),
           ),
         ],
       ),
@@ -70,9 +71,9 @@ class _MangaReaderSettingsSheetState
     } catch (_) {
       if (mounted) {
         ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-          const SnackBar(
+          SnackBar(
             content: Text(
-              'Some settings could not be reset. Please try again.',
+              context.tr("Some settings could not be reset. Please try again."),
             ),
           ),
         );
@@ -121,7 +122,7 @@ class _MangaReaderSettingsSheetState
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            'Reader settings',
+                            context.tr("Reader settings"),
                             style: Theme.of(context).textTheme.titleLarge,
                           ),
                           const SizedBox(height: 4),
@@ -136,7 +137,7 @@ class _MangaReaderSettingsSheetState
                     ),
                     IconButton(
                       key: const ValueKey('manga-settings-close'),
-                      tooltip: 'Close reader settings',
+                      tooltip: context.tr("Close reader settings"),
                       autofocus: true,
                       onPressed: () => Navigator.of(context).pop(),
                       icon: const Icon(Icons.close_rounded),
@@ -158,18 +159,24 @@ class _MangaReaderSettingsSheetState
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
                         _SettingsSection(
-                          title: 'Reading layout',
+                          title: context.tr("Reading layout"),
                           icon: Icons.auto_stories_outlined,
-                          help: 'Choose how pages flow and fit your screen.',
+                          help: context.tr(
+                            "Choose how pages flow and fit your screen.",
+                          ),
                           children: [
                             _SettingSwitch(
                               id: 'remember-layout',
-                              label: 'Remember layout for this manga',
+                              label: context.tr(
+                                "Remember layout for this manga",
+                              ),
                               help: series.enabled
-                                  ? 'Mode, direction, spread, and fit are saved '
-                                        'only for this manga.'
-                                  : 'Off: these four choices update your '
-                                        'defaults for all manga.',
+                                  ? context.tr(
+                                      "Mode, direction, spread, and fit are saved only for this manga.",
+                                    )
+                                  : context.tr(
+                                      "Off: these four choices update your defaults for all manga.",
+                                    ),
                               value: series.enabled,
                               onChanged: ready
                                   ? seriesController.setEnabled
@@ -178,10 +185,10 @@ class _MangaReaderSettingsSheetState
                             const Divider(height: 20),
                             _SettingChoice<MangaReadingMode>(
                               id: 'mode',
-                              label: 'Reading mode',
-                              help:
-                                  'Paged: turn sideways. Vertical: swipe up. '
-                                  'Webtoon: one continuous strip.',
+                              label: context.tr("Reading mode"),
+                              help: context.tr(
+                                "Paged: turn sideways. Vertical: swipe up. Webtoon: one continuous strip.",
+                              ),
                               value: prefs.mode,
                               values: MangaReadingMode.values,
                               name: (value) => value.displayName,
@@ -193,11 +200,14 @@ class _MangaReaderSettingsSheetState
                             ),
                             _SettingChoice<MangaReadingDirection>(
                               id: 'direction',
-                              label: 'Reading direction',
+                              label: context.tr("Reading direction"),
                               help: paged
-                                  ? 'Sets page order and forward navigation.'
-                                  : 'Sets forward/back tap and remote controls; '
-                                        'scrolling stays vertical.',
+                                  ? context.tr(
+                                      "Sets page order and forward navigation.",
+                                    )
+                                  : context.tr(
+                                      "Sets forward/back tap and remote controls; scrolling stays vertical.",
+                                    ),
                               value: prefs.direction,
                               values: MangaReadingDirection.values,
                               name: (value) => value.displayName,
@@ -209,10 +219,12 @@ class _MangaReaderSettingsSheetState
                             ),
                             _SettingChoice<MangaSpreadMode>(
                               id: 'spread',
-                              label: 'Page spread',
+                              label: context.tr("Page spread"),
                               help: paged
-                                  ? 'Automatic adapts to your available space.'
-                                  : 'Used in Paged mode.',
+                                  ? context.tr(
+                                      "Automatic adapts to your available space.",
+                                    )
+                                  : context.tr("Used in Paged mode."),
                               value: prefs.spreadMode,
                               values: MangaSpreadMode.values,
                               name: (value) => value.displayName,
@@ -224,10 +236,14 @@ class _MangaReaderSettingsSheetState
                             ),
                             _SettingChoice<MangaPageFit>(
                               id: 'fit',
-                              label: 'Page fit',
+                              label: context.tr("Page fit"),
                               help: webtoon
-                                  ? 'Webtoon pages always fit the strip width.'
-                                  : 'Fit page shows the whole page without cropping.',
+                                  ? context.tr(
+                                      "Webtoon pages always fit the strip width.",
+                                    )
+                                  : context.tr(
+                                      "Fit page shows the whole page without cropping.",
+                                    ),
                               value: prefs.pageFit,
                               values: MangaPageFit.values,
                               name: (value) => value.displayName,
@@ -240,14 +256,15 @@ class _MangaReaderSettingsSheetState
                           ],
                         ),
                         _SettingsSection(
-                          title: 'Page appearance',
+                          title: context.tr("Page appearance"),
                           icon: Icons.palette_outlined,
-                          help:
-                              'Applies to all manga. Original images stay unchanged.',
+                          help: context.tr(
+                            "Applies to all manga. Original images stay unchanged.",
+                          ),
                           children: [
                             _SettingChoice<MangaReaderBackground>(
                               id: 'background',
-                              label: 'Background',
+                              label: context.tr("Background"),
                               value: prefs.background,
                               values: MangaReaderBackground.values,
                               name: (value) => value.displayName,
@@ -257,9 +274,10 @@ class _MangaReaderSettingsSheetState
                             ),
                             _SettingSlider(
                               id: 'side-padding',
-                              label: 'Side margins',
-                              help:
-                                  'Adds breathing room on both sides of the page.',
+                              label: context.tr("Side margins"),
+                              help: context.tr(
+                                "Adds breathing room on both sides of the page.",
+                              ),
                               value: prefs.sidePadding,
                               max: 80,
                               divisions: 16,
@@ -270,10 +288,14 @@ class _MangaReaderSettingsSheetState
                             ),
                             _SettingSlider(
                               id: 'page-gap',
-                              label: 'Page gap',
+                              label: context.tr("Page gap"),
                               help: spreads
-                                  ? 'Space between pages in a double-page spread.'
-                                  : 'Used with Automatic or Double page in Paged mode.',
+                                  ? context.tr(
+                                      "Space between pages in a double-page spread.",
+                                    )
+                                  : context.tr(
+                                      "Used with Automatic or Double page in Paged mode.",
+                                    ),
                               value: prefs.pageGap,
                               max: 40,
                               divisions: 8,
@@ -284,10 +306,12 @@ class _MangaReaderSettingsSheetState
                             ),
                             _SettingSlider(
                               id: 'webtoon-gap',
-                              label: 'Long-strip page gap',
+                              label: context.tr("Long-strip page gap"),
                               help: webtoon
-                                  ? 'Space between pages in the continuous strip.'
-                                  : 'Used in Webtoon mode.',
+                                  ? context.tr(
+                                      "Space between pages in the continuous strip.",
+                                    )
+                                  : context.tr("Used in Webtoon mode."),
                               value: prefs.webtoonGap,
                               max: 40,
                               divisions: 8,
@@ -298,9 +322,10 @@ class _MangaReaderSettingsSheetState
                             ),
                             _SettingSwitch(
                               id: 'cover-alone',
-                              label: 'Keep cover by itself',
-                              help:
-                                  'Starts double-page layouts with a single cover.',
+                              label: context.tr("Keep cover by itself"),
+                              help: context.tr(
+                                "Starts double-page layouts with a single cover.",
+                              ),
                               value: prefs.coverStartsAlone,
                               onChanged: ready && spreads
                                   ? controller.setCoverStartsAlone
@@ -308,9 +333,10 @@ class _MangaReaderSettingsSheetState
                             ),
                             _SettingSwitch(
                               id: 'swap-spread',
-                              label: 'Swap double-page sides',
-                              help:
-                                  'Reverses the two pages inside each spread.',
+                              label: context.tr("Swap double-page sides"),
+                              help: context.tr(
+                                "Reverses the two pages inside each spread.",
+                              ),
                               value: prefs.invertDoublePages,
                               onChanged: ready && spreads
                                   ? controller.setInvertDoublePages
@@ -319,9 +345,10 @@ class _MangaReaderSettingsSheetState
                             const Divider(height: 20),
                             _SettingSlider(
                               id: 'dim',
-                              label: 'Dim pages',
-                              help:
-                                  'Reduces page brightness, not your device brightness.',
+                              label: context.tr("Dim pages"),
+                              help: context.tr(
+                                "Reduces page brightness, not your device brightness.",
+                              ),
                               value: prefs.dimAmount,
                               max: .7,
                               divisions: 14,
@@ -330,8 +357,10 @@ class _MangaReaderSettingsSheetState
                             ),
                             _SettingSlider(
                               id: 'warmth',
-                              label: 'Warmth',
-                              help: 'Adds a warm tint to page images.',
+                              label: context.tr("Warmth"),
+                              help: context.tr(
+                                "Adds a warm tint to page images.",
+                              ),
                               value: prefs.warmth,
                               max: 1,
                               divisions: 20,
@@ -340,16 +369,19 @@ class _MangaReaderSettingsSheetState
                             ),
                             _SettingSwitch(
                               id: 'grayscale',
-                              label: 'Grayscale',
-                              help: 'View colored pages in black and white.',
+                              label: context.tr("Grayscale"),
+                              help: context.tr(
+                                "View colored pages in black and white.",
+                              ),
                               value: prefs.grayscale,
                               onChanged: ready ? controller.setGrayscale : null,
                             ),
                             _SettingSwitch(
                               id: 'invert-colors',
-                              label: 'Invert page colors',
-                              help:
-                                  'Reverses light and dark colors in page images.',
+                              label: context.tr("Invert page colors"),
+                              help: context.tr(
+                                "Reverses light and dark colors in page images.",
+                              ),
                               value: prefs.invertColors,
                               onChanged: ready
                                   ? controller.setInvertColors
@@ -358,16 +390,18 @@ class _MangaReaderSettingsSheetState
                           ],
                         ),
                         _SettingsSection(
-                          title: 'Controls & progress',
+                          title: context.tr("Controls & progress"),
                           icon: Icons.touch_app_outlined,
-                          help:
-                              'Applies to all manga. Make navigation feel familiar.',
+                          help: context.tr(
+                            "Applies to all manga. Make navigation feel familiar.",
+                          ),
                           children: [
                             _SettingSwitch(
                               id: 'page-number',
-                              label: 'Show page number',
-                              help:
-                                  'Keep a small page counter visible while reading.',
+                              label: context.tr("Show page number"),
+                              help: context.tr(
+                                "Keep a small page counter visible while reading.",
+                              ),
                               value: prefs.showPageNumber,
                               onChanged: ready
                                   ? controller.setShowPageNumber
@@ -375,9 +409,10 @@ class _MangaReaderSettingsSheetState
                             ),
                             _SettingSwitch(
                               id: 'double-tap-zoom',
-                              label: 'Double-tap to zoom',
-                              help:
-                                  'Double-tap a page to zoom in or return to its normal size.',
+                              label: context.tr("Double-tap to zoom"),
+                              help: context.tr(
+                                "Double-tap a page to zoom in or return to its normal size.",
+                              ),
                               value: prefs.doubleTapZoom,
                               onChanged: ready
                                   ? controller.setDoubleTapZoom
@@ -385,9 +420,10 @@ class _MangaReaderSettingsSheetState
                             ),
                             _SettingSwitch(
                               id: 'tap-zones',
-                              label: 'Tap zones',
-                              help:
-                                  'Tap the sides to turn pages and the center for controls.',
+                              label: context.tr("Tap zones"),
+                              help: context.tr(
+                                "Tap the sides to turn pages and the center for controls.",
+                              ),
                               value: prefs.tapZonesEnabled,
                               onChanged: ready
                                   ? controller.setTapZonesEnabled
@@ -395,9 +431,10 @@ class _MangaReaderSettingsSheetState
                             ),
                             _SettingChoice<MangaTapZoneLayout>(
                               id: 'tap-zone-layout',
-                              label: 'Tap-zone layout',
-                              help:
-                                  'Thirds uses wider turn zones. Edges leaves more room for the center.',
+                              label: context.tr("Tap-zone layout"),
+                              help: context.tr(
+                                "Thirds uses wider turn zones. Edges leaves more room for the center.",
+                              ),
                               value: prefs.tapZoneLayout,
                               values: MangaTapZoneLayout.values,
                               name: (value) => value.displayName,
@@ -407,9 +444,10 @@ class _MangaReaderSettingsSheetState
                             ),
                             _SettingSwitch(
                               id: 'invert-tap-zones',
-                              label: 'Reverse tap zones',
-                              help:
-                                  'Swaps previous and next without changing reading direction.',
+                              label: context.tr("Reverse tap zones"),
+                              help: context.tr(
+                                "Swaps previous and next without changing reading direction.",
+                              ),
                               value: prefs.invertTapZones,
                               onChanged: ready && prefs.tapZonesEnabled
                                   ? controller.setInvertTapZones
@@ -417,10 +455,10 @@ class _MangaReaderSettingsSheetState
                             ),
                             _SettingSwitch(
                               id: 'book-animation',
-                              label: 'Animate page turns',
-                              help:
-                                  'Smooth page changes, with a gentle book '
-                                  'effect in Paged mode.',
+                              label: context.tr("Animate page turns"),
+                              help: context.tr(
+                                "Smooth page changes, with a gentle book effect in Paged mode.",
+                              ),
                               value: prefs.bookAnimationEnabled,
                               onChanged: ready
                                   ? controller.setBookAnimationEnabled
@@ -429,15 +467,16 @@ class _MangaReaderSettingsSheetState
                           ],
                         ),
                         _SettingsSection(
-                          title: 'Performance & privacy',
+                          title: context.tr("Performance & privacy"),
                           icon: Icons.shield_outlined,
-                          help: 'Applies to all manga.',
+                          help: context.tr("Applies to all manga."),
                           children: [
                             _SettingSlider(
                               id: 'preload',
-                              label: 'Pages to preload',
-                              help:
-                                  'Loads nearby pages ahead of time. Lower values use less data and memory.',
+                              label: context.tr("Pages to preload"),
+                              help: context.tr(
+                                "Loads nearby pages ahead of time. Lower values use less data and memory.",
+                              ),
                               value: prefs.preloadPages.toDouble(),
                               max: 5,
                               divisions: 5,
@@ -450,9 +489,10 @@ class _MangaReaderSettingsSheetState
                             ),
                             _SettingSwitch(
                               id: 'keep-awake',
-                              label: 'Keep screen awake',
-                              help:
-                                  'Prevents the display from sleeping while this reader is open.',
+                              label: context.tr("Keep screen awake"),
+                              help: context.tr(
+                                "Prevents the display from sleeping while this reader is open.",
+                              ),
                               value: prefs.keepScreenAwake,
                               onChanged: ready
                                   ? controller.setKeepScreenAwake
@@ -460,9 +500,10 @@ class _MangaReaderSettingsSheetState
                             ),
                             _SettingSwitch(
                               id: 'discord-title',
-                              label: 'Show manga title on Discord',
-                              help:
-                                  'When Discord sharing is connected, turn off to share only “Reading manga”.',
+                              label: context.tr("Show manga title on Discord"),
+                              help: context.tr(
+                                "Share the manga title and public cover. Turn off to hide both and show only “Reading manga”.",
+                              ),
                               value: prefs.showDiscordTitle,
                               onChanged: ready
                                   ? controller.setShowDiscordTitle
@@ -475,11 +516,11 @@ class _MangaReaderSettingsSheetState
                           key: const ValueKey('manga-settings-reset'),
                           onPressed: ready ? _confirmReset : null,
                           icon: const Icon(Icons.restart_alt_rounded),
-                          label: const Text('Reset reader settings'),
+                          label: Text(context.tr("Reset reader settings")),
                         ),
                         const SizedBox(height: 10),
                         Text(
-                          'Changes save automatically.',
+                          context.tr("Changes save automatically."),
                           textAlign: TextAlign.center,
                           style: Theme.of(context).textTheme.bodySmall
                               ?.copyWith(color: palette.mutedText),
@@ -641,7 +682,10 @@ class _SettingChoice<T> extends StatelessWidget {
                 focusColor: context.appPalette.focusRing.withValues(alpha: .24),
                 items: [
                   for (final item in values)
-                    DropdownMenuItem(value: item, child: Text(name(item))),
+                    DropdownMenuItem(
+                      value: item,
+                      child: Text(context.tr(name(item))),
+                    ),
                 ],
                 onChanged: onChanged == null
                     ? null

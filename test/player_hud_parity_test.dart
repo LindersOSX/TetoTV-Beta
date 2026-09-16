@@ -18,6 +18,21 @@ void main() {
     expect(player, isNot(contains('onSelectEngine')));
   });
 
+  test(
+    'player display metadata follows Title Language, not provider identity',
+    () {
+      expect(player, contains('_activeLaunch.episode.playbackDisplayTitle('));
+      expect(player, contains('ref.watch(titleLanguagePreferenceProvider)'));
+      expect(
+        RegExp(
+          r'widget\.launch\.episode\.displayTitle\(',
+        ).allMatches(player).length,
+        greaterThanOrEqualTo(2),
+      );
+      expect(player, isNot(contains('title: widget.launch.episode.title,')));
+    },
+  );
+
   test('built-in players share the TV HUD without duplicating controls', () {
     expect(player, contains("_usesMedia3 ? 'media3' : 'mpv'"));
     expect(player, contains('engineKey: _engineKey'));

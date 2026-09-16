@@ -1,3 +1,4 @@
+import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'dart:async';
 
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
@@ -52,15 +53,18 @@ class _AllDebridPairingScreenState
       final session = await _client.start();
       if (!mounted || generation != _generation) return;
       setState(() => _session = session);
-      _pollTimer = Timer.periodic(
-        session.pollInterval,
-        (_) => _poll(generation),
-      );
+      _schedulePoll(generation, session.pollInterval);
     } catch (error) {
       if (mounted && generation == _generation) {
-        setState(() => _error = error.toString());
+        setState(() => _error = _safePairingError(error));
       }
     }
+  }
+
+  void _schedulePoll(int generation, Duration delay) {
+    _pollTimer?.cancel();
+    if (!mounted || generation != _generation || _authorized) return;
+    _pollTimer = Timer(delay, () => unawaited(_poll(generation)));
   }
 
   Future<void> _poll(int generation) async {
@@ -78,27 +82,42 @@ class _AllDebridPairingScreenState
       return;
     }
     _polling = true;
+    Duration? nextPollDelay;
     try {
       final token = await _client.poll(session);
-      if (token == null || !mounted || generation != _generation) return;
+      if (token == null) {
+        nextPollDelay = session.pollInterval;
+        return;
+      }
+      if (!mounted || generation != _generation) return;
       final saved = await ref
           .read(allDebridSettingsControllerProvider.notifier)
           .saveAndValidate(token);
       if (!mounted || generation != _generation) return;
       if (!saved) {
-        throw StateError(
-          ref.read(allDebridSettingsControllerProvider).errorMessage ??
-              'AllDebrid could not validate this account.',
+        throw const AllDebridPinAuthException(
+          'AllDebrid could not verify this account. Check that it is Premium and try again.',
         );
       }
       _pollTimer?.cancel();
       setState(() => _authorized = true);
+    } on AllDebridPinAuthException catch (error) {
+      if (!mounted || generation != _generation) return;
+      if (error.isPollingDeferred) {
+        nextPollDelay = error.retryAfter ?? const Duration(seconds: 60);
+      } else {
+        _pollTimer?.cancel();
+        setState(() => _error = error.message);
+      }
     } catch (error) {
       if (!mounted || generation != _generation) return;
       _pollTimer?.cancel();
-      setState(() => _error = error.toString());
+      setState(() => _error = _safePairingError(error));
     } finally {
       _polling = false;
+      if (nextPollDelay case final delay?) {
+        _schedulePoll(generation, delay);
+      }
     }
   }
 
@@ -126,12 +145,12 @@ class _AllDebridPairingScreenState
                   _ActionButton(
                     autofocus: true,
                     icon: Icons.arrow_back_rounded,
-                    label: 'Back',
+                    label: context.tr("Back"),
                     onPressed: context.pop,
                   ),
                   const SizedBox(width: 18),
                   Text(
-                    'Connect AllDebrid',
+                    context.tr("Connect AllDebrid"),
                     style: Theme.of(context).textTheme.headlineSmall,
                   ),
                 ],
@@ -140,14 +159,14 @@ class _AllDebridPairingScreenState
               Row(
                 children: [
                   IconButton(
-                    tooltip: 'Back',
+                    tooltip: context.tr("Back"),
                     onPressed: context.pop,
                     icon: const Icon(Icons.arrow_back_rounded),
                   ),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      'Connect AllDebrid',
+                      context.tr("Connect AllDebrid"),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: Theme.of(context).textTheme.headlineSmall,
@@ -168,9 +187,9 @@ class _AllDebridPairingScreenState
       return _PairingMessage(
         icon: Icons.check_circle_rounded,
         color: const Color(0xFF67D49B),
-        title: 'AllDebrid connected',
-        body: 'Your API key is encrypted in the Android Keystore.',
-        actionLabel: 'Done',
+        title: context.tr("AllDebrid connected"),
+        body: context.tr("Your API key is encrypted in the Android Keystore."),
+        actionLabel: context.tr("Done"),
         onAction: context.pop,
       );
     }
@@ -178,9 +197,9 @@ class _AllDebridPairingScreenState
       return _PairingMessage(
         icon: Icons.error_outline_rounded,
         color: const Color(0xFFFF929B),
-        title: 'Could not connect AllDebrid',
+        title: context.tr("Could not connect AllDebrid"),
         body: error,
-        actionLabel: 'Try again',
+        actionLabel: context.tr("Try again"),
         onAction: _start,
       );
     }
@@ -203,8 +222,8 @@ class _AllDebridPairingScreenState
           final compact = constraints.maxWidth < 650;
           final qr = CopyableQrInteraction(
             data: session.verificationUrl.toString(),
-            semanticsLabel: 'QR code for AllDebrid pairing',
-            confirmationMessage: 'AllDebrid pairing link copied.',
+            semanticsLabel: context.tr("QR code for AllDebrid pairing"),
+            confirmationMessage: context.tr("AllDebrid pairing link copied."),
             child: Container(
               width: compact ? 170 : 220,
               height: compact ? 170 : 220,
@@ -232,17 +251,19 @@ class _AllDebridPairingScreenState
               const _WaitingPill(),
               const SizedBox(height: 16),
               Text(
-                'Scan with your phone',
+                context.tr("Scan with your phone"),
                 textAlign: compact ? TextAlign.center : null,
                 style: Theme.of(context).textTheme.displaySmall,
               ),
               const SizedBox(height: 10),
-              const Text('Or open alldebrid.com/pin and enter:'),
+              Text(context.tr("Or open alldebrid.com/pin and enter:")),
               const SizedBox(height: 14),
               CopyableCodeInteraction(
                 code: session.pin,
-                semanticsLabel: 'AllDebrid one-time PIN ${session.pin}',
-                confirmationMessage: 'AllDebrid PIN copied.',
+                semanticsLabel: context.tr("AllDebrid one-time PIN {value1}", {
+                  'value1': session.pin,
+                }),
+                confirmationMessage: context.tr("AllDebrid PIN copied."),
                 child: Text(
                   session.pin,
                   style: const TextStyle(
@@ -254,7 +275,9 @@ class _AllDebridPairingScreenState
               ),
               const SizedBox(height: 12),
               Text(
-                'TetoTV saves the key only after AllDebrid confirms an active premium account.',
+                context.tr(
+                  "TetoTV saves the key only after AllDebrid confirms an active premium account.",
+                ),
                 style: TextStyle(color: context.appPalette.mutedText),
               ),
             ],
@@ -279,6 +302,11 @@ class _AllDebridPairingScreenState
   }
 }
 
+String _safePairingError(Object error) {
+  if (error is AllDebridPinAuthException) return error.message;
+  return 'AllDebrid authorization could not be completed. Try again.';
+}
+
 class _WaitingPill extends StatelessWidget {
   const _WaitingPill();
 
@@ -299,7 +327,7 @@ class _WaitingPill extends StatelessWidget {
         ),
         const SizedBox(width: 7),
         Text(
-          'WAITING FOR APPROVAL',
+          context.tr("WAITING FOR APPROVAL"),
           style: TextStyle(
             color: context.appPalette.secondaryAccent,
             fontSize: 11,
@@ -337,7 +365,7 @@ class _PairingMessage extends StatelessWidget {
       const SizedBox(height: 18),
       Text(title, style: Theme.of(context).textTheme.displaySmall),
       const SizedBox(height: 10),
-      Text(body, textAlign: TextAlign.center),
+      Text(context.tr(body), textAlign: TextAlign.center),
       const SizedBox(height: 24),
       _ActionButton(
         autofocus: true,

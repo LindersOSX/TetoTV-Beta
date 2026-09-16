@@ -1,3 +1,4 @@
+import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'dart:async';
 
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
@@ -52,11 +53,11 @@ class _DeviceSetupScreenState extends ConsumerState<DeviceSetupScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
+                      LocalizedText(
                         'Device calibration',
                         style: Theme.of(context).textTheme.headlineSmall,
                       ),
-                      Text(
+                      LocalizedText(
                         'TetoTV scans Android’s decoders, display, audio output, and subtitle engine.',
                         style: TextStyle(color: context.appPalette.mutedText),
                       ),
@@ -137,11 +138,11 @@ class _CalibrationReportView extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
+                    LocalizedText(
                       '${report.profile.manufacturer} ${report.profile.model}',
                       style: Theme.of(context).textTheme.titleLarge,
                     ),
-                    Text(
+                    LocalizedText(
                       'Android ${report.profile.sdk} • ${report.profile.abis.join(', ')}',
                       style: TextStyle(color: context.appPalette.mutedText),
                     ),
@@ -192,7 +193,7 @@ class _CalibrationReportView extends StatelessWidget {
               ),
               const SizedBox(width: 12),
               Expanded(
-                child: Text(
+                child: LocalizedText(
                   report.recommendation,
                   style: const TextStyle(fontWeight: FontWeight.w700),
                 ),
@@ -239,12 +240,12 @@ class _CapabilityCard extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
+              LocalizedText(
                 check.label,
                 style: const TextStyle(fontWeight: FontWeight.w900),
               ),
               const SizedBox(height: 4),
-              Text(
+              LocalizedText(
                 check.detail,
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
@@ -277,7 +278,7 @@ class _CalibrationError extends StatelessWidget {
           color: context.appPalette.accentBright,
         ),
         const SizedBox(height: 10),
-        Text(message, textAlign: TextAlign.center),
+        LocalizedText(message, textAlign: TextAlign.center),
         const SizedBox(height: 12),
         _CalibrationButton(
           icon: Icons.refresh_rounded,
@@ -328,7 +329,10 @@ class _CalibrationButton extends StatelessWidget {
             children: [
               Icon(icon, size: 19),
               const SizedBox(width: 7),
-              Text(label, style: const TextStyle(fontWeight: FontWeight.w900)),
+              LocalizedText(
+                label,
+                style: const TextStyle(fontWeight: FontWeight.w900),
+              ),
             ],
           ),
         ),

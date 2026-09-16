@@ -36,6 +36,16 @@
         android:required="false" />
 
     <!--
+        The Discord SDK retains the legacy BLUETOOTH permission for Android
+        11 and earlier. Without this explicit declaration Android infers that
+        Bluetooth hardware is required and distribution stores can hide the
+        app from otherwise supported TVs/tablets that do not advertise it.
+    -->
+    <uses-feature
+        android:name="android.hardware.bluetooth"
+        android:required="false" />
+
+    <!--
         Resolution / display capabilities.
         Declaring these as optional allows the APK to install on all screen
         sizes and lets the Amazon Appstore know the app supports 4K.
@@ -197,6 +207,12 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+        <service
+            android:name=".aniyomi.AniyomiIsolatedService"
+            android:exported="false"
+            android:isolatedProcess="true"
+            android:process=":aniyomi_worker"
+            android:stopWithTask="true" />
     </application>
 
     <queries>

@@ -157,7 +157,6 @@ void main() {
     for (final reason in [
       'empty_result',
       'empty_sources',
-      'runtime_api',
       'unsafe_target',
       'http_404',
     ]) {
@@ -188,6 +187,143 @@ void main() {
       consecutiveFailures: 4,
     );
     expect(malformedBeforeThreshold.quarantineAfter, 5);
+
+    final runtimeFailure = providerFailureCircuitPolicy(
+      stage: 'search',
+      reason: 'runtime_api',
+      consecutiveFailures: 1,
+    );
+    expect(runtimeFailure.quarantineAfter, 5);
+    expect(runtimeFailure.quarantineFor, const Duration(minutes: 5));
+  });
+
+  test(
+    'reliability writes preserve every upsert path on real SQLite',
+    () async {
+      final database = await databaseFactoryFfi.openDatabase(
+        inMemoryDatabasePath,
+      );
+      addTearDown(database.close);
+      await _createReliabilityFixtureTables(database);
+      final store = TetoTvDatabase.forTesting(database);
+
+      await store.recordStreamFailure(
+        deviceKey: 'living-room',
+        infoHash: 'ABCDEF',
+        reason: 'first failure',
+      );
+      await store.recordStreamFailure(
+        deviceKey: 'living-room',
+        infoHash: 'abcdef',
+        reason: 'second failure',
+      );
+      final streamFailure = (await database.query('stream_failures')).single;
+      expect(streamFailure['info_hash'], 'abcdef');
+      expect(streamFailure['failure_count'], 2);
+      expect(streamFailure['reason'], 'second failure');
+
+      final firstFailure = await store.recordProviderFailure(
+        'provider.runtime',
+        StateError('first runtime failure'),
+        quarantineAfter: 1,
+        quarantineFor: const Duration(minutes: 5),
+        stage: 'search',
+        reason: 'network',
+      );
+      final secondFailure = await store.recordProviderFailure(
+        'provider.runtime',
+        StateError('second runtime failure'),
+        quarantineAfter: 2,
+        quarantineFor: const Duration(minutes: 5),
+        stage: 'server_lookup',
+        reason: 'provider_error',
+      );
+      expect(firstFailure.totalFailures, 1);
+      expect(secondFailure.consecutiveFailures, 2);
+      expect(secondFailure.totalFailures, 2);
+      expect(secondFailure.lastFailureStage, 'server_lookup');
+      expect(secondFailure.quarantinedUntil, isNotNull);
+
+      final firstCompatibility = await store.recordProviderCompatibilityResult(
+        'provider.runtime',
+        passed: true,
+        stage: 'stream_extraction',
+        reason: 'compatible',
+      );
+      final secondCompatibility = await store.recordProviderCompatibilityResult(
+        'provider.runtime',
+        passed: false,
+        stage: 'episode_lookup',
+        reason: 'empty_result',
+      );
+      expect(firstCompatibility.compatibilityTests, 1);
+      expect(secondCompatibility.compatibilityTests, 2);
+      expect(secondCompatibility.compatibilityPasses, 1);
+      expect(secondCompatibility.totalFailures, 2);
+      expect(secondCompatibility.lastTestStage, 'episode_lookup');
+      expect(secondCompatibility.lastTestReason, 'empty_result');
+
+      final inconclusive = await store.recordProviderCompatibilityInconclusive(
+        'provider.runtime',
+        stage: 'title_matching',
+        reason: 'test_title_unavailable',
+      );
+      expect(inconclusive.compatibilityTests, 2);
+      expect(inconclusive.compatibilityPasses, 1);
+      expect(inconclusive.lastTestStage, 'episode_lookup');
+      expect(inconclusive.lastTestReason, 'empty_result');
+
+      await store.recordProviderHealthyResponse('provider.runtime');
+      final healthy = (await store.providerHealth())['provider.runtime']!;
+      expect(healthy.consecutiveFailures, 0);
+      expect(healthy.totalFailures, 2);
+      expect(healthy.lastError, isNull);
+      expect(healthy.lastFailureStage, isNull);
+      expect(healthy.lastFailureReason, isNull);
+      expect(healthy.quarantinedUntil, isNull);
+      expect(healthy.lastSuccessAt, isNull);
+      expect(healthy.compatibilityTests, 2);
+
+      await store.recordProviderSuccess('provider.runtime');
+      final successful = (await store.providerHealth())['provider.runtime']!;
+      expect(successful.totalFailures, 2);
+      expect(successful.lastSuccessAt, isNotNull);
+      expect(successful.compatibilityTests, 2);
+
+      await store.recordProviderSuccess('provider.success-new');
+      await store.recordProviderHealthyResponse('provider.healthy-new');
+      final neverTested = await store.recordProviderCompatibilityInconclusive(
+        'provider.inconclusive-new',
+        stage: 'title_matching',
+        reason: 'test_title_unavailable',
+      );
+      final inserted = await store.recordProviderCompatibilityResult(
+        'provider.compatibility-new',
+        passed: true,
+        stage: 'stream_extraction',
+        reason: 'compatible',
+      );
+      final health = await store.providerHealth();
+      expect(health['provider.success-new']!.lastSuccessAt, isNotNull);
+      expect(health['provider.healthy-new']!.lastSuccessAt, isNull);
+      expect(neverTested.compatibilityTests, 0);
+      expect(neverTested.lastTestStage, 'title_matching');
+      expect(inserted.compatibilityTests, 1);
+      expect(inserted.compatibilityPasses, 1);
+    },
+  );
+
+  test('database source avoids SQLite 3.24-only upsert syntax', () {
+    final source = File(
+      'lib/core/storage/tetotv_database.dart',
+    ).readAsStringSync();
+    expect(
+      RegExp(
+        r'ON\s+CONFLICT\s*\([^)]*\)\s+DO\s+UPDATE',
+        caseSensitive: false,
+      ).hasMatch(source),
+      isFalse,
+    );
   });
 
   test('legacy player profiles always resolve to the MPV-only contract', () {
@@ -604,6 +740,37 @@ void main() {
     expect(redacted, contains('[EMAIL]'));
     expect(redacted, contains('12:34:56'));
   });
+}
+
+Future<void> _createReliabilityFixtureTables(Database database) async {
+  await database.execute('''
+    CREATE TABLE stream_failures (
+      device_key TEXT NOT NULL,
+      info_hash TEXT NOT NULL,
+      reason TEXT NOT NULL,
+      failure_count INTEGER NOT NULL DEFAULT 0,
+      last_failed_at INTEGER NOT NULL,
+      PRIMARY KEY (device_key, info_hash)
+    )
+  ''');
+  await database.execute('''
+    CREATE TABLE provider_health (
+      provider_id TEXT PRIMARY KEY,
+      consecutive_failures INTEGER NOT NULL DEFAULT 0,
+      total_failures INTEGER NOT NULL DEFAULT 0,
+      last_success_at INTEGER,
+      last_failure_at INTEGER,
+      last_error TEXT,
+      last_failure_stage TEXT,
+      last_failure_reason TEXT,
+      quarantined_until INTEGER,
+      compatibility_tests INTEGER NOT NULL DEFAULT 0,
+      compatibility_passes INTEGER NOT NULL DEFAULT 0,
+      last_tested_at INTEGER,
+      last_test_stage TEXT,
+      last_test_reason TEXT
+    )
+  ''');
 }
 
 Map<String, Object?> _mangaDownloadJobRow() => {

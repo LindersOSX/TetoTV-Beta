@@ -39,8 +39,24 @@ void main() {
       native.indexOf('nativeUpdateReadingPresence('),
       native.indexOf('nativeClearPresence('),
     );
-    expect(dartReading, isNot(contains('artworkUrl')));
-    expect(kotlinReading, isNot(contains('artworkUrl')));
-    expect(nativeReading, isNot(contains('artwork_url')));
+    expect(dartReading, contains('safeMangaPresenceArtworkUrl(artworkUrl)'));
+    expect(kotlinReading, contains('sanitizeDiscordMangaArtworkUrl'));
+    expect(nativeReading, contains('jstring artwork_url'));
+    expect(nativeReading, contains('from_jstring(env, artwork_url)'));
+    expect(native, contains('assets.SetLargeImage(value.artwork_url)'));
+    expect(
+      native,
+      contains('assets.SetLargeImage(std::string{kAppIconAssetKey})'),
+    );
+    for (final code in [dartReading, kotlinReading, nativeReading]) {
+      for (final forbidden in [
+        'requestHeaders',
+        'sourceUrl',
+        'pageUrl',
+        'localPath',
+      ]) {
+        expect(code, isNot(contains(forbidden)));
+      }
+    }
   });
 }

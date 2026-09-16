@@ -1,8 +1,35 @@
 import 'dart:convert';
+import 'dart:io' show HttpDate;
 
 import 'package:anime_tv/features/settings/domain/phone_setup_pairing.dart';
 import 'package:crypto/crypto.dart';
 import 'package:dio/dio.dart';
+
+enum PhoneSetupRateLimitScope {
+  activePairings('active_pairings'),
+  requestRate('request_rate'),
+  unknown('unknown');
+
+  const PhoneSetupRateLimitScope(this.diagnosticCode);
+  final String diagnosticCode;
+}
+
+/// App-authored error metadata only: never retain a response body, request,
+/// pairing code, URL, or arbitrary server message in controller state/logs.
+class PhoneSetupServiceException extends StateError {
+  PhoneSetupServiceException({
+    required this.reasonCode,
+    required String message,
+    this.httpStatus,
+    this.retryAfter,
+    this.rateLimitScope = PhoneSetupRateLimitScope.unknown,
+  }) : super(message);
+
+  final String reasonCode;
+  final int? httpStatus;
+  final Duration? retryAfter;
+  final PhoneSetupRateLimitScope rateLimitScope;
+}
 
 abstract interface class PhoneSetupPairingApi {
   Future<void> ensureReady();
@@ -69,7 +96,7 @@ class PhoneSetupPairingClient implements PhoneSetupPairingApi {
         throw StateError('The secure phone-setup service needs to be updated.');
       }
     } on DioException catch (error) {
-      throw StateError(_connectionMessage(error));
+      throw _connectionFailure(error);
     }
   }
 
@@ -87,7 +114,7 @@ class PhoneSetupPairingClient implements PhoneSetupPairingApi {
         },
       );
     } on DioException catch (error) {
-      throw StateError(_connectionMessage(error));
+      throw _connectionFailure(error);
     }
     return _parseSession(
       response.data ?? const <String, dynamic>{},
@@ -113,12 +140,13 @@ class PhoneSetupPairingClient implements PhoneSetupPairingApi {
         );
       }
       if (error.response?.statusCode == 429) {
-        return const PhoneSetupPollResult(
+        return PhoneSetupPollResult(
           status: PhoneSetupPairingStatus.pending,
           revision: 0,
+          retryAfter: _retryDelay(error.response?.headers),
         );
       }
-      throw StateError(_connectionMessage(error));
+      throw _connectionFailure(error);
     }
     final data = response.data ?? const <String, dynamic>{};
     if (data['version'] != 1) {
@@ -194,7 +222,7 @@ class PhoneSetupPairingClient implements PhoneSetupPairingApi {
         options: _deviceAuthorization(session),
       );
     } on DioException catch (error) {
-      throw StateError(_connectionMessage(error));
+      throw _connectionFailure(error);
     }
   }
 
@@ -210,7 +238,7 @@ class PhoneSetupPairingClient implements PhoneSetupPairingApi {
           error.response?.statusCode == 410) {
         return;
       }
-      throw StateError(_connectionMessage(error));
+      throw _connectionFailure(error);
     }
   }
 
@@ -345,16 +373,64 @@ class PhoneSetupPairingClient implements PhoneSetupPairingApi {
   Options _deviceAuthorization(PhoneSetupPairingSession session) =>
       Options(headers: {'Authorization': 'Pairing ${session.deviceCode}'});
 
-  String _connectionMessage(DioException error) {
-    return switch (error.response?.statusCode) {
+  PhoneSetupServiceException _connectionFailure(DioException error) {
+    final status = error.response?.statusCode;
+    final message = switch (status) {
       404 => 'The secure phone-setup service is not available yet.',
       409 => 'This phone setup was already completed or changed.',
       429 =>
-        'Phone setup is temporarily rate-limited. Wait one minute and retry.',
+        'Phone setup is temporarily rate-limited. Wait before trying again.',
       503 => 'The secure phone-setup service is temporarily busy.',
       _ => 'The secure TetoTV phone-setup service could not be reached.',
     };
+    return PhoneSetupServiceException(
+      reasonCode: switch (status) {
+        429 => 'rate_limited',
+        404 => 'service_unavailable',
+        409 => 'session_changed',
+        503 => 'service_busy',
+        _ => switch (error.type) {
+          DioExceptionType.connectionTimeout ||
+          DioExceptionType.sendTimeout ||
+          DioExceptionType.receiveTimeout => 'network_timeout',
+          _ => 'network_failure',
+        },
+      },
+      message: message,
+      httpStatus: status,
+      retryAfter: status == 429 ? _retryDelay(error.response?.headers) : null,
+      rateLimitScope: status == 429
+          ? _rateLimitScope(error.response?.headers)
+          : PhoneSetupRateLimitScope.unknown,
+    );
   }
+}
+
+PhoneSetupRateLimitScope _rateLimitScope(Headers? headers) {
+  final values = headers?.map['x-tetotv-setup-limit'];
+  if (values == null || values.length != 1) {
+    return PhoneSetupRateLimitScope.unknown;
+  }
+  return switch (values.single.trim()) {
+    'active_pairings' => PhoneSetupRateLimitScope.activePairings,
+    'request_rate' => PhoneSetupRateLimitScope.requestRate,
+    _ => PhoneSetupRateLimitScope.unknown,
+  };
+}
+
+Duration _retryDelay(Headers? headers) {
+  final value = headers?.value('retry-after')?.trim();
+  var seconds = value == null ? null : int.tryParse(value);
+  if (seconds == null && value != null && value.length <= 80) {
+    try {
+      seconds = HttpDate.parse(
+        value,
+      ).difference(DateTime.now().toUtc()).inSeconds;
+    } catch (_) {
+      // Untrusted/nonstandard header values do not enter logs or UI.
+    }
+  }
+  return Duration(seconds: (seconds ?? 60).clamp(1, 3600));
 }
 
 ({String fingerprint, String confirmationCode}) _deviceKeyIdentity(

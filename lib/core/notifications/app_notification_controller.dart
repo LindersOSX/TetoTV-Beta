@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:anime_tv/core/updates/release_notes_summary.dart';
 import 'package:anime_tv/core/notifications/app_notification.dart';
 import 'package:anime_tv/core/notifications/app_announcement_client.dart';
 import 'package:anime_tv/core/notifications/app_notification_store.dart';
@@ -402,27 +403,13 @@ bool _isInstalledUpdate(AppNotification item, String currentVersion) {
 DateTime _utcNow() => DateTime.now().toUtc();
 
 String _releaseNotesSummary(String notes, AppUpdateChannel channel) {
-  var plainText = notes
-      .replaceAll(RegExp(r'```[\s\S]*?```'), ' ')
-      .replaceAll(RegExp(r'!\[[^\]]*\]\([^)]*\)'), ' ')
-      .replaceAllMapped(
-        RegExp(r'\[([^\]]+)\]\([^)]*\)'),
-        (match) => match.group(1) ?? '',
-      )
-      .replaceAll(RegExp(r'<[^>]*>'), ' ')
-      .replaceAll(RegExp(r'https?://\S+', caseSensitive: false), ' ')
-      .replaceAll(RegExp(r'[#>*_`~|]+'), ' ')
-      .replaceAll(RegExp(r'\s+'), ' ')
-      .trim();
+  final plainText = formatCustomerReleaseNotes(
+    notes,
+    maximumItems: 3,
+    maximumItemLength: 140,
+  );
   if (plainText.isEmpty) {
     return 'A new ${channel.displayName} update is ready to install from TetoTV settings.';
   }
-  const maximumLength = 480;
-  if (plainText.length <= maximumLength) return plainText;
-  plainText = plainText.substring(0, maximumLength - 1).trimRight();
-  final lastSpace = plainText.lastIndexOf(' ');
-  if (lastSpace >= maximumLength ~/ 2) {
-    plainText = plainText.substring(0, lastSpace);
-  }
-  return '$plainText…';
+  return plainText;
 }

@@ -3,6 +3,7 @@ import 'package:anime_tv/features/auth/application/tracking_token_service.dart';
 import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
 import 'package:anime_tv/features/settings/application/simkl_account_controller.dart';
 import 'package:anime_tv/features/tracking/data/anilist_tracking_repository.dart';
+import 'package:anime_tv/features/tracking/data/kitsu_tracking_repository.dart';
 import 'package:anime_tv/features/tracking/data/myanimelist_tracking_repository.dart';
 import 'package:anime_tv/features/tracking/data/simkl_account_session.dart';
 import 'package:anime_tv/features/tracking/data/simkl_tracking_repository.dart';
@@ -44,6 +45,7 @@ TrackingRepository trackingRepository(
   TrackingProvider.myAnimeList => MyAnimeListTrackingRepository(
     accessToken: accessToken,
   ),
+  TrackingProvider.kitsu => KitsuTrackingRepository(accessToken: accessToken),
   TrackingProvider.simkl => SimklTrackingRepository(
     accessToken: accessToken,
     clientIdLoader: simklClientIdLoader ?? () async => null,

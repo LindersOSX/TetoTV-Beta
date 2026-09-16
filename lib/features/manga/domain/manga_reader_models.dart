@@ -17,12 +17,20 @@ sealed class MangaPageResource {
   const MangaPageResource();
 }
 
+/// An in-memory image source that can be loaded by [MangaPageFetchClient].
+sealed class MangaFetchablePageResource extends MangaPageResource {
+  const MangaFetchablePageResource();
+
+  bool get allowPlatformArtworkTranscode;
+}
+
 /// A remote image loaded over an authenticated or unauthenticated HTTPS URL.
 @immutable
-final class MangaRemotePageResource extends MangaPageResource {
+final class MangaRemotePageResource extends MangaFetchablePageResource {
   MangaRemotePageResource({
     required this.uri,
     Map<String, String> headers = const <String, String>{},
+    this.allowPlatformArtworkTranscode = false,
   }) : headers = Map<String, String>.unmodifiable(headers) {
     if (uri.scheme.toLowerCase() != 'https' ||
         uri.host.isEmpty ||
@@ -60,8 +68,38 @@ final class MangaRemotePageResource extends MangaPageResource {
   /// Ephemeral request headers retained only for this in-memory reader request.
   final Map<String, String> headers;
 
+  /// Allows the Android artwork bridge to convert a recognized AVIF/HEIF
+  /// cover into a bounded WebP image. Reader pages deliberately leave this
+  /// off so a source cannot make every page pay a native transcode cost.
+  @override
+  final bool allowPlatformArtworkTranscode;
+
   @override
   String toString() => 'MangaRemotePageResource($uri, headers: <redacted>)';
+}
+
+typedef MangaOpaqueImageLoader = Future<Uint8List> Function();
+
+/// A native-owned image authority with no URL, headers, or serialization API.
+///
+/// [cacheIdentity] is process-local and used only to coalesce reader preloads.
+/// The loader is expected to enforce its own network boundary; received bytes
+/// still pass through the reader's byte and image-header validation.
+@immutable
+final class MangaOpaquePageResource extends MangaFetchablePageResource {
+  const MangaOpaquePageResource({
+    required this.cacheIdentity,
+    required this.loadImage,
+    this.allowPlatformArtworkTranscode = false,
+  });
+
+  final Object cacheIdentity;
+  final MangaOpaqueImageLoader loadImage;
+  @override
+  final bool allowPlatformArtworkTranscode;
+
+  @override
+  String toString() => 'MangaOpaquePageResource(<redacted>)';
 }
 
 /// A page inside a storage area controlled by TetoTV.
@@ -161,6 +199,13 @@ class MangaReaderPage {
   }
 }
 
+/// Identifies the runtime boundary which created a reader request.
+///
+/// Core requests are available whenever the viewer enables Manga. Aniyomi
+/// requests retain the experimental boundary even though both runtimes share
+/// the same polished reader UI.
+enum MangaReaderOrigin { core, aniyomiExperimental }
+
 /// Typed, in-memory request used to open one manga chapter.
 @immutable
 class MangaReaderRequest {
@@ -173,7 +218,16 @@ class MangaReaderRequest {
     required Iterable<MangaReaderPage> pages,
     this.chapterNumber,
     this.initialPageIndex = 0,
+    this.initialPageOffset = 0,
+    this.resolvePreviousChapter,
+    this.resolveNextChapter,
+    this.ownerKey,
+    this.coverUri,
+    MangaReaderOrigin origin = MangaReaderOrigin.core,
   }) : sourceId = _requiredBoundedLabel(sourceId, 'sourceId'),
+       origin = _isReservedAniyomiSourceId(sourceId)
+           ? MangaReaderOrigin.aniyomiExperimental
+           : origin,
        publicationId = _requiredBoundedLabel(publicationId, 'publicationId'),
        chapterId = _requiredBoundedLabel(chapterId, 'chapterId'),
        seriesTitle = _requiredBoundedLabel(
@@ -215,6 +269,15 @@ class MangaReaderRequest {
         'Initial page is outside the chapter.',
       );
     }
+    if (!initialPageOffset.isFinite ||
+        initialPageOffset < 0 ||
+        initialPageOffset > 1) {
+      throw ArgumentError.value(initialPageOffset, 'initialPageOffset');
+    }
+    if (ownerKey != null &&
+        !RegExp(r'^[A-Za-z0-9._-]{1,128}$').hasMatch(ownerKey!)) {
+      throw ArgumentError('Invalid protected reader owner key.');
+    }
     if (chapterNumber case final value?
         when !value.isFinite || value <= 0 || value > 100000) {
       throw ArgumentError.value(
@@ -226,6 +289,15 @@ class MangaReaderRequest {
   }
 
   final String sourceId;
+
+  /// Runtime provenance used by the route guard. The reserved `aniyomi.`
+  /// namespace is promoted to experimental in the constructor so an older or
+  /// incomplete caller cannot accidentally make an Aniyomi request public.
+  final MangaReaderOrigin origin;
+
+  bool get requiresDeveloperMode =>
+      origin == MangaReaderOrigin.aniyomiExperimental;
+
   final String publicationId;
   final String chapterId;
   final String seriesTitle;
@@ -234,11 +306,29 @@ class MangaReaderRequest {
   final List<MangaReaderPage> pages;
   final int initialPageIndex;
 
+  /// Fraction of the active page above the viewport in continuous mode.
+  final double initialPageOffset;
+
+  /// Runtime-only chapter capabilities. A returned request carries its own
+  /// adjacency and resume state; these callbacks are never persisted.
+  final Future<MangaReaderRequest?> Function()? resolvePreviousChapter;
+  final Future<MangaReaderRequest?> Function()? resolveNextChapter;
+
+  /// Protected profile digest, never a raw tracker/account identifier.
+  final String? ownerKey;
+
+  /// Header-free cover metadata only. Presence applies its own stricter URL
+  /// policy and the user's title-sharing preference before any disclosure.
+  final Uri? coverUri;
+
   @override
   String toString() =>
       'MangaReaderRequest($seriesTitle, $chapterTitle, '
       '${pages.length} pages)';
 }
+
+bool _isReservedAniyomiSourceId(String value) =>
+    value.trim().toLowerCase().startsWith('aniyomi.');
 
 String _requiredBoundedLabel(
   String value,

@@ -1,9 +1,9 @@
 import 'dart:async';
 
+import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/features/player/presentation/player_control_overlay.dart';
-import 'package:anime_tv/features/watch_together/application/watch_party_controller.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -21,6 +21,9 @@ const Color _defaultPlayerChromeShadow = Color(0xA8000000);
 const Color _defaultPlayerControlSurface = Color(0x8F242429);
 const Color _defaultPlayerSkipSurface = Color(0xB30B0B0D);
 const Color _defaultPlayerSkipShadow = Color(0x77000000);
+const playerSkipIdleTimeout = Duration(seconds: 3);
+const playerSkipFadeDuration = Duration(milliseconds: 350);
+const double playerSkipIdleOpacity = .3;
 
 bool _usesDefaultPlayerPalette(AppThemePalette palette) =>
     palette == AppThemePalette.defaults;
@@ -782,7 +785,12 @@ class _TetoPlayerHeader extends StatelessWidget {
           key: ValueKey('$engineKey-watch-party-watching'),
           icon: Icons.group_rounded,
           text: '${count.clamp(1, 21)}',
-          semanticsLabel: watchPartyAudienceLabel(count.clamp(1, 21)),
+          semanticsLabel: context.tr(
+            count.clamp(1, 21) == 1
+                ? '{count} person watching'
+                : '{count} people watching',
+            {'count': count.clamp(1, 21)},
+          ),
         ),
     ];
     return LayoutBuilder(
@@ -1065,7 +1073,9 @@ class _TetoPlayerProgressScrubberState
       mainAxisSize: MainAxisSize.min,
       children: [
         Semantics(
-          hint: widget.showSupplementalRow ? null : widget.footerHint,
+          hint: widget.showSupplementalRow
+              ? null
+              : context.tr(widget.footerHint),
           child: Focus(
             focusNode: _focusNode,
             onFocusChange: (focused) {
@@ -1153,7 +1163,7 @@ class _TetoPlayerProgressScrubberState
               ),
               const SizedBox(height: 3),
               Text(
-                widget.footerHint,
+                context.tr(widget.footerHint),
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(color: widget.palette.mutedText, fontSize: 11),
@@ -1173,7 +1183,7 @@ class _TetoPlayerProgressScrubberState
                 const Spacer(),
                 Flexible(
                   child: Text(
-                    widget.footerHint,
+                    context.tr(widget.footerHint),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     textAlign: TextAlign.end,
@@ -1323,7 +1333,7 @@ class _PlayerSeekTimeBubble extends StatelessWidget {
                 child: IgnorePointer(
                   child: Semantics(
                     container: true,
-                    label: 'Seek $label',
+                    label: context.tr("Seek {value1}", {'value1': label}),
                     excludeSemantics: true,
                     child: CustomPaint(
                       key: ValueKey('$engineKey-player-seek-time-bubble'),
@@ -1437,7 +1447,7 @@ class _PlayerProgressTime extends StatelessWidget {
   );
 }
 
-class TetoSkipSegmentOverlay extends StatelessWidget {
+class TetoSkipSegmentOverlay extends StatefulWidget {
   const TetoSkipSegmentOverlay({
     required this.label,
     required this.onPressed,
@@ -1450,52 +1460,130 @@ class TetoSkipSegmentOverlay extends StatelessWidget {
   final FocusNode? focusNode;
 
   @override
+  State<TetoSkipSegmentOverlay> createState() => _TetoSkipSegmentOverlayState();
+}
+
+class _TetoSkipSegmentOverlayState extends State<TetoSkipSegmentOverlay> {
+  Timer? _idleTimer;
+  double _opacity = 1;
+
+  @override
+  void initState() {
+    super.initState();
+    _restartIdleTimer();
+  }
+
+  @override
+  void didUpdateWidget(covariant TetoSkipSegmentOverlay oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.label != widget.label) {
+      _restoreAndRestartIdleTimer();
+    }
+  }
+
+  void _restartIdleTimer() {
+    _idleTimer?.cancel();
+    _idleTimer = Timer(playerSkipIdleTimeout, () {
+      if (!mounted || _opacity == playerSkipIdleOpacity) return;
+      setState(() => _opacity = playerSkipIdleOpacity);
+    });
+  }
+
+  void _restoreAndRestartIdleTimer() {
+    if (_opacity != 1 && mounted) setState(() => _opacity = 1);
+    _restartIdleTimer();
+  }
+
+  void _activate() {
+    _restoreAndRestartIdleTimer();
+    widget.onPressed();
+  }
+
+  @override
+  void dispose() {
+    _idleTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final palette = context.appPalette;
     final maximumWidth = (MediaQuery.sizeOf(context).width - 36).clamp(
       160.0,
       520.0,
     );
-    return TvFocusable(
-      key: const ValueKey('player-skip-segment-overlay'),
-      focusNode: focusNode,
-      onPressed: onPressed,
-      focusScale: 1.025,
-      borderRadius: BorderRadius.circular(10),
-      child: Container(
-        constraints: BoxConstraints(minHeight: 44, maxWidth: maximumWidth),
-        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 11),
-        decoration: BoxDecoration(
-          color: _playerSkipSurfaceColor(palette),
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(
-            color: palette.accentBright.withValues(alpha: .82),
-          ),
-          boxShadow: [
-            BoxShadow(color: _playerSkipShadowColor(palette), blurRadius: 16),
-          ],
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              Icons.skip_next_rounded,
-              color: palette.accentBright,
-              size: 21,
-            ),
-            const SizedBox(width: 8),
-            Flexible(
-              child: Text(
-                label,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: _playerPrimaryTextColor(palette),
-                  fontWeight: FontWeight.w900,
+    return MouseRegion(
+      onEnter: (_) => _restoreAndRestartIdleTimer(),
+      onHover: (_) => _restoreAndRestartIdleTimer(),
+      child: Listener(
+        onPointerDown: (_) => _restoreAndRestartIdleTimer(),
+        child: Focus(
+          canRequestFocus: false,
+          onKeyEvent: (_, _) {
+            _restoreAndRestartIdleTimer();
+            return KeyEventResult.ignored;
+          },
+          child: AnimatedOpacity(
+            key: const ValueKey('player-skip-segment-opacity'),
+            opacity: _opacity,
+            duration: playerSkipFadeDuration,
+            curve: Curves.easeOutCubic,
+            child: TvFocusable(
+              key: const ValueKey('player-skip-segment-overlay'),
+              focusNode: widget.focusNode,
+              onFocusChanged: (focused) {
+                if (focused) _restoreAndRestartIdleTimer();
+              },
+              onPressed: _activate,
+              focusScale: 1.025,
+              borderRadius: BorderRadius.circular(10),
+              child: Container(
+                constraints: BoxConstraints(
+                  minHeight: 44,
+                  maxWidth: maximumWidth,
+                ),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 18,
+                  vertical: 11,
+                ),
+                decoration: BoxDecoration(
+                  color: _playerSkipSurfaceColor(palette),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color: palette.accentBright.withValues(alpha: .82),
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: _playerSkipShadowColor(palette),
+                      blurRadius: 16,
+                    ),
+                  ],
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.skip_next_rounded,
+                      color: palette.accentBright,
+                      size: 21,
+                    ),
+                    const SizedBox(width: 8),
+                    Flexible(
+                      child: Text(
+                        widget.label,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: _playerPrimaryTextColor(palette),
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
-          ],
+          ),
         ),
       ),
     );
@@ -1543,6 +1631,14 @@ class TetoPlayerControl extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final palette = context.appPalette;
+    // Keep the control identity independent of the translated visible label.
+    final seek = RegExp(r'^(Back|Forward) (\d+)s$').firstMatch(label);
+    final visibleLabel = seek == null
+        ? context.tr(label)
+        : context.tr(
+            seek[1] == 'Back' ? 'Back {value1}s' : 'Forward {value1}s',
+            {'value1': seek[2]!},
+          );
     final foreground = primary
         ? _playerPrimaryControlTextColor(palette)
         : _playerPrimaryTextColor(palette);
@@ -1592,7 +1688,7 @@ class TetoPlayerControl extends StatelessWidget {
             const SizedBox(width: 6),
             Flexible(
               child: Text(
-                label,
+                visibleLabel,
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
@@ -1608,7 +1704,7 @@ class TetoPlayerControl extends StatelessWidget {
     );
     if (!enabled) {
       final disabled = Semantics(
-        label: iconOnly ? label : null,
+        label: iconOnly ? visibleLabel : null,
         button: true,
         enabled: false,
         child: ExcludeFocus(
@@ -1616,7 +1712,11 @@ class TetoPlayerControl extends StatelessWidget {
         ),
       );
       return iconOnly
-          ? Tooltip(message: label, excludeFromSemantics: true, child: disabled)
+          ? Tooltip(
+              message: visibleLabel,
+              excludeFromSemantics: true,
+              child: disabled,
+            )
           : disabled;
     }
     final control = TvFocusable(
@@ -1687,9 +1787,9 @@ class TetoPlayerControl extends StatelessWidget {
     );
     if (!iconOnly) return control;
     return Tooltip(
-      message: label,
+      message: visibleLabel,
       excludeFromSemantics: true,
-      child: Semantics(label: label, button: true, child: control),
+      child: Semantics(label: visibleLabel, button: true, child: control),
     );
   }
 }

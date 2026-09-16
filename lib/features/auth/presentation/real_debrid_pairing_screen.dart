@@ -1,3 +1,4 @@
+import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'dart:async';
 
 import 'package:anime_tv/core/theme/app_theme.dart';
@@ -54,12 +55,18 @@ class _RealDebridPairingScreenState
       final session = await _client.startDeviceAuthorization();
       if (!mounted || generation != _generation) return;
       setState(() => _session = session);
-      _pollTimer = Timer.periodic(session.interval, (_) => _poll(generation));
+      _schedulePoll(generation, session.interval);
     } catch (error) {
       if (mounted && generation == _generation) {
         setState(() => _error = _friendlyError(error));
       }
     }
+  }
+
+  void _schedulePoll(int generation, Duration delay) {
+    _pollTimer?.cancel();
+    if (!mounted || generation != _generation || _authorized) return;
+    _pollTimer = Timer(delay, () => unawaited(_poll(generation)));
   }
 
   Future<void> _poll(int generation) async {
@@ -72,9 +79,13 @@ class _RealDebridPairingScreenState
       return;
     }
     _polling = true;
+    Duration? nextPollDelay;
     try {
       final credentials = await _client.pollCredentials(session);
-      if (credentials == null) return;
+      if (credentials == null) {
+        nextPollDelay = session.interval;
+        return;
+      }
       if (!mounted || generation != _generation) return;
       final tokens = await _client.exchangeDeviceCode(
         session: session,
@@ -92,7 +103,11 @@ class _RealDebridPairingScreenState
         final message = ref
             .read(realDebridSettingsControllerProvider)
             .errorMessage;
-        throw StateError(message ?? 'Real-Debrid account validation failed.');
+        throw StateError(
+          message == null
+              ? 'Real-Debrid account validation failed.'
+              : 'Real-Debrid could not verify this account. Check that it is Premium and try again.',
+        );
       }
 
       // Validation persists the access token. Add device-flow metadata only
@@ -122,12 +137,23 @@ class _RealDebridPairingScreenState
       if (!mounted || generation != _generation) return;
       _pollTimer?.cancel();
       setState(() => _authorized = true);
+    } on RealDebridOAuthException catch (error) {
+      if (!mounted || generation != _generation) return;
+      if (error.isPollingDeferred) {
+        nextPollDelay = error.retryAfter ?? const Duration(seconds: 60);
+      } else {
+        _pollTimer?.cancel();
+        setState(() => _error = error.message);
+      }
     } catch (error) {
       if (!mounted || generation != _generation) return;
       _pollTimer?.cancel();
       setState(() => _error = _friendlyError(error));
     } finally {
       _polling = false;
+      if (nextPollDelay case final delay?) {
+        _schedulePoll(generation, delay);
+      }
     }
   }
 
@@ -160,7 +186,7 @@ class _RealDebridPairingScreenState
                       SizedBox(width: compactHeader ? 12 : 18),
                       Flexible(
                         child: Text(
-                          'Connect Real-Debrid',
+                          context.tr("Connect Real-Debrid"),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: Theme.of(context).textTheme.headlineSmall,
@@ -169,7 +195,9 @@ class _RealDebridPairingScreenState
                       if (!compactHeader) ...[
                         const Spacer(),
                         Text(
-                          'Your Real-Debrid password never touches this TV',
+                          context.tr(
+                            "Your Real-Debrid password never touches this TV",
+                          ),
                           style: TextStyle(color: context.appPalette.mutedText),
                         ),
                       ],
@@ -191,9 +219,9 @@ class _RealDebridPairingScreenState
       return _MessagePanel(
         icon: Icons.check_circle_rounded,
         color: const Color(0xFF67D49B),
-        title: 'Real-Debrid connected',
-        body: 'Premium status and streaming access are ready.',
-        actionLabel: 'Done',
+        title: context.tr("Real-Debrid connected"),
+        body: context.tr("Premium status and streaming access are ready."),
+        actionLabel: context.tr("Done"),
         onAction: context.pop,
       );
     }
@@ -201,9 +229,9 @@ class _RealDebridPairingScreenState
       return _MessagePanel(
         icon: Icons.error_outline_rounded,
         color: const Color(0xFFFF929B),
-        title: 'Could not connect',
+        title: context.tr("Could not connect"),
         body: error,
-        actionLabel: 'Try again',
+        actionLabel: context.tr("Try again"),
         onAction: _start,
       );
     }
@@ -228,8 +256,10 @@ class _RealDebridPairingScreenState
           final qrData = session.verificationUrl.toString();
           final qr = CopyableQrInteraction(
             data: qrData,
-            semanticsLabel: 'QR code for ${session.verificationUrl}',
-            confirmationMessage: 'Real-Debrid pairing link copied.',
+            semanticsLabel: context.tr("QR code for {value1}", {
+              'value1': session.verificationUrl,
+            }),
+            confirmationMessage: context.tr("Real-Debrid pairing link copied."),
             child: Container(
               key: const ValueKey('real-debrid-qr-code'),
               width: qrSize,
@@ -241,8 +271,10 @@ class _RealDebridPairingScreenState
               ),
               child: QrImageView(
                 data: qrData,
-                semanticsLabel:
-                    'Real-Debrid pairing link ${session.verificationUrl}',
+                semanticsLabel: context.tr(
+                  "Real-Debrid pairing link {value1}",
+                  {'value1': session.verificationUrl},
+                ),
                 backgroundColor: Colors.white,
                 errorCorrectionLevel: QrErrorCorrectLevel.Q,
                 padding: EdgeInsets.zero,
@@ -263,7 +295,7 @@ class _RealDebridPairingScreenState
                   const _WaitingPill(),
                   const SizedBox(height: 12),
                   Text(
-                    'Enter this code',
+                    context.tr("Enter this code"),
                     textAlign: TextAlign.center,
                     style: Theme.of(context).textTheme.headlineSmall,
                   ),
@@ -271,7 +303,9 @@ class _RealDebridPairingScreenState
                   code,
                   const SizedBox(height: 12),
                   Text(
-                    'Open ${session.verificationUrl} on your phone, or scan below.',
+                    context.tr("Open {value1} on your phone, or scan below.", {
+                      'value1': session.verificationUrl,
+                    }),
                     textAlign: TextAlign.center,
                     style: Theme.of(context).textTheme.bodyMedium,
                   ),
@@ -279,7 +313,9 @@ class _RealDebridPairingScreenState
                   qr,
                   const SizedBox(height: 12),
                   Text(
-                    'This screen updates automatically after approval.',
+                    context.tr(
+                      "This screen updates automatically after approval.",
+                    ),
                     textAlign: TextAlign.center,
                     style: Theme.of(context).textTheme.bodyMedium,
                   ),
@@ -300,19 +336,23 @@ class _RealDebridPairingScreenState
                     const _WaitingPill(),
                     const SizedBox(height: 18),
                     Text(
-                      'Scan with your phone',
+                      context.tr("Scan with your phone"),
                       style: Theme.of(context).textTheme.displaySmall,
                     ),
                     const SizedBox(height: 12),
                     Text(
-                      'Open ${session.verificationUrl} and enter:',
+                      context.tr("Open {value1} and enter:", {
+                        'value1': session.verificationUrl,
+                      }),
                       style: Theme.of(context).textTheme.bodyLarge,
                     ),
                     const SizedBox(height: 18),
                     code,
                     const SizedBox(height: 14),
                     Text(
-                      'This screen updates automatically after approval.',
+                      context.tr(
+                        "This screen updates automatically after approval.",
+                      ),
                       style: Theme.of(context).textTheme.bodyMedium,
                     ),
                   ],
@@ -335,8 +375,10 @@ class _UserCode extends StatelessWidget {
   Widget build(BuildContext context) {
     return CopyableCodeInteraction(
       code: code,
-      semanticsLabel: 'Real-Debrid one-time pairing code $code',
-      confirmationMessage: 'Real-Debrid pairing code copied.',
+      semanticsLabel: context.tr("Real-Debrid one-time pairing code {value1}", {
+        'value1': code,
+      }),
+      confirmationMessage: context.tr("Real-Debrid pairing code copied."),
       child: Container(
         key: const ValueKey('real-debrid-user-code'),
         padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
@@ -364,10 +406,17 @@ class _UserCode extends StatelessWidget {
 }
 
 String _friendlyError(Object error) {
-  final text = error.toString().trim();
-  return text
-      .replaceFirst(RegExp(r'^(StateError|Bad state|FormatException):\s*'), '')
-      .trim();
+  if (error is RealDebridOAuthException) return error.message;
+  if (error is StateError || error is FormatException) {
+    final text = error.toString().trim();
+    return text
+        .replaceFirst(
+          RegExp(r'^(StateError|Bad state|FormatException):\s*'),
+          '',
+        )
+        .trim();
+  }
+  return 'Real-Debrid authorization could not be completed. Try again.';
 }
 
 class _WaitingPill extends StatelessWidget {
@@ -391,7 +440,7 @@ class _WaitingPill extends StatelessWidget {
           ),
           const SizedBox(width: 7),
           Text(
-            'WAITING FOR APPROVAL',
+            context.tr("WAITING FOR APPROVAL"),
             style: TextStyle(
               color: context.appPalette.secondaryAccent,
               fontSize: 11,
@@ -431,7 +480,7 @@ class _MessagePanel extends StatelessWidget {
         const SizedBox(height: 18),
         Text(title, style: Theme.of(context).textTheme.displaySmall),
         const SizedBox(height: 10),
-        Text(body, style: Theme.of(context).textTheme.bodyLarge),
+        Text(context.tr(body), style: Theme.of(context).textTheme.bodyLarge),
         const SizedBox(height: 24),
         _ActionButton(label: actionLabel, onPressed: onAction),
       ],

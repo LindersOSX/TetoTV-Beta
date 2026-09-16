@@ -41,7 +41,11 @@ void main() {
         final container = ProviderScope.containerOf(tester.element(row));
         expect(
           container.read(settingsPreferencesProvider).media3SurfaceViewEnabled,
-          isFalse,
+          isTrue,
+        );
+        expect(
+          container.read(settingsPreferencesProvider).preferredPlayer,
+          PreferredPlayer.media3,
         );
         await tester.ensureVisible(surfaceViewToggle);
         await tester.pumpAndSettle();
@@ -49,11 +53,17 @@ void main() {
         await tester.pumpAndSettle();
         expect(
           container.read(settingsPreferencesProvider).media3SurfaceViewEnabled,
-          isTrue,
+          isFalse,
         );
         expect(
           container.read(settingsPreferencesProvider).preferredPlayer,
           PreferredPlayer.media3,
+        );
+        await tester.tap(surfaceViewToggle);
+        await tester.pumpAndSettle();
+        expect(
+          container.read(settingsPreferencesProvider).media3SurfaceViewEnabled,
+          isTrue,
         );
 
         await tester.ensureVisible(row);

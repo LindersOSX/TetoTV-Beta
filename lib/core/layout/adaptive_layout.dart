@@ -25,9 +25,25 @@ final isTelevisionProvider = Provider<bool>((ref) {
   };
 });
 
+/// The interaction/layout family selected from the native device category.
+///
+/// Android reports phones, tablets, and foldables through the same `mobile`
+/// category. They deliberately share TetoTV's touch-first UI; viewport width
+/// may make cards or spacing more generous, but it must never promote a tablet
+/// to the ten-foot television interaction model.
+enum AdaptiveUiTarget { mobile, television }
+
+final adaptiveUiTargetProvider = Provider<AdaptiveUiTarget>((ref) {
+  return ref.watch(isTelevisionProvider)
+      ? AdaptiveUiTarget.television
+      : AdaptiveUiTarget.mobile;
+});
+
 enum AdaptiveWindowClass { compact, medium, expanded, large, extraLarge }
 
 extension AdaptiveLayoutContext on BuildContext {
+  /// A sizing class only. Device interaction remains controlled by
+  /// [adaptiveUiTargetProvider], so medium and expanded tablets stay mobile.
   AdaptiveWindowClass get adaptiveWindowClass {
     final width = MediaQuery.sizeOf(this).width;
     if (width < 600) return AdaptiveWindowClass.compact;

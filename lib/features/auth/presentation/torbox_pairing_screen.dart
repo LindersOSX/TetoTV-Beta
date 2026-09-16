@@ -1,3 +1,4 @@
+import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'dart:async';
 
 import 'package:anime_tv/core/storage/tetotv_database.dart';
@@ -287,9 +288,11 @@ class _TorBoxPairingScreenState extends ConsumerState<TorBoxPairingScreen>
       return _PairingMessage(
         icon: Icons.check_circle_rounded,
         color: const Color(0xFF67D49B),
-        title: 'TorBox connected',
-        body: 'Your API token is encrypted in the Android Keystore.',
-        actionLabel: 'Done',
+        title: context.tr("TorBox connected"),
+        body: context.tr(
+          "Your API token is encrypted in the Android Keystore.",
+        ),
+        actionLabel: context.tr("Done"),
         onAction: context.pop,
       );
     }
@@ -297,9 +300,9 @@ class _TorBoxPairingScreenState extends ConsumerState<TorBoxPairingScreen>
       return _PairingMessage(
         icon: Icons.error_outline_rounded,
         color: const Color(0xFFFF929B),
-        title: 'Could not connect TorBox',
+        title: context.tr("Could not connect TorBox"),
         body: error,
-        actionLabel: 'Try again',
+        actionLabel: context.tr("Try again"),
         onAction: _start,
       );
     }
@@ -317,8 +320,8 @@ class _TorBoxPairingScreenState extends ConsumerState<TorBoxPairingScreen>
           final qrSize = compact ? 190.0 : 220.0;
           final qr = CopyableQrInteraction(
             data: session.verificationUrl.toString(),
-            semanticsLabel: 'QR code for TorBox pairing',
-            confirmationMessage: 'TorBox pairing link copied.',
+            semanticsLabel: context.tr("QR code for TorBox pairing"),
+            confirmationMessage: context.tr("TorBox pairing link copied."),
             child: Container(
               width: qrSize,
               height: qrSize,
@@ -344,20 +347,24 @@ class _TorBoxPairingScreenState extends ConsumerState<TorBoxPairingScreen>
               const _WaitingPill(),
               const SizedBox(height: 18),
               Text(
-                'Scan with your phone',
+                context.tr("Scan with your phone"),
                 style: Theme.of(context).textTheme.displaySmall,
               ),
               const SizedBox(height: 12),
               Text(
-                'Or open ${session.friendlyVerificationUrl} and enter:',
+                context.tr("Or open {value1} and enter:", {
+                  'value1': session.friendlyVerificationUrl,
+                }),
                 style: Theme.of(context).textTheme.bodyLarge,
               ),
               const SizedBox(height: 18),
               CopyableCodeInteraction(
                 code: session.userCode,
-                semanticsLabel:
-                    'TorBox one-time pairing code ${session.userCode}',
-                confirmationMessage: 'TorBox pairing code copied.',
+                semanticsLabel: context.tr(
+                  "TorBox one-time pairing code {value1}",
+                  {'value1': session.userCode},
+                ),
+                confirmationMessage: context.tr("TorBox pairing code copied."),
                 child: Text(
                   session.userCode,
                   style: TextStyle(
@@ -370,17 +377,16 @@ class _TorBoxPairingScreenState extends ConsumerState<TorBoxPairingScreen>
               ),
               const SizedBox(height: 14),
               Text(
-                'TorBox updates this screen automatically after approval. '
-                'Device authorization requires a paid TorBox plan.',
+                context.tr(
+                  "TorBox updates this screen automatically after approval. Device authorization requires a paid TorBox plan.",
+                ),
                 style: Theme.of(context).textTheme.bodyMedium,
               ),
               const SizedBox(height: 10),
               Text(
-                'Sign in to torbox.app in the same browser before approving. '
-                "TorBox's Continue button may not respond in Chrome. If that "
-                'happens, use Edge, Firefox, or another browser and enter this '
-                'current code again. Keep this screen open while approving; '
-                'TetoTV will keep retrying.',
+                context.tr(
+                  "Sign in to torbox.app in the same browser before approving. TorBox's Continue button may not respond in Chrome. If that happens, use Edge, Firefox, or another browser and enter this current code again. Keep this screen open while approving; TetoTV will keep retrying.",
+                ),
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
                   color: context.appPalette.mutedText,
                 ),
@@ -449,7 +455,10 @@ class _RetryingNotice extends StatelessWidget {
           ),
           const SizedBox(width: 8),
           Flexible(
-            child: Text(message, style: Theme.of(context).textTheme.bodySmall),
+            child: Text(
+              context.tr(message),
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
           ),
         ],
       ),
@@ -470,13 +479,13 @@ class _PairingHeader extends StatelessWidget {
         _PairingAction(
           autofocus: true,
           icon: Icons.arrow_back_rounded,
-          label: 'Back',
+          label: context.tr("Back"),
           onPressed: onBack,
         ),
         const SizedBox(width: 18),
         Expanded(
           child: Text(
-            'Connect TorBox',
+            context.tr("Connect TorBox"),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: Theme.of(context).textTheme.headlineSmall,
@@ -485,7 +494,7 @@ class _PairingHeader extends StatelessWidget {
       ],
     );
     final note = Text(
-      'Your TorBox password never touches this TV',
+      context.tr("Your TorBox password never touches this TV"),
       style: TextStyle(color: context.appPalette.mutedText),
     );
     if (compact) {
@@ -525,7 +534,7 @@ class _WaitingPill extends StatelessWidget {
           ),
           const SizedBox(width: 7),
           Text(
-            'WAITING FOR APPROVAL',
+            context.tr("WAITING FOR APPROVAL"),
             style: TextStyle(
               color: context.appPalette.secondaryAccent,
               fontSize: 11,
@@ -565,7 +574,7 @@ class _PairingMessage extends StatelessWidget {
         const SizedBox(height: 18),
         Text(title, style: Theme.of(context).textTheme.displaySmall),
         const SizedBox(height: 10),
-        Text(body, style: Theme.of(context).textTheme.bodyLarge),
+        Text(context.tr(body), style: Theme.of(context).textTheme.bodyLarge),
         const SizedBox(height: 24),
         _PairingAction(
           autofocus: true,

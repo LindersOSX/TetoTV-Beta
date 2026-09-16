@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'package:anime_tv/core/preferences/title_language_preference.dart';
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/layout/poster_card_geometry.dart';
@@ -8,10 +9,12 @@ import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/tv/tv_shelf_focus.dart';
 import 'package:anime_tv/core/widgets/network_artwork.dart';
+import 'package:anime_tv/core/widgets/release_highlights.dart';
 import 'package:anime_tv/core/widgets/poster_metadata_overlay.dart';
 import 'package:anime_tv/core/storage/storage_providers.dart';
 import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
+import 'package:anime_tv/features/catalog/presentation/localized_anime_title.dart';
 import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
 import 'package:anime_tv/features/home/application/top_navigation_availability.dart';
 import 'package:anime_tv/features/settings/application/display_preferences_controller.dart';
@@ -150,21 +153,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     if (!mounted || notes == null) return;
     await showDialog<void>(
       context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: context.appPalette.surface,
-        title: const Text('What\'s new in TetoTV'),
-        content: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 640, maxHeight: 420),
-          child: SingleChildScrollView(child: SelectableText(notes)),
-        ),
-        actions: [
-          FilledButton(
-            autofocus: true,
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Continue'),
-          ),
-        ],
-      ),
+      builder: (context) => ReleaseHighlightsDialog(notes: notes),
     );
   }
 
@@ -496,8 +485,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     ref.invalidate(trackingHomeProvider);
     ref.invalidate(recentPlaybackProvider);
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Refreshing Home…'),
+      SnackBar(
+        content: Text(context.tr("Refreshing Home…")),
         duration: Duration(milliseconds: 1200),
       ),
     );
@@ -510,16 +499,18 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       ]);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Home refreshed.'),
+        SnackBar(
+          content: Text(context.tr("Home refreshed.")),
           duration: Duration(milliseconds: 1200),
         ),
       );
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Some Home shelves could not be refreshed.'),
+        SnackBar(
+          content: Text(
+            context.tr("Some Home shelves could not be refreshed."),
+          ),
           duration: Duration(seconds: 3),
         ),
       );
@@ -536,20 +527,22 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       barrierDismissible: true,
       builder: (context) => AlertDialog(
         backgroundColor: context.appPalette.surface,
-        title: const Text('Remove from this TV?'),
+        title: Text(context.tr("Remove from this TV?")),
         content: Text(
-          'Remove “${item.title}” from local Watch History and Continue '
-          'Watching? AniList and MAL will not be changed.',
+          context.tr(
+            'Remove “{value1}” from local Watch History and Continue Watching? Connected anime trackers will not be changed.',
+            {'value1': item.title},
+          ),
         ),
         actions: [
           TextButton(
             autofocus: true,
             onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel'),
+            child: Text(context.tr("Cancel")),
           ),
           FilledButton(
             onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Remove'),
+            child: Text(context.tr("Remove")),
           ),
         ],
       ),
@@ -562,7 +555,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not remove local watch history.')),
+        SnackBar(
+          content: Text(context.tr("Could not remove local watch history.")),
+        ),
       );
       return;
     }
@@ -618,7 +613,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         SnackBar(
           content: Text(
             failures == 0
-                ? '${item.title} moved to ${action.displayName}.'
+                ? context.tr("{value1} moved to {value2}.", {
+                    'value1': item.title,
+                    'value2': action.displayName,
+                  })
                 : 'Updated ${item.trackingItems.length - failures} of '
                       '${item.trackingItems.length} connected lists.',
           ),
@@ -661,7 +659,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           : 'Could not update this show. Try again.';
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(message),
+          content: Text(context.tr(message)),
           backgroundColor: const Color(0xFF7D1E32),
         ),
       );
@@ -683,7 +681,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     final opened = await AndroidTvBridge.instance.openExternalWebPage(uri);
     if (!opened && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not open SIMKL on this device.')),
+        SnackBar(
+          content: Text(context.tr("Could not open SIMKL on this device.")),
+        ),
       );
     }
   }
@@ -731,14 +731,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     final enabledShelves = ref.watch(homeShelfPreferencesProvider);
     final shelfOrder = ref.watch(homeShelfOrderProvider);
     final preferences = ref.watch(settingsPreferencesProvider);
-    final developerNavigation = ref.watch(
-      appUpdateControllerProvider.select(
-        (state) => (loaded: state.loaded, enabled: state.developerMode),
-      ),
-    );
     final accounts = ref.watch(trackingAccountsControllerProvider);
     final localProfiles = ref.watch(localProfilesControllerProvider);
-    final isTelevision = ref.watch(isTelevisionProvider);
+    final uiTarget = ref.watch(adaptiveUiTargetProvider);
+    final isTelevision = uiTarget == AdaptiveUiTarget.television;
     final dismissedIds =
         ref.watch(dismissedContinueWatchingProvider).valueOrNull ??
         const <int>{};
@@ -788,7 +784,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         .take(20)
         .map(
           (anime) => _ShelfItem.fromAnime(anime, titlePreference).copyWith(
-            subtitle: 'Episode ${anime.nextAiringEpisode} airing soon',
+            subtitle: context.tr('Episode {episode} airing soon', {
+              'episode': anime.nextAiringEpisode ?? 1,
+            }),
           ),
         )
         .toList(growable: false);
@@ -861,9 +859,13 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       right: responsivePadding.right,
     );
     final screenSize = MediaQuery.sizeOf(context);
+    // Phones, tablets, and foldables intentionally share this mobile layout.
+    // Their available width can still adjust card geometry without switching
+    // them to the TV interaction model.
+    final usesMobileUi = uiTarget == AdaptiveUiTarget.mobile;
     final isPhoneLandscape =
-        !isTelevision && screenSize.width > screenSize.height;
-    final isPhonePortrait = !isTelevision && !isPhoneLandscape;
+        usesMobileUi && screenSize.width > screenSize.height;
+    final isPhonePortrait = usesMobileUi && !isPhoneLandscape;
     final useTvRail =
         isTelevision &&
         preferences.interfaceMode != InterfaceMode.phone &&
@@ -885,16 +887,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           !accounts.isLoading &&
           preferences.settingsEntryPlacement ==
               SettingsEntryPlacement.profileMenu;
-      _hasVisibleNavigationAction =
-          runtimeTopNavigationOrder(
-            preferences,
-            developerStateLoaded: developerNavigation.loaded,
-            developerMode: developerNavigation.enabled,
-          ).any(
-            (destination) =>
-                destination != TopNavigationDestination.settings ||
-                !settingsInProfileMenu,
-          );
+      _hasVisibleNavigationAction = runtimeTopNavigationOrder(preferences).any(
+        (destination) =>
+            destination != TopNavigationDestination.settings ||
+            !settingsInProfileMenu,
+      );
     } else {
       _hasVisibleNavigationAction = true;
     }
@@ -1281,8 +1278,10 @@ class _HeroPanel extends StatelessWidget {
     final facts = <String>[
       if (anime?.seasonYear case final year?) '$year',
       if (anime?.format case final format?) format.replaceAll('_', ' '),
-      if (anime?.episodes case final episodes?) '$episodes episodes',
-      if (anime?.durationMinutes case final minutes?) '$minutes min',
+      if (anime?.episodes case final episodes?)
+        context.tr('{value1} episodes', {'value1': episodes}),
+      if (anime?.durationMinutes case final minutes?)
+        context.tr('{count} min', {'count': minutes}),
     ];
     final labels = <({String text, bool accent})>[
       if (anime?.status case final status?)
@@ -1369,7 +1368,7 @@ class _HeroPanel extends StatelessWidget {
                     ),
                     const SizedBox(width: 8),
                     Text(
-                      'FEATURED',
+                      context.tr("FEATURED"),
                       key: const ValueKey('home-hero-featured-label'),
                       style: TextStyle(
                         color: context.appPalette.accentBright,
@@ -1568,7 +1567,7 @@ class _HeroInlineText extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Text(
-    text,
+    context.tr(text),
     maxLines: 1,
     overflow: TextOverflow.ellipsis,
     style: TextStyle(
@@ -1739,7 +1738,10 @@ class _MediaShelfState extends State<_MediaShelf> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(widget.title, style: Theme.of(context).textTheme.titleLarge),
+          LocalizedText(
+            widget.title,
+            style: Theme.of(context).textTheme.titleLarge,
+          ),
           SizedBox(
             height:
                 (MediaQuery.sizeOf(context).width >= 840 ? 2 : 9) *
@@ -1836,7 +1838,7 @@ class _MediaShelfSkeleton extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(title, style: Theme.of(context).textTheme.titleLarge),
+          LocalizedText(title, style: Theme.of(context).textTheme.titleLarge),
           SizedBox(
             height:
                 (MediaQuery.sizeOf(context).width >= 840 ? 2 : 9) *
@@ -1904,14 +1906,14 @@ class _MediaShelfNotice extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(title, style: Theme.of(context).textTheme.titleLarge),
+          LocalizedText(title, style: Theme.of(context).textTheme.titleLarge),
           SizedBox(
             height:
                 (MediaQuery.sizeOf(context).width >= 840 ? 4 : 9) *
                 preferences.contentDensity.spacingScale,
           ),
           Text(
-            message,
+            context.tr(message),
             key: ValueKey('home-empty-${title.toLowerCase()}'),
             style: Theme.of(context).textTheme.bodyMedium?.copyWith(
               color: context.appPalette.mutedText,
@@ -1940,6 +1942,17 @@ class _SkeletonLine extends StatelessWidget {
       ),
     ),
   );
+}
+
+String _localizedShelfSubtitle(BuildContext context, String subtitle) {
+  final episodes = RegExp(
+    r'^(\d+) episodes( • Completed)?$',
+  ).firstMatch(subtitle);
+  if (episodes != null) {
+    final count = context.tr('{value1} episodes', {'value1': episodes[1]!});
+    return episodes[2] == null ? count : '$count • ${context.tr('Completed')}';
+  }
+  return context.tr(subtitle);
 }
 
 class _PosterCard extends StatelessWidget {
@@ -2028,13 +2041,13 @@ class _PosterCard extends StatelessWidget {
                               border: Border.all(color: Colors.white38),
                               borderRadius: BorderRadius.circular(5),
                             ),
-                            child: const Padding(
+                            child: Padding(
                               padding: EdgeInsets.symmetric(
                                 horizontal: 6,
                                 vertical: 3,
                               ),
                               child: Text(
-                                'SIMKL',
+                                context.tr("SIMKL"),
                                 style: TextStyle(
                                   color: Colors.white,
                                   fontSize: 8,
@@ -2065,8 +2078,9 @@ class _PosterCard extends StatelessWidget {
                 height: 24,
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 6),
-                  child: Text(
+                  child: LocalizedAnimeTitle(
                     item.title,
+                    aniListId: item.animeId,
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
@@ -2084,7 +2098,7 @@ class _PosterCard extends StatelessWidget {
                   child: Padding(
                     padding: const EdgeInsets.fromLTRB(6, 3, 6, 0),
                     child: Text(
-                      item.subtitle,
+                      _localizedShelfSubtitle(context, item.subtitle),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
@@ -2147,8 +2161,9 @@ class _PosterCard extends StatelessWidget {
                 left: 12,
                 right: 12,
                 bottom: item.progress == null ? 12 : 19,
-                child: Text(
+                child: LocalizedAnimeTitle(
                   item.title,
+                  aniListId: item.animeId,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
@@ -2174,7 +2189,7 @@ class _PosterCard extends StatelessWidget {
                       border: Border.all(color: Colors.white24),
                     ),
                     child: Text(
-                      'EP $episode',
+                      context.tr("EP {value1}", {'value1': episode}),
                       style: const TextStyle(
                         color: Colors.white,
                         fontSize: 10,
@@ -2259,7 +2274,7 @@ class _TvButton extends StatelessWidget {
             Icon(icon, size: 21, color: Colors.white),
             const SizedBox(width: 7),
             Text(
-              label,
+              context.tr(label),
               style: Theme.of(context).textTheme.labelLarge?.copyWith(
                 color: Colors.white,
                 fontSize: 14,
@@ -2284,6 +2299,7 @@ List<_ShelfItem> _mergeContinueWatching({
   final localMalIds = <int>{};
   final localAniListIndexes = <int, int>{};
   final localMalIndexes = <int, int>{};
+  final localTitlePriorities = <int, int>{};
 
   // Recent local playback contains the most useful resume position, so it is
   // deliberately added first and wins whenever the tracker has the same media
@@ -2324,10 +2340,22 @@ List<_ShelfItem> _mergeContinueWatching({
           ? localMalIndexes[malId]
           : localAniListIndexes[aniListId] ?? localMalIndexes[malId];
       if (index != null) {
+        // Keep the local checkpoint's episode, position, and progress while
+        // applying the independently selected Title Language whenever a
+        // tracker has richer title metadata. A direct AniList identity wins
+        // over a secondary MAL cross-reference regardless of provider order.
+        final directAniListMatch =
+            aniListId != null && localAniListIndexes[aniListId] == index;
+        final titlePriority = directAniListMatch ? 2 : 1;
+        final replaceTitle = titlePriority > (localTitlePriorities[index] ?? 0);
         merged[index] = merged[index].copyWith(
+          title: replaceTitle
+              ? tracked.tracked.displayTitle(titlePreference)
+              : null,
           trackingItems: [...merged[index].trackingItems, tracked],
           sourceUrl: merged[index].sourceUrl ?? tracked.effectiveSimklSourceUrl,
         );
+        if (replaceTitle) localTitlePriorities[index] = titlePriority;
       }
       continue;
     }
@@ -2406,11 +2434,12 @@ class _ShelfItem {
   }
 
   _ShelfItem copyWith({
+    String? title,
     String? subtitle,
     String? sourceUrl,
     List<HomeTrackedAnime>? trackingItems,
   }) => _ShelfItem(
-    title,
+    title ?? this.title,
     subtitle ?? this.subtitle,
     progress: progress,
     animeId: animeId,
@@ -2479,7 +2508,12 @@ class _HomeShowActionsDialog extends StatelessWidget {
         : item.trackingItems.first.tracked.status;
     return AlertDialog(
       backgroundColor: context.appPalette.surface,
-      title: Text(item.title, maxLines: 2, overflow: TextOverflow.ellipsis),
+      title: LocalizedAnimeTitle(
+        item.title,
+        aniListId: item.animeId,
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+      ),
       content: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 680),
         child: Column(
@@ -2489,8 +2523,14 @@ class _HomeShowActionsDialog extends StatelessWidget {
             if (item.animeId != null || item.trackingItems.isNotEmpty) ...[
               Text(
                 item.trackingItems.isEmpty
-                    ? 'Add or update this show on your connected AniList and MAL accounts.'
-                    : 'Update status on ${item.trackingItems.map((entry) => entry.provider.displayName).join(' and ')}',
+                    ? context.tr(
+                        "Add or update this show on every connected anime tracker.",
+                      )
+                    : context.tr("Update status on {value1}", {
+                        'value1': item.trackingItems
+                            .map((entry) => entry.provider.displayName)
+                            .join(' and '),
+                      }),
                 style: TextStyle(color: context.appPalette.mutedText),
               ),
               const SizedBox(height: 14),
@@ -2500,7 +2540,9 @@ class _HomeShowActionsDialog extends StatelessWidget {
               ),
             ] else
               Text(
-                'Connect AniList or MAL to change this show\'s list status.',
+                context.tr(
+                  "Connect an anime tracker to change this show's list status.",
+                ),
                 style: TextStyle(color: context.appPalette.mutedText),
               ),
           ],
@@ -2511,18 +2553,18 @@ class _HomeShowActionsDialog extends StatelessWidget {
           TextButton(
             onPressed: () =>
                 Navigator.of(context).pop(_HomeShowAction.viewSource),
-            child: const Text('View on SIMKL'),
+            child: Text(context.tr("View on SIMKL")),
           ),
         TextButton(
           autofocus: item.animeId == null && item.trackingItems.isEmpty,
           onPressed: () => Navigator.of(context).pop(_HomeShowAction.open),
-          child: const Text('Open show'),
+          child: Text(context.tr("Open show")),
         ),
         if (item.historyMediaId != null)
           FilledButton.tonal(
             onPressed: () =>
                 Navigator.of(context).pop(_HomeShowAction.removeLocal),
-            child: const Text('Remove locally'),
+            child: Text(context.tr("Remove locally")),
           ),
       ],
     );

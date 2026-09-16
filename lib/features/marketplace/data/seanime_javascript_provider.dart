@@ -1,10 +1,12 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:anime_tv/core/preferences/caption_language.dart';
+import 'package:anime_tv/core/preferences/playback_audio_preference.dart';
 import 'package:anime_tv/features/marketplace/domain/addon_models.dart';
 import 'package:anime_tv/features/marketplace/data/public_https_dio.dart';
 import 'package:anime_tv/features/manga/domain/manga_extension_models.dart';
@@ -17,6 +19,7 @@ import 'package:flutter_js/quickjs/quickjs_runtime2.dart';
 
 const seanimeProviderRuntimeLimit = Duration(milliseconds: 10500);
 const seanimeHlsEnrichmentBudget = Duration(milliseconds: 700);
+const seanimeMaximumExternalAudioTracks = 8;
 
 abstract interface class WebStreamingProvider {
   String get id;
@@ -76,6 +79,7 @@ class SeanimeJavascriptProvider implements WebStreamingProvider {
     this.addon, {
     this.validateResultTarget = validatePublicNetworkTarget,
     this.preferredSubtitleLanguage = 'eng',
+    this.preferredAudio,
   });
 
   static Future<String>? _domRuntimeSource;
@@ -83,6 +87,7 @@ class SeanimeJavascriptProvider implements WebStreamingProvider {
   final InstalledStreamingAddon addon;
   final Future<void> Function(Uri uri) validateResultTarget;
   final String preferredSubtitleLanguage;
+  final PlaybackAudioPreference? preferredAudio;
 
   @override
   String get id => addon.manifest.id;
@@ -125,6 +130,7 @@ class SeanimeJavascriptProvider implements WebStreamingProvider {
         'status': episode.status,
         'format': episode.format,
         'episodeCount': episode.episodeCount,
+        'absoluteSeasonOffset': episode.absoluteSeasonOffset,
         'isAdult': episode.isAdult,
         'episode': episode.episode,
         'anilistId': episode.anilistMediaId,
@@ -132,6 +138,7 @@ class SeanimeJavascriptProvider implements WebStreamingProvider {
         'year': episode.year,
         'requestedSeason': catalogSeasonNumber(episode),
         'preferredSubtitleLanguage': preferredSubtitleLanguage,
+        'preferredAudioMode': preferredAudio?.name ?? 'all',
       },
       timeout: seanimeProviderRuntimeLimit,
       cancellation: cancellation,
@@ -141,6 +148,7 @@ class SeanimeJavascriptProvider implements WebStreamingProvider {
     cancellation?.throwIfCancelled();
     final results = <WebStreamResult>[];
     final publicHosts = <String, bool>{};
+    var resultTargetFailureReason = 'unsafe_target';
     Future<bool> allowed(Uri uri) async {
       cancellation?.throwIfCancelled();
       final known = publicHosts[uri.host];
@@ -150,7 +158,15 @@ class SeanimeJavascriptProvider implements WebStreamingProvider {
         cancellation?.throwIfCancelled();
         publicHosts[uri.host] = true;
         return true;
+      } on FormatException {
+        publicHosts[uri.host] = false;
+        return false;
       } catch (_) {
+        // DNS lookup/timeout/socket failures are transient network outcomes,
+        // not proof that a provider returned a private target. Keeping this
+        // distinction prevents one connectivity failure from permanently
+        // blocking an otherwise safe extension.
+        resultTargetFailureReason = 'network';
         publicHosts[uri.host] = false;
         return false;
       }
@@ -168,6 +184,13 @@ class SeanimeJavascriptProvider implements WebStreamingProvider {
       final headers = sanitizeAddonHeaders(
         item['headers'],
         maximumValueLength: 1024,
+      );
+      final externalAudioTracks = await normalizeSeanimeExternalAudioTracks(
+        item['externalAudioTracks'],
+        primaryUri: uri,
+        primaryHeaders: headers,
+        isAllowed: allowed,
+        cancellation: cancellation,
       );
       final reportedAudio = webStreamAudioCapabilityFromWire(item);
       final legacyDubbed = item['isDubbed'] == true;
@@ -197,6 +220,7 @@ class SeanimeJavascriptProvider implements WebStreamingProvider {
           headers: headers,
           subtitleUri: subtitle,
           subtitleLanguage: item['subtitleLanguage'] as String?,
+          externalAudioTracks: externalAudioTracks,
           isDubbed: audioCapability?.supportsDub ?? legacyDubbed,
           audioCapability: audioCapability,
           audioLanguages: webStreamAudioLanguagesFromWire(item),
@@ -209,7 +233,7 @@ class SeanimeJavascriptProvider implements WebStreamingProvider {
     if (results.isEmpty && raw.isNotEmpty) {
       throw StateError(
         'NO_STREAM: Provider streams failed URL or network safety validation. '
-        '[stage=stream_extraction; reason=unsafe_target]',
+        '[stage=stream_extraction; reason=$resultTargetFailureReason]',
       );
     }
     return results;
@@ -511,6 +535,182 @@ String? _boundedProviderTitle(Object? value) {
   return title.length >= 2 && title.length <= 200 ? title : null;
 }
 
+String? _boundedProviderTrackText(Object? value) {
+  if (value is! String) return null;
+  final text = value
+      .replaceAll(RegExp(r'[\x00-\x1f\x7f]'), ' ')
+      .replaceAll(RegExp(r'[\u202a-\u202e\u2066-\u2069]'), '')
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
+  return text.isNotEmpty && text.length <= 80 ? text : null;
+}
+
+final class _SeanimeExternalAudioCandidate {
+  const _SeanimeExternalAudioCandidate({
+    required this.uri,
+    required this.headers,
+    this.label,
+    this.language,
+  });
+
+  final Uri uri;
+  final String? label;
+  final String? language;
+  final Map<String, String> headers;
+}
+
+Object? _firstProviderMapValue(Map<Object?, Object?> raw, List<String> keys) {
+  for (final key in keys) {
+    final value = raw[key];
+    if (value != null) return value;
+  }
+  return null;
+}
+
+String _seanimeExternalAudioCandidateFingerprint(
+  _SeanimeExternalAudioCandidate candidate,
+) => jsonEncode({
+  'url': candidate.uri.toString(),
+  'language': candidate.language ?? '',
+  'headers': _rawWebStreamHeaderFingerprint(candidate.headers),
+});
+
+List<_SeanimeExternalAudioCandidate> _parseSeanimeExternalAudioCandidates(
+  Object? raw,
+) {
+  if (raw is! List) return const [];
+  final result = <_SeanimeExternalAudioCandidate>[];
+  final seen = <String>{};
+  for (final value in raw.take(seanimeMaximumExternalAudioTracks)) {
+    final map = value is Map
+        ? value.cast<Object?, Object?>()
+        : const <Object?, Object?>{};
+    final rawUrl = value is String
+        ? value
+        : _firstProviderMapValue(map, const [
+            'url',
+            'file',
+            'src',
+            'link',
+            'href',
+            'uri',
+            'manifest',
+            'playlist',
+            'streamUrl',
+            'hls',
+          ]);
+    final uri = safePublicHttpsUri(rawUrl);
+    if (uri == null) continue;
+    final rawLanguage = _boundedProviderTrackText(
+      _firstProviderMapValue(map, const [
+        'language',
+        'lang',
+        'locale',
+        'audioLanguage',
+      ]),
+    );
+    final canonicalLanguage = canonicalCaptionLanguageCode(rawLanguage);
+    final label = _boundedProviderTrackText(
+      _firstProviderMapValue(map, const [
+            'label',
+            'name',
+            'title',
+            'quality',
+          ]) ??
+          rawLanguage,
+    );
+    final headers = sanitizeAddonHeaders(
+      _firstProviderMapValue(map, const ['headers', 'requestHeaders']),
+      maximumValueLength: 1024,
+    );
+    final candidate = _SeanimeExternalAudioCandidate(
+      uri: uri,
+      label: label,
+      language: canonicalLanguage.isEmpty ? null : canonicalLanguage,
+      headers: headers,
+    );
+    if (seen.add(_seanimeExternalAudioCandidateFingerprint(candidate))) {
+      result.add(candidate);
+    }
+  }
+  return List.unmodifiable(result);
+}
+
+Map<String, String> _mergeSeanimeExternalAudioHeaders(
+  Map<String, String> inherited,
+  Map<String, String> explicit,
+) {
+  final entries = <String, MapEntry<String, String>>{};
+  for (final entry in inherited.entries) {
+    entries[entry.key.toLowerCase()] = entry;
+  }
+  for (final entry in explicit.entries) {
+    entries[entry.key.toLowerCase()] = entry;
+  }
+  return sanitizeAddonHeaders(
+    Map<String, String>.fromEntries(entries.values),
+    maximumValueLength: 1024,
+  );
+}
+
+/// Normalizes optional Seanime audio sidecars at the add-on boundary.
+///
+/// The JavaScript adapter emits at most eight explicit audio references. Each
+/// URL still crosses the same public-HTTPS/DNS policy as the primary video.
+/// Invalid sidecars are omitted independently so they can never hide an
+/// otherwise playable primary stream. Primary credentials are inherited only
+/// for the same origin; a track's own bounded headers remain scoped to the URL
+/// the provider explicitly supplied and will be re-checked on proxy redirects.
+Future<List<WebExternalAudioTrack>> normalizeSeanimeExternalAudioTracks(
+  Object? raw, {
+  required Uri primaryUri,
+  required Map<String, String> primaryHeaders,
+  required Future<bool> Function(Uri uri) isAllowed,
+  WebProviderCancellation? cancellation,
+}) async {
+  final result = <WebExternalAudioTrack>[];
+  for (final candidate in _parseSeanimeExternalAudioCandidates(raw)) {
+    cancellation?.throwIfCancelled();
+    var allowed = false;
+    try {
+      allowed = await isAllowed(candidate.uri);
+    } on WebProviderSearchCancelled {
+      rethrow;
+    } catch (_) {
+      // Optional audio must fail independently from the primary video.
+      continue;
+    }
+    cancellation?.throwIfCancelled();
+    if (!allowed) continue;
+    final inheritedHeaders = sanitizeAddonHeaders(
+      primaryHeaders,
+      stripCredentials: !_sameOrigin(primaryUri, candidate.uri),
+      maximumValueLength: 1024,
+    );
+    result.add(
+      WebExternalAudioTrack(
+        uri: candidate.uri,
+        label: candidate.label,
+        language: candidate.language,
+        headers: _mergeSeanimeExternalAudioHeaders(
+          inheritedHeaders,
+          candidate.headers,
+        ),
+      ),
+    );
+  }
+  return List.unmodifiable(result);
+}
+
+String _rawSeanimeExternalAudioFingerprint(Object? raw) => jsonEncode([
+  for (final candidate in _parseSeanimeExternalAudioCandidates(raw))
+    {
+      'url': candidate.uri.toString(),
+      'language': candidate.language ?? '',
+      'headers': _rawWebStreamHeaderFingerprint(candidate.headers),
+    },
+]);
+
 bool isSeanimeProviderNoMatch(Object error) {
   final explicitlyNoMatch = error.toString().contains('NO_MATCH:');
   final details = seanimeProviderFailureDetails(error);
@@ -657,6 +857,10 @@ const _providerFailureStages = {
 };
 const _providerFailureReasons = {
   'timeout',
+  'request_limit',
+  'response_limit',
+  'redirect_limit',
+  'invalid_payload',
   'empty_sources',
   'unsafe_target',
   'invalid_response',
@@ -665,6 +869,89 @@ const _providerFailureReasons = {
   'provider_error',
   'empty_result',
 };
+
+// Keep these patterns deliberately narrow. A third-party payload frequently
+// throws TypeErrors containing "undefined" or "is not a function" when its
+// upstream HTML/JSON shape changes; those are provider failures, not evidence
+// that TetoTV's compatibility runtime is missing an API. These two patterns
+// are also injected into the JavaScript runner below so the pure Dart tests
+// exercise the same classification contract on platforms without QuickJS.
+const _missingRuntimeReferencePattern =
+    r'(?:referenceerror\s*:\s*)?(?:fetch|Request|Response|Headers|URL|URLSearchParams|TextEncoder|TextDecoder|DOMParser|document|Doc|LoadDoc|Buffer|CryptoJS|crypto(?:\.subtle)?|atob|btoa|setTimeout|clearTimeout|\$sleep|\$getUserPreference|\$)\s+is not defined\b';
+const _missingRuntimeApiPattern =
+    r'(?:\b(?:fetch|Request|Response|Headers|URL|URLSearchParams|TextEncoder|TextDecoder|DOMParser|document|Doc|LoadDoc|Buffer|CryptoJS|crypto(?:\.subtle)?|atob|btoa|setTimeout|clearTimeout)|\$(?:sleep|getUserPreference)?)(?:.{0,80})\b(?:is not a function|is undefined|is not defined)\b';
+
+/// Classifies a provider-thrown message without retaining or exposing it.
+///
+/// Public for platform-independent contract tests. Callers must persist only
+/// the returned bounded reason code, never [errorText].
+String classifySeanimeProviderFailureReason(String errorText) {
+  final message = errorText.toLowerCase();
+  if (RegExp(r'timeout|timed out|deadline|aborted').hasMatch(message)) {
+    return 'timeout';
+  }
+  if (RegExp(r'network request limit|request budget').hasMatch(message)) {
+    return 'request_limit';
+  }
+  if (RegExp(
+    r'total response limit|response budget|response is too large',
+  ).hasMatch(message)) {
+    return 'response_limit';
+  }
+  if (RegExp(r'redirect limit|too many redirects').hasMatch(message)) {
+    return 'redirect_limit';
+  }
+  if (RegExp(
+    r'invalid provider request|configured addon payload|invalid payload',
+  ).hasMatch(message)) {
+    return 'invalid_payload';
+  }
+  final http = RegExp(
+    r'(?:http|status|returned|failed)\D{0,12}([1-5][0-9]{2})',
+  ).firstMatch(message);
+  if (http != null) return 'http_${http.group(1)}';
+  if (RegExp(
+    r'\b(?:no anime|no titles?|no results?|no matches?|no episodes?)\s+(?:was\s+|were\s+)?found\b',
+  ).hasMatch(message)) {
+    return 'empty_result';
+  }
+  if (RegExp(
+    r'\b(?:selected\s+|requested\s+)?server\s+(?:was\s+)?not found\b|\bno providers found for server\b',
+  ).hasMatch(message)) {
+    return 'empty_sources';
+  }
+  if (RegExp(
+    r'no source|no stream|video source|empty source|unable to find a valid source',
+  ).hasMatch(message)) {
+    return 'empty_sources';
+  }
+  if (RegExp(
+    r'public https|safety|unsafe|private address|not permitted',
+  ).hasMatch(message)) {
+    return 'unsafe_target';
+  }
+  if (RegExp(
+    r'json|parse|unexpected token|invalid response',
+  ).hasMatch(message)) {
+    return 'invalid_response';
+  }
+  if (RegExp(
+    r'network|socket|dns|connection|fetch failed|host lookup',
+  ).hasMatch(message)) {
+    return 'network';
+  }
+  if (RegExp(
+        _missingRuntimeReferencePattern,
+        caseSensitive: false,
+      ).hasMatch(errorText) ||
+      RegExp(
+        _missingRuntimeApiPattern,
+        caseSensitive: false,
+      ).hasMatch(errorText)) {
+    return 'runtime_api';
+  }
+  return 'provider_error';
+}
 
 /// Reads only the bounded, runtime-generated failure marker. Provider error
 /// text is deliberately excluded so URLs, search terms, cookies, and tokens
@@ -686,6 +973,10 @@ SeanimeProviderFailureDetails? seanimeProviderFailureDetails(Object error) {
 
 String _providerReasonCopy(String reason) => switch (reason) {
   'timeout' => 'the provider timed out',
+  'request_limit' => 'the provider exceeded its bounded request budget',
+  'response_limit' => 'the provider exceeded its bounded response budget',
+  'redirect_limit' => 'the upstream exceeded the safe redirect limit',
+  'invalid_payload' => 'the provider returned an invalid payload',
   'empty_sources' || 'empty_result' => 'the upstream returned no sources',
   'unsafe_target' => 'the returned address failed network safety checks',
   'invalid_response' => 'the upstream response format changed',
@@ -1027,8 +1318,19 @@ Future<List<Map<String, dynamic>>> expandHlsVariantsWithinBudget(
       hlsCandidates.map((item) => loader(item, enrichmentCancellation)),
     ).timeout(budget);
     cancellation?.throwIfCancelled();
-    final result = raw.toList(growable: true);
-    for (final variants in groups) {
+    final result = original.toList(growable: true);
+    for (var index = 0; index < groups.length; index++) {
+      final variants = groups[index];
+      final candidate = hlsCandidates[index];
+      final replacesCandidate = variants.any(
+        (item) => '${item['url'] ?? ''}' == '${candidate['url'] ?? ''}',
+      );
+      if (replacesCandidate) {
+        final candidateKey = _rawWebStreamPlaybackIdentity(candidate);
+        result.removeWhere(
+          (item) => _rawWebStreamPlaybackIdentity(item) == candidateKey,
+        );
+      }
       result.addAll(variants);
     }
     return mergeDuplicateWebStreamItems(
@@ -1067,41 +1369,63 @@ String? _webStreamAudioCapabilityWireValue(
   WebStreamAudioCapability.unknown => null,
 };
 
-/// Merges duplicate provider results without discarding complementary audio
-/// evidence. Some providers search Sub and Dub separately but return the same
-/// multi-audio URI for both searches; retaining only the first result made it
-/// appear in only one picker filter.
+/// Deduplicates only playback-equivalent provider results.
+///
+/// A shared URL is not proof of dual audio: providers can use mode-specific
+/// headers, cookies, subtitles, or opaque session state. Exclusive Sub and Dub
+/// results therefore stay separate unless the provider independently labels a
+/// result as dual audio.
 List<Map<String, dynamic>> mergeDuplicateWebStreamItems(
   Iterable<Map<String, dynamic>> items,
 ) {
   final unique = <String, Map<String, dynamic>>{};
   for (final item in items) {
-    final url = '${item['url'] ?? ''}';
-    final quality = '${item['quality'] ?? ''}';
-    final key = '$url|$quality';
+    final capability = webStreamAudioCapabilityFromWire(item);
+    final key = _rawWebStreamPlaybackIdentity(item);
     final existing = unique[key];
     if (existing == null) {
       unique[key] = item;
       continue;
     }
 
-    // Read the complete bounded provider result rather than only the normalized
-    // field. Older extensions may report complementary `subOrDub`, track, or
-    // boolean evidence on duplicate Sub/Dub results.
-    final existingCapability = webStreamAudioCapabilityFromWire(existing);
-    final itemCapability = webStreamAudioCapabilityFromWire(item);
-    final mergedCapability = mergeWebStreamAudioCapabilities(
-      existingCapability,
-      itemCapability,
-    );
     final winner =
         _rawAudioCapabilityScore(item) > _rawAudioCapabilityScore(existing)
         ? item
         : existing;
-    final wireValue = _webStreamAudioCapabilityWireValue(mergedCapability);
-    unique[key] = <String, dynamic>{...winner, 'audioCapability': ?wireValue};
+    final languages = <String>{
+      ...webStreamAudioLanguagesFromWire(existing),
+      ...webStreamAudioLanguagesFromWire(item),
+    }.take(24).toList(growable: false);
+    final wireValue = _webStreamAudioCapabilityWireValue(capability);
+    unique[key] = <String, dynamic>{
+      ...winner,
+      'audioCapability': ?wireValue,
+      if (languages.isNotEmpty) 'audioLanguages': languages,
+    };
   }
   return unique.values.toList(growable: false);
+}
+
+String _rawWebStreamPlaybackIdentity(Map<String, dynamic> item) => [
+  '${item['url'] ?? ''}',
+  '${item['quality'] ?? ''}',
+  webStreamAudioCapabilityFromWire(item).name,
+  _rawWebStreamHeaderFingerprint(item['headers']),
+  '${item['subtitleUrl'] ?? ''}',
+  '${item['subtitleLanguage'] ?? ''}',
+  _rawSeanimeExternalAudioFingerprint(item['externalAudioTracks']),
+].join('|');
+
+String _rawWebStreamHeaderFingerprint(Object? raw) {
+  final headers = sanitizeAddonHeaders(raw);
+  final entries = headers.entries.toList(growable: false)
+    ..sort(
+      (left, right) =>
+          left.key.toLowerCase().compareTo(right.key.toLowerCase()),
+    );
+  return entries
+      .map((entry) => '${entry.key.toLowerCase()}:${entry.value}')
+      .join('\n');
 }
 
 bool isHlsInspectionCandidate(Map<String, dynamic> item) {
@@ -1116,9 +1440,9 @@ bool isHlsInspectionCandidate(Map<String, dynamic> item) {
       normalizedType.contains('mpegurl');
 }
 
-/// Selects a small, unique set of safe HLS URLs for optional metadata
-/// inspection. Providers commonly repeat one master under several labels;
-/// inspecting those duplicates only delays the stream picker.
+/// Selects a small, unique set of safe HLS request variants for optional
+/// metadata inspection. Providers commonly repeat one master under several
+/// labels; independently authorized header variants must remain distinct.
 List<Map<String, dynamic>> selectHlsInspectionCandidates(
   Iterable<Map<String, dynamic>> items, {
   int maximum = 4,
@@ -1129,7 +1453,15 @@ List<Map<String, dynamic>> selectHlsInspectionCandidates(
     if (!isHlsInspectionCandidate(item)) continue;
     final uri = safePublicHttpsUri(item['url']);
     if (uri == null) continue;
-    selected.putIfAbsent(uri.toString(), () => item);
+    final key = webPlaybackVariantKey(
+      providerIdentity: 'hls-inspection',
+      uri: uri,
+      audioCapability: WebStreamAudioCapability.unknown,
+      headers: sanitizeAddonHeaders(item['headers']),
+    );
+    final sidecarAwareKey =
+        '$key|${_rawSeanimeExternalAudioFingerprint(item['externalAudioTracks'])}';
+    selected.putIfAbsent(sidecarAwareKey, () => item);
     if (selected.length >= maximum) break;
   }
   return selected.values.toList(growable: false);
@@ -1432,8 +1764,28 @@ Future<List<Map<String, dynamic>>> _executeProvider(
   final runtimeStartedAt = DateTime.now();
   const runtimeNetworkWindow = Duration(milliseconds: 9500);
   final completed = Completer<List<Map<String, dynamic>>>();
+  var latestProgress = const <Map<String, dynamic>>[];
   final networkBudget = AddonRuntimeNetworkBudget();
+  final cookieJar = AddonRuntimeCookieJar();
   final sleepTimers = <String, Timer>{};
+  final clearedSleepIds = <String>{};
+
+  List<Map<String, dynamic>> projectedRuntimeResult(dynamic data) {
+    final streams = <Map<String, dynamic>>[];
+    final maximumItems = switch (input['operation']) {
+      'manga-search' => 120,
+      'manga-chapters' || 'manga-pages' => 1000,
+      _ => 80,
+    };
+    if (data is List) {
+      for (final item in data.take(maximumItems)) {
+        if (item is Map) {
+          streams.add(item.map((key, value) => MapEntry('$key', value)));
+        }
+      }
+    }
+    return streams;
+  }
 
   runtime.onMessage('TetoNetwork', (dynamic request) {
     unawaited(() async {
@@ -1455,8 +1807,15 @@ Future<List<Map<String, dynamic>>> _executeProvider(
           request,
           maximumOverallTimeout: requestBudget,
           cancellation: cancellation,
+          cookieJar: cookieJar,
         );
-        networkBudget.recordResponse('${response['body'] ?? ''}');
+        final bodyByteLength = response['bodyByteLength'];
+        if (bodyByteLength is int) {
+          networkBudget.recordResponseBytes(bodyByteLength);
+        } else {
+          // Compatibility fallback for an injected/older request adapter.
+          networkBudget.recordResponse('${response['body'] ?? ''}');
+        }
         if (!disposed) {
           runtime.evaluate(
             '__tetoNetworkFinish(${jsonEncode(id)}, ${jsonEncode(response)});',
@@ -1487,26 +1846,23 @@ Future<List<Map<String, dynamic>>> _executeProvider(
       );
       return;
     }
-    final data = value['result'];
-    final streams = <Map<String, dynamic>>[];
-    final maximumItems = switch (input['operation']) {
-      'manga-search' => 120,
-      'manga-chapters' || 'manga-pages' => 1000,
-      _ => 80,
-    };
-    if (data is List) {
-      for (final item in data.take(maximumItems)) {
-        if (item is Map) {
-          streams.add(item.map((key, value) => MapEntry('$key', value)));
-        }
-      }
-    }
-    completed.complete(streams);
+    completed.complete(projectedRuntimeResult(value['result']));
+  });
+  runtime.onMessage('TetoProgress', (dynamic value) {
+    if (completed.isCompleted || value is! Map || value['ok'] != true) return;
+    final streams = projectedRuntimeResult(value['result']);
+    if (streams.isNotEmpty) latestProgress = streams;
   });
   runtime.onMessage('TetoSleep', (dynamic request) {
     if (disposed || cancellation.isCancelled || request is! Map) return;
     final id = '${request['id'] ?? ''}';
-    if (id.isEmpty || sleepTimers.containsKey(id)) return;
+    if (!_isValidAddonSleepId(id) || sleepTimers.containsKey(id)) return;
+    if (clearedSleepIds.remove(id)) return;
+    if (sleepTimers.length >= 64) {
+      runtime.evaluate('__tetoSleepFinish(${jsonEncode(id)});');
+      unawaited(runtime.dispatch());
+      return;
+    }
     final remaining =
         runtimeNetworkWindow - DateTime.now().difference(runtimeStartedAt);
     final duration = addonSleepDuration(
@@ -1525,6 +1881,17 @@ Future<List<Map<String, dynamic>>> _executeProvider(
     } else {
       sleepTimers[id] = Timer(duration, finish);
     }
+  });
+  runtime.onMessage('TetoClearSleep', (dynamic request) {
+    if (disposed || request is! Map) return;
+    final id = '${request['id'] ?? ''}';
+    if (!_isValidAddonSleepId(id)) return;
+    final timer = sleepTimers.remove(id);
+    if (timer != null) {
+      timer.cancel();
+      return;
+    }
+    if (clearedSleepIds.length < 64) clearedSleepIds.add(id);
   });
 
   try {
@@ -1570,7 +1937,7 @@ Future<List<Map<String, dynamic>>> _executeProvider(
               await __tetoAwaitSleeps();
             }
           };
-          const settings = typeof provider.getSettings === 'function'
+          let settings = typeof provider.getSettings === 'function'
             ? ((await providerCall(() => provider.getSettings())) || {}) : {};
           const titles = ${jsonEncode((input['titles'] as List?) ?? const [])}
             .filter(Boolean).filter((title, index, all) =>
@@ -1579,6 +1946,7 @@ Future<List<Map<String, dynamic>>> _executeProvider(
           const episodeNumber = ${input['episode']};
           const requestedSeason = ${input['requestedSeason'] ?? 'null'};
           const preferredSubtitleLanguage = ${jsonEncode(input['preferredSubtitleLanguage'] ?? 'eng')};
+          const preferredAudioMode = ${jsonEncode(input['preferredAudioMode'] ?? 'all')};
           // Match Seanime's documented provider contract exactly. Providers
           // are allowed to branch on these sentinel values when catalog
           // metadata is unavailable.
@@ -1592,6 +1960,11 @@ Future<List<Map<String, dynamic>>> _executeProvider(
             synonyms: ${jsonEncode((input['synonyms'] as List?) ?? const [])},
             isAdult: ${input['isAdult'] == true},
           };
+          const absoluteSeasonOffset = ${input['absoluteSeasonOffset'] ?? 'null'};
+          if (Number.isInteger(absoluteSeasonOffset) &&
+              absoluteSeasonOffset > 0 && absoluteSeasonOffset <= 100000) {
+            media.absoluteSeasonOffset = absoluteSeasonOffset;
+          }
           // Canonical Seanime names stay authoritative. Read-only aliases
           // cover older community providers without changing the object shape
           // expected by current SearchOptions implementations.
@@ -1628,9 +2001,22 @@ Future<List<Map<String, dynamic>>> _executeProvider(
             : String(server || 'Default');
           const serverValue = server => server && typeof server === 'object'
             ? (server.value || server.id || server.name || server.label) : server;
+          const boundedServerList = value => {
+            if (!Array.isArray(value)) return [];
+            const output = [];
+            const seen = new Set();
+            for (const server of value) {
+              const key = (String(serverValue(server) || '') + '|' +
+                serverName(server)).trim().toLowerCase();
+              if (!key || seen.has(key)) continue;
+              seen.add(key);
+              output.push(server);
+              if (output.length >= 48) break;
+            }
+            return output;
+          };
           const configuredServers = settings.episodeServers || settings.servers;
-          const configuredServerList = Array.isArray(configuredServers)
-            ? configuredServers.slice(0, 6) : [];
+          const configuredServerList = boundedServerList(configuredServers);
           const serverAudioLabel = server => String(serverName(server) || '')
             .toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, ' ').trim();
           const serverSupportsDub = server => {
@@ -1664,12 +2050,20 @@ Future<List<Map<String, dynamic>>> _executeProvider(
           // dub SearchOption without declaring the capability. Never probe a
           // provider that explicitly opted out, and never treat the requested
           // flag itself as proof that the returned stream is dubbed.
+          const preferredDub = preferredAudioMode === 'dub';
           const modes = supportsDub
-            ? [{dub: false, undeclaredDubProbe: false},
-               {dub: true, undeclaredDubProbe: false}]
-            : (!hasDubSettingDeclaration && !hasDubServerMarker)
-              ? [{dub: false, undeclaredDubProbe: false},
-                 {dub: true, undeclaredDubProbe: true}]
+            ? (preferredDub
+                ? [{dub: true, undeclaredDubProbe: false},
+                   {dub: false, undeclaredDubProbe: false}]
+                : [{dub: false, undeclaredDubProbe: false},
+                   {dub: true, undeclaredDubProbe: false}])
+            : (!hasDubSettingDeclaration && !hasDubServerMarker &&
+                preferredAudioMode !== 'sub')
+              ? (preferredDub
+                  ? [{dub: true, undeclaredDubProbe: true},
+                     {dub: false, undeclaredDubProbe: false}]
+                  : [{dub: false, undeclaredDubProbe: false},
+                     {dub: true, undeclaredDubProbe: true}])
               : [{dub: false, undeclaredDubProbe: false}];
           const output = [];
           const errors = [];
@@ -1721,25 +2115,28 @@ Future<List<Map<String, dynamic>>> _executeProvider(
               ? 300 + Math.round((overlap / denominator) * 100)
               : overlap * 20;
           };
-          const listFrom = (value, keys, depth) => {
+          const listFrom = (value, keys, depth, maximum) => {
             const level = Number(depth || 0);
-            if (Array.isArray(value)) return value.slice(0, 200);
+            const requestedLimit = Number(maximum || 200);
+            const limit = Number.isFinite(requestedLimit)
+              ? Math.max(1, Math.min(4096, Math.floor(requestedLimit))) : 200;
+            if (Array.isArray(value)) return value.slice(0, limit);
             if (!value || typeof value !== 'object' || level >= 3) return [];
             for (const key of keys) {
-              if (Array.isArray(value[key])) return value[key].slice(0, 200);
+              if (Array.isArray(value[key])) return value[key].slice(0, limit);
               if (value[key] && typeof value[key] === 'object') {
-                const nested = listFrom(value[key], keys, level + 1);
+                const nested = listFrom(value[key], keys, level + 1, limit);
                 if (nested.length) return nested;
               }
             }
             for (const wrapper of ['data', 'result', 'response', 'payload']) {
               if (value[wrapper] && typeof value[wrapper] === 'object') {
-                const nested = listFrom(value[wrapper], keys, level + 1);
+                const nested = listFrom(value[wrapper], keys, level + 1, limit);
                 if (nested.length) return nested;
               }
             }
             const mapped = Object.values(value);
-            if (mapped.length && mapped.length <= 200 &&
+            if (mapped.length && mapped.length <= limit &&
                 mapped.every(item => item && typeof item === 'object')) {
               return mapped;
             }
@@ -1839,6 +2236,21 @@ Future<List<Map<String, dynamic>>> _executeProvider(
             'title', 'name', 'englishTitle', 'romajiTitle', 'nativeTitle',
             'titleNative', 'label',
           ]) || '');
+          const candidateSeasonOf = item => {
+            const structured = seasonNumberOf(item);
+            if (Number.isInteger(structured) && structured > 0) {
+              return structured;
+            }
+            for (const raw of [
+              item && item.title, item && item.name, item && item.label,
+              item && item.id, item && item.slug, item && item.url,
+              item && item.link,
+            ]) {
+              const parsed = explicitSeason(raw);
+              if (Number.isInteger(parsed) && parsed > 0) return parsed;
+            }
+            return null;
+          };
           const candidateYearOf = item => {
             const raw = valueFrom(item, [
               'year', 'releaseYear', 'startYear', 'airedYear', 'startDate',
@@ -1855,6 +2267,10 @@ Future<List<Map<String, dynamic>>> _executeProvider(
           const providerReason = error => {
             const message = String(error && error.message || error || '').toLowerCase();
             if (/timeout|timed out|deadline|aborted/.test(message)) return 'timeout';
+            if (/network request limit|request budget/.test(message)) return 'request_limit';
+            if (/total response limit|response budget|response is too large/.test(message)) return 'response_limit';
+            if (/redirect limit|too many redirects/.test(message)) return 'redirect_limit';
+            if (/invalid provider request|configured addon payload|invalid payload/.test(message)) return 'invalid_payload';
             const http = message.match(/(?:http|status|returned|failed)\\D{0,12}([1-5][0-9]{2})/);
             if (http) return 'http_' + http[1];
             // These common empty-result phrases describe title or episode
@@ -1870,7 +2286,15 @@ Future<List<Map<String, dynamic>>> _executeProvider(
             if (/public https|safety|unsafe|private address|not permitted/.test(message)) return 'unsafe_target';
             if (/json|parse|unexpected token|invalid response/.test(message)) return 'invalid_response';
             if (/network|socket|dns|connection|fetch failed|host lookup/.test(message)) return 'network';
-            if (/referenceerror|is not defined|is not a function|undefined/.test(message)) return 'runtime_api';
+            const missingRuntimeReference = new RegExp(
+              ${jsonEncode(_missingRuntimeReferencePattern)}, 'i'
+            );
+            const missingRuntimeApi = new RegExp(
+              ${jsonEncode(_missingRuntimeApiPattern)}, 'i'
+            );
+            if (missingRuntimeReference.test(message) || missingRuntimeApi.test(message)) {
+              return 'runtime_api';
+            }
             return 'provider_error';
           };
           const isSearchArgumentShapeError = error => {
@@ -1928,6 +2352,150 @@ Future<List<Map<String, dynamic>>> _executeProvider(
               const words = new Set(value.split(' ').filter(Boolean));
               return aliases.some(alias => value === alias || words.has(alias));
             }) || tracks[0];
+          };
+          const trackIsAudio = track => {
+            if (!track || typeof track !== 'object') return false;
+            const kind = normalize(
+              track.type || track.kind || track.codecType || track.trackType
+            );
+            return kind === 'audio' || kind.includes('audio');
+          };
+          const explicitTrackEntries = (item, keys) => {
+            if (!item || typeof item !== 'object') return [];
+            const output = [];
+            const append = value => {
+              if (output.length >= 64 || value == null) return;
+              if (typeof value === 'string') {
+                output.push(value);
+                return;
+              }
+              if (value && typeof value === 'object' && !Array.isArray(value) &&
+                  valueFrom(value, [
+                    'url', 'file', 'src', 'link', 'href', 'uri', 'manifest',
+                    'playlist', 'streamUrl', 'hls',
+                  ]) != null) {
+                output.push(value);
+                return;
+              }
+              for (const entry of listFrom(
+                value,
+                keys.concat(['items', 'tracks', 'sources']),
+                0,
+                64,
+              )) {
+                output.push(entry);
+                if (output.length >= 64) break;
+              }
+            };
+            for (const key of keys) append(item[key]);
+            return output.slice(0, 64);
+          };
+          const audioTrackEntriesWithin = item => {
+            const explicitKeys = [
+              'externalAudioTracks', 'audioTracks', 'availableAudioTracks',
+              'audioStreams', 'audios',
+            ];
+            const output = explicitTrackEntries(item, explicitKeys);
+            for (const track of listFrom(
+              item && item.tracks,
+              ['tracks', 'items'],
+              0,
+              64,
+            )) {
+              if (trackIsAudio(track)) output.push(track);
+              if (output.length >= 64) break;
+            }
+            return output.slice(0, 64);
+          };
+          const subtitleTrackEntriesWithin = item => {
+            const output = explicitTrackEntries(item, ['subtitles', 'captions']);
+            for (const track of listFrom(
+              item && item.tracks,
+              ['tracks', 'items'],
+              0,
+              64,
+            )) {
+              // Untyped generic tracks retain legacy subtitle compatibility;
+              // entries explicitly identified as audio never cross into CC.
+              if (!trackIsAudio(track)) output.push(track);
+              if (output.length >= 64) break;
+            }
+            return output.slice(0, 64);
+          };
+          const boundedTrackText = value => {
+            if (typeof value !== 'string') return null;
+            const text = value.replace(/[\\u0000-\\u001f\\u007f]/g, ' ')
+              .replace(/[\\u202a-\\u202e\\u2066-\\u2069]/g, '')
+              .replace(/\\s+/g, ' ').trim();
+            return text ? text.slice(0, 80) : null;
+          };
+          const boundedExternalAudioHeaders = value => {
+            if (!value || typeof value !== 'object' || Array.isArray(value)) {
+              return null;
+            }
+            const output = {};
+            for (const [rawName, rawValue] of Object.entries(value).slice(0, 24)) {
+              const name = String(rawName || '').trim();
+              if (!name || name.length > 80 ||
+                  !/^[!#\$%&'*+.^_`|~0-9A-Za-z-]+\$/.test(name) ||
+                  !['string', 'number', 'boolean'].includes(typeof rawValue)) {
+                continue;
+              }
+              const headerValue = String(rawValue).trim();
+              if (!headerValue || headerValue.length > 1024 ||
+                  /[\\u0000-\\u001f\\u007f]/.test(headerValue)) {
+                continue;
+              }
+              output[name] = headerValue;
+            }
+            return Object.keys(output).length ? output : null;
+          };
+          const externalAudioTracksOf = (source, resolved, bases) => {
+            const output = [];
+            const seen = new Set();
+            const candidates = audioTrackEntriesWithin(source)
+              .concat(audioTrackEntriesWithin(resolved))
+              .slice(0, 64);
+            for (const rawTrack of candidates) {
+              const track = typeof rawTrack === 'string'
+                ? {url: rawTrack} : rawTrack;
+              if (!track || typeof track !== 'object') continue;
+              const rawUrl = valueFrom(track, [
+                'url', 'file', 'src', 'link', 'href', 'uri', 'manifest',
+                'playlist', 'streamUrl', 'hls',
+              ]);
+              if (typeof rawTrack === 'string') {
+                const location = rawTrack.trim();
+                const looksLikeLocation = /^(?:https:)?\\/\\//i.test(location) ||
+                  /^(?:\\.\\.?\\/|\\/)/.test(location) ||
+                  /[/?#]/.test(location) ||
+                  /\\.(?:m3u8|mpd|aac|m4a|mp3|opus|ogg|flac|wav|ac3|eac3)(?:\$|[?#])/i
+                    .test(location);
+                if (!looksLikeLocation) continue;
+              }
+              const audioUrl = toHttps(rawUrl, bases);
+              if (!audioUrl) continue;
+              const language = boundedTrackText(valueFrom(track, [
+                'language', 'lang', 'locale', 'audioLanguage',
+              ]));
+              const label = boundedTrackText(valueFrom(track, [
+                'label', 'name', 'title', 'quality',
+              ])) || language;
+              const headers = boundedExternalAudioHeaders(
+                track.headers || track.requestHeaders
+              );
+              const marker = audioUrl + '|' + String(language || '') + '|' +
+                String(label || '') + '|' + JSON.stringify(headers || {});
+              if (seen.has(marker)) continue;
+              seen.add(marker);
+              const normalizedTrack = {url: audioUrl};
+              if (label) normalizedTrack.label = label;
+              if (language) normalizedTrack.language = language;
+              if (headers) normalizedTrack.headers = headers;
+              output.push(normalizedTrack);
+              if (output.length >= $seanimeMaximumExternalAudioTracks) break;
+            }
+            return output;
           };
           const audioEvidenceText = (value, depth) => {
             const level = Number(depth || 0);
@@ -1988,23 +2556,8 @@ Future<List<Map<String, dynamic>>> _executeProvider(
           };
           const audioSupportFromTracks = item => {
             if (!item || typeof item !== 'object') return 0;
-            const explicit = listFrom(
-              item.audioTracks || item.availableAudioTracks ||
-                item.audioStreams || item.audios,
-              [
-                'audioTracks', 'availableAudioTracks', 'audioStreams',
-                'audios', 'items',
-              ],
-            );
-            // A generic tracks collection is frequently subtitles. Accept it
-            // only when the provider identifies each entry as audio.
-            const generic = listFrom(item.tracks, ['tracks', 'items']).filter(track => {
-              if (!track || typeof track !== 'object') return false;
-              const kind = normalize(track.type || track.kind || track.codecType);
-              return kind === 'audio' || kind.includes('audio');
-            });
             let support = 0;
-            for (const track of explicit.concat(generic)) {
+            for (const track of audioTrackEntriesWithin(item)) {
               const text = normalize(typeof track === 'string' ? track :
                 track && (track.language || track.lang || track.label || track.name));
               const words = new Set(text.split(' ').filter(Boolean));
@@ -2039,17 +2592,61 @@ Future<List<Map<String, dynamic>>> _executeProvider(
             addValue(item.audioLanguage);
             addValue(item.audioLanguages);
             addValue(item.availableAudioLanguages);
-            for (const track of listFrom(
-              item.audioTracks || item.availableAudioTracks ||
-                item.audioStreams || item.audios,
-              ['audioTracks', 'availableAudioTracks', 'audioStreams', 'audios', 'items'],
-            )) {
+            for (const track of audioTrackEntriesWithin(item)) {
               addValue(track);
             }
             return output.slice(0, 24);
           };
+          const sourceAudioLocale = item => {
+            if (!item || typeof item !== 'object') return null;
+            const explicit = valueFrom(item, [
+              'audioLanguage', 'audioLang', 'audioLocale',
+            ]);
+            const raw = String(explicit || valueFrom(item, [
+              'label', 'quality', 'title', 'name',
+            ]) || '').trim();
+            // A leading BCP-47/ISO language token is stream-specific evidence.
+            // Do not scan arbitrary words later in the label: "1080p English
+            // subtitles" describes captions, not the audio feed.
+            const match = /^([a-z]{2,3})(?:[-_]([a-z]{2}))?(?=\\s|\\(|\\[|_|-|\$)/i.exec(raw);
+            if (!match) return null;
+            const language = match[1].toLowerCase();
+            const known = new Set([
+              'ar', 'ara', 'bn', 'ben', 'bg', 'bul', 'ca', 'cat',
+              'cs', 'ces', 'cze', 'da', 'dan', 'de', 'deu', 'ger',
+              'el', 'ell', 'gre', 'en', 'eng', 'es', 'spa', 'fa',
+              'fas', 'per', 'fi', 'fin', 'fil', 'tl', 'fr', 'fra',
+              'fre', 'he', 'heb', 'hi', 'hin', 'hr', 'hrv', 'hu',
+              'hun', 'id', 'ind', 'it', 'ita', 'ja', 'jp', 'jpn',
+              'ko', 'kor', 'ms', 'msa', 'may', 'nl', 'nld', 'dut',
+              'no', 'nb', 'nn', 'nor', 'pl', 'pol', 'pt', 'por',
+              'ro', 'ron', 'rum', 'ru', 'rus', 'sk', 'slk', 'slo',
+              'sl', 'slv', 'sr', 'srp', 'sv', 'swe', 'ta', 'tam',
+              'te', 'tel', 'th', 'tha', 'tr', 'tur', 'uk', 'ukr',
+              'ur', 'urd', 'vi', 'vie', 'zh', 'zho', 'chi',
+            ]);
+            if (!known.has(language)) return null;
+            return match[2]
+              ? language + '-' + match[2].toUpperCase()
+              : language;
+          };
+          const audioSupportFromSourceLabel = item => {
+            const locale = sourceAudioLocale(item);
+            if (locale) {
+              const primary = locale.split('-')[0];
+              return ['ja', 'jp', 'jpn'].includes(primary) ? 1 : 2;
+            }
+            const raw = String(valueFrom(item, [
+              'audioLabel', 'label', 'quality', 'title', 'name',
+            ]) || '').trim();
+            const first = normalize(raw).split(' ').filter(Boolean)[0] || '';
+            if (['japanese', 'sub', 'subbed'].includes(first)) return 1;
+            if (['english', 'dub', 'dubbed'].includes(first)) return 2;
+            return 0;
+          };
           const audioLanguagesOf = (source, resolved, selectedResult) =>
-            audioLanguagesWithin(source)
+            (sourceAudioLocale(source) ? [sourceAudioLocale(source)] : [])
+              .concat(audioLanguagesWithin(source))
               .concat(audioLanguagesWithin(resolved))
               .concat(audioLanguagesWithin(selectedResult))
               .slice(0, 24);
@@ -2066,6 +2663,10 @@ Future<List<Map<String, dynamic>>> _executeProvider(
             // its provider also offers the other language elsewhere.
             const sourceCapability = capabilityWithin(source);
             if (sourceCapability) return sourceCapability;
+            const sourceLabelCapability = capabilityFromSupport(
+              audioSupportFromSourceLabel(source)
+            );
+            if (sourceLabelCapability) return sourceLabelCapability;
             const resolvedCapability = capabilityWithin(resolved);
             if (resolvedCapability) return resolvedCapability;
 
@@ -2091,7 +2692,12 @@ Future<List<Map<String, dynamic>>> _executeProvider(
           let providerRequiresLegacySearch = false;
           const cleanEmptyLegacyProbedModes = new Set();
           let providerSearchRuntimeFailed = false;
+          let settingsRefreshedAfterLookup = false;
           for (const mode of modes) {
+            // A stream with independent dual-audio evidence already satisfies
+            // either picker mode. Do not repeat the provider's title, episode,
+            // and server work solely to request the opposite flag.
+            if (output.some(item => item.audioCapability === 'sub_and_dub')) break;
             if (providerSearchRuntimeFailed) break;
             const dub = mode.dub;
             const undeclaredDubProbe = mode.undeclaredDubProbe;
@@ -2106,9 +2712,7 @@ Future<List<Map<String, dynamic>>> _executeProvider(
                 if (!item || typeof item !== 'object') return;
                 const candidateName = candidateTitle(item);
                 const titleSeason = explicitSeason(candidateName);
-                const structuredSeasonValue = seasonNumberOf(item);
-                const structuredSeason = Number.isInteger(structuredSeasonValue) &&
-                  structuredSeasonValue > 0 ? structuredSeasonValue : null;
+                const structuredSeason = candidateSeasonOf(item);
                 // Alias scoring is intentionally broad, but it must not let a
                 // bare/native alias erase the catalog's numbered-season
                 // identity. Provider-owned title/season fields or an exact
@@ -2261,7 +2865,7 @@ Future<List<Map<String, dynamic>>> _executeProvider(
             let selected = null;
             let episode = null;
             for (const candidate of rankedCandidates) {
-              let episodes = listFrom(candidate.item, ['episodes']);
+              let episodes = listFrom(candidate.item, ['episodes'], 0, 4096);
               if (episodes.length) successfulEpisodeLookups += 1;
               const identifier = valueFrom(candidate.item, [
                 'id', 'animeId', 'mediaId', 'providerId', 'slug', 'url', 'link',
@@ -2275,7 +2879,7 @@ Future<List<Map<String, dynamic>>> _executeProvider(
                   successfulEpisodeLookups += 1;
                   episodes = listFrom(rawEpisodes, [
                     'episodes', 'items', 'results', 'data', 'entries',
-                  ]);
+                  ], 0, 4096);
                 } catch (error) {
                   errors.push({stage: 'episode_lookup', reason: providerReason(error)});
                   // A bounded object-shape retry covers providers that adopted
@@ -2291,7 +2895,7 @@ Future<List<Map<String, dynamic>>> _executeProvider(
                       successfulEpisodeLookups += 1;
                       episodes = listFrom(rawEpisodes, [
                         'episodes', 'items', 'results', 'data', 'entries',
-                      ]);
+                      ], 0, 4096);
                     } catch (fallbackError) {
                       errors.push({
                         stage: 'episode_lookup',
@@ -2314,8 +2918,22 @@ Future<List<Map<String, dynamic>>> _executeProvider(
             }
             if (!selected || !episode) continue;
             foundEpisode = true;
-            let servers = Array.isArray(configuredServers) && configuredServers.length
-              ? configuredServers.slice(0, 6) : ['default'];
+            if (!settingsRefreshedAfterLookup &&
+                typeof provider.getSettings === 'function') {
+              settingsRefreshedAfterLookup = true;
+              try {
+                const refreshed = await providerCall(() => provider.getSettings());
+                if (refreshed && typeof refreshed === 'object') {
+                  settings = Object.assign({}, settings, refreshed);
+                }
+              } catch (error) {
+                errors.push({stage: 'server_lookup', reason: providerReason(error)});
+              }
+            }
+            const activeConfiguredServers =
+              settings.episodeServers || settings.servers || configuredServers;
+            let servers = boundedServerList(activeConfiguredServers);
+            if (!servers.length) servers = ['default'];
             const dubbedServers = servers.filter(serverIsDubOnly);
             if (supportsDub && dubbedServers.length) {
               servers = dub ? dubbedServers : servers.filter(server => !serverIsDubOnly(server));
@@ -2324,7 +2942,9 @@ Future<List<Map<String, dynamic>>> _executeProvider(
             // resolving a server. Resolve in manifest order on the one
             // Provider instance so those stateful calls cannot race and so
             // stream ordering remains deterministic.
+            let successfulServers = 0;
             for (const server of servers) {
+              const outputBeforeServer = output.length;
               let resolved = null;
               try {
                 try {
@@ -2356,6 +2976,9 @@ Future<List<Map<String, dynamic>>> _executeProvider(
                 }
                 if (!resolved) continue;
                 foundServer = true;
+                const effectiveServer = resolved.server != null &&
+                    String(resolved.server).trim()
+                  ? resolved.server : server;
                 const resolvedHeaders = resolved &&
                   (resolved.headers || resolved.requestHeaders || resolved.responseHeaders);
                 const serverHeaders = resolvedHeaders && typeof resolvedHeaders === 'object'
@@ -2377,13 +3000,9 @@ Future<List<Map<String, dynamic>>> _executeProvider(
                     bases,
                   );
                   if (!url) continue;
-                  const subtitles = listFrom(
-                    source.subtitles || source.tracks || source.captions,
-                    ['subtitles', 'tracks', 'captions'],
-                  ).concat(listFrom(
-                    resolved.subtitles || resolved.tracks || resolved.captions,
-                    ['subtitles', 'tracks', 'captions'],
-                  ));
+                  const subtitles = subtitleTrackEntriesWithin(source)
+                    .concat(subtitleTrackEntriesWithin(resolved))
+                    .slice(0, 64);
                   const preferredSubtitle = preferredSubtitleTrack(subtitles);
                   const subtitleUrl = preferredSubtitle && toHttps(
                     preferredSubtitle.url || preferredSubtitle.file ||
@@ -2392,15 +3011,20 @@ Future<List<Map<String, dynamic>>> _executeProvider(
                       preferredSubtitle.subtitleUrl,
                     bases,
                   );
+                  const externalAudioTracks = externalAudioTracksOf(
+                    source,
+                    resolved,
+                    bases,
+                  );
                   const explicitDubSelection =
                     /dub/i.test(String(selected.item.subOrDub || '')) ||
-                    /dub/i.test(serverName(server));
+                    /dub/i.test(serverName(effectiveServer));
                   const audioCapability = audioCapabilityOf(
                     source,
                     resolved,
                     selected.item,
                     (!undeclaredDubProbe && dub) || explicitDubSelection,
-                    serverName(server || resolved.server),
+                    serverName(effectiveServer),
                   );
                   // A provider that omits Dub capability metadata might ignore
                   // the probe flag and return its ordinary Sub feed. Keep only
@@ -2411,7 +3035,7 @@ Future<List<Map<String, dynamic>>> _executeProvider(
                     continue;
                   }
                   output.push({
-                    title: serverName(server || resolved.server) + ' / ' +
+                    title: serverName(effectiveServer) + ' / ' +
                       String(source.quality || source.label || 'Auto'),
                     quality: String(source.quality || source.label || 'Auto'),
                     url,
@@ -2427,6 +3051,7 @@ Future<List<Map<String, dynamic>>> _executeProvider(
                       preferredSubtitle.language || preferredSubtitle.lang ||
                         preferredSubtitle.label || preferredSubtitleLanguage
                     ),
+                    externalAudioTracks,
                     audioCapability,
                     audioLanguages: audioLanguagesOf(
                       source,
@@ -2443,6 +3068,16 @@ Future<List<Map<String, dynamic>>> _executeProvider(
                   stage: resolved ? 'stream_extraction' : 'server_lookup',
                   reason: providerReason(error),
                 });
+              }
+              if (output.length > outputBeforeServer) {
+                sendMessage('TetoProgress', JSON.stringify({
+                  ok: true,
+                  result: output.slice(0, 80),
+                }));
+                successfulServers += 1;
+                // Keep multiple mirrors/qualities without spending the entire
+                // provider deadline walking dozens of already-working hosts.
+                if (successfulServers >= 8) break;
               }
             }
           }
@@ -2498,16 +3133,32 @@ Future<List<Map<String, dynamic>>> _executeProvider(
       cancellation.whenCancelled.then<List<Map<String, dynamic>>>(
         (_) => throw const WebProviderSearchCancelled(),
       ),
-    ]).timeout(const Duration(seconds: 10));
+    ]).timeout(
+      const Duration(seconds: 10),
+      onTimeout: () {
+        cancellation.throwIfCancelled();
+        // A declared Sub/Dub provider may return the preferred mode and then
+        // stall while checking the opposite mode. Preserve already-projected
+        // results rather than turning that valid provider into a total
+        // timeout. The worker is still disposed immediately in finally.
+        if (latestProgress.isNotEmpty) return latestProgress;
+        throw TimeoutException('Provider runtime deadline exceeded.');
+      },
+    );
   } finally {
     disposed = true;
     for (final timer in sleepTimers.values) {
       timer.cancel();
     }
     sleepTimers.clear();
+    clearedSleepIds.clear();
     runtime.dispose();
   }
 }
+
+bool _isValidAddonSleepId(String value) =>
+    value.length <= 32 &&
+    RegExp(r'^(?:sleep|timer)-[0-9]{1,12}$').hasMatch(value);
 
 String _mangaProviderInvocationSource(Map<String, Object?> input) {
   final operation = jsonEncode(input['operation']);
@@ -2572,7 +3223,16 @@ String _mangaProviderInvocationSource(Map<String, Object?> input) {
                 synonyms: synonyms,
                 year: boundedNumber(item.year) ?? boundedString(item.year, 16),
                 image: boundedString(item.image, 2048),
-                imageHeaders: projectHeaders(item.imageHeaders),
+                // Current community extensions use both `headers` (the
+                // original Seanime shape) and `imageHeaders` (the explicit
+                // TetoTV shape). Preserve both, with the artwork-specific
+                // values taking precedence, then apply Dart's header policy.
+                imageHeaders: projectHeaders(Object.assign(
+                  {},
+                  item.headers && typeof item.headers === 'object' ? item.headers : {},
+                  item.requestHeaders && typeof item.requestHeaders === 'object' ? item.requestHeaders : {},
+                  item.imageHeaders && typeof item.imageHeaders === 'object' ? item.imageHeaders : {},
+                )),
               });
             } else if (operation === 'manga-chapters') {
               projected.push({
@@ -2682,7 +3342,14 @@ class AddonRuntimeNetworkBudget {
   }
 
   void recordResponse(String value) {
-    _responseBytes += utf8.encode(value).length;
+    recordResponseBytes(utf8.encode(value).length);
+  }
+
+  void recordResponseBytes(int byteLength) {
+    if (byteLength < 0) {
+      throw const FormatException('Provider response length is invalid.');
+    }
+    _responseBytes += byteLength;
     if (_responseBytes > maximumResponseBytes) {
       throw const FormatException(
         'Provider exceeded its total response limit.',
@@ -2723,7 +3390,19 @@ const _crossOriginSafeAddonHeaders = {
   'origin',
   'range',
   'referer',
+  'sec-fetch-dest',
+  'sec-fetch-mode',
+  'sec-fetch-site',
   'user-agent',
+};
+
+// Fetch Metadata values are deliberately finite. Besides keeping the values
+// browser-shaped, this prevents a newly allowlisted cross-origin header from
+// becoming an arbitrary provider-controlled data channel.
+const _addonFetchMetadataValues = <String, Set<String>>{
+  'sec-fetch-dest': {'audio', 'empty', 'video'},
+  'sec-fetch-mode': {'cors', 'navigate', 'no-cors', 'same-origin'},
+  'sec-fetch-site': {'cross-site', 'none', 'same-origin', 'same-site'},
 };
 
 /// Sanitizes headers originating in untrusted add-on code before either the
@@ -2746,7 +3425,12 @@ Map<String, String> sanitizeAddonHeaders(
   for (final entry in raw.entries.take(24)) {
     final key = '${entry.key}'.trim();
     final lower = key.toLowerCase();
-    final value = '${entry.value}'.trim();
+    var value = '${entry.value}'.trim();
+    final allowedFetchMetadataValues = _addonFetchMetadataValues[lower];
+    if (allowedFetchMetadataValues != null) {
+      value = value.toLowerCase();
+      if (!allowedFetchMetadataValues.contains(value)) continue;
+    }
     if (key.isEmpty ||
         key.length > 80 ||
         !RegExp(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$").hasMatch(key) ||
@@ -2802,6 +3486,7 @@ Future<Map<String, Object?>> _safeAddonRequest(
   Duration? maximumOverallTimeout,
   int maximumResponseBytes = 2 * 1024 * 1024,
   WebProviderCancellation? cancellation,
+  AddonRuntimeCookieJar? cookieJar,
 }) async {
   cancellation?.throwIfCancelled();
   if (raw is! Map) throw const FormatException('Invalid provider request.');
@@ -2813,8 +3498,13 @@ Future<Map<String, Object?>> _safeAddonRequest(
   await validatePublicNetworkTarget(currentUri);
   cancellation?.throwIfCancelled();
   final options = raw['options'] is Map ? raw['options'] as Map : const {};
+  final abortSignal = options['signal'];
+  if (addonRuntimeAbortSignalIsAborted(abortSignal)) {
+    throw const HttpException('Provider request was aborted.');
+  }
   final requestedTimeout = addonRequestTimeout(
     options['timeout'],
+    abortSignal: abortSignal,
     maximum: maximumOverallTimeout ?? const Duration(seconds: 12),
   );
   final effectiveOverallTimeout = overallTimeout == null
@@ -2839,6 +3529,11 @@ Future<Map<String, Object?>> _safeAddonRequest(
   final redirectMode = '${options['redirect'] ?? 'follow'}'.toLowerCase();
   if (!const {'follow', 'manual', 'error'}.contains(redirectMode)) {
     throw const FormatException('Invalid provider redirect mode.');
+  }
+  final credentialsMode = '${options['credentials'] ?? 'same-origin'}'
+      .toLowerCase();
+  if (!const {'omit', 'same-origin', 'include'}.contains(credentialsMode)) {
+    throw const FormatException('Invalid provider credentials mode.');
   }
   var headers = Map<String, String>.from(
     sanitizeAddonHeaders(
@@ -2879,28 +3574,32 @@ Future<Map<String, Object?>> _safeAddonRequest(
     () => cancelToken.cancel('Provider request deadline exceeded.'),
   );
   Response<ResponseBody>? response;
-  String responseText = '';
+  var responseBody = AddonRuntimeResponseBody.empty();
   var currentMethod = method;
   var redirected = false;
+  var lastRequestHeaders = headers;
   try {
     for (var redirect = 0; ; redirect++) {
       cancellation?.throwIfCancelled();
+      final requestHeaders = Map<String, String>.from(headers);
+      final cookiesAllowed =
+          credentialsMode == 'include' ||
+          (credentialsMode == 'same-origin' && _sameOrigin(uri, currentUri));
+      if (cookiesAllowed) cookieJar?.apply(currentUri, requestHeaders);
+      lastRequestHeaders = Map.unmodifiable(requestHeaders);
       response = await dio.request<ResponseBody>(
         currentUri.toString(),
         data: body,
         cancelToken: cancelToken,
         options: Options(
           method: currentMethod,
-          headers: headers,
+          headers: lastRequestHeaders,
           responseType: ResponseType.stream,
         ),
       );
-      responseText = await _boundedResponseText(
-        response.data,
-        maximumResponseBytes,
-      );
       final status = response.statusCode ?? 0;
       final location = response.headers.value(HttpHeaders.locationHeader);
+      if (cookiesAllowed) cookieJar?.capture(currentUri, response.headers);
       if (!_isAddonRedirectStatus(status) || location == null) break;
       if (redirectMode == 'manual') break;
       if (redirectMode == 'error') {
@@ -2911,6 +3610,7 @@ Future<Map<String, Object?>> _safeAddonRequest(
       if (redirect >= 4) {
         throw const HttpException('Provider request exceeded redirect limit.');
       }
+      await _discardAddonResponseBody(response.data);
       final redirectUri = safePublicHttpsUri(
         currentUri.resolve(location).toString(),
       );
@@ -2941,6 +3641,10 @@ Future<Map<String, Object?>> _safeAddonRequest(
       await validatePublicNetworkTarget(currentUri);
       cancellation?.throwIfCancelled();
     }
+    responseBody = await readBoundedAddonRuntimeResponseBody(
+      response.data,
+      maximumResponseBytes,
+    );
   } finally {
     overallDeadline.cancel();
     removeCancellationListener?.call();
@@ -2951,9 +3655,6 @@ Future<Map<String, Object?>> _safeAddonRequest(
     for (final entry in rawResponseHeaders.entries)
       if (entry.value.isNotEmpty) entry.key: entry.value.first,
   });
-  final declaredLength = int.tryParse(
-    response.headers.value(HttpHeaders.contentLengthHeader) ?? '',
-  );
   return {
     'status': response.statusCode ?? 0,
     'statusText': response.statusMessage ?? '',
@@ -2962,12 +3663,12 @@ Future<Map<String, Object?>> _safeAddonRequest(
     'ok': (response.statusCode ?? 0) >= 200 && (response.statusCode ?? 0) < 300,
     'redirected': redirected,
     'contentType': response.headers.value(HttpHeaders.contentTypeHeader) ?? '',
-    'contentLength': declaredLength ?? utf8.encode(responseText).length,
-    'body': responseText,
+    'contentLength': responseBody.bytes.length,
+    ...addonRuntimeResponseBodyWireFields(responseBody),
     // HLS expansion must reuse the post-redirect header set. In particular,
     // credentials supplied for one origin cannot follow a master-playlist
     // redirect and then leak to that other origin's variant URLs.
-    'requestHeaders': headers,
+    'requestHeaders': lastRequestHeaders,
     'headers': responseHeaders,
     'rawHeaders': rawResponseHeaders,
     'cookies': _addonResponseCookies(response.headers),
@@ -2978,17 +3679,38 @@ Future<Map<String, Object?>> _safeAddonRequest(
 /// inside both its requested budget and TetoTV's remaining provider deadline.
 Duration addonRequestTimeout(
   Object? raw, {
+  Object? abortSignal,
   Duration maximum = const Duration(seconds: 12),
 }) {
   final numeric = raw is num ? raw.toDouble() : double.tryParse('$raw');
-  final requested = numeric != null && numeric.isFinite && numeric > 0
+  var requested = numeric != null && numeric.isFinite && numeric > 0
       ? Duration(milliseconds: (numeric * 1000).round())
       : maximum;
+  final abortMilliseconds = addonRuntimeAbortSignalTimeoutMilliseconds(
+    abortSignal,
+  );
+  if (abortMilliseconds != null) {
+    final signalDuration = Duration(milliseconds: abortMilliseconds);
+    if (signalDuration < requested) requested = signalDuration;
+  }
   const minimum = Duration(milliseconds: 100);
   if (maximum <= Duration.zero) return minimum;
   if (requested < minimum) return minimum < maximum ? minimum : maximum;
   return requested > maximum ? maximum : requested;
 }
+
+/// Reads only the private, numeric field emitted by TetoTV's AbortSignal shim.
+/// Arbitrary signal fields cannot extend the Dart-side hard deadline.
+int? addonRuntimeAbortSignalTimeoutMilliseconds(Object? raw) {
+  if (raw is! Map) return null;
+  final value = raw['__tetoTimeoutMilliseconds'];
+  final numeric = value is num ? value.toDouble() : double.tryParse('$value');
+  if (numeric == null || !numeric.isFinite || numeric <= 0) return null;
+  return numeric.ceil().clamp(1, 12000);
+}
+
+bool addonRuntimeAbortSignalIsAborted(Object? raw) =>
+    raw is Map && raw['aborted'] == true;
 
 /// Seanime's `$sleep(milliseconds)` is synchronous from a provider author's
 /// perspective, but TetoTV implements it as a host-backed promise barrier so a
@@ -3067,6 +3789,241 @@ Map<String, String> _addonResponseCookies(Headers headers) {
   );
 }
 
+/// Invocation-local cookie storage for providers using Fetch
+/// `credentials: include` or the default same-origin mode.
+///
+/// The jar accepts an RFC-style parent-domain attribute only when the response
+/// host domain-matches it, and sends it only to matching HTTPS hosts and paths.
+/// Since the app intentionally carries no public-suffix database, a domain
+/// cookie is additionally pinned to the host which set it and that host's
+/// descendants. This prevents `Domain=co.uk`-style sibling credential leaks
+/// while retaining providers that set `.example.com` from `api.example.com`.
+/// It has no persistence path and is discarded with each provider invocation.
+/// Public solely so its security contract can be tested without QuickJS.
+class AddonRuntimeCookieJar {
+  static const _maximumCookies = 32;
+
+  final LinkedHashMap<String, _StoredAddonCookie> _cookies = LinkedHashMap();
+  var _sequence = 0;
+
+  void capture(Uri uri, Headers headers) {
+    if (!_isSecureAddonCookieUri(uri)) return;
+    final values = headers.map.entries
+        .where(
+          (entry) => entry.key.toLowerCase() == HttpHeaders.setCookieHeader,
+        )
+        .expand((entry) => entry.value)
+        .take(_maximumCookies);
+    for (final raw in values) {
+      if (raw.length > 8192) continue;
+      try {
+        final cookie = Cookie.fromSetCookieValue(raw);
+        final name = cookie.name.trim();
+        final requestHost = uri.host.toLowerCase();
+        final rawDomain = cookie.domain?.trim();
+        final hostOnly = rawDomain == null || rawDomain.isEmpty;
+        final domain = hostOnly
+            ? requestHost
+            : _normalizeAddonCookieDomain(rawDomain);
+        final path = _normalizeAddonCookiePath(cookie.path, uri);
+        if (name.isEmpty ||
+            name.length > 256 ||
+            !RegExp(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$").hasMatch(name) ||
+            cookie.value.length > 4096 ||
+            RegExp(r'[\x00-\x1f\x7f]').hasMatch(cookie.value) ||
+            domain == null ||
+            path == null ||
+            (!hostOnly &&
+                !addonRuntimeCookieDomainMatches(requestHost, domain))) {
+          continue;
+        }
+        final key = _addonCookieStorageKey(
+          name: name,
+          domain: domain,
+          sourceHost: requestHost,
+          path: path,
+          hostOnly: hostOnly,
+        );
+        if (cookie.maxAge != null && cookie.maxAge! <= 0) {
+          _cookies.remove(key);
+          continue;
+        }
+        final now = DateTime.now();
+        final maxAge = cookie.maxAge;
+        final expires = maxAge != null
+            ? now.add(Duration(seconds: maxAge.clamp(1, 315360000)))
+            : cookie.expires;
+        if (expires != null && !expires.isAfter(now)) {
+          _cookies.remove(key);
+          continue;
+        }
+        // Updating a cookie makes it the newest bounded entry.
+        _cookies.remove(key);
+        _cookies[key] = _StoredAddonCookie(
+          name: name,
+          value: cookie.value,
+          domain: domain,
+          sourceHost: requestHost,
+          hostOnly: hostOnly,
+          path: path,
+          expires: expires,
+          sequence: _sequence++,
+        );
+        while (_cookies.length > _maximumCookies) {
+          _cookies.remove(_cookies.keys.first);
+        }
+      } on FormatException {
+        // A malformed cookie cannot suppress an otherwise valid response.
+      }
+    }
+  }
+
+  void apply(Uri uri, Map<String, String> headers) {
+    if (!_isSecureAddonCookieUri(uri) || _cookies.isEmpty) return;
+    final now = DateTime.now();
+    final matching = <_StoredAddonCookie>[];
+    final expired = <String>[];
+    for (final entry in _cookies.entries) {
+      final cookie = entry.value;
+      if (cookie.expires != null && !cookie.expires!.isAfter(now)) {
+        expired.add(entry.key);
+        continue;
+      }
+      final hostMatches = cookie.hostOnly
+          ? uri.host.toLowerCase() == cookie.domain
+          : addonRuntimeCookieDomainMatches(uri.host, cookie.domain) &&
+                addonRuntimeCookieDomainMatches(uri.host, cookie.sourceHost);
+      if (!hostMatches ||
+          !addonRuntimeCookiePathMatches(uri.path, cookie.path)) {
+        continue;
+      }
+      matching.add(cookie);
+    }
+    for (final key in expired) {
+      _cookies.remove(key);
+    }
+    if (matching.isEmpty) return;
+    // RFC 6265 recommends longer (more specific) paths first. Preserve
+    // creation order for otherwise equivalent cookies.
+    matching.sort((left, right) {
+      final byPath = right.path.length.compareTo(left.path.length);
+      return byPath != 0 ? byPath : left.sequence.compareTo(right.sequence);
+    });
+    final values = matching
+        .map((cookie) => '${cookie.name}=${cookie.value}')
+        .toList(growable: false);
+    final existingKey = headers.keys.cast<String?>().firstWhere(
+      (key) => key?.toLowerCase() == HttpHeaders.cookieHeader,
+      orElse: () => null,
+    );
+    final existing = existingKey == null ? null : headers[existingKey];
+    final combined = [
+      if (existing != null && existing.trim().isNotEmpty) existing.trim(),
+      ...values,
+    ].join('; ');
+    if (combined.length > 4096) return;
+    if (existingKey != null) headers.remove(existingKey);
+    headers[HttpHeaders.cookieHeader] = combined;
+  }
+}
+
+class _StoredAddonCookie {
+  const _StoredAddonCookie({
+    required this.name,
+    required this.value,
+    required this.domain,
+    required this.sourceHost,
+    required this.hostOnly,
+    required this.path,
+    required this.sequence,
+    this.expires,
+  });
+
+  final String name;
+  final String value;
+  final String domain;
+  final String sourceHost;
+  final bool hostOnly;
+  final String path;
+  final int sequence;
+  final DateTime? expires;
+}
+
+bool _isSecureAddonCookieUri(Uri uri) =>
+    uri.scheme.toLowerCase() == 'https' &&
+    uri.host.isNotEmpty &&
+    uri.userInfo.isEmpty;
+
+String? _normalizeAddonCookieDomain(String raw) {
+  final domain = raw.trim().toLowerCase().replaceFirst(RegExp(r'^\.'), '');
+  if (domain.isEmpty ||
+      domain.length > 253 ||
+      domain.endsWith('.') ||
+      InternetAddress.tryParse(domain) != null ||
+      !RegExp(
+        r'^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$',
+      ).hasMatch(domain)) {
+    return null;
+  }
+  return domain;
+}
+
+String? _normalizeAddonCookiePath(String? raw, Uri requestUri) {
+  final value = raw?.trim();
+  if (value != null &&
+      value.startsWith('/') &&
+      value.length <= 1024 &&
+      !RegExp(r'[\x00-\x1f\x7f]').hasMatch(value)) {
+    return value;
+  }
+  final requestPath = requestUri.path;
+  if (!requestPath.startsWith('/') || requestPath == '/') return '/';
+  final lastSlash = requestPath.lastIndexOf('/');
+  return lastSlash <= 0 ? '/' : requestPath.substring(0, lastSlash);
+}
+
+String _addonCookieStorageKey({
+  required String name,
+  required String domain,
+  required String sourceHost,
+  required String path,
+  required bool hostOnly,
+}) =>
+    '${hostOnly ? 'h' : 'd'}\u0001$sourceHost\u0001$domain\u0001$path\u0001$name';
+
+/// RFC-style cookie domain-match used by the invocation-local runtime jar.
+/// Parent domains are accepted, while unrelated/lookalike hosts and IP suffix
+/// matches are rejected.
+bool addonRuntimeCookieDomainMatches(String requestHost, String cookieDomain) {
+  final host = requestHost.trim().toLowerCase().replaceFirst(
+    RegExp(r'\.$'),
+    '',
+  );
+  final domain = cookieDomain.trim().toLowerCase().replaceFirst(
+    RegExp(r'^\.'),
+    '',
+  );
+  if (host.isEmpty || domain.isEmpty) return false;
+  if (host == domain) return true;
+  if (!domain.contains('.')) return false;
+  if (InternetAddress.tryParse(host) != null ||
+      InternetAddress.tryParse(domain) != null) {
+    return false;
+  }
+  return host.endsWith('.$domain');
+}
+
+/// RFC-style cookie path-match: `/foo` matches `/foo` and `/foo/bar`, but not
+/// `/foobar`. Invalid/relative request paths are treated as `/`.
+bool addonRuntimeCookiePathMatches(String requestPath, String cookiePath) {
+  final request = requestPath.startsWith('/') ? requestPath : '/';
+  final cookie = cookiePath.startsWith('/') ? cookiePath : '/';
+  if (request == cookie) return true;
+  if (!request.startsWith(cookie)) return false;
+  if (cookie.endsWith('/')) return true;
+  return request.length > cookie.length && request[cookie.length] == '/';
+}
+
 /// Parses only bounded, syntactically safe cookie name/value pairs. Cookie
 /// attributes stay out of the provider-facing record, matching Seanime.
 Map<String, String> parseAddonResponseCookies(Iterable<String> values) {
@@ -3091,11 +4048,26 @@ Map<String, String> parseAddonResponseCookies(Iterable<String> values) {
   return Map.unmodifiable(result);
 }
 
-Future<String> _boundedResponseText(
+/// Bounded response bytes plus the legacy UTF-8 text projection used by
+/// FetchResponse.text()/json(). Raw bytes remain authoritative for
+/// FetchResponse.body and are never reconstructed from a lossy String.
+class AddonRuntimeResponseBody {
+  const AddonRuntimeResponseBody({required this.bytes, required this.text});
+
+  AddonRuntimeResponseBody.empty() : bytes = Uint8List(0), text = '';
+
+  final Uint8List bytes;
+  final String text;
+}
+
+Future<AddonRuntimeResponseBody> readBoundedAddonRuntimeResponseBody(
   ResponseBody? body,
   int maximumBytes,
 ) async {
-  if (body == null) return '';
+  if (maximumBytes < 0) {
+    throw const FormatException('Provider response limit is invalid.');
+  }
+  if (body == null) return AddonRuntimeResponseBody.empty();
   final bytes = BytesBuilder(copy: false);
   var length = 0;
   await for (final chunk in body.stream) {
@@ -3105,7 +4077,27 @@ Future<String> _boundedResponseText(
     }
     bytes.add(chunk);
   }
-  return utf8.decode(bytes.takeBytes(), allowMalformed: true);
+  final value = bytes.takeBytes();
+  return AddonRuntimeResponseBody(
+    bytes: value,
+    text: utf8.decode(value, allowMalformed: true),
+  );
+}
+
+/// JSON-safe transport fields for the isolate/QuickJS boundary. Base64 adds
+/// no authority and is decoded only inside the bounded provider runtime.
+Map<String, Object> addonRuntimeResponseBodyWireFields(
+  AddonRuntimeResponseBody body,
+) => Map.unmodifiable({
+  'body': body.text,
+  'bodyBase64': base64Encode(body.bytes),
+  'bodyByteLength': body.bytes.length,
+});
+
+Future<void> _discardAddonResponseBody(ResponseBody? body) async {
+  if (body == null) return;
+  final subscription = body.stream.listen((_) {});
+  await subscription.cancel();
 }
 
 String _safeError(Object error) {
@@ -3148,9 +4140,31 @@ const _networkBootstrap = r'''
       enumerable: false,
       value: headerValue,
     });
-    const body = String(response.body || '');
+    const bodyText = String(response.body || '');
+    const encodedBody = String(response.bodyBase64 || '');
+    const declaredBodyLength = Number(response.bodyByteLength || 0);
+    if (!Number.isFinite(declaredBodyLength) || declaredBodyLength < 0 ||
+        declaredBodyLength > 2 * 1024 * 1024 ||
+        encodedBody.length > 2796204) {
+      throw new Error('Provider response exceeds its byte limit');
+    }
+    const binaryBody = atob(encodedBody);
+    if (binaryBody.length !== declaredBodyLength) {
+      throw new Error('Provider response byte payload is invalid');
+    }
+    const body = new Uint8Array(binaryBody.length);
+    for (let index = 0; index < binaryBody.length; index++) {
+      body[index] = binaryBody.charCodeAt(index) & 255;
+    }
+    // Preserve the most common legacy direct-body coercion without changing
+    // the byte-indexable Seanime contract used by Uint8Array.from().
+    Object.defineProperty(body, 'toString', {
+      configurable: true,
+      enumerable: false,
+      value: () => bodyText,
+    });
     let parsedJson = null;
-    try { parsedJson = body ? JSON.parse(body) : null; } catch (_) {}
+    try { parsedJson = bodyText ? JSON.parse(bodyText) : null; } catch (_) {}
     return {
       ok: response.ok === true || (response.status >= 200 && response.status < 300),
       status: response.status,
@@ -3164,11 +4178,15 @@ const _networkBootstrap = r'''
       contentType: String(response.contentType || headerValue('content-type') || ''),
       contentLength: Number(response.contentLength || 0),
       body,
+      bodyText,
       // Seanime's extension FetchResponse intentionally exposes synchronous
       // body readers. `await response.text()` still works because awaiting a
       // non-Promise value is valid JavaScript.
-      text: () => body,
+      text: () => bodyText,
       json: () => parsedJson,
+      arrayBuffer: () => body.buffer.slice(
+        body.byteOffset, body.byteOffset + body.byteLength
+      ),
     };
   }
   function __tetoNetworkFinish(id, response) {
@@ -3241,6 +4259,46 @@ const _seanimeCompatibilityBootstrap = r'''
       configurable: true,
       writable: true,
     });
+  }
+
+  // Working Seanime providers use AbortSignal.timeout(ms) as a request hint.
+  // Keep only the bounded timeout/aborted state enumerable so it can cross the
+  // JSON bridge; Dart remains the authority for the hard request deadline.
+  const __TetoAbortSignal = class AbortSignal {
+    constructor(timeoutMilliseconds) {
+      const numeric = timeoutMilliseconds == null
+        ? Number.NaN : Number(timeoutMilliseconds);
+      const bounded = Number.isFinite(numeric)
+        ? Math.max(1, Math.min(12000, Math.ceil(numeric)))
+        : null;
+      Object.defineProperty(this, '__tetoTimeoutMilliseconds', {
+        value: bounded,
+        enumerable: true,
+        configurable: false,
+        writable: false,
+      });
+      this.aborted = false;
+    }
+    static timeout(milliseconds) {
+      return new __TetoAbortSignal(milliseconds);
+    }
+    throwIfAborted() {
+      if (this.aborted) throw new Error('Request aborted');
+    }
+  };
+  if (typeof AbortSignal === 'undefined') {
+    globalThis.AbortSignal = __TetoAbortSignal;
+  } else if (typeof AbortSignal.timeout !== 'function') {
+    Object.defineProperty(AbortSignal, 'timeout', {
+      configurable: true,
+      value: milliseconds => new __TetoAbortSignal(milliseconds),
+    });
+  }
+  if (typeof AbortController === 'undefined') {
+    globalThis.AbortController = class AbortController {
+      constructor() { this.signal = new __TetoAbortSignal(null); }
+      abort() { this.signal.aborted = true; }
+    };
   }
 
   // Seanime exposes a small Node-compatible Buffer surface to providers.
@@ -3683,24 +4741,51 @@ const _seanimeCompatibilityBootstrap = r'''
   const __tetoPendingSleeps = Object.create(null);
   let __tetoSleepId = 0;
   let __tetoSleepTail = Promise.resolve();
+  const __tetoMaximumPendingSleeps = 64;
+  function __tetoScheduleSleep(kind, milliseconds, callback, args) {
+    if (Object.keys(__tetoPendingSleeps).length >= __tetoMaximumPendingSleeps) {
+      throw new Error('Provider timer limit exceeded');
+    }
+    const numeric = Number(milliseconds);
+    const duration = Number.isFinite(numeric) && numeric > 0 ? numeric : 0;
+    const id = kind + '-' + String(++__tetoSleepId);
+    __tetoPendingSleeps[id] = {kind, callback, args: args || []};
+    sendMessage('TetoSleep', JSON.stringify({id, milliseconds: duration}));
+    return id;
+  }
   function $sleep(milliseconds) {
     const numeric = Number(milliseconds);
     if (!Number.isFinite(numeric) || numeric <= 0) return __tetoSleepTail;
-    const wait = __tetoSleepTail.then(() => new Promise(resolve => {
-      const id = String(++__tetoSleepId);
-      __tetoPendingSleeps[id] = resolve;
-      sendMessage('TetoSleep', JSON.stringify({id, milliseconds: numeric}));
+    const wait = __tetoSleepTail.then(() => new Promise((resolve, reject) => {
+      try {
+        __tetoScheduleSleep('sleep', numeric, resolve, []);
+      } catch (error) {
+        reject(error);
+      }
     }));
     // Keep the shared barrier fulfilled even if a future bridge implementation
     // chooses to reject an individual wait.
     __tetoSleepTail = wait.catch(() => {});
     return wait;
   }
+  globalThis.setTimeout = function(callback, milliseconds, ...args) {
+    if (typeof callback !== 'function') {
+      throw new TypeError('setTimeout callback must be a function');
+    }
+    return __tetoScheduleSleep('timer', milliseconds, callback, args);
+  };
+  globalThis.clearTimeout = function(id) {
+    const key = String(id || '');
+    const pending = __tetoPendingSleeps[key];
+    if (!pending || pending.kind !== 'timer') return;
+    delete __tetoPendingSleeps[key];
+    sendMessage('TetoClearSleep', JSON.stringify({id: key}));
+  };
   function __tetoSleepFinish(id) {
-    const resolve = __tetoPendingSleeps[id];
-    if (!resolve) return;
+    const pending = __tetoPendingSleeps[id];
+    if (!pending) return;
     delete __tetoPendingSleeps[id];
-    resolve();
+    try { pending.callback(...pending.args); } catch (_) {}
   }
   async function __tetoAwaitSleeps() {
     let pending;

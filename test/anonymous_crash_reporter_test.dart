@@ -1,6 +1,8 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:anime_tv/core/diagnostics/anonymous_crash_reporter.dart';
+import 'package:anime_tv/core/diagnostics/ui_diagnostic_context.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/features/catalog/domain/catalog_availability_exception.dart';
 import 'package:anime_tv/features/settings/application/simkl_account_controller.dart';
@@ -12,6 +14,133 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test(
+    'legacy queued report without version uses unknown, never current build',
+    () async {
+      final platform = _CrashPlatform()
+        ..pendingReport = {
+          'report_id': 'java-legacy',
+          'kind': 'java',
+          'message': 'legacy crash',
+          'stack': '',
+          'occurred_at': '2026-08-12T12:00:00.000Z',
+        };
+      final client = _CrashClient();
+      final reporter = AnonymousCrashReporter(client, platform)
+        ..setEnabled(true);
+      await reporter.record(kind: 'platform', error: StateError('new crash'));
+      expect(client.reports.first.appVersion, '0.0.0');
+      expect(client.reports.first.buildNumber, 1);
+      expect(client.reports.last.appVersion, '1.2.3');
+    },
+  );
+
+  test(
+    'worst-case encoded report fits the unchanged native JSON queue',
+    () async {
+      final client = _CrashClient();
+      final reporter = AnonymousCrashReporter(client, _CrashPlatform())
+        ..setEnabled(true);
+      await reporter.record(
+        kind: 'flutter',
+        error: StateError('\u0000界"\\' * 500),
+        stack: StackTrace.fromString(
+          List.filled(45, '\u0000界"\\' * 40).join('\n'),
+        ),
+      );
+      final report = client.reports.single;
+      expect(
+        utf8.encode(jsonEncode(report.toLocalJson())).length,
+        lessThanOrEqualTo(12000),
+      );
+      expect(report.stack, isNot(contains('\u0000')));
+      expect(report.message, isNot(contains('\u0000')));
+    },
+  );
+
+  test('crash context is frozen before queued asynchronous work', () async {
+    final context = UiDiagnosticContext()
+      ..configure(screen: 'manga', languageCode: 'es');
+    context.recordFocus(control: 'manga.section.sources', ordinal: 3);
+    context.recordNavigation('right');
+    final client = _CrashClient();
+    final reporter = AnonymousCrashReporter(
+      client,
+      _CrashPlatform(),
+      uiDiagnostics: context,
+    )..setEnabled(true);
+    final result = reporter.record(
+      kind: 'flutter',
+      error: StateError('boom'),
+      frameworkLibrary: 'rendering library',
+      stack: StackTrace.fromString(
+        '#0 Widget.build (package:anime_tv/app/app.dart:10:4)',
+      ),
+    );
+    context.configure(screen: 'home', languageCode: 'en');
+    await result;
+    final report = client.reports.single;
+    expect(report.stack, contains('screen=manga language=es'));
+    expect(report.stack, contains('manga.section.sources'));
+    expect(report.stack, contains('framework_area=rendering'));
+    expect(
+      report.stack,
+      contains('package anime_tv/app/app.dart line=10 column=4'),
+    );
+    expect(report.stack, isNot(contains('screen=home')));
+    expect(report.toWireJson().keys.toSet(), {
+      'schema_version',
+      'event_id',
+      'kind',
+      'message',
+      'stack',
+      'occurred_at',
+      'app_version',
+      'build_number',
+      'android_sdk',
+      'abi',
+      'device_class',
+    });
+  });
+
+  test(
+    'queued report retains its original build and context after upgrade',
+    () async {
+      final platform = _CrashPlatform()
+        ..pendingReport = {
+          'report_id': 'dart-old-build',
+          'kind': 'flutter',
+          'message': 'old crash',
+          'stack': 'ui_snapshot_v1 screen=manga language=de',
+          'occurred_at': '2026-08-12T12:00:00.000Z',
+          'app_version': '1.0.1',
+          'build_number': 101,
+          'android_sdk': 30,
+          'abi': 'armeabi-v7a',
+          'device_class': 'tv',
+        };
+      final context = UiDiagnosticContext()..configure(screen: 'home');
+      final client = _CrashClient();
+      final reporter = AnonymousCrashReporter(
+        client,
+        platform,
+        uiDiagnostics: context,
+      )..setEnabled(true);
+      // Flush startup work by submitting a second, distinct report.
+      await reporter.record(
+        kind: 'platform',
+        error: StateError('second crash'),
+      );
+      final previous = client.reports.first;
+      expect(previous.appVersion, '1.0.1');
+      expect(previous.buildNumber, 101);
+      expect(previous.androidSdk, 30);
+      expect(previous.abi, 'armeabi-v7a');
+      expect(previous.stack, 'ui_snapshot_v1 screen=manga language=de');
+      expect(previous.occurredAt, DateTime.utc(2026, 8, 12, 12));
+    },
+  );
+
   test(
     'native technical fingerprints survive without loosening secret redaction',
     () async {
@@ -46,21 +175,54 @@ void main() {
     },
   );
 
-  test('reporting stays completely dormant until explicit opt in', () async {
-    final client = _CrashClient();
-    final platform = _CrashPlatform();
-    final reporter = AnonymousCrashReporter(client, platform);
+  test(
+    'reporting stays completely dormant while the preference is off',
+    () async {
+      final client = _CrashClient();
+      final platform = _CrashPlatform();
+      final reporter = AnonymousCrashReporter(client, platform);
 
-    await reporter.record(
-      kind: 'flutter',
-      error: StateError('should stay local'),
-      stack: StackTrace.current,
-    );
+      await reporter.record(
+        kind: 'flutter',
+        error: StateError('should stay local'),
+        stack: StackTrace.current,
+      );
 
-    expect(client.reports, isEmpty);
-    expect(platform.stored, isEmpty);
-    expect(platform.enabled, isFalse);
-  });
+      expect(client.reports, isEmpty);
+      expect(platform.stored, isEmpty);
+      expect(platform.enabled, isFalse);
+    },
+  );
+
+  test(
+    'loaded false preference disables stale native consent and clears pending once',
+    () async {
+      final platform = _CrashPlatform()
+        ..enabled = true
+        ..pendingReport = {
+          'report_id': 'stale-native-report',
+          'kind': 'java',
+          'message': 'queued before the saved preference loaded',
+          'stack': '',
+          'occurred_at': '2026-08-12T12:00:00.000Z',
+        };
+      final reporter = AnonymousCrashReporter(_CrashClient(), platform);
+
+      reporter.setEnabled(false);
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(platform.enabled, isFalse);
+      expect(platform.pendingReport, isNull);
+      expect(platform.setEnabledCalls, [false]);
+      expect(platform.clearCalls, 1);
+
+      reporter.setEnabled(false);
+      await Future<void>.delayed(Duration.zero);
+      expect(platform.setEnabledCalls, [false]);
+      expect(platform.clearCalls, 1);
+    },
+  );
 
   test('opted-in report is redacted, delivered, and acknowledged', () async {
     const sha256LikeValue =
@@ -104,6 +266,41 @@ void main() {
     expect(platform.acknowledged, [report.reportId]);
     expect(report.deviceClass, 'tv');
   });
+
+  test(
+    'anonymous reports remove extension packages while explicit diagnostics may retain them',
+    () async {
+      const canonicalPackage = 'eu.kanade.tachiyomi.animeextension.en.fixture';
+      const customPackage = 'org.example.private.extension';
+      final client = _CrashClient();
+      final reporter = AnonymousCrashReporter(client, _CrashPlatform())
+        ..setEnabled(true);
+
+      await reporter.record(
+        kind: 'platform',
+        error: StateError(
+          'provider failed: $canonicalPackage; '
+          'extensionPackage=$customPackage; user_id=private-viewer',
+        ),
+        stack: StackTrace.fromString(
+          'packageName: $customPackage\n'
+          '#0 Widget.build (package:anime_tv/app/app.dart:10:4)',
+        ),
+      );
+
+      final report = client.reports.single;
+      expect(report.message, contains('[EXTENSION PACKAGE]'));
+      expect(report.stack, contains('[EXTENSION PACKAGE]'));
+      expect(report.message, isNot(contains(canonicalPackage)));
+      expect(report.message, isNot(contains(customPackage)));
+      expect(report.stack, isNot(contains(customPackage)));
+      expect(report.message, isNot(contains('private-viewer')));
+      expect(
+        report.stack,
+        contains('package anime_tv/app/app.dart line=10 column=4'),
+      );
+    },
+  );
 
   test('failed delivery remains queued and is retried next launch', () async {
     final platform = _CrashPlatform();
@@ -256,6 +453,20 @@ void main() {
           uri: Uri.https('assets.fanart.tv', '/fanart/logo.png'),
         ),
       );
+      await reporter.record(
+        kind: 'flutter',
+        error: HttpException(
+          'Connection reset by peer',
+          uri: Uri.https('image.tmdb.org', '/t/p/original/logo.png'),
+        ),
+      );
+      await reporter.record(
+        kind: 'flutter',
+        error: HttpException(
+          'Software caused connection abort',
+          uri: Uri.https('s4.anilist.co', '/poster.jpg'),
+        ),
+      );
 
       expect(client.reports, isEmpty);
       expect(platform.stored, isEmpty);
@@ -376,6 +587,7 @@ class _CrashClient implements AnonymousCrashReportClient {
 class _CrashPlatform implements AnonymousCrashPlatform {
   bool enabled = false;
   int clearCalls = 0;
+  final setEnabledCalls = <bool>[];
   final stored = <Map<String, Object?>>[];
   final acknowledged = <String>[];
   Map<String, Object?>? pendingReport;
@@ -416,6 +628,7 @@ class _CrashPlatform implements AnonymousCrashPlatform {
 
   @override
   Future<void> setEnabled(bool value) async {
+    setEnabledCalls.add(value);
     enabled = value;
   }
 

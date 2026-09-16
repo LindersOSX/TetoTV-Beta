@@ -205,6 +205,14 @@ void main() {
       '_playbackPerformance.dispose()',
       '_bufferingSubscription?.cancel()',
       '_engineHandoffInProgress = true',
+      'unawaited(_releaseAfterUnexpectedRouteDispose())',
+    ]);
+    final unexpectedRelease = section(
+      'Future<void> _releaseAfterUnexpectedRouteDispose',
+      '@override\n  void dispose()',
+    );
+    inOrder(unexpectedRelease, [
+      'await _detachAndroidVideoOutputBeforeRelease()',
       'await _player.dispose()',
     ]);
   });

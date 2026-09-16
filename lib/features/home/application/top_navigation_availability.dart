@@ -2,55 +2,30 @@ import 'package:anime_tv/features/settings/application/settings_preferences_cont
 
 /// Returns whether [destination] is available in the current runtime.
 ///
-/// Persisted viewer visibility still owns ordinary destinations. Manga is a
-/// Developer Mode preview and therefore fails closed until that preference has
-/// finished loading. Keeping this policy in one pure helper prevents the TV
-/// rail, phone bar, and classic header from drifting apart.
+/// Persisted viewer visibility owns destinations. Manga fails closed until its
+/// saved enable/disable preference has loaded, independently of Developer Mode.
+/// Keeping the policy here prevents the TV rail, phone bar, and classic header
+/// from drifting apart.
 bool isRuntimeTopNavigationDestinationVisible(
   SettingsPreferences preferences,
-  TopNavigationDestination destination, {
-  required bool developerStateLoaded,
-  required bool developerMode,
-}) {
+  TopNavigationDestination destination,
+) {
   if (destination == TopNavigationDestination.manga) {
-    return developerStateLoaded && developerMode;
+    return preferences.loaded && preferences.mangaReaderEnabled;
   }
   return preferences.isTopNavigationDestinationVisible(destination);
 }
 
-/// Builds the shared runtime order without persisting a developer-only item.
+/// Builds the shared persisted runtime order.
 ///
-/// Manga is inserted immediately before Downloads (or Settings when Downloads
-/// is absent). This keeps old saved navigation orders byte-for-byte compatible
-/// and prevents the existing settings organizer from exposing Manga outside
-/// Developer Mode.
+/// Manga keeps its user-selected position and opt-out.
 List<TopNavigationDestination> runtimeTopNavigationOrder(
-  SettingsPreferences preferences, {
-  required bool developerStateLoaded,
-  required bool developerMode,
-}) {
+  SettingsPreferences preferences,
+) {
   final order = <TopNavigationDestination>[
     for (final destination in preferences.topNavigationOrder)
-      if (destination != TopNavigationDestination.manga &&
-          isRuntimeTopNavigationDestinationVisible(
-            preferences,
-            destination,
-            developerStateLoaded: developerStateLoaded,
-            developerMode: developerMode,
-          ))
+      if (isRuntimeTopNavigationDestinationVisible(preferences, destination))
         destination,
   ];
-  if (!developerStateLoaded || !developerMode) {
-    return List<TopNavigationDestination>.unmodifiable(order);
-  }
-
-  final downloadsIndex = order.indexOf(TopNavigationDestination.downloads);
-  final settingsIndex = order.indexOf(TopNavigationDestination.settings);
-  final insertionIndex = downloadsIndex >= 0
-      ? downloadsIndex
-      : settingsIndex >= 0
-      ? settingsIndex
-      : order.length;
-  order.insert(insertionIndex, TopNavigationDestination.manga);
   return List<TopNavigationDestination>.unmodifiable(order);
 }

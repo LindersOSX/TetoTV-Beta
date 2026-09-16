@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:anime_tv/features/marketplace/data/addon_store.dart';
@@ -13,7 +15,9 @@ class MarketplaceClient {
     this._store, {
     Dio? dio,
     AddonTypescriptCompiler? typescriptCompiler,
+    Future<void> Function(Uri uri)? targetValidator,
   }) : _typescriptCompiler = typescriptCompiler ?? AddonTypescriptCompiler(),
+       _targetValidator = targetValidator ?? validatePublicNetworkTarget,
        _dio =
            dio ??
            createPinnedPublicHttpsDio(
@@ -29,9 +33,12 @@ class MarketplaceClient {
   static const _maxCatalogBytes = 2 * 1024 * 1024;
   static const _maxManifestBytes = 256 * 1024;
   static const _maxPayloadBytes = 768 * 1024;
+  static const _maxRedirects = 5;
+  static const _downloadDeadline = Duration(seconds: 24);
 
   final AddonStore _store;
   final AddonTypescriptCompiler _typescriptCompiler;
+  final Future<void> Function(Uri uri) _targetValidator;
   final Dio _dio;
 
   Future<List<MarketplaceAddon>> catalog(
@@ -39,9 +46,9 @@ class MarketplaceClient {
     bool refresh = false,
   }) async {
     if (!refresh) {
-      final cached = await _store.cachedCatalog(repository.url);
+      final cached = await _store.cachedCatalogEntry(repository.url);
       if (cached != null) {
-        return _parseCatalog(cached, repository.url);
+        return _parseCachedCatalog(cached, repository.url);
       }
     }
     final uri = safePublicHttpsUri(repository.url);
@@ -53,14 +60,22 @@ class MarketplaceClient {
       throw FormatException(compatibility.rejectionMessage!);
     }
     try {
-      final payload = await _getText(uri, maximumBytes: _maxCatalogBytes);
-      final parsed = _parseCatalog(payload, repository.url);
-      await _store.cacheCatalog(repository.url, payload);
+      final download = await _getText(uri, maximumBytes: _maxCatalogBytes);
+      final parsed = _parseCatalog(
+        download.body,
+        repository.url,
+        resourceBaseUri: download.effectiveUri,
+      );
+      await _store.cacheCatalog(
+        repository.url,
+        download.body,
+        resourceBaseUri: download.effectiveUri,
+      );
       return parsed;
     } catch (_) {
-      final cached = await _store.cachedCatalog(repository.url);
+      final cached = await _store.cachedCatalogEntry(repository.url);
       if (cached != null) {
-        return _parseCatalog(cached, repository.url);
+        return _parseCachedCatalog(cached, repository.url);
       }
       rethrow;
     }
@@ -78,7 +93,10 @@ class MarketplaceClient {
     }
     final downloadedSource =
         complete.inlinePayload ??
-        await _getText(complete.payloadUri!, maximumBytes: _maxPayloadBytes);
+        (await _getText(
+          complete.payloadUri!,
+          maximumBytes: _maxPayloadBytes,
+        )).body;
     final source = applyAddonConfigDefaults(
       downloadedSource,
       complete.userConfigDefaults,
@@ -102,46 +120,178 @@ class MarketplaceClient {
   }
 
   Future<MarketplaceAddon> manifest(MarketplaceAddon summary) async {
-    final manifestPayload = await _getText(
+    final manifestDownload = await _getText(
       summary.manifestUri,
       maximumBytes: _maxManifestBytes,
     );
-    final decoded = jsonDecode(manifestPayload);
-    return validateAndMergeMarketplaceManifest(summary, decoded);
+    final decoded = jsonDecode(manifestDownload.body);
+    return validateAndMergeMarketplaceManifest(
+      summary,
+      decoded,
+      resourceBaseUri: manifestDownload.effectiveUri,
+    );
   }
 
-  Future<String> _getText(Uri uri, {required int maximumBytes}) async {
+  Future<({String body, Uri effectiveUri})> _getText(
+    Uri uri, {
+    required int maximumBytes,
+  }) async {
     if (safePublicHttpsUri(uri.toString()) == null) {
       throw const FormatException('Only public HTTPS resources are allowed.');
     }
-    await validatePublicNetworkTarget(uri);
-    final response = await _dio.get<ResponseBody>(
-      uri.toString(),
-      options: Options(responseType: ResponseType.stream),
-    );
-    final body = response.data;
-    if (body == null) {
-      throw const FormatException('The downloaded resource is empty.');
-    }
-    final bytes = BytesBuilder(copy: false);
-    var length = 0;
-    await for (final chunk in body.stream) {
-      length += chunk.length;
-      if (length > maximumBytes) {
-        throw const FormatException('The downloaded resource is too large.');
+    final clock = Stopwatch()..start();
+    final visited = <String>{};
+    var current = uri;
+    for (var redirectCount = 0; ; redirectCount++) {
+      final canonical = current.toString();
+      if (!visited.add(canonical)) {
+        throw const FormatException('Marketplace redirect loop detected.');
       }
-      bytes.add(chunk);
+      await _targetValidator(current);
+      final remaining = _downloadDeadline - clock.elapsed;
+      if (remaining <= Duration.zero) {
+        throw TimeoutException(
+          'Marketplace download exceeded its deadline.',
+          _downloadDeadline,
+        );
+      }
+      final cancelToken = CancelToken();
+      late final Timer deadlineTimer;
+      deadlineTimer = Timer(
+        remaining,
+        () => cancelToken.cancel('Marketplace download deadline exceeded.'),
+      );
+      Response<ResponseBody> response;
+      try {
+        response = await _dio.get<ResponseBody>(
+          current.toString(),
+          cancelToken: cancelToken,
+          options: Options(
+            responseType: ResponseType.stream,
+            followRedirects: false,
+            validateStatus: (_) => true,
+          ),
+        );
+      } on DioException catch (error) {
+        if (CancelToken.isCancel(error) && clock.elapsed >= _downloadDeadline) {
+          throw TimeoutException(
+            'Marketplace download exceeded its deadline.',
+            _downloadDeadline,
+          );
+        }
+        rethrow;
+      } finally {
+        deadlineTimer.cancel();
+      }
+      final status = response.statusCode ?? 0;
+      if (_isMarketplaceRedirectStatus(status)) {
+        await _discardMarketplaceBody(response.data);
+        final location = response.headers.value(HttpHeaders.locationHeader);
+        if (location == null || location.trim().isEmpty) {
+          throw FormatException(
+            'Marketplace redirect HTTP $status did not include a location.',
+          );
+        }
+        if (redirectCount >= _maxRedirects) {
+          throw const FormatException(
+            'Marketplace resource exceeded its redirect limit.',
+          );
+        }
+        final redirected = safePublicHttpsUri(
+          current.resolve(location).toString(),
+        );
+        if (redirected == null) {
+          throw const FormatException(
+            'Marketplace redirect must use public HTTPS.',
+          );
+        }
+        current = redirected;
+        continue;
+      }
+      if (status < 200 || status >= 300) {
+        await _discardMarketplaceBody(response.data);
+        throw FormatException(
+          'Marketplace resource request failed with HTTP $status.',
+        );
+      }
+      final body = response.data;
+      if (body == null) {
+        throw const FormatException('The downloaded resource is empty.');
+      }
+      final bodyRemaining = _downloadDeadline - clock.elapsed;
+      if (bodyRemaining <= Duration.zero) {
+        throw TimeoutException(
+          'Marketplace download exceeded its deadline.',
+          _downloadDeadline,
+        );
+      }
+      final data = await _readMarketplaceBody(body, maximumBytes).timeout(
+        bodyRemaining,
+        onTimeout: () {
+          cancelToken.cancel('Marketplace download deadline exceeded.');
+          throw TimeoutException(
+            'Marketplace download exceeded its deadline.',
+            _downloadDeadline,
+          );
+        },
+      );
+      return (body: data, effectiveUri: current);
     }
-    final data = utf8.decode(bytes.takeBytes(), allowMalformed: false);
-    if (data.isEmpty) {
-      throw const FormatException('The downloaded resource is empty.');
-    }
-    return data;
   }
 
-  List<MarketplaceAddon> _parseCatalog(String payload, String repositoryUrl) {
-    return parseMarketplaceCatalog(payload, repositoryUrl: repositoryUrl);
+  List<MarketplaceAddon> _parseCatalog(
+    String payload,
+    String repositoryUrl, {
+    Uri? resourceBaseUri,
+  }) {
+    return parseMarketplaceCatalog(
+      payload,
+      repositoryUrl: repositoryUrl,
+      resourceBaseUri: resourceBaseUri,
+    );
   }
+
+  List<MarketplaceAddon> _parseCachedCatalog(
+    CachedMarketplaceCatalog cached,
+    String repositoryUrl,
+  ) {
+    final cachedBase = safePublicHttpsUri(cached.resourceBaseUrl);
+    return _parseCatalog(
+      cached.payload,
+      repositoryUrl,
+      resourceBaseUri: cachedBase,
+    );
+  }
+}
+
+bool _isMarketplaceRedirectStatus(int status) =>
+    status == 301 ||
+    status == 302 ||
+    status == 303 ||
+    status == 307 ||
+    status == 308;
+
+Future<void> _discardMarketplaceBody(ResponseBody? body) async {
+  if (body == null) return;
+  final subscription = body.stream.listen(null);
+  await subscription.cancel();
+}
+
+Future<String> _readMarketplaceBody(ResponseBody body, int maximumBytes) async {
+  final bytes = BytesBuilder(copy: false);
+  var length = 0;
+  await for (final chunk in body.stream) {
+    length += chunk.length;
+    if (length > maximumBytes) {
+      throw const FormatException('The downloaded resource is too large.');
+    }
+    bytes.add(chunk);
+  }
+  final data = utf8.decode(bytes.takeBytes(), allowMalformed: false);
+  if (data.isEmpty) {
+    throw const FormatException('The downloaded resource is empty.');
+  }
+  return data;
 }
 
 /// Parses both Seanime's canonical top-level list and common named wrappers
@@ -151,6 +301,7 @@ class MarketplaceClient {
 List<MarketplaceAddon> parseMarketplaceCatalog(
   String payload, {
   required String repositoryUrl,
+  Uri? resourceBaseUri,
 }) {
   if (utf8.encode(payload).length > MarketplaceClient._maxCatalogBytes) {
     throw const FormatException('Repository catalog is too large.');
@@ -170,17 +321,22 @@ List<MarketplaceAddon> parseMarketplaceCatalog(
       'Repository catalog must be a JSON list or contain an addons/providers list.',
     );
   }
-  final unique = <String, MarketplaceAddon>{};
+  final addons = <MarketplaceAddon>[];
   for (final entry in entries.take(1000)) {
     final addon = MarketplaceAddon.tryParse(
       entry,
       repositoryUrl: repositoryUrl,
+      resourceBaseUri: resourceBaseUri,
     );
     if (addon != null && addon.isExecutableProvider) {
-      unique.putIfAbsent(marketplaceAddonIdentityKey(addon.id), () => addon);
+      // Keep same-ID variants until every configured repository has been
+      // collected. The controller performs the status/version/provenance
+      // comparison once; first-entry-wins here allowed an older or broken
+      // entry to hide a maintained variant in the same catalog.
+      addons.add(addon);
     }
   }
-  return unique.values.toList(growable: false);
+  return List.unmodifiable(addons);
 }
 
 List<dynamic>? _catalogEntriesFromWrapper(
@@ -222,7 +378,24 @@ List<dynamic>? _catalogEntriesFromWrapper(
 /// add-ons.
 List<dynamic>? _catalogEntriesFromMapValues(Map<dynamic, dynamic> value) {
   if (value.isEmpty || value.length > 1000) return null;
-  final entries = value.values.whereType<Map>().toList(growable: false);
+  final entries = <Map<String, Object?>>[];
+  for (final entry in value.entries) {
+    if (entry.value is! Map) return null;
+    final normalized = (entry.value as Map).map<String, Object?>(
+      (key, item) => MapEntry('$key', item),
+    );
+    final hasInnerIdentity = const [
+      'id',
+      'extensionId',
+      'identifier',
+    ].any((key) => normalized[key] is String);
+    final mapKey = '${entry.key}'.trim();
+    if (!hasInnerIdentity &&
+        RegExp(r'^[A-Za-z0-9._-]{1,80}$').hasMatch(mapKey)) {
+      normalized['id'] = mapKey;
+    }
+    entries.add(normalized);
+  }
   if (entries.isEmpty || entries.length != value.length) return null;
   final hasManifestSummary = entries.any(
     (entry) => const [
@@ -243,13 +416,14 @@ List<dynamic>? _catalogEntriesFromMapValues(Map<dynamic, dynamic> value) {
 /// install rejection.
 MarketplaceAddon validateAndMergeMarketplaceManifest(
   MarketplaceAddon summary,
-  Object? decoded,
-) {
+  Object? decoded, {
+  Uri? resourceBaseUri,
+}) {
   final manifestValue = _unwrapMarketplaceManifest(decoded);
   final manifest = MarketplaceAddon.tryParse(
     manifestValue,
     repositoryUrl: summary.repositoryUrl,
-    resourceBaseUri: summary.manifestUri,
+    resourceBaseUri: resourceBaseUri ?? summary.manifestUri,
   );
   if (manifest == null || !marketplaceAddonIdsMatch(manifest.id, summary.id)) {
     throw const FormatException(
@@ -293,9 +467,97 @@ Object? _unwrapMarketplaceManifest(Object? value, {int depth = 0}) {
   return normalized;
 }
 
-bool _looksLikeProvider(String payload) =>
-    RegExp(r'\bclass\s+Provider\b').hasMatch(payload) &&
-    utf8.encode(payload).length <= MarketplaceClient._maxPayloadBytes;
+bool _looksLikeProvider(String payload) {
+  if (utf8.encode(payload).length > MarketplaceClient._maxPayloadBytes) {
+    return false;
+  }
+  final source = _javascriptWithoutCommentsAndStrings(payload);
+  if (RegExp(r'\b(?:class|function)\s+Provider\b').hasMatch(source)) {
+    return true;
+  }
+  if (RegExp(
+    r'\b(?:const|let|var)\s+Provider\s*=\s*(?:class|function)\b',
+  ).hasMatch(source)) {
+    return true;
+  }
+  // Some bundled providers keep an implementation-specific class name and
+  // export it into Seanime's required global at the end of the payload.
+  return RegExp(
+    r'\b(?:globalThis|window|self)\s*\.\s*Provider\s*=\s*'
+    r'(?:class\b|function\b|[A-Za-z_$][A-Za-z0-9_$]*)',
+  ).hasMatch(source);
+}
+
+/// Removes trivia that could otherwise make a comment or string containing
+/// `class Provider` pass install-time shape validation. This is deliberately
+/// only a compatibility preflight; the executable still runs solely inside
+/// TetoTV's bounded provider sandbox.
+String _javascriptWithoutCommentsAndStrings(String source) {
+  final output = StringBuffer();
+  var index = 0;
+  String? quote;
+  var escaped = false;
+  var lineComment = false;
+  var blockComment = false;
+  while (index < source.length) {
+    final current = source[index];
+    final next = index + 1 < source.length ? source[index + 1] : '';
+    if (lineComment) {
+      if (current == '\n' || current == '\r') {
+        lineComment = false;
+        output.write(current);
+      } else {
+        output.write(' ');
+      }
+      index++;
+      continue;
+    }
+    if (blockComment) {
+      if (current == '*' && next == '/') {
+        output.write('  ');
+        index += 2;
+        blockComment = false;
+      } else {
+        output.write(current == '\n' || current == '\r' ? current : ' ');
+        index++;
+      }
+      continue;
+    }
+    if (quote != null) {
+      output.write(current == '\n' || current == '\r' ? current : ' ');
+      if (escaped) {
+        escaped = false;
+      } else if (current == r'\') {
+        escaped = true;
+      } else if (current == quote) {
+        quote = null;
+      }
+      index++;
+      continue;
+    }
+    if (current == '/' && next == '/') {
+      output.write('  ');
+      index += 2;
+      lineComment = true;
+      continue;
+    }
+    if (current == '/' && next == '*') {
+      output.write('  ');
+      index += 2;
+      blockComment = true;
+      continue;
+    }
+    if (current == "'" || current == '"' || current == '`') {
+      quote = current;
+      output.write(' ');
+      index++;
+      continue;
+    }
+    output.write(current);
+    index++;
+  }
+  return output.toString();
+}
 
 String applyAddonConfigDefaults(String source, Map<String, String> defaults) {
   var encodedLength = 0;

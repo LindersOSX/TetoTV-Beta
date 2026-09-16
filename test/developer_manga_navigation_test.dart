@@ -12,112 +12,127 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   setUp(() => FlutterSecureStorage.setMockInitialValues({}));
 
-  test('runtime order injects Manga only after Developer Mode loads', () {
-    const preferences = SettingsPreferences();
+  test('runtime order requires only the saved Manga preference', () {
+    const loading = SettingsPreferences();
 
     expect(
-      runtimeTopNavigationOrder(
-        preferences,
-        developerStateLoaded: false,
-        developerMode: true,
-      ),
-      isNot(contains(TopNavigationDestination.manga)),
-    );
-    expect(
-      runtimeTopNavigationOrder(
-        preferences,
-        developerStateLoaded: true,
-        developerMode: false,
-      ),
+      runtimeTopNavigationOrder(loading),
       isNot(contains(TopNavigationDestination.manga)),
     );
 
-    final developerOrder = runtimeTopNavigationOrder(
-      preferences,
-      developerStateLoaded: true,
-      developerMode: true,
-    );
-    expect(developerOrder, contains(TopNavigationDestination.manga));
+    const preferences = SettingsPreferences(loaded: true);
     expect(
-      developerOrder.indexOf(TopNavigationDestination.manga),
-      developerOrder.indexOf(TopNavigationDestination.downloads) - 1,
+      runtimeTopNavigationOrder(preferences),
+      contains(TopNavigationDestination.manga),
     );
+
+    final optedOutOrder = runtimeTopNavigationOrder(
+      const SettingsPreferences(loaded: true, mangaReaderEnabled: false),
+    );
+    expect(optedOutOrder, isNot(contains(TopNavigationDestination.manga)));
+    final enabledOrder = runtimeTopNavigationOrder(preferences);
+    expect(enabledOrder, contains(TopNavigationDestination.manga));
     expect(
-      defaultTopNavigationOrder,
-      isNot(contains(TopNavigationDestination.manga)),
+      defaultTopNavigationOrder.indexOf(TopNavigationDestination.manga),
+      defaultTopNavigationOrder.indexOf(TopNavigationDestination.downloads) - 1,
     );
   });
 
-  testWidgets('all shared navigation surfaces use the Developer Mode gate', (
-    tester,
-  ) async {
-    tester.view.physicalSize = const Size(1280, 720);
-    tester.view.devicePixelRatio = 1;
-    addTearDown(tester.view.resetPhysicalSize);
-    addTearDown(tester.view.resetDevicePixelRatio);
+  testWidgets(
+    'all shared navigation surfaces expose core Manga without Developer Mode',
+    (tester) async {
+      tester.view.physicalSize = const Size(1280, 720);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
 
-    Future<void> pumpWith(AppUpdateState state) async {
-      final controller = _FixedAppUpdateController(state);
-      await tester.pumpWidget(
-        ProviderScope(
-          key: ValueKey(
-            'developer-navigation-${state.loaded}-${state.developerMode}',
-          ),
-          overrides: [
-            appUpdateControllerProvider.overrideWith((_) => controller),
-          ],
-          child: MaterialApp(
-            home: Scaffold(
-              body: Stack(
-                children: [
-                  Positioned(
-                    left: 0,
-                    top: 0,
-                    bottom: 0,
-                    child: HomeSideNavigation(
-                      preferences: const SettingsPreferences(),
-                      metrics: homeNavigationRailMetrics(
-                        NavigationChromeSize.medium,
+      Future<void> pumpWith(
+        AppUpdateState state,
+        SettingsPreferences preferences,
+      ) async {
+        final controller = _FixedAppUpdateController(state);
+        await tester.pumpWidget(
+          ProviderScope(
+            key: ValueKey(
+              'developer-navigation-${state.loaded}-${state.developerMode}',
+            ),
+            overrides: [
+              appUpdateControllerProvider.overrideWith((_) => controller),
+            ],
+            child: MaterialApp(
+              home: Scaffold(
+                body: Stack(
+                  children: [
+                    Positioned(
+                      left: 0,
+                      top: 0,
+                      bottom: 0,
+                      child: HomeSideNavigation(
+                        preferences: preferences,
+                        metrics: homeNavigationRailMetrics(
+                          NavigationChromeSize.medium,
+                        ),
+                        onExitRight: () {},
                       ),
-                      onExitRight: () {},
                     ),
-                  ),
-                  const Positioned(
-                    left: 100,
-                    right: 0,
-                    top: 0,
-                    child: MainNavigationBar(
-                      active: MainNavigationDestination.home,
-                      preferences: SettingsPreferences(),
+                    Positioned(
+                      left: 100,
+                      right: 0,
+                      top: 0,
+                      child: MainNavigationBar(
+                        active: MainNavigationDestination.home,
+                        preferences: preferences,
+                      ),
                     ),
-                  ),
-                  const Positioned(
-                    left: 100,
-                    right: 0,
-                    bottom: 0,
-                    child: PhoneBottomNavigation(
-                      preferences: SettingsPreferences(),
-                      activeDestination: TopNavigationDestination.home,
+                    Positioned(
+                      left: 100,
+                      right: 0,
+                      bottom: 0,
+                      child: PhoneBottomNavigation(
+                        preferences: preferences,
+                        activeDestination: TopNavigationDestination.home,
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
           ),
-        ),
+        );
+        await tester.pump();
+      }
+
+      await pumpWith(
+        const AppUpdateState(loaded: false, developerMode: true),
+        const SettingsPreferences(),
       );
-      await tester.pump();
-    }
+      expect(find.byKey(const ValueKey('main-nav-manga')), findsNothing);
 
-    await pumpWith(const AppUpdateState(loaded: false, developerMode: true));
-    expect(find.byKey(const ValueKey('main-nav-manga')), findsNothing);
+      await pumpWith(
+        const AppUpdateState(loaded: true, developerMode: false),
+        const SettingsPreferences(loaded: true),
+      );
+      expect(find.byKey(const ValueKey('main-nav-manga')), findsNWidgets(3));
 
-    await pumpWith(const AppUpdateState(loaded: true, developerMode: false));
-    expect(find.byKey(const ValueKey('main-nav-manga')), findsNothing);
+      await pumpWith(
+        const AppUpdateState(loaded: false, developerMode: false),
+        const SettingsPreferences(loaded: true),
+      );
+      expect(find.byKey(const ValueKey('main-nav-manga')), findsNWidgets(3));
 
-    await pumpWith(const AppUpdateState(loaded: true, developerMode: true));
-    expect(find.byKey(const ValueKey('main-nav-manga')), findsNWidgets(3));
-  });
+      await pumpWith(
+        const AppUpdateState(loaded: true, developerMode: true),
+        const SettingsPreferences(loaded: true),
+      );
+      expect(find.byKey(const ValueKey('main-nav-manga')), findsNWidgets(3));
+
+      await pumpWith(
+        const AppUpdateState(loaded: true, developerMode: true),
+        const SettingsPreferences(loaded: true, mangaReaderEnabled: false),
+      );
+      expect(find.byKey(const ValueKey('main-nav-manga')), findsNothing);
+    },
+  );
 }
 
 class _FixedAppUpdateController extends AppUpdateController {

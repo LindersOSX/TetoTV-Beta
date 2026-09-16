@@ -102,11 +102,13 @@ class PhoneSetupPollResult {
     required this.status,
     required this.revision,
     this.envelope,
+    this.retryAfter,
   });
 
   final PhoneSetupPairingStatus status;
   final int revision;
   final PhoneSetupEncryptedSubmission? envelope;
+  final Duration? retryAfter;
 }
 
 class PhoneSetupPreferences {
@@ -376,6 +378,7 @@ class PhoneSetupBundle {
       trackingProvider: _enumValue(preferences['tracking_provider'], const {
         'anilist',
         'myanimelist',
+        'kitsu',
         'simkl',
       }),
       debridProvider: _enumValue(preferences['debrid_provider'], const {
@@ -481,6 +484,7 @@ PhoneSetupTrackingCredentials? _parseTrackingCredentials(Object? value) {
   final provider = _requiredEnum(data['provider'], const {
     'anilist',
     'myanimelist',
+    'kitsu',
     'simkl',
   }, 'tracker provider');
   final accessToken = _requiredCredential(data['access_token']);
@@ -492,10 +496,10 @@ PhoneSetupTrackingCredentials? _parseTrackingCredentials(Object? value) {
       'This tracker phone setup does not accept a refresh token.',
     );
   }
-  if (provider == 'myanimelist' &&
+  if ((provider == 'myanimelist' || provider == 'kitsu') &&
       (refreshToken == null || expiresAt == null)) {
     throw const FormatException(
-      'MyAnimeList phone setup requires refresh and expiry metadata.',
+      'This tracker phone setup requires refresh and expiry metadata.',
     );
   }
   return PhoneSetupTrackingCredentials(

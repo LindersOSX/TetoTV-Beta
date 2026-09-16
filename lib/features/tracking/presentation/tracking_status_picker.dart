@@ -1,3 +1,4 @@
+import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/features/tracking/domain/tracking_repository.dart';
@@ -28,7 +29,9 @@ Future<CatalogTrackingSelection?> showTrackingStatusPicker(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'Add or update this show on your connected AniList and MAL accounts.',
+            context.tr(
+              "Add or update this show on every connected anime tracker.",
+            ),
             style: TextStyle(color: context.appPalette.mutedText),
           ),
           const SizedBox(height: 14),
@@ -59,7 +62,9 @@ Future<CatalogTrackingSelection?> showTrackingStatusPicker(
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
-                        'Remove from ${current.displayName}',
+                        context.tr("Remove from {value1}", {
+                          'value1': context.tr(current.displayName),
+                        }),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(fontWeight: FontWeight.w800),
@@ -71,8 +76,9 @@ Future<CatalogTrackingSelection?> showTrackingStatusPicker(
             ),
             const SizedBox(height: 8),
             Text(
-              'Remove deletes the tracker list entry. Dropped keeps the show '
-              'in your list as something you started and stopped.',
+              context.tr(
+                "Remove deletes the tracker list entry. Dropped keeps the show in your list as something you started and stopped.",
+              ),
               style: TextStyle(
                 color: context.appPalette.mutedText,
                 fontSize: 12,
@@ -85,7 +91,7 @@ Future<CatalogTrackingSelection?> showTrackingStatusPicker(
     actions: [
       TextButton(
         onPressed: () => Navigator.of(context).pop(),
-        child: const Text('Cancel'),
+        child: Text(context.tr("Cancel")),
       ),
     ],
   ),
@@ -121,7 +127,7 @@ class TrackingStatusOptions extends StatelessWidget {
                 ? context.appPalette.accent
                 : context.appPalette.surfaceRaised,
             child: Text(
-              status.displayName,
+              context.tr(status.displayName),
               style: const TextStyle(fontWeight: FontWeight.w800),
             ),
           ),

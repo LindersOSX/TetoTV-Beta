@@ -34,23 +34,24 @@ void main() {
       expect(selected.id, 2);
     });
 
-    test('falls back to the largest playable file', () {
-      final selected = selectEpisodeFile(const [
-        RealDebridTorrentFile(
-          id: 10,
-          path: '/feature-a.mkv',
-          bytes: 400,
-          selected: false,
-        ),
-        RealDebridTorrentFile(
-          id: 11,
-          path: '/feature-b.mp4',
-          bytes: 800,
-          selected: false,
-        ),
-      ], 12);
-
-      expect(selected.id, 11);
+    test('rejects playable files with no episode identity', () {
+      expect(
+        () => selectEpisodeFile(const [
+          RealDebridTorrentFile(
+            id: 10,
+            path: '/feature-a.mkv',
+            bytes: 400,
+            selected: false,
+          ),
+          RealDebridTorrentFile(
+            id: 11,
+            path: '/feature-b.mp4',
+            bytes: 800,
+            selected: false,
+          ),
+        ], 12),
+        throwsA(isA<EpisodeIdentityAmbiguousException>()),
+      );
     });
 
     test('ignores a Stremio file index that identifies another episode', () {
@@ -76,27 +77,28 @@ void main() {
       expect(selected.id, 1);
     });
 
-    test('honors a Stremio file index when filenames are ambiguous', () {
-      final selected = selectEpisodeFile(
-        const [
-          RealDebridTorrentFile(
-            id: 1,
-            path: '/feature-a.mkv',
-            bytes: 900,
-            selected: false,
-          ),
-          RealDebridTorrentFile(
-            id: 2,
-            path: '/feature-b.mkv',
-            bytes: 1000,
-            selected: false,
-          ),
-        ],
-        1,
-        preferredFileIndex: 0,
+    test('does not trust a Stremio file index without filename proof', () {
+      expect(
+        () => selectEpisodeFile(
+          const [
+            RealDebridTorrentFile(
+              id: 1,
+              path: '/feature-a.mkv',
+              bytes: 900,
+              selected: false,
+            ),
+            RealDebridTorrentFile(
+              id: 2,
+              path: '/feature-b.mkv',
+              bytes: 1000,
+              selected: false,
+            ),
+          ],
+          1,
+          preferredFileIndex: 0,
+        ),
+        throwsA(isA<EpisodeIdentityAmbiguousException>()),
       );
-
-      expect(selected.id, 1);
     });
 
     test('keeps repeated episode numbers in the requested season', () {

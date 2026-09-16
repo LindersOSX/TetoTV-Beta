@@ -16,7 +16,9 @@ void main() {
     await tester.pumpAndSettle();
 
     final bundledPolicy = await rootBundle.loadString('docs/PRIVACY.md');
-    expect(bundledPolicy, contains('Effective date: September 3, 2026'));
+    expect(bundledPolicy, contains('Effective date: September 5, 2026'));
+    expect(bundledPolicy, contains('64 coalesced events'));
+    expect(bundledPolicy, contains('It disappears when the process ends.'));
     expect(
       bundledPolicy,
       contains('Offline downloads, background operation, and external players'),
@@ -37,11 +39,24 @@ void main() {
       ),
     );
     expect(bundledPolicy, contains('versioned `confirmed: true` marker'));
+    expect(
+      bundledPolicy,
+      contains('starts enabled only on genuinely new installs'),
+    );
+    expect(
+      bundledPolicy,
+      matches(
+        RegExp(
+          r'a\s+missing legacy preference and any unreadable preference',
+          multiLine: true,
+        ),
+      ),
+    );
 
     expect(find.text('Privacy & data'), findsOneWidget);
     expect(find.textContaining('TetoTV privacy disclosure'), findsOneWidget);
     expect(
-      find.textContaining('Effective date: September 3, 2026'),
+      find.textContaining('Effective date: September 5, 2026'),
       findsOneWidget,
     );
     expect(find.textContaining('does not sell personal data'), findsOneWidget);

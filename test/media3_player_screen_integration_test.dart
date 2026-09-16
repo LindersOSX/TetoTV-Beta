@@ -18,7 +18,7 @@ void main() {
     return source.substring(startIndex, endIndex);
   }
 
-  test('Media3 is an explicit Android-only choice; MPV stays the default', () {
+  test('Media3 preference activates only on Android', () {
     for (final platform in TargetPlatform.values) {
       for (final preference in PreferredPlayer.values) {
         expect(
@@ -59,19 +59,22 @@ void main() {
     },
   );
 
-  test('engine identity reaches watch party, metrics, health and HUD', () {
-    expect(source, contains("_usesMedia3 ? 'media3' : 'mpv'"));
-    expect(source, contains("_usesMedia3 ? 'Media3 (Built in)' : 'MPV'"));
-    expect(RegExp(r'engine: _engineKey').allMatches(source).length, 2);
-    expect(source, contains('engineKey: _engineKey'));
-    expect(source, contains('recordPlayerSuccess(device.key, _engineKey)'));
-    expect(source, contains('recordPlayerFailure(device.key, _engineKey)'));
-    final metrics = method(
-      'Future<String?> _readPlaybackPerformanceProperty',
-      'Future<void> _seekWithPerformanceDiagnostics',
-    );
-    expect(metrics, contains('return media3.readProperty(property)'));
-  });
+  test(
+    'engine identity reaches watch party, metrics, health, teardown diagnostics and HUD',
+    () {
+      expect(source, contains("_usesMedia3 ? 'media3' : 'mpv'"));
+      expect(source, contains("_usesMedia3 ? 'Media3 (Built in)' : 'MPV'"));
+      expect(RegExp(r'engine: _engineKey').allMatches(source).length, 3);
+      expect(source, contains('engineKey: _engineKey'));
+      expect(source, contains('recordPlayerSuccess(device.key, _engineKey)'));
+      expect(source, contains('recordPlayerFailure(device.key, _engineKey)'));
+      final metrics = method(
+        'Future<String?> _readPlaybackPerformanceProperty',
+        'Future<void> _seekWithPerformanceDiagnostics',
+      );
+      expect(metrics, contains('return media3.readProperty(property)'));
+    },
+  );
 
   test('alternate surface is captured only for Media3 at session creation', () {
     expect(source, contains('late final bool _media3SurfaceViewEnabled;'));
@@ -167,11 +170,11 @@ void main() {
     expect(options, contains("'audioDelayMs': 0"));
     expect(
       source,
-      contains('Audio and caption timing offsets are available in '),
-    );
-    expect(
-      source,
-      contains("'MPV. Switch the built-in player in Playback settings '"),
+      contains(
+        'Audio and caption timing offsets are available in MPV. '
+        'Switch the built-in player in Playback settings when a stream '
+        'needs manual timing adjustment.',
+      ),
     );
   });
 }

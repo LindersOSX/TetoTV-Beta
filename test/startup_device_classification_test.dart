@@ -121,6 +121,25 @@ void main() {
 
       expect(container.read(isTelevisionProvider), isFalse);
     });
+
+    test('mobile category selects the shared phone and tablet UI target', () {
+      final container = ProviderContainer(
+        overrides: [
+          startupDeviceCategoryProvider.overrideWith(
+            (_) => AndroidDeviceCategory.mobile,
+          ),
+        ],
+      );
+      addTearDown(container.dispose);
+
+      expect(container.read(adaptiveUiTargetProvider), AdaptiveUiTarget.mobile);
+      container.read(startupDeviceCategoryProvider.notifier).state =
+          AndroidDeviceCategory.television;
+      expect(
+        container.read(adaptiveUiTargetProvider),
+        AdaptiveUiTarget.television,
+      );
+    });
   });
 
   group('inferStartupTelevisionFromViewport', () {

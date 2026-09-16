@@ -165,6 +165,28 @@ void main() {
     expect(selected.name, 'Episode 01.mkv');
   });
 
+  test('file selection rejects an opaque preferred file', () {
+    expect(
+      () => selectAllDebridEpisodeFile(
+        const [
+          AllDebridTorrentFile(
+            name: 'feature-a.mkv',
+            size: 100,
+            link: 'https://redirect.test/a',
+          ),
+          AllDebridTorrentFile(
+            name: 'feature-b.mkv',
+            size: 200,
+            link: 'https://redirect.test/b',
+          ),
+        ],
+        1,
+        preferredFileIndex: 1,
+      ),
+      throwsA(isA<EpisodeIdentityAmbiguousException>()),
+    );
+  });
+
   test('file selection keeps repeated episode numbers in the right season', () {
     final selected = selectAllDebridEpisodeFile(
       const [

@@ -8,6 +8,26 @@ import org.junit.Test
 
 class DiscordRichPresenceBridgeAbiTest {
     @Test
+    fun `reading artwork extends its JNI signature without changing playback`() {
+        val bridge = Class.forName(
+            "dev.animetv.anime_tv.DiscordRichPresenceBridge", false, javaClass.classLoader,
+        )
+        val reading = bridge.getDeclaredMethod(
+            "nativeUpdateReadingPresence", String::class.java, String::class.java,
+            Int::class.javaPrimitiveType, Int::class.javaPrimitiveType, String::class.java,
+        )
+        val playback = bridge.getDeclaredMethod(
+            "nativeUpdatePlaybackPresence", String::class.java, Int::class.javaPrimitiveType,
+            Boolean::class.javaPrimitiveType, Long::class.javaPrimitiveType,
+            Long::class.javaPrimitiveType, String::class.java,
+        )
+        for (method in listOf(reading, playback)) {
+            assertTrue("${method.name} must remain native", Modifier.isNative(method.modifiers))
+            assertEquals("${method.name} must return void", Void.TYPE, method.returnType)
+        }
+    }
+
+    @Test
     fun `native callbacks retain the void static JNI contract`() {
         val bridge = Class.forName(
             "dev.animetv.anime_tv.DiscordRichPresenceBridge",

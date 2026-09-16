@@ -1,9 +1,11 @@
 import 'dart:math' as math;
 
+import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/widgets/network_artwork.dart';
 import 'package:anime_tv/features/player/presentation/watch_party_player_status.dart';
 import 'package:anime_tv/features/watch_together/application/watch_party_controller.dart';
+import 'package:anime_tv/features/watch_together/domain/watch_party_models.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -88,7 +90,7 @@ class _WatchPartyNoticeCard extends StatelessWidget {
       container: true,
       liveRegion: true,
       excludeSemantics: true,
-      label: watchPartyPlayerCopy(notice.message),
+      label: _localizedNoticeMessage(context, notice),
       child: DecoratedBox(
         decoration: BoxDecoration(
           color: const Color(0xF20B0B10),
@@ -193,7 +195,7 @@ class _NoticeCopy extends StatelessWidget {
         displayName == null ||
         actionText == null) {
       return Text(
-        watchPartyPlayerCopy(notice.message),
+        _localizedNoticeMessage(context, notice),
         key: ValueKey('watch-party-membership-message-${notice.sequence}'),
         maxLines: 2,
         overflow: TextOverflow.ellipsis,
@@ -209,7 +211,7 @@ class _NoticeCopy extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          displayName,
+          _isLocalRemovalNotice(notice) ? context.tr('You') : displayName,
           key: ValueKey('watch-party-membership-name-${notice.sequence}'),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
@@ -221,7 +223,7 @@ class _NoticeCopy extends StatelessWidget {
         ),
         const SizedBox(height: 3),
         Text(
-          actionText,
+          context.tr(_noticeActionTemplate(notice)),
           key: ValueKey('watch-party-membership-action-${notice.sequence}'),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
@@ -237,6 +239,43 @@ class _NoticeCopy extends StatelessWidget {
 }
 
 const _noticeAvatarBorderRadius = BorderRadius.all(Radius.circular(9));
+
+// This is the controller's synthetic local-removal notice, not a username.
+// Another participant named "You" must remain unchanged in every language.
+bool _isLocalRemovalNotice(WatchPartyNotice notice) =>
+    notice.eventType == WatchPartyEventType.kicked &&
+    notice.displayName == 'You' &&
+    notice.actionText == 'were kicked from the party' &&
+    notice.message == 'The host removed you from this Watch Party.';
+
+String _noticeActionTemplate(WatchPartyNotice notice) =>
+    _isLocalRemovalNotice(notice)
+    ? 'were kicked from the party'
+    : switch (notice.eventType) {
+        WatchPartyEventType.joined => 'joined the party',
+        WatchPartyEventType.left => 'left the party',
+        WatchPartyEventType.kicked => 'was kicked from the party',
+        WatchPartyEventType.hostTransferred => 'is now the host',
+        null => notice.actionText ?? '',
+      };
+
+String _localizedNoticeMessage(BuildContext context, WatchPartyNotice notice) {
+  if (_isLocalRemovalNotice(notice)) return context.tr(notice.message);
+  if (!notice.isParticipantEvent) {
+    return context.tr(watchPartyPlayerCopy(notice.message));
+  }
+  // Localize the event before inserting the exact name. Translating the
+  // composed controller message would also miss names containing placeholders
+  // or the legacy product name, and would leave screen-reader text in English.
+  final template = switch (notice.eventType!) {
+    WatchPartyEventType.joined => '{name} joined the Watch Party.',
+    WatchPartyEventType.left => '{name} left the Watch Party.',
+    WatchPartyEventType.kicked => '{name} was removed from the Watch Party.',
+    WatchPartyEventType.hostTransferred =>
+      'Host controls transferred to {name}.',
+  };
+  return context.tr(template, {'name': notice.displayName!});
+}
 
 String _initial(String value) {
   final normalized = value.trim();

@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'package:anime_tv/core/localization/app_language.dart';
+import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/preferences/caption_language.dart';
 import 'package:anime_tv/core/preferences/title_language_preference.dart';
@@ -12,6 +14,7 @@ import 'package:anime_tv/core/tv/tv_navigation.dart';
 import 'package:anime_tv/core/tv/tv_shelf_focus.dart';
 import 'package:anime_tv/core/widgets/teto_top_level_shell.dart';
 import 'package:anime_tv/core/widgets/tv_text_input.dart';
+import 'package:anime_tv/core/widgets/release_highlights.dart';
 import 'package:anime_tv/core/widgets/copyable_qr_interaction.dart';
 import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
 import 'package:anime_tv/features/discord/application/discord_account_link_resolver.dart';
@@ -169,6 +172,7 @@ extension _SettingsSectionMetadata on _SettingsSection {
     _SettingsSection.themeDisplay => const [
       'Theme & display',
       'Theme Studio',
+      'App language',
       'Title language',
       'Show title style',
       'Colors',
@@ -288,6 +292,7 @@ extension _SettingsSectionMetadata on _SettingsSection {
       'Jellyfin',
       'Plex',
       'Watch Party',
+      'Manga reader',
       'Offline downloads',
       'Download manager',
     ],
@@ -303,6 +308,7 @@ extension _SettingsSectionMetadata on _SettingsSection {
       'AniList',
       'MyAnimeList',
       'MAL',
+      'Kitsu',
       'SIMKL',
       'Connect tracker',
     ],
@@ -385,7 +391,7 @@ class _SettingsSearchMatch {
 }
 
 String _normalizeSettingsSearchText(String value) =>
-    value.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), ' ').trim();
+    value.toLowerCase().replaceAll(RegExp(r'[\s\-_&/]+'), ' ').trim();
 
 String _settingsSearchResultSlug(String value) =>
     _normalizeSettingsSearchText(value).replaceAll(' ', '-');
@@ -452,6 +458,9 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
   final _backFocus = FocusNode(debugLabel: 'accounts.back');
   final _contentFocus = FocusNode(debugLabel: 'accounts.content');
   final _titleLanguageFocus = FocusNode(debugLabel: 'accounts.title-language');
+  final _interfaceLanguageFocus = FocusNode(
+    debugLabel: 'accounts.app-language',
+  );
   final _showTitleStyleFocus = FocusNode(
     debugLabel: 'accounts.show-title-style',
   );
@@ -515,6 +524,9 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
   );
   final _watchTogetherFocus = FocusNode(
     debugLabel: 'accounts.streaming.watch-together',
+  );
+  final _mangaReaderFocus = FocusNode(
+    debugLabel: 'accounts.streaming.manga-reader',
   );
   final _customizationFocus = FocusNode(
     debugLabel: 'accounts.customization.first',
@@ -610,6 +622,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
   );
   final _anilistFocus = FocusNode(debugLabel: 'accounts.anilist');
   final _malFocus = FocusNode(debugLabel: 'accounts.myanimelist');
+  final _kitsuFocus = FocusNode(debugLabel: 'accounts.kitsu');
   final _simklFocus = FocusNode(debugLabel: 'accounts.simkl');
   final _trackingDisconnectFocus = FocusNode(
     debugLabel: 'accounts.tracking.disconnect',
@@ -822,7 +835,9 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
         if (!_settingsSearchLabelIsAvailable(section, label)) continue;
         final normalizedLabel = _normalizeSettingsSearchText(label);
         final searchable =
-            '$normalizedLabel ${section.area.label.toLowerCase()}';
+            '$normalizedLabel ${section.area.label.toLowerCase()} '
+            '${_normalizeSettingsSearchText(context.tr(label))} '
+            '${_normalizeSettingsSearchText(context.tr(section.area.label))}';
         if (!queryWords.every(searchable.contains)) continue;
         final score = normalizedLabel == query
             ? 0
@@ -1004,6 +1019,11 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
         _trackingDisconnectFocus,
         _malFocus,
       ],
+      TrackingProvider.kitsu => <FocusNode?>[
+        _simklFocus,
+        _trackingDisconnectFocus,
+        _kitsuFocus,
+      ],
       TrackingProvider.simkl => <FocusNode?>[_simklFocus],
     };
     return switch (section) {
@@ -1031,6 +1051,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       _SettingsSection.librariesFeatures => lastMounted([
         _downloadManagerFocus,
         _offlineDownloadsFocus,
+        _mangaReaderFocus,
         _watchTogetherFocus,
         _localMediaFocus,
       ]),
@@ -1073,6 +1094,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     return switch (label) {
       'theme studio' || 'colors' || 'appearance' => _customizationFocus,
       'title language' => _titleLanguageFocus,
+      'app language' => _interfaceLanguageFocus,
       'show title style' => _showTitleStyleFocus,
       'featured hero' => _featuredHomeContentFocus,
       'poster metadata' => _posterMetadataFocus,
@@ -1101,6 +1123,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
         match.section == _SettingsSection.librariesFeatures
             ? _watchTogetherFocus
             : _menuOrderFocus,
+      'manga reader' => _mangaReaderFocus,
       'navigation size' => _navigationSizeFocus,
       'menu order' || 'settings placement' => _menuOrderFocus,
       'reset appearance and navigation' => _customizationResetFocus,
@@ -1143,6 +1166,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       'anilist' ||
       'myanimelist' ||
       'mal' ||
+      'kitsu' ||
       'connect tracker' => _trackingProviderFocus,
       'simkl' => _simklFocus,
       'local profiles' ||
@@ -1229,8 +1253,8 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
         context: context,
         builder: (dialogContext) => AlertDialog(
           icon: const Icon(Icons.devices_other_rounded),
-          title: const Text('Direct torrent is unavailable'),
-          content: const Text(
+          title: const LocalizedText('Direct torrent is unavailable'),
+          content: const LocalizedText(
             'This build supports direct torrent playback and downloads on ARM32 and ARM64 '
             'Android devices. It is unavailable on this device architecture.',
           ),
@@ -1238,7 +1262,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
             FilledButton(
               autofocus: true,
               onPressed: () => Navigator.of(dialogContext).pop(),
-              child: const Text('OK'),
+              child: const LocalizedText('OK'),
             ),
           ],
         ),
@@ -1251,10 +1275,10 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       barrierDismissible: false,
       builder: (dialogContext) => AlertDialog(
         icon: const Icon(Icons.public_rounded),
-        title: const Text('Enable direct peer torrents?'),
+        title: const LocalizedText('Enable direct peer torrents?'),
         content: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 620),
-          child: const Text(
+          child: const LocalizedText(
             'This connects directly to public torrent peers without a debrid '
             'account. Your public IP address is visible to peers and trackers, '
             'and selected episode data may upload while you watch or download. '
@@ -1267,12 +1291,12 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
           TextButton(
             autofocus: true,
             onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('Keep off'),
+            child: const LocalizedText('Keep off'),
           ),
           FilledButton.icon(
             onPressed: () => Navigator.of(dialogContext).pop(true),
             icon: const Icon(Icons.public_rounded),
-            label: const Text('Enable direct peers'),
+            label: const LocalizedText('Enable direct peers'),
           ),
         ],
       ),
@@ -1305,6 +1329,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     _backFocus.dispose();
     _contentFocus.dispose();
     _titleLanguageFocus.dispose();
+    _interfaceLanguageFocus.dispose();
     _showTitleStyleFocus.dispose();
     _debridProviderFocus.dispose();
     _trackingProviderFocus.dispose();
@@ -1327,6 +1352,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     _offlineDownloadsFocus.dispose();
     _downloadManagerFocus.dispose();
     _watchTogetherFocus.dispose();
+    _mangaReaderFocus.dispose();
     _customizationFocus.dispose();
     _homeShelvesSectionFocus.dispose();
     _displaySectionFocus.dispose();
@@ -1365,6 +1391,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     _premiumizeSaveFocus.dispose();
     _anilistFocus.dispose();
     _malFocus.dispose();
+    _kitsuFocus.dispose();
     _simklFocus.dispose();
     _trackingDisconnectFocus.dispose();
     _anilistTokenFocus.dispose();
@@ -1468,6 +1495,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     final selectedTrackingAction = switch (preferences.trackingProvider) {
       TrackingProvider.anilist => _anilistFocus,
       TrackingProvider.myAnimeList => _malFocus,
+      TrackingProvider.kitsu => _kitsuFocus,
       TrackingProvider.simkl => _simklFocus,
     };
     FocusNode? target;
@@ -1546,6 +1574,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       _customizationResetFocus,
       ...shelfNodes,
       _customizationFocus,
+      _interfaceLanguageFocus,
       _titleLanguageFocus,
       _showTitleStyleFocus,
       _navigationSizeFocus,
@@ -1569,6 +1598,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       _localMediaFocus,
       _offlineDownloadsFocus,
       _watchTogetherFocus,
+      _mangaReaderFocus,
       _trackingProviderFocus,
       selectedTrackingAction,
       _trackingDisconnectFocus,
@@ -1576,6 +1606,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       _anilistSaveFocus,
       _malTokenFocus,
       _malSaveFocus,
+      _kitsuFocus,
       _simklFocus,
       _localProfilesFocus,
       _trackingThresholdFocus,
@@ -1800,11 +1831,14 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
         target = _featuredHomeContentFocus;
       }
       if (key == LogicalKeyboardKey.arrowDown) {
-        target = _titleLanguageFocus;
+        target = _interfaceLanguageFocus;
       }
+    } else if (current == _interfaceLanguageFocus) {
+      if (key == LogicalKeyboardKey.arrowUp) target = _customizationFocus;
+      if (key == LogicalKeyboardKey.arrowDown) target = _titleLanguageFocus;
     } else if (current == _titleLanguageFocus) {
       if (key == LogicalKeyboardKey.arrowUp) {
-        target = _customizationFocus;
+        target = _interfaceLanguageFocus;
       }
       if (key == LogicalKeyboardKey.arrowRight && !tvListLayout) {
         target = _posterMetadataFocus;
@@ -2112,7 +2146,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       }
     } else if (current == _offlineDownloadsFocus) {
       if (key == LogicalKeyboardKey.arrowUp) {
-        target = _watchTogetherFocus;
+        target = _mangaReaderFocus;
       }
       if (key == LogicalKeyboardKey.arrowRight &&
           preferences.offlineDownloadsEnabled) {
@@ -2143,6 +2177,11 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     } else if (current == _watchTogetherFocus) {
       if (key == LogicalKeyboardKey.arrowUp) target = _localMediaFocus;
       if (key == LogicalKeyboardKey.arrowDown) {
+        target = _mangaReaderFocus;
+      }
+    } else if (current == _mangaReaderFocus) {
+      if (key == LogicalKeyboardKey.arrowUp) target = _watchTogetherFocus;
+      if (key == LogicalKeyboardKey.arrowDown) {
         target = _offlineDownloadsFocus;
       }
     } else if (current == _trackingProviderFocus) {
@@ -2165,6 +2204,13 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
           focusNodeIsMounted(_malTokenFocus)) {
         target = _malTokenFocus;
       } else if (key == LogicalKeyboardKey.arrowDown) {
+        target = tvListLayout && focusNodeIsMounted(_trackingDisconnectFocus)
+            ? _trackingDisconnectFocus
+            : _simklFocus;
+      }
+      if (key == LogicalKeyboardKey.arrowUp) target = _trackingProviderFocus;
+    } else if (current == _kitsuFocus) {
+      if (key == LogicalKeyboardKey.arrowDown) {
         target = tvListLayout && focusNodeIsMounted(_trackingDisconnectFocus)
             ? _trackingDisconnectFocus
             : _simklFocus;
@@ -2203,6 +2249,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
           final selectedSave = switch (preferences.trackingProvider) {
             TrackingProvider.anilist => _anilistSaveFocus,
             TrackingProvider.myAnimeList => _malSaveFocus,
+            TrackingProvider.kitsu => _kitsuFocus,
             TrackingProvider.simkl => _simklFocus,
           };
           target = focusNodeIsMounted(selectedSave)
@@ -2539,9 +2586,9 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(
+        content: LocalizedText(
           enabled
-              ? 'Developer mode enabled. Release history and Manga Preview are now available.'
+              ? 'Developer mode enabled. Release history and experimental Aniyomi extensions are now available.'
               : 'Developer mode disabled. Standard update controls remain available.',
         ),
       ),
@@ -2579,7 +2626,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                       Row(
                         children: [
                           Expanded(
-                            child: Text(
+                            child: LocalizedText(
                               'Menu order',
                               style: Theme.of(context).textTheme.titleLarge
                                   ?.copyWith(
@@ -2790,7 +2837,8 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     Widget librariesAndFeaturesCard() => settingsSectionCard(
       key: const ValueKey('settings-card-services-features'),
       section: _SettingsSection.librariesFeatures,
-      subtitle: 'Manage local libraries, Watch Party, and offline viewing.',
+      subtitle:
+          'Manage local libraries, Manga, Watch Party, and offline viewing.',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -2817,6 +2865,20 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
             onChanged: ref
                 .read(settingsPreferencesProvider.notifier)
                 .setShowWatchTogether,
+          ),
+          _AppearanceToggleRow(
+            key: const ValueKey('settings-manga-reader-toggle'),
+            label: 'Manga reader',
+            subtitle: preferences.mangaReaderEnabled
+                ? 'Available in navigation with your library, sources, downloads, and reader settings.'
+                : 'Hidden from navigation. Your manga library and downloads stay safely on this device.',
+            icon: Icons.menu_book_rounded,
+            value: preferences.mangaReaderEnabled,
+            focusNode: _mangaReaderFocus,
+            showDivider: true,
+            onChanged: ref
+                .read(settingsPreferencesProvider.notifier)
+                .setMangaReaderEnabled,
           ),
           offlineDownloadsPanel(),
         ],
@@ -2943,8 +3005,12 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
               vertical: _usesTvSettingsScale(context) ? 6 : 11,
             ),
             child: Text(
-              'Crash reports are off by default and contain only the app/build, error type and time, Android version, CPU architecture, device class, and a redacted technical trace. They never include a show, episode, account, device ID, source, or URL.'
-              '${showAnonymousUsageCount ? ' The Beta live count shares only whether TetoTV is active or has an MPV player open. It contains no profile or media details; normal HTTPS delivery and short-lived abuse limits may process an IP address, but the presence record does not store it.' : ''}',
+              context.tr(
+                    'Anonymous crash reports start enabled on new installs and are optional. Existing installs keep their current choice. You can turn them off here or anytime in Settings. Reports contain only the app/build, error type and time, Android version, CPU architecture, device class, and a redacted technical trace. They never include a show, episode, account, device ID, source, or URL.',
+                  ) +
+                  (showAnonymousUsageCount
+                      ? ' ${context.tr('The Beta live count shares only whether TetoTV is active or has an MPV player open. It contains no profile or media details; normal HTTPS delivery and short-lived abuse limits may process an IP address, but the presence record does not store it.')}'
+                      : ''),
               style: TextStyle(
                 color: context.appPalette.mutedText,
                 fontSize: _usesTvSettingsScale(context) ? 12 : 11,
@@ -3044,7 +3110,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                       SizedBox(width: constraints.maxWidth < 620 ? 12 : 18),
                     ],
                     Expanded(
-                      child: Text(
+                      child: LocalizedText(
                         'Settings',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
@@ -3115,6 +3181,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                             settingsPreferencesProvider.notifier,
                           ),
                           themeStudioFocusNode: _customizationFocus,
+                          interfaceLanguageFocusNode: _interfaceLanguageFocus,
                           titleLanguageFocusNode: _titleLanguageFocus,
                           showTitleStyleFocusNode: _showTitleStyleFocus,
                           navigationSizeFocusNode: _navigationSizeFocus,
@@ -3551,16 +3618,30 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                                         TrackingProvider.simkl)
                                       _TrackingPanel(
                                         provider: preferences.trackingProvider,
-                                        color:
-                                            preferences.trackingProvider ==
-                                                TrackingProvider.anilist
-                                            ? context.appPalette.accentBright
-                                            : const Color(0xFFB41F3D),
-                                        description:
-                                            preferences.trackingProvider ==
-                                                TrackingProvider.anilist
-                                            ? 'Seasonal discovery, lists, and automatic episode progress.'
-                                            : 'Sync watch progress and MAL statuses automatically.',
+                                        color: switch (preferences
+                                            .trackingProvider) {
+                                          TrackingProvider.anilist =>
+                                            context.appPalette.accentBright,
+                                          TrackingProvider.myAnimeList =>
+                                            const Color(0xFFB41F3D),
+                                          TrackingProvider.kitsu => const Color(
+                                            0xFFFD8320,
+                                          ),
+                                          TrackingProvider.simkl => const Color(
+                                            0xFF32C8FF,
+                                          ),
+                                        },
+                                        description: switch (preferences
+                                            .trackingProvider) {
+                                          TrackingProvider.anilist =>
+                                            'Seasonal discovery, lists, and automatic episode progress.',
+                                          TrackingProvider.myAnimeList =>
+                                            'Sync watch progress and MAL statuses automatically.',
+                                          TrackingProvider.kitsu =>
+                                            'Sync Kitsu lists, episode progress, and status securely.',
+                                          TrackingProvider.simkl =>
+                                            'Sync watch progress and SIMKL statuses automatically.',
+                                        },
                                         username:
                                             tracking.usernames[preferences
                                                 .trackingProvider],
@@ -3569,12 +3650,17 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                                                 .trackingProvider],
                                         isLoading: tracking.isLoading,
                                         onConnect: () async {
-                                          await context.push(
-                                            preferences.trackingProvider ==
-                                                    TrackingProvider.anilist
-                                                ? '/pair/anilist'
-                                                : '/pair/myanimelist',
-                                          );
+                                          await context.push(switch (preferences
+                                              .trackingProvider) {
+                                            TrackingProvider.anilist =>
+                                              '/pair/anilist',
+                                            TrackingProvider.myAnimeList =>
+                                              '/pair/myanimelist',
+                                            TrackingProvider.kitsu =>
+                                              '/pair/kitsu',
+                                            TrackingProvider.simkl =>
+                                              '/pair/simkl',
+                                          });
                                           await ref
                                               .read(
                                                 trackingAccountsControllerProvider
@@ -3599,11 +3685,15 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                                               preferences.trackingProvider,
                                               token,
                                             ),
-                                        focusNode:
-                                            preferences.trackingProvider ==
-                                                TrackingProvider.anilist
-                                            ? _anilistFocus
-                                            : _malFocus,
+                                        focusNode: switch (preferences
+                                            .trackingProvider) {
+                                          TrackingProvider.anilist =>
+                                            _anilistFocus,
+                                          TrackingProvider.myAnimeList =>
+                                            _malFocus,
+                                          TrackingProvider.kitsu => _kitsuFocus,
+                                          TrackingProvider.simkl => _simklFocus,
+                                        },
                                         tokenFocusNode:
                                             preferences.trackingProvider ==
                                                 TrackingProvider.anilist
@@ -3614,6 +3704,9 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                                                 TrackingProvider.anilist
                                             ? _anilistSaveFocus
                                             : _malSaveFocus,
+                                        allowManualToken:
+                                            preferences.trackingProvider !=
+                                            TrackingProvider.kitsu,
                                         disconnectFocusNode:
                                             _trackingDisconnectFocus,
                                       ),
@@ -3991,7 +4084,7 @@ class _SettingsAreaTabs extends StatelessWidget {
               Flexible(
                 child: FittedBox(
                   fit: BoxFit.scaleDown,
-                  child: Text(
+                  child: LocalizedText(
                     label,
                     maxLines: 1,
                     style: TextStyle(
@@ -4315,7 +4408,7 @@ class _SettingsToggleAllButton extends StatelessWidget {
                   ),
                   const SizedBox(width: 7),
                   Flexible(
-                    child: Text(
+                    child: LocalizedText(
                       label,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
@@ -4359,7 +4452,7 @@ class _SettingsSearchResults extends StatelessWidget {
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
           decoration: _settingsSearchResultsDecoration(context),
-          child: Text(
+          child: LocalizedText(
             'No matching settings',
             style: TextStyle(
               color: context.appPalette.mutedText,
@@ -4485,7 +4578,7 @@ class _SettingsSearchResultButton extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
+                    LocalizedText(
                       match.matchedLabel,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
@@ -4495,8 +4588,8 @@ class _SettingsSearchResultButton extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 1),
-                    Text(
-                      '${match.section.area.label}  ›  ${match.section.title}',
+                    LocalizedText(
+                      '${context.tr(match.section.area.label)}  ›  ${context.tr(match.section.title)}',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
@@ -4640,7 +4733,7 @@ class _SettingsCardFrame extends StatelessWidget {
       children: [
         if (subtitle case final detail?) ...[
           SizedBox(height: tvScale ? 2 : 4),
-          Text(
+          LocalizedText(
             detail,
             style: TextStyle(
               color: context.appPalette.mutedText,
@@ -4752,6 +4845,7 @@ class _AppearanceSettingsLayout extends StatelessWidget {
     required this.homeShelfOrder,
     required this.controller,
     required this.themeStudioFocusNode,
+    required this.interfaceLanguageFocusNode,
     required this.titleLanguageFocusNode,
     required this.showTitleStyleFocusNode,
     required this.navigationSizeFocusNode,
@@ -4783,6 +4877,7 @@ class _AppearanceSettingsLayout extends StatelessWidget {
   final List<HomeShelf> homeShelfOrder;
   final SettingsPreferencesController controller;
   final FocusNode themeStudioFocusNode;
+  final FocusNode interfaceLanguageFocusNode;
   final FocusNode titleLanguageFocusNode;
   final FocusNode showTitleStyleFocusNode;
   final FocusNode navigationSizeFocusNode;
@@ -4854,6 +4949,27 @@ class _AppearanceSettingsLayout extends StatelessWidget {
           trailing: paletteDots(),
           showDivider: true,
           onPressed: onOpenThemeStudio,
+        ),
+        _AppearanceSelectionRow<AppLanguage>(
+          key: const ValueKey('settings-app-language'),
+          label: 'App language',
+          icon: Icons.translate_rounded,
+          value: preferences.interfaceLanguage,
+          valueLabel: preferences.interfaceLanguage.nativeName,
+          translateValue: false,
+          focusNode: interfaceLanguageFocusNode,
+          options: [
+            for (final language in AppLanguage.values)
+              _SettingsOption(
+                value: language,
+                label: language.nativeName,
+                translateLabel: false,
+                detail:
+                    'Also sets preferred audio and captions. You can change them separately in Playback.',
+              ),
+          ],
+          onSelected: controller.setInterfaceLanguage,
+          showDivider: true,
         ),
         _AppearanceSelectionRow<TitleLanguagePreference>(
           key: const ValueKey('settings-appearance-title-language'),
@@ -5238,7 +5354,7 @@ class _AppearanceCardTitle extends StatelessWidget {
     final mediaSize = MediaQuery.sizeOf(context);
     final tvScale =
         mediaSize.width >= 900 && mediaSize.width > mediaSize.height;
-    return Text(
+    return LocalizedText(
       title,
       style: TextStyle(
         color: _settingsPrimaryText(context),
@@ -5256,6 +5372,7 @@ class _AppearanceActionRow extends StatefulWidget {
     required this.onPressed,
     this.subtitle,
     this.value,
+    this.translateValue = true,
     this.trailing,
     this.focusNode,
     this.autofocus = false,
@@ -5268,6 +5385,7 @@ class _AppearanceActionRow extends StatefulWidget {
   final String label;
   final String? subtitle;
   final String? value;
+  final bool translateValue;
   final Widget? trailing;
   final IconData icon;
   final VoidCallback onPressed;
@@ -5337,7 +5455,7 @@ class _AppearanceActionRowState extends State<_AppearanceActionRow> {
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
+                    LocalizedText(
                       widget.label,
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
@@ -5351,7 +5469,7 @@ class _AppearanceActionRowState extends State<_AppearanceActionRow> {
                     ),
                     if (widget.subtitle case final subtitle?) ...[
                       SizedBox(height: tvScale ? 2 : 3),
-                      Text(
+                      LocalizedText(
                         subtitle,
                         maxLines: tvScale ? 2 : 3,
                         overflow: TextOverflow.ellipsis,
@@ -5372,7 +5490,7 @@ class _AppearanceActionRowState extends State<_AppearanceActionRow> {
                 SizedBox(width: tvScale ? 6 : 10),
                 Flexible(
                   child: Text(
-                    value,
+                    widget.translateValue ? context.tr(value) : value,
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     textAlign: TextAlign.end,
@@ -5430,7 +5548,7 @@ class _SettingsSupportingText extends StatelessWidget {
           ),
           SizedBox(width: tvScale ? 7 : 14),
           Expanded(
-            child: Text(
+            child: LocalizedText(
               text,
               style: TextStyle(
                 color: context.appPalette.mutedText,
@@ -5453,6 +5571,7 @@ class _AppearanceSelectionRow<T> extends StatelessWidget {
     required this.valueLabel,
     required this.options,
     required this.onSelected,
+    this.translateValue = true,
     this.focusNode,
     this.showDivider = false,
     super.key,
@@ -5462,6 +5581,7 @@ class _AppearanceSelectionRow<T> extends StatelessWidget {
   final IconData icon;
   final T value;
   final String valueLabel;
+  final bool translateValue;
   final List<_SettingsOption<T>> options;
   final ValueChanged<T> onSelected;
   final FocusNode? focusNode;
@@ -5471,6 +5591,7 @@ class _AppearanceSelectionRow<T> extends StatelessWidget {
   Widget build(BuildContext context) => _AppearanceActionRow(
     label: label,
     value: valueLabel,
+    translateValue: translateValue,
     icon: icon,
     focusNode: focusNode,
     showDivider: showDivider,
@@ -5552,6 +5673,7 @@ class _SettingsOption<T> {
   const _SettingsOption({
     required this.value,
     required this.label,
+    this.translateLabel = true,
     this.detail,
     this.enabled = true,
     this.focusableWhenDisabled = false,
@@ -5559,6 +5681,7 @@ class _SettingsOption<T> {
 
   final T value;
   final String label;
+  final bool translateLabel;
   final String? detail;
   final bool enabled;
   final bool focusableWhenDisabled;
@@ -5685,7 +5808,7 @@ class _SettingsSelectionDialogState<T>
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
+              LocalizedText(
                 widget.label,
                 style: Theme.of(context).textTheme.titleLarge?.copyWith(
                   fontSize: tvScale ? 18 : null,
@@ -5760,7 +5883,9 @@ class _SettingsSelectionDialogState<T>
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    option.label,
+                    option.translateLabel
+                        ? context.tr(option.label)
+                        : option.label,
                     style: TextStyle(
                       color: _settingsPrimaryText(context),
                       fontWeight: FontWeight.w900,
@@ -5768,7 +5893,7 @@ class _SettingsSelectionDialogState<T>
                   ),
                   if (option.detail case final detail?) ...[
                     const SizedBox(height: 2),
-                    Text(
+                    LocalizedText(
                       detail,
                       style: TextStyle(
                         color: context.appPalette.mutedText,
@@ -6376,8 +6501,8 @@ class _CustomizationPanel extends StatelessWidget {
                     key: const ValueKey('settings-media3-surface-view'),
                     label: 'Media3 SurfaceView',
                     subtitle: preferences.media3SurfaceViewEnabled
-                        ? 'SurfaceView (experimental). Media3 only; applies to the next video.'
-                        : 'TextureView (default). Turn on to use SurfaceView and select Media3 for the next video.',
+                        ? 'SurfaceView (default). Media3 only; applies to the next video.'
+                        : 'TextureView. Turn on to restore the default SurfaceView renderer and select Media3 for the next video.',
                     icon: Icons.video_settings_rounded,
                     focusNode: media3SurfaceViewFocusNode,
                     value: preferences.media3SurfaceViewEnabled,
@@ -6395,7 +6520,11 @@ class _CustomizationPanel extends StatelessWidget {
                       _SettingsOption(
                         value: preference,
                         label: preference.displayName,
-                        detail: preference.description,
+                        detail: preferences.preferredAudioLanguage == 'auto'
+                            ? preference.description
+                            : preference == PlaybackAudioPreference.dub
+                            ? 'Prefer dubbed sources. Track selection follows Preferred audio language.'
+                            : 'Prefer subtitled sources. Track selection follows Preferred audio language.',
                       ),
                   ],
                   showDivider: true,
@@ -6438,7 +6567,7 @@ class _CustomizationPanel extends StatelessWidget {
                 ),
                 const _SettingsSupportingText(
                   'Adds an Open externally action for compatible streams. '
-                  'Turning this off returns an external default to MPV; '
+                  'Turning this off returns an external default to Media3; '
                   'your built-in player choice stays selected. TetoTV never '
                   'shares account headers or private-server credentials.',
                 ),
@@ -6553,7 +6682,7 @@ class _ExternalPlayerDefaultSelectionState
         final selectedValue = switch (widget.preferences.preferredPlayer) {
           PreferredPlayer.mpv => _mpvValue,
           PreferredPlayer.media3 => _media3Value,
-          PreferredPlayer.external => savedPackage ?? _mpvValue,
+          PreferredPlayer.external => savedPackage ?? _media3Value,
         };
         final hasSavedPlayer = installed.any(
           (player) => player.packageName == savedPackage,
@@ -6562,12 +6691,12 @@ class _ExternalPlayerDefaultSelectionState
           const _SettingsOption(
             value: _mpvValue,
             label: 'MPV (Built in)',
-            detail: 'Default engine with full TetoTV controls',
+            detail: 'Compatibility engine with full TetoTV controls',
           ),
           const _SettingsOption(
             value: _media3Value,
             label: 'Media3 (Built in)',
-            detail: 'Android playback engine with the same TetoTV controls',
+            detail: 'Default Android engine with the same TetoTV controls',
           ),
           for (final player in installed)
             _SettingsOption(
@@ -6581,7 +6710,7 @@ class _ExternalPlayerDefaultSelectionState
             _SettingsOption(
               value: selectedValue,
               label: savedLabel ?? 'Unavailable player',
-              detail: 'Not installed — TetoTV will fall back to MPV',
+              detail: 'Not installed — TetoTV will fall back to Media3',
             ),
         ];
         return Column(
@@ -6618,7 +6747,8 @@ class _ExternalPlayerDefaultSelectionState
                     .firstOrNull;
                 if (player == null) {
                   unawaited(
-                    widget.controller.fallBackToMpvAndClearExternalPlayer(),
+                    widget.controller
+                        .fallBackToBuiltInPlayerAndClearExternalPlayer(),
                   );
                   return;
                 }
@@ -6790,7 +6920,7 @@ class _InlineCollapsibleSectionState extends State<_InlineCollapsibleSection> {
                       mainAxisSize: MainAxisSize.min,
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
+                        LocalizedText(
                           _settingsDisplayLabel(widget.label),
                           style: TextStyle(
                             color: _settingsPrimaryText(context),
@@ -6799,7 +6929,7 @@ class _InlineCollapsibleSectionState extends State<_InlineCollapsibleSection> {
                           ),
                         ),
                         const SizedBox(height: 3),
-                        Text(
+                        LocalizedText(
                           widget.expanded
                               ? 'Options shown'
                               : 'Open to view and change these options',
@@ -6996,7 +7126,7 @@ class _StreamRankingPanel extends StatelessWidget {
           showDivider: true,
         ),
         const SizedBox(height: 5),
-        Text(
+        LocalizedText(
           'Preferences change ranking only. Other usable streams remain '
           'available for manual choice and automatic failover.',
           style: TextStyle(
@@ -7113,7 +7243,7 @@ class _AutoPickSourcePanel extends StatelessWidget {
           ),
         ],
         const SizedBox(height: 5),
-        Text(
+        LocalizedText(
           preferences.autoPickSourceEnabled
               ? 'Priorities are tried from top to bottom. The audio rule '
                     'still filters candidates; if none play, the complete '
@@ -7176,7 +7306,7 @@ class _PriorityListEditor<T> extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
+              LocalizedText(
                 '$description Select a row or use its arrows to reorder it.',
                 style: TextStyle(
                   color: context.appPalette.mutedText,
@@ -7241,7 +7371,7 @@ class _PriorityListRow<T> extends StatelessWidget {
         children: [
           SizedBox(
             width: tvScale ? 24 : 24,
-            child: Text(
+            child: LocalizedText(
               '${index + 1}',
               textAlign: TextAlign.center,
               style: TextStyle(
@@ -7286,7 +7416,7 @@ class _PriorityListRow<T> extends StatelessWidget {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            Text(
+                            LocalizedText(
                               label,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
@@ -7297,7 +7427,7 @@ class _PriorityListRow<T> extends StatelessWidget {
                               ),
                             ),
                             if (description.isNotEmpty)
-                              Text(
+                              LocalizedText(
                                 description,
                                 maxLines: 2,
                                 overflow: TextOverflow.ellipsis,
@@ -7311,7 +7441,7 @@ class _PriorityListRow<T> extends StatelessWidget {
                         ),
                       ),
                       if (index == 0)
-                        Text(
+                        LocalizedText(
                           'FIRST',
                           style: TextStyle(
                             color: context.appPalette.accentBright,
@@ -7389,7 +7519,7 @@ class _PreferenceRow extends StatelessWidget {
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
+                    LocalizedText(
                       label,
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
@@ -7475,7 +7605,7 @@ class _PreferenceChip extends StatelessWidget {
               child: FittedBox(
                 fit: BoxFit.scaleDown,
                 alignment: Alignment.centerLeft,
-                child: Text(
+                child: LocalizedText(
                   label,
                   maxLines: 1,
                   style: TextStyle(
@@ -7544,7 +7674,11 @@ class _DeveloperUpdatePanel extends StatelessWidget {
         for (final release in releases)
           _SettingsOption(
             value: release,
-            label: appReleaseDisplayLabel(release, state.updateChannel),
+            label: _localizedReleaseLabel(
+              context,
+              release,
+              state.updateChannel,
+            ),
             detail: _releaseCompatibilityDetail(release),
             enabled: !isKnownAndroidVersionDowngrade(
               currentVersion: state.currentVersion,
@@ -7563,9 +7697,13 @@ class _DeveloperUpdatePanel extends StatelessWidget {
     final versionParts = normalized.split('+');
     final versionName = versionParts.first;
     final installedRelease = _releaseForVersion(state, versionName);
-    final installedReleaseDate = formatAppReleaseDate(
-      installedRelease?.releasedAtUtc,
-    );
+    final installedReleaseDate = installedRelease?.releasedAtUtc == null
+        ? null
+        : TetoLocalizations.of(context).date(
+            installedRelease!.releasedAtUtc!,
+            short: true,
+            localTime: false,
+          );
     final buildNumber = versionParts.length > 1
         ? versionParts.sublist(1).join('+')
         : 'Not reported';
@@ -7611,7 +7749,11 @@ class _DeveloperUpdatePanel extends StatelessWidget {
                 for (final release in state.releaseHistory)
                   _SettingsOption(
                     value: release,
-                    label: appReleaseDisplayLabel(release, state.updateChannel),
+                    label: _localizedReleaseLabel(
+                      context,
+                      release,
+                      state.updateChannel,
+                    ),
                     detail: _releaseCompatibilityDetail(release),
                     enabled: !isKnownAndroidVersionDowngrade(
                       currentVersion: state.currentVersion,
@@ -7638,7 +7780,7 @@ class _DeveloperUpdatePanel extends StatelessWidget {
                   : () => _loadAndOpenReleaseHistory(context),
             ),
           SizedBox(height: _usesTvSettingsScale(context) ? 4 : 7),
-          Text(
+          LocalizedText(
             'Entries marked Blocked by Android remain visible for reference '
             'but cannot be selected. Android cannot replace this installation '
             'with a lower build code; Developer Mode cannot bypass that rule. '
@@ -7654,26 +7796,35 @@ class _DeveloperUpdatePanel extends StatelessWidget {
           spacing: _usesTvSettingsScale(context) ? 10 : 18,
           runSpacing: _usesTvSettingsScale(context) ? 3 : 6,
           children: [
-            Text(
-              'Installed version: $versionName'
-              '${installedReleaseDate == null ? '' : ' • $installedReleaseDate'}',
+            LocalizedText(
+              'Installed version: {version}{date}',
+              arguments: {
+                'version': versionName,
+                'date': installedReleaseDate == null
+                    ? ''
+                    : ' • $installedReleaseDate',
+              },
               style: TextStyle(
                 color: context.appPalette.primaryText,
                 fontSize: _usesTvSettingsScale(context) ? 12 : 11,
                 fontWeight: FontWeight.w800,
               ),
             ),
-            Text(
-              'Build: $buildNumber',
+            LocalizedText(
+              'Build: {number}',
+              arguments: {'number': buildNumber},
               style: TextStyle(
                 color: context.appPalette.mutedText,
                 fontSize: _usesTvSettingsScale(context) ? 12 : 11,
               ),
             ),
             if (state.latestVersion case final latest?)
-              Text(
-                'Latest ${state.updateChannel.displayName}: '
-                '${_releaseLabelForVersion(state, latest)}',
+              LocalizedText(
+                'Latest {channel}: {version}',
+                arguments: {
+                  'channel': context.tr(state.updateChannel.displayName),
+                  'version': _releaseLabelForVersion(context, state, latest),
+                },
                 style: TextStyle(
                   color: context.appPalette.mutedText,
                   fontSize: _usesTvSettingsScale(context) ? 12 : 11,
@@ -7707,9 +7858,11 @@ class _AppUpdatePanel extends StatelessWidget {
   Widget build(BuildContext context) {
     final latest = state.latestVersion;
     final currentRelease = _releaseForVersion(state, state.currentVersion);
-    final currentReleaseDate = formatAppReleaseDate(
-      currentRelease?.releasedAtUtc,
-    );
+    final currentReleaseDate = currentRelease?.releasedAtUtc == null
+        ? null
+        : TetoLocalizations.of(
+            context,
+          ).date(currentRelease!.releasedAtUtc!, short: true, localTime: false);
     final latestRelease = state.release;
     final currentVersionName = normalizeAppVersion(
       state.currentVersion,
@@ -7718,12 +7871,17 @@ class _AppUpdatePanel extends StatelessWidget {
         latestRelease != null && latestRelease.version != currentVersionName;
     final status =
         state.message ??
-        'Current ${state.currentVersion}'
-            '${latest == null ? '' : ' • Latest ${_releaseLabelForVersion(state, latest)}'}';
+        context.tr('Current {version}{latest}', {
+          'version': state.currentVersion,
+          'latest': latest == null
+              ? ''
+              : ' • ${context.tr('Latest {version}', {'version': _releaseLabelForVersion(context, state, latest)})}',
+        });
     final checkLabel = switch (state.phase) {
       AppUpdatePhase.checking => 'Checking…',
-      AppUpdatePhase.downloading =>
-        'Downloading ${(state.progress * 100).round()}%',
+      AppUpdatePhase.downloading => context.tr('Downloading {percent}%', {
+        'percent': (state.progress * 100).round(),
+      }),
       AppUpdatePhase.installing => 'Opening installer…',
       AppUpdatePhase.ready => 'Install update',
       _ => 'Check for updates',
@@ -7758,7 +7916,7 @@ class _AppUpdatePanel extends StatelessWidget {
                           runSpacing: 6,
                           crossAxisAlignment: WrapCrossAlignment.center,
                           children: [
-                            Text(
+                            LocalizedText(
                               'TetoTV ${state.currentVersion}'
                               '${currentReleaseDate == null ? '' : ' • $currentReleaseDate'}',
                               key: const ValueKey(
@@ -7771,8 +7929,15 @@ class _AppUpdatePanel extends StatelessWidget {
                               ),
                             ),
                             if (showSeparateLatestRelease)
-                              Text(
-                                'Latest ${appReleaseDisplayLabel(latestRelease, state.updateChannel)}',
+                              LocalizedText(
+                                'Latest {version}',
+                                arguments: {
+                                  'version': _localizedReleaseLabel(
+                                    context,
+                                    latestRelease,
+                                    state.updateChannel,
+                                  ),
+                                },
                                 key: const ValueKey(
                                   'app-update-latest-version-and-date',
                                 ),
@@ -7789,7 +7954,7 @@ class _AppUpdatePanel extends StatelessWidget {
                           ],
                         ),
                         const SizedBox(height: 3),
-                        Text(
+                        LocalizedText(
                           'Signed releases download securely from the official TetoTV repository.',
                           style: TextStyle(
                             color: context.appPalette.mutedText,
@@ -7803,7 +7968,7 @@ class _AppUpdatePanel extends StatelessWidget {
                 ],
               ),
               SizedBox(height: tvScale ? 5 : 10),
-              Text(
+              LocalizedText(
                 status,
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
@@ -7819,7 +7984,7 @@ class _AppUpdatePanel extends StatelessWidget {
                 SizedBox(height: tvScale ? 5 : 10),
                 Divider(color: _settingsBorderColor(context, .14), height: 1),
                 SizedBox(height: tvScale ? 5 : 10),
-                Text(
+                LocalizedText(
                   'WHAT’S NEW',
                   style: TextStyle(
                     color: context.appPalette.accentBright,
@@ -7828,10 +7993,8 @@ class _AppUpdatePanel extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 4),
-                Text(
-                  state.release!.notes.trim(),
-                  maxLines: 8,
-                  overflow: TextOverflow.ellipsis,
+                ReleaseHighlightsList(
+                  notes: state.release!.notes,
                   style: TextStyle(fontSize: tvScale ? 12 : 11, height: 1.35),
                 ),
               ],
@@ -7903,11 +8066,29 @@ AppReleaseInfo? _releaseForVersion(AppUpdateState state, String version) {
   return null;
 }
 
-String _releaseLabelForVersion(AppUpdateState state, String version) {
+String _localizedReleaseLabel(
+  BuildContext context,
+  AppReleaseInfo release,
+  AppUpdateChannel channel,
+) {
+  final version = channel.versionLabel(release.version);
+  final date = release.releasedAtUtc;
+  // Keep the existing GitHub release calendar date; localization should not
+  // silently shift a release into the previous day in western time zones.
+  return date == null
+      ? version
+      : '$version • ${TetoLocalizations.of(context).date(date, short: true, localTime: false)}';
+}
+
+String _releaseLabelForVersion(
+  BuildContext context,
+  AppUpdateState state,
+  String version,
+) {
   final release = _releaseForVersion(state, version);
   return release == null
       ? state.updateChannel.versionLabel(version)
-      : appReleaseDisplayLabel(release, state.updateChannel);
+      : _localizedReleaseLabel(context, release, state.updateChannel);
 }
 
 class _TopNavigationOrganizer extends StatelessWidget {
@@ -7939,7 +8120,7 @@ class _TopNavigationOrganizer extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
+          LocalizedText(
             'Navigation bar',
             style: TextStyle(
               color: context.appPalette.mutedText,
@@ -7948,7 +8129,7 @@ class _TopNavigationOrganizer extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 3),
-          Text(
+          LocalizedText(
             'Choose which buttons are shown and move them into your preferred order. Settings can move to the profile menu, with a top-row fallback on small screens or when no profile is linked.',
             style: TextStyle(color: context.appPalette.mutedText, fontSize: 10),
           ),
@@ -8050,7 +8231,7 @@ class _TopNavigationRow extends StatelessWidget {
           ),
           SizedBox(width: tvScale ? 6 : 9),
           Expanded(
-            child: Text(
+            child: LocalizedText(
               destination.displayName,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
@@ -8063,7 +8244,7 @@ class _TopNavigationRow extends StatelessWidget {
               ),
             ),
           ),
-          Text(
+          LocalizedText(
             isSettings
                 ? (settingsInProfileMenu ? 'PROFILE MENU' : 'TOP ROW')
                 : (visible ? 'SHOWN' : 'HIDDEN'),
@@ -8089,7 +8270,7 @@ class _TopNavigationRow extends StatelessWidget {
         children: [
           SizedBox(
             width: tvScale ? 24 : 24,
-            child: Text(
+            child: LocalizedText(
               '${index + 1}',
               textAlign: TextAlign.center,
               style: TextStyle(
@@ -8158,7 +8339,7 @@ class _HomeShelfRow extends StatelessWidget {
       children: [
         SizedBox(
           width: tvScale ? 24 : 24,
-          child: Text(
+          child: LocalizedText(
             '${index + 1}',
             textAlign: TextAlign.center,
             style: TextStyle(
@@ -8202,7 +8383,7 @@ class _HomeShelfRow extends StatelessWidget {
                   ),
                   SizedBox(width: tvScale ? 6 : 9),
                   Expanded(
-                    child: Text(
+                    child: LocalizedText(
                       shelf.displayName,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
@@ -8215,7 +8396,7 @@ class _HomeShelfRow extends StatelessWidget {
                       ),
                     ),
                   ),
-                  Text(
+                  LocalizedText(
                     enabled ? 'SHOWN' : 'HIDDEN',
                     style: TextStyle(
                       color: enabled
@@ -8324,7 +8505,7 @@ class _SectionHeader extends StatelessWidget {
               ),
               SizedBox(width: tvScale ? 6 : 10),
               Expanded(
-                child: Text(
+                child: LocalizedText(
                   _settingsDisplayLabel(title),
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
@@ -8340,7 +8521,7 @@ class _SectionHeader extends StatelessWidget {
           SizedBox(height: tvScale ? 3 : 5),
           Padding(
             padding: EdgeInsets.only(left: tvScale ? 26 : 31),
-            child: Text(
+            child: LocalizedText(
               subtitle,
               maxLines: 3,
               overflow: TextOverflow.ellipsis,
@@ -8404,7 +8585,7 @@ class _SettingsPanelSummary extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
+                LocalizedText(
                   title,
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
@@ -8415,7 +8596,7 @@ class _SettingsPanelSummary extends StatelessWidget {
                   ),
                 ),
                 SizedBox(height: tvScale ? 2 : 3),
-                Text(
+                LocalizedText(
                   subtitle,
                   maxLines: tvScale ? 3 : 4,
                   overflow: TextOverflow.ellipsis,
@@ -8427,7 +8608,7 @@ class _SettingsPanelSummary extends StatelessWidget {
                 ),
                 if (error case final message?) ...[
                   const SizedBox(height: 5),
-                  Text(
+                  LocalizedText(
                     message,
                     key: errorKey,
                     maxLines: 3,
@@ -8516,8 +8697,8 @@ class _LegalNoticesPanel extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              'TetoTV is an independent, unofficial client. It is not affiliated with or endorsed by AniList, MAL, SIMKL, debrid services, addon authors, or media rights holders. Users add and are responsible for their own services and repositories.',
+            LocalizedText(
+              'TetoTV is an independent, unofficial client. It is not affiliated with or endorsed by AniList, MAL, Kitsu, SIMKL, debrid services, addon authors, or media rights holders. Users add and are responsible for their own services and repositories.',
               style: TextStyle(
                 color: context.appPalette.mutedText,
                 fontSize: _usesTvSettingsScale(context) ? 12 : 11,
@@ -8525,7 +8706,7 @@ class _LegalNoticesPanel extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 7),
-            Text(
+            LocalizedText(
               '重音テト © 線 / 小山乃舞世 / TWINDRILL',
               style: TextStyle(
                 color: _settingsPrimaryText(context),
@@ -8534,7 +8715,7 @@ class _LegalNoticesPanel extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 7),
-            Text(
+            LocalizedText(
               'Development disclosure: TetoTV includes code created and reviewed with AI-assisted development tools. Releases are tested and maintained by the project owner.',
               style: TextStyle(
                 color: context.appPalette.mutedText,
@@ -8662,7 +8843,7 @@ class _DiscordCommunityPanel extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
-        Text(
+        LocalizedText(
           'Join the TetoTV Discord',
           style: TextStyle(
             color: _settingsPrimaryText(context),
@@ -8671,7 +8852,7 @@ class _DiscordCommunityPanel extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 5),
-        Text(
+        LocalizedText(
           'Scan the code with your phone, or select the invite below to copy it.',
           style: TextStyle(
             color: context.appPalette.mutedText,
@@ -8690,7 +8871,7 @@ class _DiscordCommunityPanel extends StatelessWidget {
             await Clipboard.setData(const ClipboardData(text: inviteUrl));
             if (!context.mounted) return;
             ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Discord invite copied.')),
+              const SnackBar(content: LocalizedText('Discord invite copied.')),
             );
           },
         ),
@@ -8866,7 +9047,7 @@ class _DonationPanel extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
-        Text(
+        LocalizedText(
           'Support TetoTV',
           style: TextStyle(
             color: _settingsPrimaryText(context),
@@ -8875,7 +9056,7 @@ class _DonationPanel extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 5),
-        Text(
+        LocalizedText(
           'Donations are optional. Scan with your phone to open the official '
           'TetoTV Ko-fi page, or select the link below to copy it.',
           style: TextStyle(
@@ -8895,7 +9076,9 @@ class _DonationPanel extends StatelessWidget {
             await Clipboard.setData(const ClipboardData(text: donationUrl));
             if (!context.mounted) return;
             ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Ko-fi donation link copied.')),
+              const SnackBar(
+                content: LocalizedText('Ko-fi donation link copied.'),
+              ),
             );
           },
         ),
@@ -9279,7 +9462,7 @@ class _SettingsTokenEditor extends StatelessWidget {
                   ),
                   SizedBox(width: tvScale ? 8 : 14),
                   Expanded(
-                    child: Text(
+                    child: LocalizedText(
                       title,
                       style: TextStyle(
                         color: _settingsPrimaryText(context),
@@ -9302,7 +9485,7 @@ class _SettingsTokenEditor extends StatelessWidget {
               ),
               if (error case final message?) ...[
                 SizedBox(height: tvScale ? 5 : 8),
-                Text(
+                LocalizedText(
                   message,
                   style: TextStyle(
                     color: const Color(0xFFFF8DA0),
@@ -9346,7 +9529,7 @@ class _LocalProfilesPanel extends StatelessWidget {
         _SettingsPanelSummary(
           title: 'Local profiles',
           subtitle: active == null
-              ? 'Use TetoTV without linking AniList, MAL, or SIMKL by creating a name stored only on this device. History and settings are shared; account credentials stay separate.'
+              ? 'Use TetoTV without linking AniList, MAL, Kitsu, or SIMKL by creating a name stored only on this device. History and settings are shared; account credentials stay separate.'
               : 'Using ${active.displayName}. This name appears in the profile switcher and Watch Party. History and settings are shared; tracker credentials stay separate.',
           icon: Icons.person_outline_rounded,
           iconColor: context.appPalette.secondaryAccent,
@@ -9515,19 +9698,22 @@ class _LocalProfilesDialogState extends ConsumerState<_LocalProfilesDialog> {
       context: context,
       barrierColor: const Color(0xCC000000),
       builder: (context) => AlertDialog(
-        title: Text('Delete ${profile.displayName}?'),
-        content: const Text(
+        title: LocalizedText(
+          'Delete {name}?',
+          arguments: {'name': profile.displayName},
+        ),
+        content: const LocalizedText(
           'This removes only the local profile name. Shared history, settings, and connected trackers stay saved.',
         ),
         actions: [
           TextButton(
             autofocus: true,
             onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel'),
+            child: const LocalizedText('Cancel'),
           ),
           FilledButton(
             onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Delete'),
+            child: const LocalizedText('Delete'),
           ),
         ],
       ),
@@ -9594,7 +9780,7 @@ class _LocalProfilesDialogState extends ConsumerState<_LocalProfilesDialog> {
                       ),
                       SizedBox(width: _usesTvSettingsScale(context) ? 5 : 9),
                       Expanded(
-                        child: Text(
+                        child: LocalizedText(
                           'Local profiles',
                           style: Theme.of(context).textTheme.headlineSmall,
                         ),
@@ -9602,13 +9788,13 @@ class _LocalProfilesDialogState extends ConsumerState<_LocalProfilesDialog> {
                     ],
                   ),
                   const SizedBox(height: 5),
-                  Text(
+                  LocalizedText(
                     'Names are stored only on this device and never include tracker credentials. The selected name is shared with Watch Party participants.',
                     style: TextStyle(color: context.appPalette.mutedText),
                   ),
                   if (state.profiles.isEmpty) ...[
                     SizedBox(height: _usesTvSettingsScale(context) ? 8 : 16),
-                    const Text('No local profiles yet.'),
+                    const LocalizedText('No local profiles yet.'),
                   ] else ...[
                     SizedBox(height: _usesTvSettingsScale(context) ? 7 : 14),
                     for (final profile in state.profiles) ...[
@@ -9651,7 +9837,7 @@ class _LocalProfilesDialogState extends ConsumerState<_LocalProfilesDialog> {
                   ),
                   if (_message ?? state.error case final message?) ...[
                     SizedBox(height: _usesTvSettingsScale(context) ? 5 : 10),
-                    Text(
+                    LocalizedText(
                       message,
                       key: const ValueKey('local-profiles-dialog-message'),
                       style: TextStyle(
@@ -9757,6 +9943,7 @@ class _TrackingPanel extends StatefulWidget {
     required this.saveFocusNode,
     required this.disconnectFocusNode,
     required this.isLoading,
+    this.allowManualToken = true,
     this.username,
     this.error,
   });
@@ -9772,6 +9959,7 @@ class _TrackingPanel extends StatefulWidget {
   final FocusNode saveFocusNode;
   final FocusNode disconnectFocusNode;
   final bool isLoading;
+  final bool allowManualToken;
   final String? username;
   final String? error;
 
@@ -9825,7 +10013,7 @@ class _TrackingPanelState extends State<_TrackingPanel> {
             connected: connected,
             label: connected ? 'CONNECTED' : 'NOT CONNECTED',
           ),
-          error: connected ? widget.error : null,
+          error: connected || !widget.allowManualToken ? widget.error : null,
         ),
         _SettingsPanelActionRow(
           label: connected ? 'Add profile' : 'Connect by QR',
@@ -9850,7 +10038,7 @@ class _TrackingPanelState extends State<_TrackingPanel> {
             destructive: true,
             onPressed: widget.onDisconnect,
           ),
-        if (!connected)
+        if (!connected && widget.allowManualToken)
           _SettingsTokenEditor(
             title: 'Manual API token',
             labelText: 'Personal Access Token',
@@ -9896,7 +10084,10 @@ class _SimklPanel extends StatelessWidget {
         ? 'READY'
         : 'UNAVAILABLE';
     final description = connected
-        ? 'Connected as ${state.username}. Lists and episode progress sync automatically.'
+        ? context.tr(
+            'Connected as {name}. Lists and episode progress sync automatically.',
+            {'name': state.username ?? ''},
+          )
         : hasCredentials
         ? state.error ?? 'Reconnect SIMKL to verify this saved account.'
         : state.isAvailable
@@ -9965,7 +10156,7 @@ class _StreamingPrivacyPanel extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
+                LocalizedText(
                   preferences.directTorrentStreamingEnabled
                       ? 'Direct peer streaming enabled'
                       : 'Protected streaming paths',
@@ -9976,7 +10167,7 @@ class _StreamingPrivacyPanel extends StatelessWidget {
                   ),
                 ),
                 SizedBox(height: tvScale ? 2 : 3),
-                Text(
+                LocalizedText(
                   preferences.directTorrentStreamingEnabled
                       ? 'Torrent releases can play without a debrid account. '
                             'Public peers can see your IP address; temporary '
@@ -10044,7 +10235,10 @@ class _ResponsiveTokenRow extends StatelessWidget {
           return Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(title, style: Theme.of(context).textTheme.titleMedium),
+              LocalizedText(
+                title,
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
               const SizedBox(height: 10),
               fieldAndAction,
             ],
@@ -10054,7 +10248,7 @@ class _ResponsiveTokenRow extends StatelessWidget {
           children: [
             SizedBox(
               width: 210,
-              child: Text(
+              child: LocalizedText(
                 title,
                 style: Theme.of(context).textTheme.titleMedium,
               ),
@@ -10146,7 +10340,7 @@ class _StorageResetPanelState extends State<_StorageResetPanel> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(
+          content: LocalizedText(
             bytes > 0
                 ? 'Cleared ${_formatStorageBytes(bytes)} of temporary files.'
                 : 'TetoTV cache is already clear.',
@@ -10166,7 +10360,9 @@ class _StorageResetPanelState extends State<_StorageResetPanel> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('This device does not support TetoTV cache cleanup.'),
+          content: LocalizedText(
+            'This device does not support TetoTV cache cleanup.',
+          ),
         ),
       );
     } finally {
@@ -10204,7 +10400,9 @@ class _StorageResetPanelState extends State<_StorageResetPanel> {
       setState(() => _resetting = false);
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('This device does not support resetting TetoTV.'),
+          content: LocalizedText(
+            'This device does not support resetting TetoTV.',
+          ),
         ),
       );
     }
@@ -10350,7 +10548,7 @@ class _ResetDialogFrame extends StatelessWidget {
               ),
               SizedBox(width: _usesTvSettingsScale(context) ? 7 : 12),
               Expanded(
-                child: Text(
+                child: LocalizedText(
                   title,
                   style: Theme.of(context).textTheme.titleLarge?.copyWith(
                     fontSize: _usesTvSettingsScale(context) ? 18 : null,
@@ -10360,7 +10558,10 @@ class _ResetDialogFrame extends StatelessWidget {
             ],
           ),
           SizedBox(height: _usesTvSettingsScale(context) ? 7 : 14),
-          Text(message, style: TextStyle(color: context.appPalette.mutedText)),
+          LocalizedText(
+            message,
+            style: TextStyle(color: context.appPalette.mutedText),
+          ),
           SizedBox(height: _usesTvSettingsScale(context) ? 10 : 20),
           LayoutBuilder(
             builder: (context, constraints) {
@@ -10436,7 +10637,7 @@ class _DialogAction extends StatelessWidget {
           Icon(icon, size: _usesTvSettingsScale(context) ? 16 : 19),
           SizedBox(width: _usesTvSettingsScale(context) ? 5 : 8),
           Flexible(
-            child: Text(
+            child: LocalizedText(
               label,
               textAlign: TextAlign.center,
               style: const TextStyle(fontWeight: FontWeight.w900),
@@ -10593,7 +10794,7 @@ class _StatusPill extends StatelessWidget {
         color: color.withValues(alpha: .12),
         borderRadius: BorderRadius.circular(999),
       ),
-      child: Text(
+      child: LocalizedText(
         label,
         style: TextStyle(
           color: color,
@@ -10694,7 +10895,7 @@ class _TvTextButton extends StatelessWidget {
             ),
             const SizedBox(width: 8),
             Flexible(
-              child: Text(
+              child: LocalizedText(
                 label,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,

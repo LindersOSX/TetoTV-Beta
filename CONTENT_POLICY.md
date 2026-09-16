@@ -15,18 +15,23 @@ preconfigured media sources.
 - User-supplied extensions are untrusted third-party code. Technical
   compatibility is not a safety review, legality determination, endorsement,
   or promise of availability.
-- The Developer Mode Manga Preview accepts user-added public HTTPS OPDS
-  1.x/2.0 catalogs, a declarative TetoTV repository that points to OPDS
-  catalogs, or a user-installed Seanime-format manga-provider extension from
-  a Marketplace repository entered by that viewer. TetoTV does not bundle,
+- The optional manga reader adds new sources through user-supplied
+  public HTTPS Seanime-compatible repositories and separately confirmed
+  `manga-provider` extension installs. Previously saved OPDS 1.x/2.0 and
+  declarative data catalogs remain accessible; they are not a new-source setup
+  option. Existing library entries and downloads are preserved. TetoTV does not bundle,
   recommend, rank, mirror, or maintain manga catalogs, providers, repository
   URLs, chapter archives, page images, or title indexes.
-- A TetoTV manga repository is metadata, not executable code. It cannot embed
-  credentials or install Tachiyomi/Mihon APK extensions. A manga-provider is
-  separately disclosed as untrusted JavaScript/TypeScript and runs within the
-  same bounded public-HTTPS extension boundary used by Marketplace providers.
+- A legacy declarative TetoTV manga catalog is metadata, not executable code.
+  This data-only statement does not apply to an installed Seanime manga-provider:
+  it executes untrusted JavaScript/TypeScript in a bounded QuickJS isolate with
+  public-HTTPS request limits and no direct Android, arbitrary-file or TetoTV
+  account/service-credential access. Credentials do not belong in a repository
+  document. Tachiyomi/Mihon APK extensions are not supported.
   Compatibility with any repository, extension, or OPDS server is not a
   content review or endorsement.
+- The separate experimental Aniyomi compatibility layer remains available only
+  in Developer Mode and does not bundle a repository or provider APK.
 - Manga catalog requests go directly to the public HTTPS source selected by
   the viewer; page and chapter-archive requests go to public HTTPS resource
   hosts declared by that source. No TetoTV-operated service proxies, caches,

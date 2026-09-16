@@ -41,12 +41,16 @@ class PairingPollResult {
     this.accessToken,
     this.refreshToken,
     this.expiresAt,
+    this.retryAfter,
+    this.diagnosticReason,
   });
 
   final PairingStatus status;
   final String? accessToken;
   final String? refreshToken;
   final DateTime? expiresAt;
+  final Duration? retryAfter;
+  final String? diagnosticReason;
 }
 
 class TrackingTokenSet {

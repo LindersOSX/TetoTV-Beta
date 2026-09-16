@@ -21,7 +21,13 @@ void main() {
               synonyms: ['Sousou no Frieren'],
               year: opts.year,
               image: 'https://images.example.test/frieren.jpg',
-              imageHeaders: {Referer: 'https://reader.example.test/'},
+              // `headers` is the original community-provider shape. TetoTV
+              // also accepts the more explicit `imageHeaders` alias.
+              headers: {
+                Referer: 'https://reader.example.test/',
+                'User-Agent': 'Community manga provider',
+              },
+              imageHeaders: {'Accept-Language': 'en'},
             }];
           }
           async findChapters(id) {
@@ -53,6 +59,11 @@ void main() {
       expect(results.single.year, 2023);
       expect(results.single.synonyms, ['Sousou no Frieren']);
       expect(results.single.imageHeaders['Referer'], isNotEmpty);
+      expect(
+        results.single.imageHeaders['User-Agent'],
+        'Community manga provider',
+      );
+      expect(results.single.imageHeaders['Accept-Language'], 'en');
 
       final chapters = await provider.findChapters(results.single.id);
       expect(chapters, hasLength(1));

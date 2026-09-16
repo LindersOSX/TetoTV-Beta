@@ -1,0 +1,70 @@
+{
+  "schemaVersion": 1,
+  "component": "Cash App QuickJS Android",
+  "version": "0.9.2",
+  "embeddedEngineVersion": "2021-03-27",
+  "repository": "https://github.com/cashapp/quickjs-java",
+  "releaseCommit": "a738129cc4aa99206c00ae49e9c5b15cb58ad880",
+  "releaseTree": "6a560c8a1d1da88d2eaa8a9c0755ec677333518b",
+  "tagWarning": "Do not resolve the repository's current 0.9.2 tag; after the repository rename it identifies a different Zipline release. The full commit above is authoritative.",
+  "sourceArchive": {
+    "url": "https://github.com/cashapp/quickjs-java/archive/a738129cc4aa99206c00ae49e9c5b15cb58ad880.tar.gz",
+    "sha256": "b54a2153690533afd0181fc1136ce989eb31e3c39bf2e852b2ff1adf4179d56f"
+  },
+  "sourceInventory": "android/cash-quickjs-android/SOURCE_MANIFEST.sha256",
+  "importedPaths": [
+    "LICENSE",
+    "quickjs/android/src/main/java/app/cash/quickjs/QuickJsNativeLoader.java",
+    "quickjs/common/java/app/cash/quickjs/QuickJs.java",
+    "quickjs/common/java/app/cash/quickjs/QuickJsException.java",
+    "quickjs/common/native"
+  ],
+  "adaptations": [
+    {
+      "path": "quickjs/common/native/Context.h",
+      "reason": "Declare the directly used std::function type explicitly for current NDK libc++ headers; behavior and ABI are unchanged.",
+      "upstreamGitBlobSha1": "1da2eaeff9915d542be7b23dd1a3ee654b9e4a3a",
+      "upstreamSha256": "4a33f1d0be29983ec60020e0b6cffbbae9d3edb2a5519888a09d66ff54db7ae6",
+      "localSha256": "d187163ccc2ae2a4fe210be24a93f4e4544b6d5484cb5aef8f5cfcef371fa30f",
+      "change": "Add #include <functional>."
+    }
+  ],
+  "build": {
+    "module": "android/cash-quickjs-android",
+    "nativeLibrary": "libquickjs.so",
+    "javaPackage": "app.cash.quickjs",
+    "ndk": "28.2.13676358",
+    "cmake": "3.22.1",
+    "compileOnlyAnnotations": {
+      "coordinate": "androidx.annotation:annotation:1.2.0",
+      "upstreamPublishedCoordinate": "androidx.annotation:annotation:1.1.0",
+      "reason": "Internal non-published source compilation uses an already-verified compiler-only artifact; it is not exposed or packaged and does not alter annotation retention or Java descriptors."
+    },
+    "abis": [
+      "armeabi-v7a",
+      "arm64-v8a"
+    ],
+    "linkOptions": [
+      "-Wl,-z,common-page-size=16384",
+      "-Wl,-z,max-page-size=16384"
+    ]
+  },
+  "abiVerification": {
+    "baseline": "app.cash.quickjs:quickjs-android:0.9.2",
+    "javaClassDescriptors": "QuickJs, QuickJsException, and QuickJsNativeLoader match the published 0.9.2 AAR when compiled for Java 8.",
+    "jniExports": "All eight JNI exports match the published 0.9.2 AAR; no JNI exports were added or removed."
+  },
+  "historicalMavenArtifact": {
+    "coordinates": "app.cash.quickjs:quickjs-android:0.9.2",
+    "aarSha256": "b20a0addc8dd091b22f16c730000204030734231678d2b88538be0ac579510e2",
+    "moduleSha256": "1e75cf283df99054c2b51a872b6ac73f1038789bda748d1e8be683a6b1f48295",
+    "pomSha256": "be658fa8791f3f2be2bd06bd75229f9d5c17014f88a27e0b20ee7abde0e78ab2",
+    "usage": "Reference-only ABI baseline; no longer resolved or packaged."
+  },
+  "licenses": {
+    "wrapper": "Apache-2.0",
+    "embeddedEngine": "MIT",
+    "wrapperLicense": "third_party/app_cash_quickjs/upstream/LICENSE",
+    "packagedEngineLicense": "assets/addon_runtime/QUICKJS_LICENSE.txt"
+  }
+}

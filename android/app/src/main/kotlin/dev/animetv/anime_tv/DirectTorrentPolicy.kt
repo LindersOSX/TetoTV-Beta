@@ -45,9 +45,16 @@ private enum class NativeEpisodeIdentityVerdict {
     UNKNOWN,
 }
 
+private enum class NativeEpisodeMatchKind {
+    SEASON_RELATIVE,
+    ABSOLUTE,
+}
+
 private data class NativeEpisodeIdentityAssessment(
     val verdict: NativeEpisodeIdentityVerdict,
     val strength: Int = 0,
+    val exact: Boolean = false,
+    val matchKind: NativeEpisodeMatchKind? = null,
 )
 
 private data class NativeEpisodeSpan(
@@ -55,6 +62,7 @@ private data class NativeEpisodeSpan(
     val last: Int,
     val season: Int? = null,
     val explicit: Boolean = false,
+    val isSpecial: Boolean = false,
 ) {
     fun contains(episode: Int): Boolean = episode in first..last
 }
@@ -78,18 +86,23 @@ internal object DirectTorrentPolicy {
         return extension in videoExtensions
     }
 
+    fun isSelectableVideo(file: DirectTorrentFileCandidate): Boolean =
+        !file.isPadFile &&
+            file.size > 0L &&
+            file.size <= DIRECT_TORRENT_MAX_FILE_BYTES &&
+            isVideoPath(file.relativePath)
+
     fun chooseVideoFile(
         files: List<DirectTorrentFileCandidate>,
         episode: Int?,
         preferredFileIndex: Int?,
         requestedSeason: Int? = null,
+        requestedAbsoluteEpisode: Int? = null,
+        requestedSpecial: Boolean = false,
+        allowSeasonRelativeBare: Boolean = false,
+        requireNumberingSchemeEvidence: Boolean = false,
     ): DirectTorrentFileCandidate? {
-        val playable = files.filter { file ->
-            !file.isPadFile &&
-                file.size > 0L &&
-                file.size <= DIRECT_TORRENT_MAX_FILE_BYTES &&
-                isVideoPath(file.relativePath)
-        }
+        val playable = files.filter(::isSelectableVideo)
         val preferred = preferredFileIndex?.let { index ->
             playable.firstOrNull { it.index == index }
         }
@@ -99,29 +112,33 @@ internal object DirectTorrentPolicy {
 
         val assessments = playable.associateWith { file ->
             assessEpisodeIdentity(
-                label = selectedBasename(file.relativePath),
+                // Preserve season folders such as `Season 2/01.mkv` as
+                // identity evidence. Only the basename crosses back to Dart.
+                label = file.relativePath,
                 requestedEpisode = episode,
                 requestedSeason = requestedSeason,
+                requestedAbsoluteEpisode = requestedAbsoluteEpisode,
+                requestedSpecial = requestedSpecial,
+                allowSeasonRelativeBare = allowSeasonRelativeBare,
+                requireNumberingSchemeEvidence = requireNumberingSchemeEvidence,
             )
         }
         val matched = playable.filter { file ->
-            assessments[file]?.verdict == NativeEpisodeIdentityVerdict.MATCH
+            assessments[file]?.let { assessment ->
+                assessment.verdict == NativeEpisodeIdentityVerdict.MATCH && assessment.exact
+            } == true
         }
         if (matched.isEmpty()) {
-            // Once any playable filename identifies a concrete, different
-            // episode, this is an episodic pack. Do not let a preferred NCOP,
-            // NCED, sample, or trailer bypass the requested-episode check.
-            if (
-                assessments.values.any {
-                    it.verdict == NativeEpisodeIdentityVerdict.MISMATCH
-                }
-            ) {
-                return null
-            }
-            // All filenames are genuinely ambiguous. This includes later-
-            // season packs using absolute numbers without an SxxExx/4x25
-            // marker, where the provider's selected index is the best signal.
-            return preferred ?: playable.maxByOrNull { it.size }
+            // Ranges, opaque names, extras, and confirmed wrong episodes all
+            // fail closed. A provider index only breaks a verified tie.
+            return null
+        }
+        val matchKinds = matched.mapNotNull { assessments[it]?.matchKind }.toSet()
+        if (
+            NativeEpisodeMatchKind.SEASON_RELATIVE in matchKinds &&
+            NativeEpisodeMatchKind.ABSOLUTE in matchKinds
+        ) {
+            return null
         }
         preferred?.takeIf { it in matched }?.let { return it }
         return matched.maxWithOrNull(
@@ -144,6 +161,10 @@ internal object DirectTorrentPolicy {
         label: String,
         requestedEpisode: Int,
         requestedSeason: Int?,
+        requestedAbsoluteEpisode: Int?,
+        requestedSpecial: Boolean,
+        allowSeasonRelativeBare: Boolean,
+        requireNumberingSchemeEvidence: Boolean,
     ): NativeEpisodeIdentityAssessment {
         if (requestedEpisode <= 0 || label.isBlank()) {
             return NativeEpisodeIdentityAssessment(NativeEpisodeIdentityVerdict.UNKNOWN)
@@ -162,36 +183,98 @@ internal object DirectTorrentPolicy {
             return NativeEpisodeIdentityAssessment(NativeEpisodeIdentityVerdict.UNKNOWN)
         }
 
-        // Bare episode numbers are ambiguous in later seasons because anime
-        // packs commonly use absolute numbering. Preserve the provider's
-        // preferred file unless an explicit season marker can verify it.
-        if (
-            requestedSeason != null &&
-            requestedSeason > 1 &&
-            labelSeason == null &&
-            spans.all { it.season == null }
-        ) {
-            return NativeEpisodeIdentityAssessment(NativeEpisodeIdentityVerdict.UNKNOWN)
-        }
-
+        var episodeWasPresentInDifferentSeason = false
+        var bareNumberingWasAmbiguous = false
+        val matching = mutableListOf<NativeEpisodeSpan>()
+        var matchedAbsolute = false
         for (span in spans) {
-            if (!span.contains(requestedEpisode)) continue
+            if (span.isSpecial && !requestedSpecial) continue
             val observedSeason = span.season ?: labelSeason
             if (
                 requestedSeason != null &&
                 observedSeason != null &&
                 observedSeason != requestedSeason
             ) {
+                if (
+                    span.contains(requestedEpisode) ||
+                    (requestedAbsoluteEpisode != null && span.contains(requestedAbsoluteEpisode))
+                ) {
+                    episodeWasPresentInDifferentSeason = true
+                }
                 continue
             }
+
+            val isBare = observedSeason == null
+            val absoluteEpisode = requestedAbsoluteEpisode
+            if (
+                isBare &&
+                    absoluteEpisode == null &&
+                    (requireNumberingSchemeEvidence || hasUnresolvedSequelHint(label))
+            ) {
+                bareNumberingWasAmbiguous = true
+                continue
+            }
+            if (
+                isBare &&
+                    absoluteEpisode != null &&
+                    absoluteEpisode != requestedEpisode
+            ) {
+                if (span.contains(absoluteEpisode)) {
+                    matching += span
+                    matchedAbsolute = true
+                } else if (span.contains(requestedEpisode)) {
+                    if (allowSeasonRelativeBare) {
+                        matching += span
+                    } else {
+                        bareNumberingWasAmbiguous = true
+                    }
+                }
+                continue
+            }
+            val laterSeasonBare = isBare && requestedSeason != null && requestedSeason > 1
+            if (laterSeasonBare) {
+                if (requestedAbsoluteEpisode == null) {
+                    if (allowSeasonRelativeBare && span.contains(requestedEpisode)) {
+                        matching += span
+                    } else {
+                        bareNumberingWasAmbiguous = true
+                    }
+                    continue
+                }
+                if (span.contains(requestedEpisode)) {
+                    if (allowSeasonRelativeBare) {
+                        matching += span
+                    } else {
+                        bareNumberingWasAmbiguous = true
+                    }
+                }
+                continue
+            }
+            if (span.contains(requestedEpisode)) matching += span
+        }
+        if (matching.isNotEmpty()) {
+            val multipleIdentities = spans.any { it !in matching }
+            val range = matching.any { it.first != it.last } || multipleIdentities
             return NativeEpisodeIdentityAssessment(
                 NativeEpisodeIdentityVerdict.MATCH,
                 strength = when {
-                    span.season != null -> 4
-                    span.explicit -> 3
+                    matching.any { it.season != null } -> 4
+                    matching.any { it.explicit } -> 3
                     else -> 2
                 },
+                exact = !range,
+                matchKind = if (matchedAbsolute) {
+                    NativeEpisodeMatchKind.ABSOLUTE
+                } else {
+                    NativeEpisodeMatchKind.SEASON_RELATIVE
+                },
             )
+        }
+        if (bareNumberingWasAmbiguous) {
+            return NativeEpisodeIdentityAssessment(NativeEpisodeIdentityVerdict.UNKNOWN)
+        }
+        if (episodeWasPresentInDifferentSeason) {
+            return NativeEpisodeIdentityAssessment(NativeEpisodeIdentityVerdict.MISMATCH)
         }
         return NativeEpisodeIdentityAssessment(NativeEpisodeIdentityVerdict.MISMATCH)
     }
@@ -220,6 +303,20 @@ internal object DirectTorrentPolicy {
 
         collect(
             Regex(
+                """\b(?:specials?|sp|ova|ona|oad)\s*[:#._ -]*0*(\d{1,4})(?:v\d+)?(?:\s*[-~]\s*(?:(?:specials?|sp|ova|ona|oad)\s*)?0*(\d{1,4}))?\b""",
+                RegexOption.IGNORE_CASE,
+            ),
+        ) { match ->
+            episodeSpan(
+                match.groupValues.getOrNull(1),
+                match.groupValues.getOrNull(2),
+                season = 0,
+                explicit = true,
+                isSpecial = true,
+            )
+        }
+        collect(
+            Regex(
                 """\bs(?:eason\s*)?0*(\d{1,3})\s*[._ -]*e(?:p(?:isode)?)?\s*0*(\d{1,4})(?:v\d+)?(?:\s*[-~]\s*(?:(?:s0*\d{1,3}\s*)?e(?:p(?:isode)?)?\s*)?0*(\d{1,4}))?""",
                 RegexOption.IGNORE_CASE,
             ),
@@ -227,7 +324,7 @@ internal object DirectTorrentPolicy {
             episodeSpan(
                 match.groupValues.getOrNull(2),
                 match.groupValues.getOrNull(3),
-                season = positiveInt(match.groupValues.getOrNull(1)),
+                season = seasonInt(match.groupValues.getOrNull(1)),
                 explicit = true,
             )
         }
@@ -240,7 +337,7 @@ internal object DirectTorrentPolicy {
             episodeSpan(
                 match.groupValues.getOrNull(2),
                 match.groupValues.getOrNull(3),
-                season = positiveInt(match.groupValues.getOrNull(1)),
+                season = seasonInt(match.groupValues.getOrNull(1)),
                 explicit = true,
             )
         }
@@ -253,7 +350,7 @@ internal object DirectTorrentPolicy {
             episodeSpan(
                 match.groupValues.getOrNull(2),
                 match.groupValues.getOrNull(3),
-                season = positiveInt(match.groupValues.getOrNull(1)),
+                season = seasonInt(match.groupValues.getOrNull(1)),
                 explicit = true,
             )
         }
@@ -283,7 +380,7 @@ internal object DirectTorrentPolicy {
         }
         collect(
             Regex(
-                """(?:\s[-–—]\s+|[\[(]\s*)0*(\d{1,4})(?:v\d+)?(?:\s*[-~]\s*0*(\d{1,4}))?(?!\.\d)(?=\s*(?:\[|\]|\)|$|[._]))""",
+                """\s[-–—]\s+0*(\d{1,4})(?:v\d+)?(?:\s*[-~]\s*0*(\d{1,4}))?\b(?!\.\d)(?!\s*(?:-\s*)?(?:bits?|ch(?:annels?)?|fps|hz)\b)""",
                 RegexOption.IGNORE_CASE,
             ),
         ) { match ->
@@ -294,7 +391,18 @@ internal object DirectTorrentPolicy {
         }
         collect(
             Regex(
-                """^\s*0*(\d{1,4})(?:v\d+)?(?=\.(?:mkv|mp4|m4v|webm|avi|mov|ts|m2ts)\s*$)""",
+                """[\[(]\s*0*(\d{1,4})(?:v\d+)?(?:\s*[-~]\s*0*(\d{1,4}))?(?=\s*[\])])""",
+                RegexOption.IGNORE_CASE,
+            ),
+        ) { match ->
+            episodeSpan(
+                match.groupValues.getOrNull(1),
+                match.groupValues.getOrNull(2),
+            )
+        }
+        collect(
+            Regex(
+                """(?:^|[\\/])\s*0*(\d{1,4})(?:v\d+)?(?=\.(?:mkv|mp4|m4v|webm|avi|mov|ts|m2ts)\s*$)""",
                 RegexOption.IGNORE_CASE,
             ),
         ) { match -> episodeSpan(match.groupValues.getOrNull(1), null) }
@@ -306,6 +414,7 @@ internal object DirectTorrentPolicy {
         lastValue: String?,
         season: Int? = null,
         explicit: Boolean = false,
+        isSpecial: Boolean = false,
     ): NativeEpisodeSpan? {
         val parsedFirst = positiveInt(firstValue)
         val parsedLast = positiveInt(lastValue)
@@ -318,6 +427,7 @@ internal object DirectTorrentPolicy {
             last = maxOf(first, last),
             season = season,
             explicit = explicit,
+            isSpecial = isSpecial || season == 0,
         )
     }
 
@@ -338,14 +448,56 @@ internal object DirectTorrentPolicy {
             Regex("""\b0*(\d{1,3})x\d{1,4}\b""", RegexOption.IGNORE_CASE),
         )
         for (expression in expressions) {
-            val parsed = positiveInt(expression.find(value)?.groupValues?.getOrNull(1))
+            val parsed = seasonInt(expression.find(value)?.groupValues?.getOrNull(1))
             if (parsed != null) return parsed
         }
         return null
     }
 
+    private fun hasUnresolvedSequelHint(value: String): Boolean {
+        if (
+            Regex(
+                """\b(?:the\s+)?final\s+season\b""",
+                RegexOption.IGNORE_CASE,
+            ).containsMatchIn(value)
+        ) {
+            return true
+        }
+        if (
+            Regex(
+                """\b(?:second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\s+season\b""",
+                RegexOption.IGNORE_CASE,
+            ).containsMatchIn(value)
+        ) {
+            return true
+        }
+        val part = Regex(
+            """\b(?:part|cour)\s*(\d{1,3}|ii|iii|iv|v|vi|vii|viii|ix|x)\b""",
+            RegexOption.IGNORE_CASE,
+        ).find(value)?.groupValues?.getOrNull(1)?.lowercase(Locale.ROOT)
+        val partNumber = part?.toIntOrNull() ?: mapOf(
+            "ii" to 2,
+            "iii" to 3,
+            "iv" to 4,
+            "v" to 5,
+            "vi" to 6,
+            "vii" to 7,
+            "viii" to 8,
+            "ix" to 9,
+            "x" to 10,
+        )[part]
+        if (partNumber != null && partNumber > 1) return true
+        return Regex(
+            """\b(?:ii|iii|iv|v|vi|vii|viii|ix|x)\s*$""",
+            RegexOption.IGNORE_CASE,
+        ).containsMatchIn(value.trim())
+    }
+
     private fun positiveInt(value: String?): Int? =
         value?.takeIf { it.isNotEmpty() }?.toIntOrNull()?.takeIf { it > 0 }
+
+    private fun seasonInt(value: String?): Int? =
+        value?.takeIf { it.isNotEmpty() }?.toIntOrNull()?.takeIf { it >= 0 }
 
     /**
      * Returns only the selected file's basename for the in-memory Dart

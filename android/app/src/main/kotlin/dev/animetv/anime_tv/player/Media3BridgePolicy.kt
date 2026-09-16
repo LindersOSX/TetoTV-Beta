@@ -7,8 +7,19 @@ import java.util.Locale
 internal object Media3BridgePolicy {
     const val MAX_SIDECAR_BYTES = 2 * 1024 * 1024
     const val MAX_SIDECARS = 32
+    const val MAX_AUDIO_SIDECARS = 8
     const val MAX_PLAYERS = 2
+    // Keep ExoPlayer's main-thread blocking wait short. An asynchronous owned
+    // playback-thread poll supplies the rest of the bounded safety window.
     const val RELEASE_TIMEOUT_MS = 1_000L
+    const val RELEASE_COMPLETION_GRACE_MS = 3_000L
+    const val RELEASE_POLL_INTERVAL_MS = 50L
+    const val RELEASE_TOTAL_TIMEOUT_MS = RELEASE_TIMEOUT_MS + RELEASE_COMPLETION_GRACE_MS
+    // A timed-out Flutter call receives its bounded answer at four seconds,
+    // while native cleanup gets a longer bounded background window. A later
+    // create also sweeps completed sessions in case the thread ends afterward.
+    const val RELEASE_AUTOMATIC_REAP_WINDOW_MS = 30_000L
+    const val RELEASE_AUTOMATIC_REAP_INTERVAL_MS = 250L
     const val SCREENSHOT_MAX_DIMENSION = 480
     const val SCREENSHOT_MAX_BYTES = 256 * 1024
     private val headerName = Regex("^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,128}$")
@@ -37,6 +48,38 @@ internal object Media3BridgePolicy {
             }
         }.getOrDefault(false)
     }
+
+    fun ownedLoopbackAudioUri(value: String): Boolean {
+        if (value.isBlank() || value.length > 16_384 || value.any { it.code < 32 }) return false
+        return runCatching {
+            val uri = URI(value)
+            uri.scheme.equals("http", true) && uri.host == "127.0.0.1" &&
+                uri.port in 1..65_535 && uri.rawUserInfo == null &&
+                !uri.path.isNullOrBlank() && uri.path != "/"
+        }.getOrDefault(false)
+    }
+
+    fun externalAudioMime(value: String?): String? {
+        val mime = value?.lowercase(Locale.ROOT)?.substringBefore(';')?.trim()
+        return mime?.takeIf {
+            it.startsWith("audio/") || it in setOf(
+                "application/vnd.apple.mpegurl",
+                "application/x-mpegurl",
+                "application/octet-stream",
+            )
+        }
+    }
+
+    fun mergedChildIndex(trackGroupId: String): Int? {
+        if (trackGroupId.length > 256) return null
+        return Regex("^([0-9]{1,2}):").find(trackGroupId)
+            ?.groupValues?.get(1)?.toIntOrNull()
+    }
+
+    fun shouldRetryPrimaryWithoutExternalAudio(
+        externalAudioCount: Int,
+        alreadyRetried: Boolean,
+    ): Boolean = externalAudioCount in 1..MAX_AUDIO_SIDECARS && !alreadyRetried
 
     fun sameOrigin(first: String, second: String): Boolean = runCatching {
         val a = URI(first)
@@ -85,14 +128,21 @@ internal object Media3BridgePolicy {
         Regex("^(?:audio|subtitle)/g[0-9]{1,9}/t[0-9]{1,3}$").matches(value) ||
             Regex("^sidecar:[0-9]{1,3}$").matches(value)
 
-    fun sidecarTrackId(formatId: String?, registeredIds: List<String>): String? {
+    fun sidecarTrackId(
+        formatId: String?,
+        registeredIds: List<String>,
+        primaryWrappedForExternalAudio: Boolean = false,
+    ): String? {
         if (formatId == null || formatId.length > 32) return null
         // DefaultMediaSourceFactory merges main media at child zero followed
-        // by configured sidecars. MergingMediaPeriod prefixes Format.id with
-        // that child index; do not confuse an embedded or nested track with a
-        // sidecar merely because its identifier has a matching suffix.
+        // by configured subtitles. Our optional external-audio merge then
+        // wraps that complete primary source at outer child zero. Validate the
+        // exact known path; never match an arbitrary suffix from an embedded
+        // or provider-controlled track identifier.
         for ((index, id) in registeredIds.take(MAX_SIDECARS).withIndex()) {
-            if (formatId == "${index + 1}:$id") return id
+            val inner = "${index + 1}:$id"
+            val expected = if (primaryWrappedForExternalAudio) "0:$inner" else inner
+            if (formatId == expected) return id
         }
         return null
     }
@@ -151,6 +201,53 @@ internal object Media3BridgePolicy {
         "audio/mpeg" -> "mp3"
         "audio/raw" -> "pcm"
         else -> null
+    }
+}
+
+internal enum class Media3ReleasePollAction { COMPLETE, WAIT, TIMED_OUT }
+
+internal enum class Media3ReleaseReapAction { REAP, WAIT, STOP }
+
+/** Pure bounded-poll policy for the owned Media3 playback thread. */
+internal fun media3ReleasePollAction(
+    playbackThreadAlive: Boolean,
+    elapsedMs: Long,
+): Media3ReleasePollAction = when {
+    !playbackThreadAlive -> Media3ReleasePollAction.COMPLETE
+    elapsedMs >= Media3BridgePolicy.RELEASE_COMPLETION_GRACE_MS ->
+        Media3ReleasePollAction.TIMED_OUT
+    else -> Media3ReleasePollAction.WAIT
+}
+
+/** Pure policy for the bounded native follow-up after Flutter's wait expires. */
+internal fun media3ReleaseReapAction(
+    playbackThreadAlive: Boolean,
+    elapsedMs: Long,
+): Media3ReleaseReapAction = when {
+    !playbackThreadAlive -> Media3ReleaseReapAction.REAP
+    elapsedMs >= Media3BridgePolicy.RELEASE_AUTOMATIC_REAP_WINDOW_MS ->
+        Media3ReleaseReapAction.STOP
+    else -> Media3ReleaseReapAction.WAIT
+}
+
+/**
+ * Tracks only playback threads owned by each default ExoPlayer instance. A
+ * new player may be created once every tracked thread is demonstrably dead.
+ */
+internal class Media3PlaybackThreadRegistry<T>(
+    private val isAlive: (T) -> Boolean,
+) {
+    private val tracked = linkedSetOf<T>()
+
+    @Synchronized
+    fun track(value: T) {
+        tracked += value
+    }
+
+    @Synchronized
+    fun allReleased(): Boolean {
+        tracked.removeAll { !isAlive(it) }
+        return tracked.isEmpty()
     }
 }
 

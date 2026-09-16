@@ -684,8 +684,23 @@ void main() {
         ownerKey: () async => 'owner.other',
       );
       try {
-        final isolated = await otherProfile.applySavedProgress(first);
+        await expectLater(
+          otherProfile.applySavedProgress(first),
+          throwsStateError,
+        );
+        // Device downloads have no owner; the opening profile adopts them.
+        final isolated = await otherProfile.applySavedProgress(
+          MangaReaderRequest(
+            sourceId: first.sourceId,
+            publicationId: first.publicationId,
+            chapterId: first.chapterId,
+            seriesTitle: first.seriesTitle,
+            chapterTitle: first.chapterTitle,
+            pages: first.pages,
+          ),
+        );
         expect(isolated.initialPageIndex, 0);
+        expect(isolated.ownerKey, 'owner.other');
       } finally {
         otherProfile.dispose();
       }
@@ -1019,6 +1034,17 @@ class _MemoryMangaStore extends MangaStore {
     required String sourceId,
     required String entryId,
   }) async => progressRows[_progressKey(ownerKey, sourceId, entryId)];
+
+  @override
+  Future<MangaReadingProgress?> chapterProgress({
+    required String ownerKey,
+    required String sourceId,
+    required String entryId,
+    required String chapterId,
+  }) async {
+    final row = progressRows[_progressKey(ownerKey, sourceId, entryId)];
+    return row?.chapterId == chapterId ? row : null;
+  }
 
   @override
   Future<List<MangaDownloadJob>> downloadJobs({

@@ -30,6 +30,265 @@ void main() {
 
   setUp(() => FlutterSecureStorage.setMockInitialValues({}));
 
+  testWidgets(
+    'remote zoom pans without page turns and Back resets before leaving',
+    (tester) async {
+      await tester.pumpWidget(
+        _readerHarness(request: _remoteRequest(3), roots: _temporaryRoots()),
+      );
+      await _pumpReader(tester);
+      await tester.tap(find.byKey(const ValueKey('manga-reader-zoom')));
+      await tester.pump();
+      final surface = find.byKey(
+        const ValueKey('manga-surface-chapter-1-spread-0'),
+      );
+      expect(_readerSurfaceScale(tester, surface), 2);
+      Matrix4 transform() => tester
+          .widget<Transform>(
+            find
+                .descendant(of: surface, matching: find.byType(Transform))
+                .first,
+          )
+          .transform;
+      final x = transform().entry(0, 3);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+      await tester.pump();
+      expect(transform().entry(0, 3), lessThan(x));
+      expect(
+        tester
+            .widget<Slider>(find.byKey(const ValueKey('manga-reader-progress')))
+            .value,
+        0,
+      );
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pump();
+      expect(find.byType(MangaReaderScreen), findsOneWidget);
+      expect(_readerSurfaceScale(tester, surface), 1);
+      expect(find.text('Exit zoom'), findsNothing);
+    },
+  );
+
+  testWidgets('remote reload retries a failed page without changing position', (
+    tester,
+  ) async {
+    final client = _RecoverableMangaPageFetchClient();
+    await tester.pumpWidget(
+      _readerHarness(
+        request: _remoteRequest(2),
+        roots: _temporaryRoots(),
+        pageFetchClient: client,
+      ),
+    );
+    await _pumpReader(tester);
+    expect(find.byKey(const ValueKey('manga-page-retry')), findsOneWidget);
+    client.fail = false;
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+    for (var i = 0; i < 3; i++) {
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    }
+    await tester.sendKeyEvent(LogicalKeyboardKey.select);
+    await _pumpReader(tester);
+    expect(find.byKey(const ValueKey('manga-page-retry')), findsNothing);
+    expect(find.byKey(const ValueKey('manga-page-remote-0')), findsOneWidget);
+    expect(
+      tester
+          .widget<Slider>(find.byKey(const ValueKey('manga-reader-progress')))
+          .value,
+      0,
+    );
+    expect(client.fetchCount, greaterThanOrEqualTo(2));
+  });
+
+  testWidgets(
+    'chapter transition saves old chapter before restoring the next',
+    (tester) async {
+      final hub = _SilentMangaHubController();
+      var called = false;
+      final request = _remoteRequest(
+        2,
+        resolveNextChapter: () async {
+          expect(hub.savedChapterIds.last, 'chapter-1');
+          called = true;
+          return _remoteRequest(3, chapterId: 'chapter-2', initialPageIndex: 1);
+        },
+      );
+      await tester.pumpWidget(
+        _readerHarness(
+          request: request,
+          roots: _temporaryRoots(),
+          mangaHubController: hub,
+        ),
+      );
+      await _pumpReader(tester);
+      await tester.tap(find.byKey(const ValueKey('manga-reader-next-chapter')));
+      await _pumpReader(tester);
+      expect(called, true);
+      expect(find.text('chapter-2'), findsOneWidget);
+      expect(
+        tester
+            .widget<Slider>(find.byKey(const ValueKey('manga-reader-progress')))
+            .value,
+        1,
+      );
+    },
+  );
+
+  testWidgets(
+    'chapter error is safe and retry keeps the old page until success',
+    (tester) async {
+      var attempts = 0;
+      final request = _remoteRequest(
+        2,
+        initialPageIndex: 1,
+        resolveNextChapter: () async {
+          if (++attempts == 1) {
+            throw StateError('PRIVATE_TOKEN https://secret.example');
+          }
+          return _remoteRequest(2, chapterId: 'chapter-2');
+        },
+      );
+      await tester.pumpWidget(
+        _readerHarness(request: request, roots: _temporaryRoots()),
+      );
+      await _pumpReader(tester);
+      expect(
+        find.byKey(const ValueKey('manga-reader-end-next')),
+        findsOneWidget,
+      );
+      await tester.tap(find.byKey(const ValueKey('manga-reader-next-chapter')));
+      await _pumpReader(tester);
+      expect(find.textContaining('PRIVATE_TOKEN'), findsNothing);
+      expect(
+        tester
+            .widget<Slider>(find.byKey(const ValueKey('manga-reader-progress')))
+            .value,
+        1,
+      );
+      await tester.tap(find.widgetWithText(SnackBarAction, 'Retry'));
+      await _pumpReader(tester);
+      expect(find.text('chapter-2'), findsOneWidget);
+      expect(attempts, 2);
+    },
+  );
+
+  testWidgets(
+    'Back cancels a pending chapter transition and ignores its late result',
+    (tester) async {
+      final pending = Completer<MangaReaderRequest?>();
+      await tester.pumpWidget(
+        _readerHarness(
+          request: _remoteRequest(2, resolveNextChapter: () => pending.future),
+          roots: _temporaryRoots(),
+        ),
+      );
+      await _pumpReader(tester);
+      await tester.tap(find.byKey(const ValueKey('manga-reader-next-chapter')));
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pump();
+      pending.complete(_remoteRequest(2, chapterId: 'chapter-2'));
+      await _pumpReader(tester);
+      expect(find.text('chapter-2'), findsNothing);
+      expect(find.byType(MangaReaderScreen), findsOneWidget);
+    },
+  );
+
+  for (final nextOwner in <String?>['owner.other', null]) {
+    testWidgets(
+      'chapter transition refuses changed or missing owner $nextOwner',
+      (tester) async {
+        await tester.pumpWidget(
+          _readerHarness(
+            request: _remoteRequest(
+              2,
+              ownerKey: 'owner.original',
+              resolveNextChapter: () async => _remoteRequest(
+                2,
+                chapterId: 'chapter-2',
+                ownerKey: nextOwner,
+              ),
+            ),
+            roots: _temporaryRoots(),
+          ),
+        );
+        await _pumpReader(tester);
+        await tester.tap(
+          find.byKey(const ValueKey('manga-reader-next-chapter')),
+        );
+        await _pumpReader(tester);
+        expect(find.text('chapter-2'), findsNothing);
+        expect(find.byType(SnackBar), findsOneWidget);
+        expect(find.byType(MangaReaderScreen), findsOneWidget);
+      },
+    );
+  }
+
+  testWidgets(
+    'core chapter transition refuses escalation into experimental Aniyomi',
+    (tester) async {
+      await tester.pumpWidget(
+        _readerHarness(
+          request: _remoteRequest(
+            2,
+            resolveNextChapter: () async => _remoteRequest(
+              2,
+              sourceId: 'aniyomi.extension.fixture',
+              chapterId: 'chapter-2',
+            ),
+          ),
+          roots: _temporaryRoots(),
+        ),
+      );
+      await _pumpReader(tester);
+      await tester.tap(find.byKey(const ValueKey('manga-reader-next-chapter')));
+      await _pumpReader(tester);
+
+      expect(find.text('chapter-2'), findsNothing);
+      expect(find.byType(SnackBar), findsOneWidget);
+      expect(find.byType(MangaReaderScreen), findsOneWidget);
+    },
+  );
+
+  testWidgets('Webtoon restores and saves a fraction inside a tall page', (
+    tester,
+  ) async {
+    final hub = _SilentMangaHubController();
+    final prefs = _FixedMangaPreferencesController(
+      const MangaReaderPreferences(
+        loaded: true,
+        mode: MangaReadingMode.webtoon,
+        sidePadding: 0,
+        webtoonGap: 0,
+        preloadPages: 0,
+        keepScreenAwake: false,
+        showDiscordTitle: false,
+        bookAnimationEnabled: false,
+      ),
+    );
+    await tester.pumpWidget(
+      _readerHarness(
+        request: _sizedRemoteRequest(
+          [4000, 4000],
+          initialPageIndex: 1,
+          initialPageOffset: .25,
+        ),
+        roots: _temporaryRoots(),
+        preferencesController: prefs,
+        mangaHubController: hub,
+        pageFetchClient: _PendingMangaPageFetchClient(),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+    await tester.pump();
+    expect(_webtoonView(tester).controller!.offset, closeTo(5006, .1));
+    _webtoonView(tester).controller!.jumpTo(6006);
+    await tester.pump(const Duration(milliseconds: 600));
+    expect(hub.savedPageIndexes.last, 1);
+    expect(hub.savedOffsets.last, closeTo(.5, .001));
+    expect(hub.savedCompletion.last, false);
+  });
+
   testWidgets('renders a remote page with its ephemeral request headers', (
     tester,
   ) async {
@@ -902,18 +1161,22 @@ void main() {
       expect(pageSize.height, pageSize.width);
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
       await _pumpReader(tester);
-      expect(find.text('2 / 3'), findsOneWidget);
+      expect(find.text('1 / 3'), findsOneWidget);
       var strip = tester.widget<ListView>(
         find.byKey(const ValueKey('manga-reader-webtoon')),
       );
-      expect(strip.controller!.offset, closeTo(6 + pageSize.height + 20, .1));
+      final viewportStep = strip.controller!.position.viewportDimension * .8;
+      expect(strip.controller!.offset, closeTo(6 + viewportStep, .1));
       prefs.replace(prefs.state.copyWith(sidePadding: 20, webtoonGap: 40));
       await _pumpReader(tester);
-      expect(find.text('2 / 3'), findsOneWidget);
+      expect(find.text('1 / 3'), findsOneWidget);
       strip = tester.widget<ListView>(
         find.byKey(const ValueKey('manga-reader-webtoon')),
       );
-      expect(strip.controller!.offset, closeTo(6 + screenWidth - 40 + 40, .1));
+      expect(
+        strip.controller!.offset,
+        closeTo(6 + viewportStep / pageSize.height * (screenWidth - 40), .1),
+      );
       await tester.sendKeyEvent(LogicalKeyboardKey.end);
       await _pumpReader(tester);
       expect(find.text('3 / 3'), findsOneWidget);
@@ -959,7 +1222,9 @@ void main() {
         ),
       );
       await _pumpReader(tester);
-      final surface = find.byKey(const ValueKey('manga-surface-spread-0'));
+      final surface = find.byKey(
+        const ValueKey('manga-surface-chapter-1-spread-0'),
+      );
       final stateBefore = tester.state(surface);
       await _doubleTapReaderAt(tester, tester.getCenter(surface));
       expect(_readerSurfaceScale(tester, surface), 2.5);
@@ -1010,8 +1275,12 @@ void main() {
       ),
     );
     await _pumpReader(tester);
-    final first = find.byKey(const ValueKey('manga-surface-webtoon-0'));
-    final second = find.byKey(const ValueKey('manga-surface-webtoon-1'));
+    final first = find.byKey(
+      const ValueKey('manga-surface-chapter-1-webtoon-0'),
+    );
+    final second = find.byKey(
+      const ValueKey('manga-surface-chapter-1-webtoon-1'),
+    );
     final firstTap = tester.getTopLeft(first) + const Offset(400, 150);
     final secondTap = tester.getCenter(second);
     final originalOffset = _webtoonView(tester).controller!.offset;
@@ -1149,6 +1418,7 @@ ListView _webtoonView(WidgetTester tester) =>
 MangaReaderRequest _sizedRemoteRequest(
   List<int> heights, {
   int initialPageIndex = 0,
+  double initialPageOffset = 0,
 }) => MangaReaderRequest(
   sourceId: 'remote-source',
   publicationId: 'customization-test',
@@ -1156,6 +1426,7 @@ MangaReaderRequest _sizedRemoteRequest(
   seriesTitle: 'Reader test series',
   chapterTitle: 'Chapter 1',
   initialPageIndex: initialPageIndex,
+  initialPageOffset: initialPageOffset,
   pages: List.generate(
     heights.length,
     (index) => MangaReaderPage(
@@ -1170,12 +1441,22 @@ MangaReaderRequest _sizedRemoteRequest(
   ),
 );
 
-MangaReaderRequest _remoteRequest(int count) => MangaReaderRequest(
-  sourceId: 'remote-source',
+MangaReaderRequest _remoteRequest(
+  int count, {
+  String sourceId = 'remote-source',
+  String chapterId = 'chapter-1',
+  int initialPageIndex = 0,
+  String? ownerKey,
+  Future<MangaReaderRequest?> Function()? resolveNextChapter,
+}) => MangaReaderRequest(
+  sourceId: sourceId,
   publicationId: 'customization-test',
-  chapterId: 'chapter-1',
+  chapterId: chapterId,
   seriesTitle: 'Reader test series',
-  chapterTitle: 'Chapter 1',
+  chapterTitle: chapterId == 'chapter-1' ? 'Chapter 1' : chapterId,
+  initialPageIndex: initialPageIndex,
+  ownerKey: ownerKey,
+  resolveNextChapter: resolveNextChapter,
   pages: List.generate(
     count,
     (index) => MangaReaderPage(
@@ -1376,16 +1657,16 @@ class _MemoryMangaPageFetchClient extends MangaPageFetchClient {
   int fetchCount = 0;
 
   @override
-  Future<Uint8List> fetch(MangaRemotePageResource resource) async {
+  Future<Uint8List> fetch(MangaFetchablePageResource resource) async {
     fetchCount++;
-    lastResource = resource;
+    if (resource is MangaRemotePageResource) lastResource = resource;
     return _transparentPng;
   }
 }
 
 class _FailingMangaPageFetchClient extends MangaPageFetchClient {
   @override
-  Future<Uint8List> fetch(MangaRemotePageResource resource) =>
+  Future<Uint8List> fetch(MangaFetchablePageResource resource) =>
       Future<Uint8List>.error(
         const MangaPageFetchException(
           'The manga source refused this page request.',
@@ -1395,12 +1676,29 @@ class _FailingMangaPageFetchClient extends MangaPageFetchClient {
       );
 }
 
+class _RecoverableMangaPageFetchClient extends _MemoryMangaPageFetchClient {
+  bool fail = true;
+  @override
+  Future<Uint8List> fetch(MangaFetchablePageResource resource) async {
+    if (fail) {
+      fetchCount++;
+      throw const MangaPageFetchException(
+        'The manga source refused this page request.',
+        reasonCode: 'http_forbidden',
+        statusCode: 403,
+      );
+    }
+    return super.fetch(resource);
+  }
+}
+
 class _PendingMangaPageFetchClient extends MangaPageFetchClient {
   final Map<int, Completer<Uint8List>> pending = {};
 
   @override
-  Future<Uint8List> fetch(MangaRemotePageResource resource) {
-    final index = int.parse(resource.uri.pathSegments.last.split('.').first);
+  Future<Uint8List> fetch(MangaFetchablePageResource resource) {
+    final remote = resource as MangaRemotePageResource;
+    final index = int.parse(remote.uri.pathSegments.last.split('.').first);
     return pending.putIfAbsent(index, Completer<Uint8List>.new).future;
   }
 
@@ -1428,6 +1726,8 @@ class _SilentMangaHubController extends MangaHubController {
 
   final List<int> savedPageIndexes = <int>[];
   final List<bool> savedCompletion = <bool>[];
+  final List<double> savedOffsets = <double>[];
+  final List<String> savedChapterIds = <String>[];
 
   @override
   Future<bool> initialize() async => true;
@@ -1441,6 +1741,8 @@ class _SilentMangaHubController extends MangaHubController {
   }) async {
     savedPageIndexes.add(pageIndex);
     savedCompletion.add(completed);
+    savedOffsets.add(pageOffset);
+    savedChapterIds.add(request.chapterId);
     return true;
   }
 }
@@ -1502,6 +1804,7 @@ class _SilentMangaDiscordPresencePlatform
     required String chapterLabel,
     required int page,
     required int pageCount,
+    String? artworkUrl,
   }) async {}
 
   @override
@@ -1519,6 +1822,7 @@ class _RecordingMangaDiscordPresencePlatform
     required String chapterLabel,
     required int page,
     required int pageCount,
+    String? artworkUrl,
   }) async {
     titles.add(title);
     chapterLabels.add(chapterLabel);

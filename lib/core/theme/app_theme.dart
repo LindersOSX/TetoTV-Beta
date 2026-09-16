@@ -50,6 +50,7 @@ abstract final class AppTheme {
     );
 
     return ThemeData(
+      fontFamilyFallback: const ['TetoDevanagari'],
       brightness: Brightness.dark,
       scaffoldBackgroundColor: palette.background,
       canvasColor: palette.background,

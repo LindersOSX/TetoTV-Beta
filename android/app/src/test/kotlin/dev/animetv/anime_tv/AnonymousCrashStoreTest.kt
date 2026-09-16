@@ -537,6 +537,416 @@ class AnonymousCrashStoreTest {
         assertEquals("visible", AnonymousCrashStore.importanceName(200))
     }
 
+    @Test
+    fun `native trace byte count uses native capture bound instead of smaller text bound`() {
+        val native = AnonymousCrashStore.TraceEvidence("", "native_tombstone_protobuf", 900_000, false)
+        val nativeAtLimit = native.copy(rawBytes = Int.MAX_VALUE, truncated = true)
+        val text = native.copy(format = "text", rawBytes = 900_000)
+
+        assertTrue(AnonymousCrashStore.traceContext(native).contains("trace_bytes=900000"))
+        assertTrue(AnonymousCrashStore.traceContext(native).contains("trace_truncated=false"))
+        assertTrue(AnonymousCrashStore.traceContext(nativeAtLimit).contains("trace_bytes=1048576"))
+        assertTrue(AnonymousCrashStore.traceContext(nativeAtLimit).contains("trace_truncated=true"))
+        assertTrue(AnonymousCrashStore.traceContext(text).contains("trace_bytes=512000"))
+        assertTrue(AnonymousCrashStore.traceContext(native.copy(rawBytes = -1)).contains("trace_bytes=0"))
+    }
+
+    @Test
+    fun `clipped report details are explicitly marked without increasing output limits`() {
+        val longTrace = (1..70).joinToString("\n") { "frame_$it " + "safe ".repeat(80) }
+        val output = AnonymousCrashStore.composeCrashDetails(
+            listOf("exit_context reason=native_crash", "lifecycle_timeline=activity_paused:-120ms"),
+            longTrace,
+            4_000,
+        )
+
+        assertTrue(output.startsWith("exit_context reason=native_crash"))
+        assertTrue(output.endsWith("\ndetails_truncated=true"))
+        assertTrue(output.length <= 4_000)
+        assertEquals(1, Regex("details_truncated=true").findAll(output).count())
+        assertEquals("complete", AnonymousCrashStore.boundCrashDetails("complete", 100))
+        assertEquals("", AnonymousCrashStore.boundCrashDetails("too much", 0))
+        assertEquals("", AnonymousCrashStore.boundCrashDetails("too much", -1))
+        assertTrue(AnonymousCrashStore.boundCrashDetails(longTrace, 7).length <= 7)
+    }
+
+    @Test
+    fun `line count and per-line truncation are marked even below overall byte budget`() {
+        val manyLines = (1..51).joinToString("\n") { "frame_$it" }
+        val longLine = "safe ".repeat(70)
+        val full = "at dev.animetv.anime_tv.TetoTvApplication.onCreate(TetoTvApplication.kt:12)"
+
+        for (trace in listOf(manyLines, longLine)) {
+            val output = AnonymousCrashStore.sanitizeStack(trace, 4_000)
+            assertTrue(output.endsWith("\ndetails_truncated=true"))
+            assertTrue(output.length < 4_000)
+        }
+        assertFalse(AnonymousCrashStore.sanitizeStack(manyLines, 4_000).contains("frame_51"))
+        assertEquals(full, AnonymousCrashStore.sanitizeStack(full, 4_000))
+    }
+
+    @Test
+    fun `clipped context lines and omitted context rows also mark incomplete details`() {
+        val longContext = AnonymousCrashStore.composeCrashDetails(listOf("safe ".repeat(150)), "frame", 4_000)
+        val manyContexts = AnonymousCrashStore.composeCrashDetails((1..9).map { "context_$it" }, "frame", 4_000)
+
+        for (output in listOf(longContext, manyContexts)) {
+            assertTrue(output.endsWith("\ndetails_truncated=true"))
+            assertTrue(output.length < 4_000)
+            assertTrue(output.contains("frame"))
+        }
+        assertFalse(manyContexts.contains("context_9"))
+    }
+
+    @Test
+    fun `crash-time technical context and truncation survive local history privacy pipeline`() {
+        val now = 1_800_000_000_000L
+        val trace = AnonymousCrashStore.composeCrashDetails(
+            listOf(
+                "java_context thread=background state=runnable daemon=true interrupted=false",
+                "lifecycle_timeline=memory_running_critical:-120ms,activity_paused:-50ms",
+                "token=private user@example.com https://private.example/episode",
+            ),
+            (1..45).joinToString("\n") { "frame_$it " + "safe ".repeat(20) },
+            4_000,
+        )
+        val report = mapOf<String, Any?>(
+            "kind" to "java", "message" to "Native failure", "stack" to trace, "occurred_at_ms" to now - 100,
+        )
+        val saved = AnonymousCrashStore.boundLocalCrashSummaries(listOf(report), now).single()
+        val output = saved["stack"].toString()
+
+        assertEquals(now - 100, saved["occurred_at_ms"])
+        assertTrue(output.contains("state=runnable daemon=true interrupted=false"))
+        assertTrue(output.contains("memory_running_critical:-120ms"))
+        assertTrue(output.endsWith("\ndetails_truncated=true"))
+        assertTrue(output.length <= 1_800)
+        assertEquals(1, Regex("details_truncated=true").findAll(output).count())
+        assertFalse(output.contains("private"))
+        assertFalse(output.contains("user@example.com"))
+    }
+
+    @Test
+    fun `Java thread context exports only role state and flags not thread identity`() {
+        val thread = Thread("private-user@example.com-title-and-url")
+        thread.isDaemon = true
+
+        val output = AnonymousCrashStore.javaThreadContext(thread, false)
+
+        assertEquals("java_context thread=background state=new daemon=true interrupted=false", output)
+        assertFalse(output.contains(thread.name))
+        assertTrue(AnonymousCrashStore.javaThreadContext(thread, true).startsWith("java_context thread=main "))
+        assertEquals(Thread.State.NEW, thread.state)
+    }
+
+    @Test
+    fun `memory callbacks use fixed OS categories and keep UI hiding distinct from pressure`() {
+        val expected = mapOf(
+            -1 to null, 0 to null, 4 to null,
+            5 to "memory_running_moderate", 9 to "memory_running_moderate",
+            10 to "memory_running_low", 14 to "memory_running_low",
+            15 to "memory_running_critical", 19 to "memory_running_critical",
+            20 to "memory_ui_hidden", 39 to "memory_ui_hidden",
+            40 to "memory_trim_background", 59 to "memory_trim_background",
+            60 to "memory_trim_moderate", 79 to "memory_trim_moderate",
+            80 to "memory_trim_complete", 100 to "memory_trim_complete",
+        )
+        expected.forEach { (level, event) -> assertEquals("level=$level", event, AnonymousCrashStore.memoryTrimBreadcrumb(level)) }
+    }
+
+    @Test
+    fun `historic memory breadcrumbs exclude future next-launch context and arbitrary labels`() {
+        val crashAt = 1_800_000_000_000L
+        val summary = "v1|mrc@${crashAt - 200},muh@${crashAt - 100},pc@${crashAt + 500},private@${crashAt - 50}"
+        val output = AnonymousCrashStore.breadcrumbContextFromProcessSummary(summary.toByteArray(), crashAt)
+
+        assertEquals("lifecycle_timeline=memory_running_critical:-200ms,memory_ui_hidden:-100ms", output)
+        assertFalse(output.contains("app_process_created"))
+        assertFalse(output.contains("private"))
+        assertEquals(
+            "lifecycle_timeline=memory_low_callback:-1ms",
+            AnonymousCrashStore.breadcrumbContext(
+                listOf(AnonymousCrashStore.CrashBreadcrumb("memory_low_callback", crashAt - 1)), crashAt,
+            ),
+        )
+    }
+
+    @Test
+    fun `signal evidence classifies null near-null and non-null without exporting raw addresses`() {
+        val cases = listOf(
+            message(varintField(8, 1)) to "null", // Proto3 zero omitted.
+            message(varintField(8, 1), varintField(9, 0)) to "null",
+            message(varintField(8, 1), varintField(9, 128)) to "near_null_lt4096",
+            message(varintField(8, 1), varintField(9, 4095)) to "near_null_lt4096",
+            message(varintField(8, 1), varintField(9, 4096)) to "non_null",
+            message(varintField(8, 1), varintField(9, 0x7fabcdef1234)) to "non_null",
+            message(varintField(8, 1), varintField(9, -1L)) to "non_null",
+        )
+        cases.forEach { (fields, expected) ->
+            val signal = message(
+                bytesField(2, "SIGSEGV"), bytesField(4, "SEGV_MAPERR"), fields,
+                varintField(6, 874321), varintField(7, 765432),
+                bytesField(10, "https://private.example/user?token=private"),
+            )
+            val output = AnonymousCrashStore.summarizeNativeTombstone(bytesField(10, signal), 1_800)
+            assertTrue(output.contains("signals=SIGSEGV,SEGV_MAPERR"))
+            assertTrue(output.contains("fault_address_class=$expected"))
+            listOf("7fabcdef1234", "140375252668980", "fault_address=", "874321", "765432", "private").forEach {
+                assertFalse("Unexpected private field $it", output.contains(it))
+            }
+        }
+    }
+
+    @Test
+    fun `missing or incomplete signal address evidence is never called a null dereference`() {
+        val incomplete = message(varintField(8, 1), byteArrayOf(0x4a, 0x7f))
+        val tooManyFields = message(varintField(8, 1), *Array(40) { varintField(99, 0) })
+        for (signal in listOf(varintField(9, 0), message(varintField(8, 0), varintField(9, 128)), incomplete, tooManyFields)) {
+            val output = AnonymousCrashStore.summarizeNativeTombstone(bytesField(10, signal), 1_800)
+            assertFalse(output.contains("fault_address_class="))
+            assertFalse(output.contains("reason=null_pointer_dereference"))
+        }
+    }
+
+    @Test
+    fun `native process uptime is a crash-time duration and not a device or process identifier`() {
+        for (uptime in listOf(0L, 3_600L, 0xffffffffL)) {
+            val tombstone = message(
+                varintField(20, uptime), varintField(5, 874321), varintField(7, 765432),
+                bytesField(2, "private-build-fingerprint"), bytesField(9, "private-command-line"),
+            )
+            val output = AnonymousCrashStore.summarizeNativeTombstone(tombstone, 1_800)
+            assertTrue(output.contains("process_uptime_s=$uptime"))
+            assertFalse(output.contains("874321"))
+            assertFalse(output.contains("765432"))
+            assertFalse(output.contains("private"))
+        }
+        for (tombstone in listOf(byteArrayOf(), varintField(20, -1L), varintField(20, 0x100000000L))) {
+            assertFalse(AnonymousCrashStore.summarizeNativeTombstone(tombstone, 1_800).contains("process_uptime_s="))
+        }
+    }
+
+    @Test
+    fun `structured native memory-error kinds survive while allocation metadata stays private`() {
+        val kinds = listOf("use_after_free", "double_free", "invalid_free", "buffer_overflow", "buffer_underflow")
+        kinds.forEachIndexed { index, kind ->
+            val memoryError = message(
+                varintField(2, index + 1L),
+                bytesField(3, "private-account https://private.example/book 0x7fabcdef1234"),
+            )
+            // Typed memory-error evidence wins regardless of protobuf field order.
+            val cause = message(bytesField(2, memoryError), bytesField(1, "null pointer dereference at private-title"))
+            val tombstone = message(bytesField(15, cause), bytesField(15, bytesField(1, "unrecognized private-title")))
+            val output = AnonymousCrashStore.summarizeNativeTombstone(tombstone, 1_800)
+
+            assertTrue(output.contains("reason=$kind"))
+            assertFalse(output.contains("private"))
+            assertFalse(output.contains("7fabcdef1234"))
+        }
+    }
+
+    @Test
+    fun `unknown malformed or excessively nested memory-error evidence fails closed`() {
+        val invalidErrors = listOf(
+            varintField(2, 0), varintField(2, 99),
+            message(varintField(2, 1), byteArrayOf(0x1a, 0x7f)),
+            message(varintField(2, 1), *Array(25) { varintField(99, 0) }),
+        )
+        for (memoryError in invalidErrors) {
+            val output = AnonymousCrashStore.summarizeNativeTombstone(bytesField(15, bytesField(2, memoryError)), 1_800)
+            assertFalse(output.contains("reason="))
+        }
+        val malformedCause = message(bytesField(2, varintField(2, 1)), byteArrayOf(0x1a, 0x7f))
+        val output = AnonymousCrashStore.summarizeNativeTombstone(bytesField(15, malformedCause), 1_800)
+        assertFalse(output.contains("reason="))
+    }
+
+    @Test
+    fun `crash build metadata accepts bounded release versions and rejects unknown or private values`() {
+        assertEquals(
+            AnonymousCrashStore.CrashBuildMetadata("2.0.74", 410051),
+            AnonymousCrashStore.safeCrashBuildMetadata("2.0.74", 410051),
+        )
+        assertTrue(AnonymousCrashStore.safeCrashBuildMetadata("2.0.74-beta.1", 410051) != null)
+        for (version in listOf(null, "unknown", "0.0.0", "https://private.example", "2.0.74 user@example.com", "2.0.74-" + "x".repeat(40))) {
+            assertEquals(null, AnonymousCrashStore.safeCrashBuildMetadata(version, 410051))
+        }
+        for (build in listOf(null, 0L, -1L, 1_000_000_000L)) {
+            assertEquals(null, AnonymousCrashStore.safeCrashBuildMetadata("2.0.74", build))
+        }
+    }
+
+    @Test
+    fun `process snapshot carries original build with whole recent breadcrumbs inside OS byte limit`() {
+        val now = 1_800_000_000_000L
+        val build = AnonymousCrashStore.CrashBuildMetadata("2.0.69", 410046)
+        val breadcrumbs = (1..16).map { AnonymousCrashStore.CrashBreadcrumb("memory_running_critical", now - 20 + it) }
+        val snapshot = AnonymousCrashStore.encodeProcessStateSummary(breadcrumbs, build)
+        val encoded = snapshot.toString(Charsets.US_ASCII)
+
+        assertTrue(snapshot.size <= 120)
+        assertTrue(encoded.startsWith("v2|2.0.69|410046|"))
+        assertTrue(encoded.endsWith("mrc@${now - 4}"))
+        assertEquals(build, AnonymousCrashStore.buildMetadataFromProcessSummary(snapshot, now))
+        assertTrue(AnonymousCrashStore.breadcrumbContextFromProcessSummary(snapshot, now).contains("memory_running_critical:-4ms"))
+        assertFalse(encoded.contains("private"))
+    }
+
+    @Test
+    fun `isolated Aniyomi worker snapshot carries build and only its fixed lifecycle marker`() {
+        val workerCreatedAt = 1_800_000_000_000L
+        val build = AnonymousCrashStore.CrashBuildMetadata("2.0.74", 410051)
+
+        val snapshot = AnonymousCrashStore.aniyomiWorkerProcessStateSummary(build, workerCreatedAt)
+        val encoded = snapshot.toString(Charsets.US_ASCII)
+
+        assertEquals("v2|2.0.74|410051|awc@$workerCreatedAt", encoded)
+        assertEquals(
+            build,
+            AnonymousCrashStore.buildMetadataFromProcessSummary(snapshot, workerCreatedAt + 50),
+        )
+        assertEquals(
+            "lifecycle_timeline=aniyomi_worker_created:-50ms",
+            AnonymousCrashStore.breadcrumbContextFromProcessSummary(snapshot, workerCreatedAt + 50),
+        )
+        for (privateValue in listOf("provider", "extension", "request", "http", "private")) {
+            assertFalse(encoded.contains(privateValue, ignoreCase = true))
+        }
+        assertTrue(snapshot.size <= 120)
+    }
+
+    @Test
+    fun `isolated Aniyomi worker snapshot fails closed when build metadata is invalid`() {
+        val snapshot = AnonymousCrashStore.aniyomiWorkerProcessStateSummary(
+            AnonymousCrashStore.CrashBuildMetadata("private-user", 410051),
+            occurredAtMillis = 0,
+        )
+
+        assertEquals("v2|0.0.0|1|awc@1", snapshot.toString(Charsets.US_ASCII))
+        assertEquals(null, AnonymousCrashStore.buildMetadataFromProcessSummary(snapshot, 2))
+        assertEquals(
+            "lifecycle_timeline=aniyomi_worker_created:-1ms",
+            AnonymousCrashStore.breadcrumbContextFromProcessSummary(snapshot, 2),
+        )
+    }
+
+    @Test
+    fun `long safe build versions never get cut into a believable partial snapshot`() {
+        val now = 1_800_000_000_000L
+        val build = AnonymousCrashStore.CrashBuildMetadata("123.456.789-beta." + "a".repeat(23), 999_999_999)
+        val snapshot = AnonymousCrashStore.encodeProcessStateSummary(
+            (1..6).map { AnonymousCrashStore.CrashBreadcrumb("memory_running_critical", now - it) }, build,
+        )
+
+        assertTrue(snapshot.size <= 120)
+        assertEquals(build, AnonymousCrashStore.buildMetadataFromProcessSummary(snapshot, now))
+        assertTrue(snapshot.toString(Charsets.US_ASCII).endsWith("@${now - 6}"))
+    }
+
+    @Test
+    fun `old exit attribution never uses a newer launch snapshot`() {
+        val crashAt = 1_800_000_000_000L
+        val oldBuild = AnonymousCrashStore.CrashBuildMetadata("2.0.69", 410046)
+        val newBuild = AnonymousCrashStore.CrashBuildMetadata("2.0.74", 410051)
+        val old = AnonymousCrashStore.encodeProcessStateSummary(
+            listOf(AnonymousCrashStore.CrashBreadcrumb("activity_resumed", crashAt - 600_001)), oldBuild,
+        )
+        val nextLaunch = AnonymousCrashStore.encodeProcessStateSummary(
+            listOf(AnonymousCrashStore.CrashBreadcrumb("app_process_created", crashAt + 50)), newBuild,
+        )
+
+        // Build attribution remains valid even if no recent lifecycle marker
+        // exists; it belongs to this OS exit record, not a timestamp guess.
+        assertEquals(oldBuild, AnonymousCrashStore.buildMetadataFromProcessSummary(old, crashAt))
+        assertEquals("", AnonymousCrashStore.breadcrumbContextFromProcessSummary(old, crashAt))
+        assertEquals(null, AnonymousCrashStore.buildMetadataFromProcessSummary(nextLaunch, crashAt))
+    }
+
+    @Test
+    fun `legacy process snapshots retain breadcrumbs but have explicitly unknown build provenance`() {
+        val crashAt = 1_800_000_000_000L
+        val legacy = "v1|ar@${crashAt - 80},mrc@${crashAt - 20}".toByteArray()
+        val noBuild = AnonymousCrashStore.encodeProcessStateSummary(
+            listOf(AnonymousCrashStore.CrashBreadcrumb("activity_paused", crashAt - 10)), null,
+        )
+
+        assertEquals(null, AnonymousCrashStore.buildMetadataFromProcessSummary(legacy, crashAt))
+        assertEquals(null, AnonymousCrashStore.buildMetadataFromProcessSummary(noBuild, crashAt))
+        assertTrue(AnonymousCrashStore.breadcrumbContextFromProcessSummary(legacy, crashAt).contains("memory_running_critical:-20ms"))
+        assertTrue(AnonymousCrashStore.breadcrumbContextFromProcessSummary(noBuild, crashAt).contains("activity_paused:-10ms"))
+    }
+
+    @Test
+    fun `malformed partial or uncorrelated build snapshots fail closed`() {
+        val crashAt = 1_800_000_000_000L
+        val invalid = listOf(
+            "", "v2|2.0.74|410051", "v2|2.0.74|410051|", "v2|2.0.74|410051|pc@",
+            "v2|2.0.74|0|pc@${crashAt - 1}", "v2|private-user|410051|pc@${crashAt - 1}",
+            "v2|2.0.74|410051|private@${crashAt - 1}", "v2|2.0.74|410051|pc@0",
+            "v2|2.0.74|410051|ar@${crashAt - 1},pc@${crashAt + 1}",
+            "v2|2.0.74|410051|" + "x".repeat(121),
+        )
+        invalid.forEach { assertEquals(null, AnonymousCrashStore.buildMetadataFromProcessSummary(it.toByteArray(), crashAt)) }
+        assertEquals(null, AnonymousCrashStore.buildMetadataFromProcessSummary(null, crashAt))
+        assertEquals(null, AnonymousCrashStore.buildMetadataFromProcessSummary("v2|2.0.74|410051|pc@1".toByteArray(), 0))
+    }
+
+    @Test
+    fun `persisted original crash build is preserved during later replay`() {
+        val report = mapOf<String, Any?>(
+            "report_id" to "java-old-event", "kind" to "java", "stack" to "frame",
+            "app_version" to "2.0.69", "build_number" to 410046L,
+            "occurred_at_ms" to 1_800_000_000_000L,
+        )
+        val restored = AnonymousCrashStore.normalizePersistedBuildAttribution(report)
+
+        assertEquals(report, restored)
+        assertEquals("2.0.69", restored["app_version"])
+        assertEquals(410046L, restored["build_number"])
+        assertFalse(restored["stack"].toString().contains("unknown"))
+    }
+
+    @Test
+    fun `legacy or incomplete queued build metadata receives v1-safe unknown sentinel exactly once`() {
+        val variants = listOf(
+            emptyMap(), mapOf("app_version" to "2.0.69"), mapOf("build_number" to 410046L),
+            mapOf("app_version" to "private-user", "build_number" to 410046L),
+            mapOf("app_version" to "2.0.69", "build_number" to 12.5),
+            mapOf("app_version" to "2.0.69", "build_number" to Double.NaN),
+        )
+        variants.forEach { metadata ->
+            val report = mapOf<String, Any?>("kind" to "native", "stack" to "frame") + metadata
+            val first = AnonymousCrashStore.normalizePersistedBuildAttribution(report)
+            val second = AnonymousCrashStore.normalizePersistedBuildAttribution(first)
+            assertEquals("0.0.0", first["app_version"])
+            assertEquals(1L, first["build_number"])
+            assertEquals(first, second)
+            assertTrue(first["stack"].toString().startsWith("build_attribution=unknown app_version=0.0.0 build_number=1"))
+            assertEquals(setOf("kind", "stack", "app_version", "build_number"), first.keys)
+        }
+    }
+
+    @Test
+    fun `local crash history retains crash-time version fields and unknown attribution across sanitization`() {
+        val now = 1_800_000_000_000L
+        val original = mapOf<String, Any?>(
+            "kind" to "java", "message" to "failure", "stack" to "frame", "occurred_at_ms" to now - 2_000,
+            "app_version" to "2.0.69", "build_number" to 410046L,
+        )
+        val legacy = mapOf<String, Any?>(
+            "kind" to "native", "message" to "failure", "stack" to "frame", "occurred_at_ms" to now - 1_000,
+        )
+        val first = AnonymousCrashStore.boundLocalCrashSummaries(listOf(original, legacy), now)
+        val second = AnonymousCrashStore.boundLocalCrashSummaries(first, now + 1_000)
+
+        assertEquals(first, second)
+        assertEquals("2.0.69", second[0]["app_version"])
+        assertEquals(410046L, second[0]["build_number"])
+        assertEquals("0.0.0", second[1]["app_version"])
+        assertEquals(1L, second[1]["build_number"])
+        assertTrue(second[1]["stack"].toString().contains("build_attribution=unknown"))
+    }
+
     private fun message(vararg fields: ByteArray): ByteArray = fields.flatMap { it.toList() }.toByteArray()
 
     private fun threadEntry(tid: Long, module: String, function: String): ByteArray = bytesField(

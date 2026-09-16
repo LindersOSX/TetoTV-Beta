@@ -14,6 +14,8 @@ bool useTelevisionCanvas({
   required InterfaceMode mode,
 }) => switch (mode) {
   InterfaceMode.automatic => detectedTelevision,
+  // Preserve the explicit Modern Layout override. Automatic remains the
+  // device-aware default that keeps phones, tablets, and foldables mobile.
   InterfaceMode.television => true,
   InterfaceMode.phone => false,
 };

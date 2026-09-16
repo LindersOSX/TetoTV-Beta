@@ -1,3 +1,4 @@
+import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
@@ -134,7 +135,7 @@ class _ThirdPartyNoticesScreenState extends State<ThirdPartyNoticesScreen> {
                     }
                     if (snapshot.hasError || snapshot.data == null) {
                       return Center(
-                        child: Text(
+                        child: LocalizedText(
                           'Third-party notices could not be loaded.',
                           style: TextStyle(color: palette.mutedText),
                         ),
@@ -200,7 +201,7 @@ class _NoticesHeader extends StatelessWidget {
       label: compact ? 'Package licenses' : 'Flutter package licenses',
       onPressed: onOpenLicenses,
     );
-    final title = Text(
+    final title = LocalizedText(
       'Third-party notices',
       maxLines: 1,
       overflow: TextOverflow.ellipsis,
@@ -274,7 +275,7 @@ class _NoticeAction extends StatelessWidget {
             children: [
               Icon(icon, color: palette.primaryText, size: 21),
               const SizedBox(width: 8),
-              Text(
+              LocalizedText(
                 label,
                 style: TextStyle(
                   color: palette.primaryText,
@@ -407,7 +408,7 @@ class _NoticeBlockView extends StatelessWidget {
     final bodyStyle = _bodyStyle(context);
     final text = _plainInline(block.lines.join(' '));
     return switch (block.type) {
-      _NoticeBlockType.heading => Text(
+      _NoticeBlockType.heading => LocalizedText(
         text,
         style: TextStyle(
           color: block.level == 1 ? palette.primaryText : palette.accentBright,
@@ -424,7 +425,10 @@ class _NoticeBlockView extends StatelessWidget {
         children: [
           Padding(
             padding: const EdgeInsets.only(top: 2, right: 10),
-            child: Text('•', style: TextStyle(color: palette.accentBright)),
+            child: LocalizedText(
+              '•',
+              style: TextStyle(color: palette.accentBright),
+            ),
           ),
           Expanded(child: SelectableText(text, style: bodyStyle)),
         ],

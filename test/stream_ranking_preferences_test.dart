@@ -27,15 +27,23 @@ void main() {
   WebStreamResult web({
     required String id,
     required String quality,
+    String? providerId,
+    Uri? uri,
+    Map<String, String> headers = const {},
+    Uri? subtitleUri,
+    String? subtitleLanguage,
     bool dubbed = true,
     WebStreamAudioCapability? audioCapability,
     List<String> audioLanguages = const [],
   }) => WebStreamResult(
-    providerId: 'provider-$id',
+    providerId: providerId ?? 'provider-$id',
     providerName: 'Provider $id',
     title: '$quality stream $id',
-    uri: Uri.parse('https://example.com/$id.m3u8'),
+    uri: uri ?? Uri.parse('https://example.com/$id.m3u8'),
     quality: quality,
+    headers: headers,
+    subtitleUri: subtitleUri,
+    subtitleLanguage: subtitleLanguage,
     isDubbed: dubbed,
     audioCapability: audioCapability,
     audioLanguages: audioLanguages,
@@ -407,6 +415,16 @@ void main() {
       ).first,
       same(dub720),
     );
+    expect(
+      compareWebStreamCandidates(
+        sub1080,
+        dub720,
+        quality: WebStreamQualityPreference.p1080,
+        preferredAudio: PlaybackAudioPreference.dub,
+        useAudioPreference: false,
+      ),
+      lessThan(0),
+    );
   });
 
   test('structured Web audio language outranks Dub/Sub fallback', () {
@@ -601,6 +619,39 @@ void main() {
 
     expect(ranked.first, same(p1080));
     expect(ranked, containsAll([p4k, p1080, p720]));
+  });
+
+  test('Web autoplay keeps same-provider same-URI audio variants', () {
+    final uri = Uri.parse('https://example.com/shared.m3u8');
+    final sub = web(
+      id: 'sub',
+      quality: '1080p',
+      providerId: 'provider',
+      uri: uri,
+      dubbed: false,
+      audioCapability: WebStreamAudioCapability.sub,
+      headers: const {'Referer': 'https://sub.example/'},
+    );
+    final dub = web(
+      id: 'dub',
+      quality: '1080p',
+      providerId: 'provider',
+      uri: uri,
+      audioCapability: WebStreamAudioCapability.dub,
+      headers: const {'Referer': 'https://dub.example/'},
+    );
+
+    final ranked = rankAutomaticAutoplayWebStreams(
+      [sub, dub],
+      language: 'all',
+      quality: 'any',
+      preferredAudio: PlaybackAudioPreference.dub,
+      qualityPreference: WebStreamQualityPreference.bestAvailable,
+    );
+
+    expect(ranked, hasLength(2));
+    expect(ranked.first, same(dub));
+    expect(ranked, containsAll([sub, dub]));
   });
 
   test('device safety stays ahead of current-quality affinity', () {

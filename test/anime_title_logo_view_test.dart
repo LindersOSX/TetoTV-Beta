@@ -1,7 +1,9 @@
 import 'dart:convert';
 
+import 'package:anime_tv/core/localization/app_language.dart';
 import 'package:anime_tv/core/preferences/title_language_preference.dart';
 import 'package:anime_tv/features/catalog/application/anime_title_logo_provider.dart';
+import 'package:anime_tv/features/catalog/data/anime_title_logo_client.dart';
 import 'package:anime_tv/features/catalog/domain/anime_title_logo.dart';
 import 'package:anime_tv/features/catalog/presentation/anime_title_logo_view.dart';
 import 'package:anime_tv/features/settings/application/display_preferences_controller.dart';
@@ -14,6 +16,66 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  for (final preference in TitleLanguagePreference.values) {
+    test('details provider requests ${preference.name} artwork', () async {
+      final client = _RecordingLogoClient();
+      final container = ProviderContainer(
+        overrides: [animeTitleLogoClientProvider.overrideWithValue(client)],
+      );
+      addTearDown(container.dispose);
+      await container.read(
+        animeTitleLogoProvider((
+          aniListId: 123,
+          titleLanguage: preference,
+        )).future,
+      );
+      expect(client.languages, [
+        preference == TitleLanguagePreference.english ? 'en' : 'ja',
+      ]);
+    });
+  }
+
+  for (final language in <String?>[null, 'ja', '00']) {
+    testWidgets(
+      'English view rejects $language artwork even from a provider override',
+      (tester) async {
+        await tester.pumpWidget(
+          ProviderScope(
+            overrides: [
+              settingsPreferencesProvider.overrideWith(
+                (_) => _LogoSettingsController(ShowTitleStyle.englishLogo),
+              ),
+              animeTitleLogoProvider.overrideWith(
+                (_, _) async => AnimeTitleLogo(
+                  url: Uri.parse(
+                    'https://artworks.thetvdb.com/not-english.png',
+                  ),
+                  source: AnimeTitleLogoSource.aniZip,
+                  languageCode: language,
+                ),
+              ),
+            ],
+            child: const MaterialApp(
+              home: Scaffold(
+                body: AnimeTitleLogoView(
+                  aniListId: 123,
+                  fallbackTitle: 'English text fallback',
+                  maxWidth: 400,
+                  maxHeight: 100,
+                  textStyle: TextStyle(fontSize: 24),
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(find.text('English text fallback'), findsOneWidget);
+        expect(find.byType(CachedNetworkImage), findsNothing);
+        expect(tester.takeException(), isNull);
+      },
+    );
+  }
 
   testWidgets('text title style does not request logo artwork', (tester) async {
     var logoLookups = 0;
@@ -162,7 +224,7 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
-  testWidgets('Romaji title preference requests and renders Japanese artwork', (
+  testWidgets('Spanish UI still follows the Romaji artwork preference', (
     tester,
   ) async {
     final requestedLanguages = <TitleLanguagePreference>[];
@@ -170,7 +232,10 @@ void main() {
       ProviderScope(
         overrides: [
           settingsPreferencesProvider.overrideWith(
-            (_) => _LogoSettingsController(ShowTitleStyle.englishLogo),
+            (_) => _LogoSettingsController(
+              ShowTitleStyle.englishLogo,
+              language: AppLanguage.spanish,
+            ),
           ),
           titleLanguagePreferenceProvider.overrideWith(
             (_) => _LogoLanguageController(TitleLanguagePreference.romaji),
@@ -185,6 +250,7 @@ void main() {
           }),
         ],
         child: const MaterialApp(
+          locale: Locale('es'),
           home: Scaffold(
             body: AnimeTitleLogoView(
               aniListId: 456,
@@ -211,63 +277,83 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
-  testWidgets('missing Romaji artwork keeps the localized bounded text title', (
-    tester,
-  ) async {
-    await tester.pumpWidget(
-      ProviderScope(
-        overrides: [
-          settingsPreferencesProvider.overrideWith(
-            (_) => _LogoSettingsController(ShowTitleStyle.englishLogo),
-          ),
-          titleLanguagePreferenceProvider.overrideWith(
-            (_) => _LogoLanguageController(TitleLanguagePreference.romaji),
-          ),
-          animeTitleLogoProvider.overrideWith((_, request) async {
-            expect(request.titleLanguage, TitleLanguagePreference.romaji);
-            return null;
-          }),
-        ],
-        child: const MaterialApp(
-          home: Scaffold(
-            body: Align(
-              alignment: Alignment.topLeft,
-              child: AnimeTitleLogoView(
-                key: ValueKey('romaji-fallback-title'),
-                aniListId: 789,
-                fallbackTitle: 'Koukaku Kidoutai',
-                logoContextLabel: 'SEASON 2',
-                maxWidth: 260,
-                maxHeight: 58,
-                textStyle: TextStyle(fontSize: 30),
+  testWidgets(
+    'missing Romaji artwork keeps the chosen bounded fallback title',
+    (tester) async {
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            settingsPreferencesProvider.overrideWith(
+              (_) => _LogoSettingsController(ShowTitleStyle.englishLogo),
+            ),
+            titleLanguagePreferenceProvider.overrideWith(
+              (_) => _LogoLanguageController(TitleLanguagePreference.romaji),
+            ),
+            animeTitleLogoProvider.overrideWith((_, request) async {
+              expect(request.titleLanguage, TitleLanguagePreference.romaji);
+              return null;
+            }),
+          ],
+          child: const MaterialApp(
+            home: Scaffold(
+              body: Align(
+                alignment: Alignment.topLeft,
+                child: AnimeTitleLogoView(
+                  key: ValueKey('romaji-fallback-title'),
+                  aniListId: 789,
+                  fallbackTitle: 'Koukaku Kidoutai',
+                  logoContextLabel: 'SEASON 2',
+                  maxWidth: 260,
+                  maxHeight: 58,
+                  textStyle: TextStyle(fontSize: 30),
+                ),
               ),
             ),
           ),
         ),
-      ),
-    );
-    await tester.pump();
-    await tester.pump();
+      );
+      await tester.pump();
+      await tester.pump();
 
-    expect(find.text('Koukaku Kidoutai'), findsOneWidget);
-    expect(find.byType(CachedNetworkImage), findsNothing);
-    final fallbackRect = tester.getRect(
-      find.byKey(const ValueKey('romaji-fallback-title')),
-    );
-    expect(fallbackRect.width, lessThanOrEqualTo(260));
-    expect(fallbackRect.height, lessThanOrEqualTo(58));
-    expect(tester.takeException(), isNull);
-  });
+      expect(find.text('Koukaku Kidoutai'), findsOneWidget);
+      expect(find.byType(CachedNetworkImage), findsNothing);
+      final fallbackRect = tester.getRect(
+        find.byKey(const ValueKey('romaji-fallback-title')),
+      );
+      expect(fallbackRect.width, lessThanOrEqualTo(260));
+      expect(fallbackRect.height, lessThanOrEqualTo(58));
+      expect(tester.takeException(), isNull);
+    },
+  );
 }
 
 class _LogoSettingsController extends SettingsPreferencesController {
-  _LogoSettingsController(ShowTitleStyle style)
-    : super(const FlutterSecureStorage()) {
-    state = SettingsPreferences(showTitleStyle: style, loaded: true);
+  _LogoSettingsController(
+    ShowTitleStyle style, {
+    AppLanguage language = AppLanguage.english,
+  }) : super(const FlutterSecureStorage()) {
+    state = SettingsPreferences(
+      showTitleStyle: style,
+      interfaceLanguage: language,
+      loaded: true,
+    );
   }
 
   @override
   Future<void> load() async {}
+}
+
+class _RecordingLogoClient extends AnimeTitleLogoClient {
+  final languages = <String>[];
+
+  @override
+  Future<AnimeTitleLogo?> lookup(
+    int aniListId, {
+    String preferredLanguage = 'en',
+  }) async {
+    languages.add(preferredLanguage);
+    return null;
+  }
 }
 
 class _LogoLanguageController extends TitleLanguagePreferenceController {

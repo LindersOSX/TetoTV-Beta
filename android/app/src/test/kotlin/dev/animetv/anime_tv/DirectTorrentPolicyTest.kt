@@ -93,10 +93,10 @@ class DirectTorrentPolicyTest {
     }
 
     @Test
-    fun `single video torrent may use its only playable file`() {
+    fun `single opaque video torrent fails closed`() {
         val file = candidate(3, "Show.mkv", 900)
 
-        assertEquals(file, DirectTorrentPolicy.chooseVideoFile(listOf(file), 7, null))
+        assertNull(DirectTorrentPolicy.chooseVideoFile(listOf(file), 7, null))
     }
 
     @Test
@@ -123,6 +123,20 @@ class DirectTorrentPolicyTest {
     }
 
     @Test
+    fun `anime suffix followed by release tags proves the episode`() {
+        val selected = candidate(
+            8,
+            "[Group] Show - 08 Dual Audio 1080p x265.mkv",
+            900,
+        )
+
+        assertEquals(
+            selected,
+            DirectTorrentPolicy.chooseVideoFile(listOf(selected), 8, null),
+        )
+    }
+
+    @Test
     fun `episode match overrides wrong preferred index`() {
         val one = candidate(1, "Show - 01.mkv", 800)
         val two = candidate(2, "Show - 02.mkv", 900)
@@ -143,7 +157,7 @@ class DirectTorrentPolicyTest {
     }
 
     @Test
-    fun `later season preserves provider absolute-number preference without season markers`() {
+    fun `later season uses an authoritative absolute episode instead of provider preference`() {
         val absolute87 = candidate(87, "87.mkv", 800)
         val absolute88 = candidate(88, "88.mkv", 900)
         val local25 = candidate(25, "25.mkv", 1_000)
@@ -153,8 +167,103 @@ class DirectTorrentPolicyTest {
             DirectTorrentPolicy.chooseVideoFile(
                 listOf(absolute87, absolute88, local25),
                 episode = 25,
+                preferredFileIndex = 25,
+                requestedSeason = 4,
+                requestedAbsoluteEpisode = 88,
+            ),
+        )
+    }
+
+    @Test
+    fun `later season without an offset or season scope fails closed`() {
+        val absolute88 = candidate(88, "88.mkv", 900)
+        val local25 = candidate(25, "25.mkv", 1_000)
+
+        assertNull(
+            DirectTorrentPolicy.chooseVideoFile(
+                listOf(absolute88, local25),
+                episode = 25,
                 preferredFileIndex = 88,
                 requestedSeason = 4,
+            ),
+        )
+    }
+
+    @Test
+    fun `unnumbered sequel title requires an explicit numbering scheme`() {
+        val local = candidate(1, "Show Final Season - 01.mkv", 1_000)
+        val absolute = candidate(60, "Show Final Season - 60.mkv", 900)
+        val explicit = candidate(2, "Show Final Season S04E01.mkv", 800)
+
+        assertNull(
+            DirectTorrentPolicy.chooseVideoFile(
+                listOf(local, absolute),
+                episode = 1,
+                preferredFileIndex = 60,
+                requireNumberingSchemeEvidence = true,
+            ),
+        )
+        assertEquals(
+            explicit,
+            DirectTorrentPolicy.chooseVideoFile(
+                listOf(explicit),
+                episode = 1,
+                preferredFileIndex = 2,
+                requireNumberingSchemeEvidence = true,
+            ),
+        )
+    }
+
+    @Test
+    fun `season folder scopes a plain numeric anime filename`() {
+        val six = candidate(6, "Show/Season 3/06.mkv", 800)
+        val seven = candidate(7, "Show/Season 3/07.mkv", 900)
+
+        assertEquals(
+            seven,
+            DirectTorrentPolicy.chooseVideoFile(
+                listOf(six, seven),
+                episode = 7,
+                preferredFileIndex = 6,
+                requestedSeason = 3,
+            ),
+        )
+    }
+
+    @Test
+    fun `multi episode video range is not treated as the selected episode`() {
+        val compilation = candidate(0, "Show S01E01-E12.mkv", 5_000)
+
+        assertNull(
+            DirectTorrentPolicy.chooseVideoFile(
+                listOf(compilation),
+                episode = 7,
+                preferredFileIndex = 0,
+                requestedSeason = 1,
+            ),
+        )
+    }
+
+    @Test
+    fun `regular episode does not select a numbered special`() {
+        val special = candidate(0, "Show Special 01.mkv", 900)
+
+        assertNull(
+            DirectTorrentPolicy.chooseVideoFile(
+                listOf(special),
+                episode = 1,
+                preferredFileIndex = 0,
+                requestedSeason = 1,
+            ),
+        )
+        assertEquals(
+            special,
+            DirectTorrentPolicy.chooseVideoFile(
+                listOf(special),
+                episode = 1,
+                preferredFileIndex = 0,
+                requestedSeason = 0,
+                requestedSpecial = true,
             ),
         )
     }
@@ -180,6 +289,11 @@ class DirectTorrentPolicyTest {
     @Test
     fun `audio channel decimal cannot impersonate requested episode`() {
         val wrong = candidate(2, "Show.S01E02.[5.1].mkv", 900)
+        val technicalOnly = listOf(
+            candidate(5, "Show - 5.1 audio.mkv", 900),
+            candidate(10, "Show - 10-bit x265.mkv", 900),
+            candidate(60, "Show - 60 fps.mkv", 900),
+        )
 
         assertNull(
             DirectTorrentPolicy.chooseVideoFile(
@@ -189,6 +303,9 @@ class DirectTorrentPolicyTest {
                 requestedSeason = 1,
             ),
         )
+        assertNull(DirectTorrentPolicy.chooseVideoFile(technicalOnly, 5, null))
+        assertNull(DirectTorrentPolicy.chooseVideoFile(technicalOnly, 10, null))
+        assertNull(DirectTorrentPolicy.chooseVideoFile(technicalOnly, 60, null))
     }
 
     @Test

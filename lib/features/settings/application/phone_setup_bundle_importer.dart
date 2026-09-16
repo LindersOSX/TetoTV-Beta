@@ -515,6 +515,7 @@ class PhoneSetupBundleImporter {
 TrackingProvider? _trackingProvider(String? value) => switch (value) {
   'anilist' => TrackingProvider.anilist,
   'myanimelist' => TrackingProvider.myAnimeList,
+  'kitsu' => TrackingProvider.kitsu,
   'simkl' => TrackingProvider.simkl,
   _ => null,
 };

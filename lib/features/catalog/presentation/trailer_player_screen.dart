@@ -1,3 +1,4 @@
+import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'dart:async';
 
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
@@ -117,12 +118,12 @@ class _TrailerPlayerScreenState extends State<TrailerPlayerScreen> {
                         autofocus: true,
                         onPressed: _openTrailer,
                         icon: const Icon(Icons.replay_rounded),
-                        label: const Text('Try again'),
+                        label: Text(context.tr("Try again")),
                       ),
                       OutlinedButton.icon(
                         onPressed: () => Navigator.of(context).maybePop(),
                         icon: const Icon(Icons.arrow_back_rounded),
-                        label: const Text('Back'),
+                        label: Text(context.tr("Back")),
                       ),
                     ],
                   ),

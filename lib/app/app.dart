@@ -1,6 +1,11 @@
 import 'package:anime_tv/app/router.dart';
+import 'package:anime_tv/features/aniyomi/application/aniyomi_controller.dart';
+import 'package:anime_tv/core/localization/teto_localizations.dart';
+import 'package:anime_tv/features/settings/presentation/language_selection_screen.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/diagnostics/anonymous_crash_reporter.dart';
+import 'package:anime_tv/core/diagnostics/ui_diagnostic_scope.dart';
 import 'package:anime_tv/core/telemetry/anonymous_usage_reporter.dart';
 import 'package:anime_tv/core/layout/interface_scaling.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
@@ -22,16 +27,23 @@ class TetoTvApp extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    ref.watch(aniyomiGatewayProvider);
+    if (ref.watch(aniyomiEnabledProvider)) {
+      ref.watch(aniyomiControllerProvider.notifier);
+    }
     final appPalette = ref.watch(
       themeStudioControllerProvider.select((state) => state.palette),
     );
     final isTelevision = ref.watch(isTelevisionProvider);
+    final language = ref.watch(
+      settingsPreferencesProvider.select((value) => value.interfaceLanguage),
+    );
     ref.watch(trackingOutboxFlushProvider);
     // Rich Presence is opt-in. Watching the controller only restores an
     // already-linked session; fresh installs do not contact Discord.
     ref.watch(discordPresenceControllerProvider);
-    // Anonymous crash delivery is consent-gated and remains dormant until the
-    // encrypted preference has loaded. Native crashes are retried next launch.
+    // Anonymous crash delivery is preference-gated and remains dormant until
+    // encrypted settings have loaded. Native crashes are retried next launch.
     ref.watch(anonymousCrashReporterProvider);
     // Beta-only aggregate activity is separately consent-gated. The reporter
     // owns no persistent identifier and Public builds remain fully dormant.
@@ -45,6 +57,14 @@ class TetoTvApp extends ConsumerWidget {
     ref.watch(airingReleaseNotificationCoordinatorProvider);
     return MaterialApp.router(
       title: 'TetoTV',
+      locale: language.locale,
+      supportedLocales: TetoLocalizations.supportedLocales,
+      localizationsDelegates: const [
+        TetoLocalizations.delegate,
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
       debugShowCheckedModeBanner: false,
       theme: AppTheme.darkFor(appPalette),
       // A settings write must never interpolate the whole application through
@@ -69,7 +89,9 @@ class TetoTvApp extends ConsumerWidget {
                 clickEnabled: preferences.clickSounds,
                 child: TvShortcuts(
                   child: TetoTvGlobalOverlay(
-                    child: child ?? const SizedBox.shrink(),
+                    child: LanguageSelectionGate(
+                      child: child ?? const SizedBox.shrink(),
+                    ),
                   ),
                 ),
               ),
@@ -85,7 +107,15 @@ class TetoTvApp extends ConsumerWidget {
             return InterfaceScaleViewport(
               mediaQuery: mq,
               scale: scale,
-              child: content,
+              child: UiDiagnosticScope(
+                routeInformation: appRouter.routeInformationProvider,
+                languageSelection:
+                    preferences.loaded && !preferences.languageChoiceCompleted,
+                languageCode: preferences.interfaceLanguage.code,
+                playerEngine: preferences.preferredPlayer.name,
+                media3SurfaceView: preferences.media3SurfaceViewEnabled,
+                child: content,
+              ),
             );
           },
         );

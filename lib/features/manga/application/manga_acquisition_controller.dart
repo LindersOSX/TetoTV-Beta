@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:anime_tv/features/downloads/application/offline_download_keep_alive.dart';
 import 'package:anime_tv/features/manga/application/manga_dependencies.dart';
+import 'package:anime_tv/features/manga/application/manga_extension_controller.dart';
+import 'package:anime_tv/features/manga/application/manga_feature_availability.dart';
 import 'package:anime_tv/features/manga/data/manga_acquisition_service.dart';
 import 'package:anime_tv/features/manga/data/manga_local_storage.dart';
 import 'package:anime_tv/features/manga/data/manga_store.dart';
@@ -32,9 +34,39 @@ final mangaAcquisitionControllerProvider =
     StateNotifierProvider<MangaAcquisitionController, MangaAcquisitionState>((
       ref,
     ) {
+      final featureAvailable = ref.read(mangaFeatureAvailableProvider);
       final controller = MangaAcquisitionController(
         service: ref.watch(mangaAcquisitionServiceProvider.future),
+        featureAvailable: featureAvailable,
+        captureSession: () {
+          final extension = ref.read(mangaExtensionControllerProvider.notifier);
+          void validate() {
+            if (!extension.mounted ||
+                !identical(
+                  ref.read(mangaExtensionControllerProvider.notifier),
+                  extension,
+                )) {
+              throw const MangaAcquisitionException(
+                MangaAcquisitionFailureCode.invalidRequest,
+                'Profile changed. Close and reopen this manga.',
+              );
+            }
+          }
+
+          return MangaAcquisitionSession(
+            validate: validate,
+            resolve: (job) async {
+              validate();
+              final request = await extension.resolveDownload(job);
+              validate();
+              return request;
+            },
+          );
+        },
       );
+      ref.listen<bool>(mangaFeatureAvailableProvider, (_, available) {
+        unawaited(controller.setFeatureAvailable(available));
+      });
       Future<void>.microtask(controller.initialize);
       return controller;
     });
@@ -76,17 +108,32 @@ class MangaAcquisitionState {
   );
 }
 
-/// Application-facing coordinator for the developer-only manga downloader.
+/// Application-facing coordinator for the optional manga downloader.
 ///
 /// Acquisition requests and their credential capabilities remain only in this
 /// process. State exposed to widgets contains safe progress and SQLite-backed
 /// metadata, never page URLs or request headers.
+class MangaAcquisitionSession {
+  const MangaAcquisitionSession({
+    required this.validate,
+    required this.resolve,
+  });
+  final VoidCallback validate;
+  final MangaAcquisitionRequestResolver resolve;
+}
+
 class MangaAcquisitionController extends StateNotifier<MangaAcquisitionState> {
-  MangaAcquisitionController({required Future<MangaAcquisitionService> service})
-    : _service = service,
-      super(MangaAcquisitionState());
+  MangaAcquisitionController({
+    required Future<MangaAcquisitionService> service,
+    MangaAcquisitionSession Function()? captureSession,
+    bool featureAvailable = true,
+  }) : _service = service,
+       _captureSession = captureSession,
+       _featureAvailable = featureAvailable,
+       super(MangaAcquisitionState());
 
   final Future<MangaAcquisitionService> _service;
+  final MangaAcquisitionSession Function()? _captureSession;
   final Map<String, MangaAcquisitionRequest> _retryCapabilities =
       <String, MangaAcquisitionRequest>{};
   final Map<String, StreamSubscription<MangaAcquisitionProgress>>
@@ -94,15 +141,145 @@ class MangaAcquisitionController extends StateNotifier<MangaAcquisitionState> {
   final Set<String> _jobDiscoveryRefreshes = <String>{};
   Future<void>? _initialization;
   var _disposed = false;
+  bool _hasRequestResolver = false;
+  bool _featureAvailable;
+
+  Future<void> setFeatureAvailable(bool available) async {
+    _featureAvailable = available;
+    if (!available) {
+      _retryCapabilities.clear();
+      _hasRequestResolver = false;
+    }
+    final service = await _service;
+    await service.setFeatureAvailable(available);
+    if (!_disposed) await refresh();
+  }
+
+  void _requireFeatureAvailable() {
+    if (_featureAvailable) return;
+    throw const MangaAcquisitionException(
+      MangaAcquisitionFailureCode.invalidRequest,
+      'Manga reader is disabled in Settings.',
+    );
+  }
+
+  Future<void> setRequestResolver(
+    MangaAcquisitionRequestResolver resolver,
+  ) async {
+    _requireFeatureAvailable();
+    final service = await _service;
+    _requireFeatureAvailable();
+    service.setRequestResolver(resolver);
+    _requireFeatureAvailable();
+    _hasRequestResolver = true;
+  }
+
+  Future<List<MangaAcquisitionOperation>> enqueueAll(
+    Iterable<MangaAcquisitionRequest> requests,
+  ) async {
+    _requireFeatureAvailable();
+    final session = _captureSession?.call();
+    await initialize();
+    _requireFeatureAvailable();
+    final service = await _service;
+    _requireFeatureAvailable();
+    session?.validate();
+    final batch = requests.take(service.maximumQueuedJobs + 1).toList();
+    final operations = await service.enqueueAll(batch);
+    for (final operation in operations) {
+      _rememberRequest(operation.request);
+      _observe(operation);
+    }
+    await refresh();
+    return operations;
+  }
+
+  Future<MangaAcquisitionOperation> resume(
+    String jobId, {
+    VoidCallback? validateAdmission,
+  }) async {
+    _requireFeatureAvailable();
+    final session = _captureSession?.call();
+    void validate() {
+      session?.validate();
+      validateAdmission?.call();
+    }
+
+    await initialize();
+    _requireFeatureAvailable();
+    validate();
+    if (!_hasRequestResolver && session == null) return retryInSession(jobId);
+    final service = await _service;
+    _requireFeatureAvailable();
+    validate();
+    final operation = await service.resume(
+      jobId,
+      resolver: session?.resolve,
+      validateAdmission: validate,
+    );
+    _rememberRequest(operation.request);
+    _observe(operation);
+    await refresh();
+    return operation;
+  }
+
+  Future<List<MangaAcquisitionOperation>> resumePending() async {
+    _requireFeatureAvailable();
+    final session = _captureSession?.call();
+    await initialize();
+    _requireFeatureAvailable();
+    final service = await _service;
+    _requireFeatureAvailable();
+    session?.validate();
+    final operations = await service.resumePending(
+      resolver: session?.resolve,
+      validateAdmission: session?.validate,
+    );
+    for (final operation in operations) {
+      _rememberRequest(operation.request);
+      _observe(operation);
+    }
+    await refresh();
+    return operations;
+  }
+
+  Future<void> pause(String jobId) async {
+    final service = await _service;
+    final operation = service.activeOperation(jobId);
+    await service.pause(jobId);
+    if (operation != null) {
+      try {
+        await operation.completed;
+      } catch (_) {
+        // Pausing terminates only this transfer attempt, not its durable job.
+      }
+    }
+    await refresh();
+  }
+
+  void _rememberRequest(MangaAcquisitionRequest request) {
+    _retryCapabilities.remove(request.jobId);
+    _retryCapabilities[request.jobId] = request;
+    while (_retryCapabilities.length > 100) {
+      _retryCapabilities.remove(_retryCapabilities.keys.first);
+    }
+  }
 
   Future<void> initialize() => _initialization ??= _initialize();
 
   Future<MangaAcquisitionOperation> start(
-    MangaAcquisitionRequest request,
-  ) async {
+    MangaAcquisitionRequest request, {
+    VoidCallback? validateAdmission,
+  }) async {
+    _requireFeatureAvailable();
+    final session = _captureSession?.call();
     await initialize();
+    _requireFeatureAvailable();
     final service = await _service;
-    _retryCapabilities[request.jobId] = request;
+    _requireFeatureAvailable();
+    session?.validate();
+    validateAdmission?.call();
+    _rememberRequest(request);
     final operation = service.start(request);
     _observe(operation);
     return operation;
@@ -111,9 +288,14 @@ class MangaAcquisitionController extends StateNotifier<MangaAcquisitionState> {
   Future<MangaAcquisitionOperation> retry(
     MangaAcquisitionRequest request,
   ) async {
+    _requireFeatureAvailable();
+    final session = _captureSession?.call();
     await initialize();
+    _requireFeatureAvailable();
     final service = await _service;
-    _retryCapabilities[request.jobId] = request;
+    _requireFeatureAvailable();
+    session?.validate();
+    _rememberRequest(request);
     final operation = service.retry(request);
     _observe(operation);
     return operation;
@@ -123,6 +305,8 @@ class MangaAcquisitionController extends StateNotifier<MangaAcquisitionState> {
   /// After process restart the UI must acquire a fresh source capability and
   /// call [retry] with that new request.
   Future<MangaAcquisitionOperation> retryInSession(String jobId) async {
+    _requireFeatureAvailable();
+    if (_hasRequestResolver || _captureSession != null) return resume(jobId);
     final request = _retryCapabilities[jobId];
     if (request == null) {
       throw const MangaAcquisitionException(
@@ -209,6 +393,7 @@ class MangaAcquisitionController extends StateNotifier<MangaAcquisitionState> {
   Future<void> _initialize() async {
     try {
       final service = await _service;
+      await service.setFeatureAvailable(_featureAvailable);
       final jobs = await service.recoverStaleJobs();
       if (!_disposed) {
         state = state.copyWith(
@@ -262,7 +447,10 @@ class MangaAcquisitionController extends StateNotifier<MangaAcquisitionState> {
     try {
       await refresh();
     } catch (error) {
-      if (!_disposed) {
+      if (!_disposed &&
+          !(error is MangaAcquisitionException &&
+              (error.code == MangaAcquisitionFailureCode.paused ||
+                  error.code == MangaAcquisitionFailureCode.cancelled))) {
         state = state.copyWith(error: _safeAcquisitionError(error));
       }
     } finally {
@@ -274,7 +462,10 @@ class MangaAcquisitionController extends StateNotifier<MangaAcquisitionState> {
     try {
       await operation.completed;
     } catch (error) {
-      if (!_disposed) {
+      if (!_disposed &&
+          !(error is MangaAcquisitionException &&
+              (error.code == MangaAcquisitionFailureCode.paused ||
+                  error.code == MangaAcquisitionFailureCode.cancelled))) {
         state = state.copyWith(error: _safeAcquisitionError(error));
       }
     } finally {

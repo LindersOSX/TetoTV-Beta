@@ -92,6 +92,79 @@ void main() {
   });
 
   test(
+    'external audio forwards only bounded owned-loopback shaped resources',
+    () async {
+      final h = await _Harness.create();
+      final valid = List.generate(
+        10,
+        (index) => {
+          'uri': 'http://127.0.0.1:49152/session/audio-$index',
+          'title': 'Audio $index',
+          'language': index.isEven ? 'eng' : 'jpn',
+          'mimeType': index == 1
+              ? 'application/x-mpegurl'
+              : 'audio/aac; charset=binary',
+        },
+      );
+      await h.player.open(
+        Media(
+          'https://media.example/audio-sidecars.mkv',
+          extras: {
+            'audioTracks': [
+              {'uri': 'https://audio.example/dub.aac', 'mimeType': 'audio/aac'},
+              {
+                'uri': 'http://localhost:49152/session/audio',
+                'mimeType': 'audio/aac',
+              },
+              {
+                'uri': 'http://127.0.0.1/session/audio',
+                'mimeType': 'audio/aac',
+              },
+              {'uri': 'http://127.0.0.1:49152/', 'mimeType': 'audio/aac'},
+              {
+                'uri': 'http://127.0.0.1:49152/session/video',
+                'mimeType': 'video/mp4',
+              },
+              ...valid,
+              valid.first,
+            ],
+          },
+        ),
+      );
+
+      expect(h.arguments('open')['audioTracks'], [
+        for (final row in valid.take(8))
+          {
+            ...row,
+            'mimeType': row['mimeType'] == 'application/x-mpegurl'
+                ? 'application/vnd.apple.mpegurl'
+                : row['mimeType']!.split(';').first,
+          },
+      ]);
+    },
+  );
+
+  test('invalid external audio never rejects the primary Dart open', () async {
+    final h = await _Harness.create();
+    await h.player.open(
+      Media(
+        'https://media.example/primary.mp4',
+        extras: {
+          'audioTracks': [
+            {
+              'uri': 'http://127.0.0.1:49152/session/not-audio',
+              'mimeType': 'text/html',
+            },
+          ],
+        },
+      ),
+    );
+
+    expect(h.arguments('open')['uri'], 'https://media.example/primary.mp4');
+    expect(h.arguments('open'), isNot(contains('audioTracks')));
+  });
+
+  test(
     'preloaded sidecar URI selects the registered track without reopening',
     () async {
       final h = await _Harness.create();
@@ -607,6 +680,7 @@ void main() {
           'decoderName': 'https://private.example/secret',
           'audioCodec': 'Private.Movie.aac',
           'renderedFrames': 120,
+          'externalAudioFallback': true,
           'droppedFrames': double.nan,
           'url': 'https://private.example/secret',
         },
@@ -621,6 +695,12 @@ void main() {
       );
       expect(metrics['codec'], 'h264');
       expect(metrics['renderedFrames'], 120);
+      expect(
+        await h.player.readProperty('tetotv-external-audio-fallback'),
+        'yes',
+      );
+      expect(metrics['externalAudioFallback'], isTrue);
+      expect(await h.player.readProperty('externalAudioUri'), isNull);
       expect(metrics, isNot(contains('decoderName')));
       expect(metrics, isNot(contains('audioCodec')));
       expect(metrics, isNot(contains('droppedFrames')));
@@ -782,6 +862,231 @@ void main() {
       expect(h.calls.map((call) => call.method), ['create', 'dispose']);
     },
   );
+
+  test('event cancellation failure cannot strand native release', () async {
+    const channel = MethodChannel('dev.tetotv/media3/cancel-failure-test');
+    final calls = <MethodCall>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+          calls.add(call);
+          return call.method == 'create' ? <String, Object?>{'id': 73} : null;
+        });
+    addTearDown(() async {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, null);
+    });
+    final player = Media3PlatformPlayer(
+      channel: channel,
+      events: const _CancelFailingStream<dynamic>(),
+    );
+    await player.ready;
+
+    await player.dispose();
+
+    expect(calls.map((call) => call.method), ['create', 'dispose']);
+  });
+
+  test(
+    'non-completing event cancellation cannot strand native release',
+    () async {
+      const channel = MethodChannel('dev.tetotv/media3/cancel-timeout-test');
+      final calls = <MethodCall>[];
+      final nativeDisposeCalled = Completer<void>();
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (call) async {
+            calls.add(call);
+            if (call.method == 'dispose' && !nativeDisposeCalled.isCompleted) {
+              nativeDisposeCalled.complete();
+            }
+            return call.method == 'create' ? <String, Object?>{'id': 74} : null;
+          });
+      addTearDown(() async {
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(channel, null);
+      });
+      final player = Media3PlatformPlayer(
+        channel: channel,
+        events: const _CancelNeverCompletesStream<dynamic>(),
+      );
+      await player.ready;
+
+      final disposing = player.dispose();
+      await nativeDisposeCalled.future.timeout(const Duration(seconds: 2));
+      await disposing.timeout(const Duration(seconds: 2));
+
+      expect(calls.map((call) => call.method), ['create', 'dispose']);
+    },
+  );
+
+  test(
+    'native release retry rechecks completion and closes Dart state once',
+    () async {
+      var disposeAttempts = 0;
+      final h = await _Harness.create(
+        onCall: (call) async {
+          if (call.method == 'dispose' && ++disposeAttempts == 1) {
+            throw PlatformException(
+              code: 'media3_release_pending',
+              message: 'sanitized native release status',
+              details: const {
+                'stage': 'release_waiting',
+                'status': 'failed',
+                'reasonCode': 'media3_release_pending',
+                'waitElapsedMs': 4000,
+                'timeoutMs': 4000,
+                'playbackThreadAlive': true,
+                'url': 'https://private.example/secret',
+              },
+            );
+          }
+          if (call.method == 'dispose') {
+            return {
+              'stage': 'release_waiting',
+              'status': 'completed_after_wait',
+              'reasonCode': 'media3_release_complete',
+              'waitElapsedMs': 25,
+              'timeoutMs': 4000,
+              'playbackThreadAlive': false,
+            };
+          }
+          return null;
+        },
+      );
+      await h.open();
+
+      await expectLater(
+        h.player.dispose(),
+        throwsA(
+          isA<PlatformException>().having(
+            (error) => error.code,
+            'code',
+            'media3_release_pending',
+          ),
+        ),
+      );
+      await expectLater(h.player.play(), throwsStateError);
+      expect(h.player.releaseDiagnostic, {
+        'stage': 'release_waiting',
+        'status': 'failed',
+        'reason_code': 'media3_release_pending',
+        'wait_elapsed_ms': 4000,
+        'timeout_ms': 4000,
+        'playback_thread_alive': true,
+      });
+      expect(h.player.releaseDiagnostic.toString(), isNot(contains('private')));
+
+      await h.player.dispose();
+      await h.player.dispose();
+      expect(disposeAttempts, 2);
+      expect(h.calls.where((call) => call.method == 'dispose'), hasLength(2));
+      expect(h.player.releaseDiagnostic['status'], 'completed_after_wait');
+      expect(h.player.releaseDiagnostic['playback_thread_alive'], isFalse);
+    },
+  );
+}
+
+class _CancelFailingStream<T> extends Stream<T> {
+  const _CancelFailingStream();
+
+  @override
+  StreamSubscription<T> listen(
+    void Function(T event)? onData, {
+    Function? onError,
+    void Function()? onDone,
+    bool? cancelOnError,
+  }) => _CancelFailingSubscription<T>(
+    const Stream<dynamic>.empty().cast<T>().listen(
+      onData,
+      onError: onError,
+      onDone: onDone,
+      cancelOnError: cancelOnError,
+    ),
+  );
+}
+
+class _CancelNeverCompletesStream<T> extends Stream<T> {
+  const _CancelNeverCompletesStream();
+
+  @override
+  StreamSubscription<T> listen(
+    void Function(T event)? onData, {
+    Function? onError,
+    void Function()? onDone,
+    bool? cancelOnError,
+  }) => _CancelNeverCompletesSubscription<T>(
+    const Stream<dynamic>.empty().cast<T>().listen(
+      onData,
+      onError: onError,
+      onDone: onDone,
+      cancelOnError: cancelOnError,
+    ),
+  );
+}
+
+class _CancelFailingSubscription<T> implements StreamSubscription<T> {
+  _CancelFailingSubscription(this._delegate);
+
+  final StreamSubscription<T> _delegate;
+
+  @override
+  Future<void> cancel() async {
+    await _delegate.cancel();
+    throw StateError('fixture cancellation failure');
+  }
+
+  @override
+  bool get isPaused => _delegate.isPaused;
+
+  @override
+  void onData(void Function(T data)? handleData) =>
+      _delegate.onData(handleData);
+
+  @override
+  void onDone(void Function()? handleDone) => _delegate.onDone(handleDone);
+
+  @override
+  void onError(Function? handleError) => _delegate.onError(handleError);
+
+  @override
+  void pause([Future<void>? resumeSignal]) => _delegate.pause(resumeSignal);
+
+  @override
+  void resume() => _delegate.resume();
+
+  @override
+  Future<E> asFuture<E>([E? futureValue]) => _delegate.asFuture<E>(futureValue);
+}
+
+class _CancelNeverCompletesSubscription<T> implements StreamSubscription<T> {
+  _CancelNeverCompletesSubscription(this._delegate);
+
+  final StreamSubscription<T> _delegate;
+  final Completer<void> _cancelled = Completer<void>();
+
+  @override
+  Future<void> cancel() => _cancelled.future;
+
+  @override
+  bool get isPaused => _delegate.isPaused;
+
+  @override
+  void onData(void Function(T data)? handleData) =>
+      _delegate.onData(handleData);
+
+  @override
+  void onDone(void Function()? handleDone) => _delegate.onDone(handleDone);
+
+  @override
+  void onError(Function? handleError) => _delegate.onError(handleError);
+
+  @override
+  void pause([Future<void>? resumeSignal]) => _delegate.pause(resumeSignal);
+
+  @override
+  void resume() => _delegate.resume();
+
+  @override
+  Future<E> asFuture<E>([E? futureValue]) => _delegate.asFuture<E>(futureValue);
 }
 
 class _Harness {
@@ -794,7 +1099,12 @@ class _Harness {
         });
     player = Media3PlatformPlayer(channel: channel, events: events.stream);
     addTearDown(() async {
-      await player.dispose();
+      try {
+        await player.dispose();
+      } catch (_) {
+        // A release-pending fixture is intentionally sticky for process
+        // safety, just like the production adapter.
+      }
       await events.close();
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(channel, null);

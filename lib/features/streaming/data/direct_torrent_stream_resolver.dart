@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/features/streaming/domain/episode_identity_guard.dart';
 import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
+import 'package:flutter/services.dart';
 
 abstract interface class DirectTorrentPlatformClient {
   Future<DirectTorrentCapability> capability();
@@ -12,6 +13,10 @@ abstract interface class DirectTorrentPlatformClient {
     required String magnet,
     required int episode,
     int? season,
+    int? absoluteEpisode,
+    bool requestedSpecial = false,
+    bool allowSeasonRelativeBare = false,
+    bool requireNumberingSchemeEvidence = false,
     int? preferredFileIndex,
   });
 
@@ -34,12 +39,20 @@ class AndroidDirectTorrentPlatformClient
     required String magnet,
     required int episode,
     int? season,
+    int? absoluteEpisode,
+    bool requestedSpecial = false,
+    bool allowSeasonRelativeBare = false,
+    bool requireNumberingSchemeEvidence = false,
     int? preferredFileIndex,
   }) => AndroidTvBridge.instance.startDirectTorrent(
     requestId: requestId,
     magnet: magnet,
     episode: episode,
     season: season,
+    absoluteEpisode: absoluteEpisode,
+    requestedSpecial: requestedSpecial,
+    allowSeasonRelativeBare: allowSeasonRelativeBare,
+    requireNumberingSchemeEvidence: requireNumberingSchemeEvidence,
     preferredFileIndex: preferredFileIndex,
   );
 
@@ -137,15 +150,34 @@ class DirectTorrentStreamResolver implements StreamResolver {
           throw StateError('No torrent releases were found for this episode.');
         }
         final selected = releases.first;
+        final requestedSeason = catalogSeasonNumber(episode);
         requestId = _newRequestId();
         if (cancelled) return;
-        final session = await _platform.start(
-          requestId: requestId,
-          magnet: selected.magnetUri,
-          episode: episode.episode,
-          season: catalogSeasonNumber(episode),
-          preferredFileIndex: selected.preferredFileIndex,
-        );
+        late final DirectTorrentNativeSession session;
+        try {
+          session = await _platform.start(
+            requestId: requestId,
+            magnet: selected.magnetUri,
+            episode: episode.episode,
+            season: requestedSeason,
+            absoluteEpisode: absoluteEpisodeNumber(episode),
+            requestedSpecial: episodeReferenceIsSpecial(episode),
+            allowSeasonRelativeBare: torrentContainerScopesRequestedSeason(
+              selected.releaseName,
+              requestedSeason,
+            ),
+            requireNumberingSchemeEvidence:
+                episodeReferenceHasUnresolvedSequelNumbering(episode),
+            preferredFileIndex: selected.preferredFileIndex,
+          );
+        } on PlatformException catch (error) {
+          if (error.code.toUpperCase() == 'DIRECT_TORRENT_EPISODE_AMBIGUOUS') {
+            throw const EpisodeIdentityAmbiguousException(
+              reasonCode: 'episode_file_identity_ambiguous',
+            );
+          }
+          rethrow;
+        }
         if (cancelled) {
           await _platform.stop(session.sessionId);
           return;
@@ -163,6 +195,12 @@ class DirectTorrentStreamResolver implements StreamResolver {
           isDirectTorrent: true,
           providerId: 'direct-torrent',
           providerName: 'Direct torrent',
+          // A successful native start now means the Android selector found an
+          // exact file match. Dart still rejects any contradictory basename.
+          providerEpisodeIdentity: ProviderEpisodeIdentity(
+            episodeNumber: episode.episode,
+            seasonNumber: requestedSeason,
+          ),
         );
         try {
           verifyPlaybackEpisodeIdentity(

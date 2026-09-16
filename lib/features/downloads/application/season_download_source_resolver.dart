@@ -16,6 +16,7 @@ import 'package:anime_tv/features/streaming/application/debrid_token_service.dar
 import 'package:anime_tv/features/streaming/application/episode_release_search_cache.dart';
 import 'package:anime_tv/features/streaming/data/composite_release_source.dart';
 import 'package:anime_tv/features/streaming/domain/debrid_service.dart';
+import 'package:anime_tv/features/streaming/domain/episode_identity_guard.dart';
 import 'package:anime_tv/features/streaming/domain/release_audio_preference.dart';
 import 'package:anime_tv/features/streaming/domain/stream_ranking_preferences.dart';
 import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
@@ -279,6 +280,7 @@ class CatalogSeasonEpisodeDownloadResolver
       streams.where(
         (stream) =>
             stream.subtitleUri == null &&
+            stream.externalAudioTracks.isEmpty &&
             safePublicHttpsUri(stream.uri.toString()) != null,
       ),
       quality: plan.quality,
@@ -375,6 +377,15 @@ class CatalogSeasonEpisodeDownloadResolver
         directPeerCapability: DirectPeerDownloadCapability(
           magnet: release.magnetUri,
           episode: episode.episode,
+          season: catalogSeasonNumber(episode),
+          absoluteEpisode: absoluteEpisodeNumber(episode),
+          requestedSpecial: episodeReferenceIsSpecial(episode),
+          allowSeasonRelativeBare: torrentContainerScopesRequestedSeason(
+            release.releaseName,
+            catalogSeasonNumber(episode),
+          ),
+          requireNumberingSchemeEvidence:
+              episodeReferenceHasUnresolvedSequelNumbering(episode),
           preferredFileIndex: release.preferredFileIndex,
         ),
       ),

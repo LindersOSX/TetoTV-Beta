@@ -1312,6 +1312,9 @@ void main() {
         reason: 'concurrent release must share one operation',
       );
       expect(coordinator.released, isFalse);
+      expect(coordinator.attemptCount, 1);
+      expect(coordinator.lastFailure, isA<StateError>());
+      expect(coordinator.lastFailureStackTrace, isNotNull);
 
       expect(
         await coordinator.release(() async {
@@ -1321,6 +1324,38 @@ void main() {
       );
       expect(attempts, 2);
       expect(coordinator.released, isTrue);
+      expect(coordinator.attemptCount, 2);
     },
   );
+
+  test('player release diagnostics use a closed privacy-safe classifier', () {
+    expect(
+      playerReleaseFailureCode(
+        PlatformException(code: 'INVALID CODE https://private.example/episode'),
+      ),
+      'platform_error',
+    );
+    expect(
+      playerReleaseFailureCode(PlatformException(code: 'private_secret_code')),
+      'platform_error',
+    );
+    expect(
+      playerReleaseFailureCode(
+        PlatformException(code: 'media3_release_pending'),
+      ),
+      'media3_release_pending',
+    );
+    expect(
+      playerReleaseFailureCode(TimeoutException('private URL')),
+      'timeout',
+    );
+    expect(
+      const PlayerReleaseDiagnosticFailure(
+        engine: 'media3',
+        reasonCode: 'media3_release_pending',
+      ).toString(),
+      'Player release failed '
+      '(engine=media3, reason=media3_release_pending).',
+    );
+  });
 }

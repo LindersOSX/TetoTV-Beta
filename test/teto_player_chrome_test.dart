@@ -1415,6 +1415,164 @@ void main() {
     expect(find.text('Skip Intro'), findsOneWidget);
   });
 
+  testWidgets('skip segment fades to 30 percent after no interaction', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Center(
+            child: TetoSkipSegmentOverlay(
+              label: 'Skip Intro',
+              onPressed: () {},
+            ),
+          ),
+        ),
+      ),
+    );
+
+    AnimatedOpacity opacity() => tester.widget<AnimatedOpacity>(
+      find.byKey(const ValueKey('player-skip-segment-opacity')),
+    );
+
+    expect(opacity().opacity, 1);
+    await tester.pump(playerSkipIdleTimeout);
+    await tester.pump(playerSkipFadeDuration);
+    expect(opacity().opacity, playerSkipIdleOpacity);
+    expect(find.text('Skip Intro'), findsOneWidget);
+  });
+
+  testWidgets('skip segment interaction restores it and restarts idle fade', (
+    tester,
+  ) async {
+    var presses = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Center(
+            child: TetoSkipSegmentOverlay(
+              label: 'Skip Outro',
+              onPressed: () => presses++,
+            ),
+          ),
+        ),
+      ),
+    );
+
+    AnimatedOpacity opacity() => tester.widget<AnimatedOpacity>(
+      find.byKey(const ValueKey('player-skip-segment-opacity')),
+    );
+
+    await tester.pump(playerSkipIdleTimeout + playerSkipFadeDuration);
+    expect(opacity().opacity, playerSkipIdleOpacity);
+
+    await tester.tap(find.byKey(const ValueKey('player-skip-segment-overlay')));
+    await tester.pump(playerSkipFadeDuration);
+    expect(presses, 1);
+    expect(opacity().opacity, 1);
+
+    await tester.pump(playerSkipIdleTimeout);
+    await tester.pump(playerSkipFadeDuration);
+    expect(opacity().opacity, playerSkipIdleOpacity);
+  });
+
+  testWidgets('a new skip segment returns to full opacity', (tester) async {
+    var label = 'Skip Intro';
+    late StateSetter update;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: StatefulBuilder(
+            builder: (context, setState) {
+              update = setState;
+              return TetoSkipSegmentOverlay(label: label, onPressed: () {});
+            },
+          ),
+        ),
+      ),
+    );
+
+    AnimatedOpacity opacity() => tester.widget<AnimatedOpacity>(
+      find.byKey(const ValueKey('player-skip-segment-opacity')),
+    );
+
+    await tester.pump(playerSkipIdleTimeout + playerSkipFadeDuration);
+    expect(opacity().opacity, playerSkipIdleOpacity);
+
+    update(() => label = 'Skip Outro');
+    await tester.pump();
+    await tester.pump(playerSkipFadeDuration);
+    expect(opacity().opacity, 1);
+    expect(find.text('Skip Outro'), findsOneWidget);
+  });
+
+  testWidgets('D-pad focus restores a faded skip segment', (tester) async {
+    final focusNode = FocusNode();
+    addTearDown(focusNode.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Center(
+            child: TetoSkipSegmentOverlay(
+              label: 'Skip Intro',
+              focusNode: focusNode,
+              onPressed: () {},
+            ),
+          ),
+        ),
+      ),
+    );
+
+    AnimatedOpacity opacity() => tester.widget<AnimatedOpacity>(
+      find.byKey(const ValueKey('player-skip-segment-opacity')),
+    );
+
+    await tester.pump(playerSkipIdleTimeout + playerSkipFadeDuration);
+    expect(opacity().opacity, playerSkipIdleOpacity);
+
+    focusNode.requestFocus();
+    await tester.pump();
+    await tester.pump(playerSkipFadeDuration);
+    expect(opacity().opacity, 1);
+  });
+
+  testWidgets('same-label replacement starts a fresh skip fade timer', (
+    tester,
+  ) async {
+    var identity = 'intro-1';
+    late StateSetter update;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: StatefulBuilder(
+            builder: (context, setState) {
+              update = setState;
+              return TetoSkipSegmentOverlay(
+                key: ValueKey(identity),
+                label: 'Skip Intro',
+                onPressed: () {},
+              );
+            },
+          ),
+        ),
+      ),
+    );
+
+    AnimatedOpacity opacity() => tester.widget<AnimatedOpacity>(
+      find.byKey(const ValueKey('player-skip-segment-opacity')),
+    );
+
+    await tester.pump(playerSkipIdleTimeout + playerSkipFadeDuration);
+    expect(opacity().opacity, playerSkipIdleOpacity);
+
+    update(() => identity = 'intro-2');
+    await tester.pump();
+    expect(opacity().opacity, 1);
+
+    await tester.pump(playerSkipIdleTimeout + playerSkipFadeDuration);
+    expect(opacity().opacity, playerSkipIdleOpacity);
+  });
+
   for (final testCase in <({Size viewport, double textScale})>[
     (viewport: const Size(1920, 1080), textScale: 1),
     (viewport: const Size(640, 360), textScale: 2.5),

@@ -5,6 +5,8 @@ import 'dart:math';
 import 'package:anime_tv/features/auth/application/pairing_controller.dart';
 import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
 import 'package:anime_tv/features/manga/application/manga_acquisition_controller.dart';
+import 'package:anime_tv/features/manga/application/manga_feature_availability.dart';
+import 'package:anime_tv/features/manga/application/manga_tracking_controller.dart';
 import 'package:anime_tv/features/manga/application/manga_dependencies.dart';
 import 'package:anime_tv/features/manga/data/manga_catalog_client.dart';
 import 'package:anime_tv/features/manga/data/manga_store.dart';
@@ -49,16 +51,42 @@ final mangaOwnerKeyProvider = FutureProvider<String>((ref) async {
 final mangaHubControllerProvider =
     StateNotifierProvider<MangaHubController, MangaHubState>((ref) {
       final ownerKey = ref.watch(mangaOwnerKeyProvider.future);
+      final featureAvailable = ref.read(mangaFeatureAvailableProvider);
       final controller = MangaHubController(
         client: ref.watch(mangaCatalogClientProvider),
         credentials: ref.watch(mangaSourceCredentialStoreProvider),
         store: ref.watch(mangaStoreProvider),
         ownerKey: () => ownerKey,
+        featureAvailable: featureAvailable,
+        onChapterCompleted: (owner, request) async {
+          final number = request.chapterNumber;
+          if (number == null ||
+              !number.isFinite ||
+              number <= 0 ||
+              number > 100000 ||
+              number != number.truncateToDouble()) {
+            return;
+          }
+          await ref
+              .read(mangaTrackingControllerProvider)
+              .syncCompletedChapter(
+                MangaTrackingTitleKey(
+                  ownerKey: owner,
+                  sourceId: request.sourceId,
+                  publicationId: request.publicationId,
+                ),
+                completedChapters: number.toInt(),
+                deferNetwork: true,
+              );
+        },
         cleanupDownloadsForSource: (sourceId) => ref
             .read(mangaAcquisitionControllerProvider.notifier)
             .removeDownloadsForSource(sourceId),
       );
-      Future<void>.microtask(controller.initialize);
+      ref.listen<bool>(mangaFeatureAvailableProvider, (_, available) {
+        controller.setFeatureAvailable(available);
+      });
+      if (featureAvailable) Future<void>.microtask(controller.initialize);
       return controller;
     });
 
@@ -267,10 +295,15 @@ class MangaHubController extends StateNotifier<MangaHubState> {
     required MangaStore store,
     required Future<String> Function() ownerKey,
     MangaSourceDownloadCleanup? cleanupDownloadsForSource,
+    bool featureAvailable = true,
+    Future<void> Function(String ownerKey, MangaReaderRequest request)?
+    onChapterCompleted,
   }) : _client = client,
        _credentials = credentials,
        _store = store,
        _ownerKey = ownerKey,
+       _featureAvailable = featureAvailable,
+       _onChapterCompleted = onChapterCompleted,
        _cleanupDownloadsForSource =
            cleanupDownloadsForSource ?? _noMangaDownloadCleanup,
        super(MangaHubState());
@@ -279,8 +312,26 @@ class MangaHubController extends StateNotifier<MangaHubState> {
   final MangaSourceCredentialStore _credentials;
   final MangaStore _store;
   final Future<String> Function() _ownerKey;
+  Future<String> get ownerKey => _ownerKey();
+  MangaHubState get snapshot => state;
+  final Future<void> Function(String ownerKey, MangaReaderRequest request)?
+  _onChapterCompleted;
   final MangaSourceDownloadCleanup _cleanupDownloadsForSource;
   int _generation = 0;
+  bool _featureAvailable;
+
+  /// Revokes in-memory Manga capabilities without deleting persisted sources,
+  /// library entries, downloads, progress, credentials, or reader settings.
+  void setFeatureAvailable(bool available) {
+    if (!mounted || _featureAvailable == available) return;
+    _featureAvailable = available;
+    _generation++;
+    if (!available) {
+      state = MangaHubState();
+      return;
+    }
+    unawaited(initialize());
+  }
 
   Future<bool> initialize() => _run((generation) async {
     await _reloadCollections(generation);
@@ -832,10 +883,11 @@ class MangaHubController extends StateNotifier<MangaHubState> {
       );
     }
     final owner = await _ownerKey();
-    final progress = await _store.progress(
+    final progress = await _store.chapterProgress(
       ownerKey: owner,
       sourceId: source.id,
       entryId: publicationId,
+      chapterId: resolvedChapterId,
     );
     final initialPage =
         progress != null &&
@@ -846,14 +898,19 @@ class MangaHubController extends StateNotifier<MangaHubState> {
         : 0;
     try {
       return MangaReaderRequest(
+        ownerKey: owner,
         sourceId: source.id,
         publicationId: publicationId,
         chapterId: resolvedChapterId,
         seriesTitle: publication.title,
+        coverUri: _coverUri(publication),
         chapterTitle: resolvedChapterTitle,
         chapterNumber: chapterNumber,
         pages: pages,
         initialPageIndex: initialPage,
+        initialPageOffset: progress?.pageIndex == initialPage
+            ? progress!.pageOffset
+            : 0,
       );
     } on ArgumentError {
       throw const MangaReaderBuildException(
@@ -870,26 +927,45 @@ class MangaHubController extends StateNotifier<MangaHubState> {
     MangaReaderRequest request,
   ) async {
     final owner = await _ownerKey();
-    final progress = await _store.progress(
+    if (request.ownerKey != null && request.ownerKey != owner) {
+      throw StateError('Profile changed. Close and reopen this manga.');
+    }
+    final progress = await _store.chapterProgress(
       ownerKey: owner,
       sourceId: request.sourceId,
       entryId: request.publicationId,
+      chapterId: request.chapterId,
     );
-    if (progress == null ||
-        progress.chapterId != request.chapterId ||
-        progress.pageIndex < 0 ||
-        progress.pageIndex >= request.pages.length ||
-        progress.pageIndex == request.initialPageIndex) {
-      return request;
+    final savedCover = request.coverUri == null
+        ? (await _store.libraryEntry(
+            ownerKey: owner,
+            sourceId: request.sourceId,
+            entryId: request.publicationId,
+          ))?.coverUri
+        : null;
+    if (!mounted || await _ownerKey() != owner) {
+      throw StateError('Profile changed. Close and reopen this manga.');
     }
+    final valid =
+        progress != null &&
+        progress.pageIndex >= 0 &&
+        progress.pageIndex < request.pages.length;
     return MangaReaderRequest(
+      ownerKey: owner,
       sourceId: request.sourceId,
+      origin: request.origin,
       publicationId: request.publicationId,
       chapterId: request.chapterId,
       seriesTitle: request.seriesTitle,
+      coverUri: request.coverUri ?? savedCover,
       chapterTitle: request.chapterTitle,
       chapterNumber: request.chapterNumber,
-      initialPageIndex: progress.pageIndex,
+      initialPageIndex: valid ? progress.pageIndex : request.initialPageIndex,
+      initialPageOffset: valid
+          ? progress.pageOffset
+          : request.initialPageOffset,
+      resolvePreviousChapter: request.resolvePreviousChapter,
+      resolveNextChapter: request.resolveNextChapter,
       pages: request.pages,
     );
   }
@@ -946,6 +1022,7 @@ class MangaHubController extends StateNotifier<MangaHubState> {
   }) async {
     try {
       final owner = await _ownerKey();
+      if (request.ownerKey != null && request.ownerKey != owner) return false;
       await _store.upsertProgress(
         MangaReadingProgress(
           ownerKey: owner,
@@ -960,6 +1037,14 @@ class MangaHubController extends StateNotifier<MangaHubState> {
           updatedAt: DateTime.now().toUtc(),
         ),
       );
+      if (completed && _onChapterCompleted != null) {
+        try {
+          await _onChapterCompleted(owner, request);
+        } catch (_) {
+          // Local reading progress must survive tracker/network failures. The
+          // tracker owns durable retries and exposes pending work in its UI.
+        }
+      }
       return true;
     } catch (error) {
       state = state.copyWith(error: _friendlyError(error), isLoading: false);
@@ -1047,6 +1132,10 @@ class MangaHubController extends StateNotifier<MangaHubState> {
   }
 
   Future<bool> _run(Future<void> Function(int generation) operation) async {
+    if (!_featureAvailable) {
+      if (mounted) state = MangaHubState();
+      return false;
+    }
     final generation = ++_generation;
     state = state.copyWith(isLoading: true, clearError: true);
     try {
@@ -1068,7 +1157,8 @@ class MangaHubController extends StateNotifier<MangaHubState> {
     return false;
   }
 
-  bool _isCurrent(int generation) => mounted && generation == _generation;
+  bool _isCurrent(int generation) =>
+      mounted && _featureAvailable && generation == _generation;
 
   Future<void> _restoreCredential(
     String sourceId,

@@ -3,6 +3,7 @@ import 'dart:math';
 
 import 'package:anime_tv/core/diagnostics/explicit_diagnostics_reporter.dart';
 import 'package:anime_tv/core/diagnostics/playback_performance_diagnostics.dart';
+import 'package:anime_tv/core/diagnostics/ui_diagnostic_context.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:dio/dio.dart';
@@ -11,6 +12,84 @@ import 'package:flutter_test/flutter_test.dart';
 import 'support/playback_performance_fixture.dart';
 
 void main() {
+  test(
+    'local crash summaries retain original build with explicit unknown fallback',
+    () {
+      final now = DateTime.utc(2026, 9, 5, 12);
+      final report = attachRecentCrashSummaries({}, [
+        {
+          'occurred_at': now.toIso8601String(),
+          'kind': 'java',
+          'message': 'old',
+          'app_version': '2.0.73',
+          'build_number': 410050,
+        },
+        {
+          'occurred_at': now.toIso8601String(),
+          'kind': 'native',
+          'message': 'legacy',
+        },
+      ], now: now);
+      final crashes = report['recentCrashSummaries']! as List;
+      expect(crashes.first['appVersion'], '2.0.73');
+      expect(crashes.first['buildNumber'], 410050);
+      expect(crashes.first['buildAttribution'], 'recorded');
+      expect(crashes.last['appVersion'], '0.0.0');
+      expect(crashes.last['buildNumber'], 1);
+      expect(crashes.last['buildAttribution'], 'unknown');
+    },
+  );
+
+  test(
+    'manual export includes bounded navigation context without identities',
+    () {
+      final runtime = UiDiagnosticContext();
+      runtime.configure(
+        screen: UiDiagnosticContext.screenForUri(
+          Uri.parse('/anime/private-customer-title?token=private-token'),
+        ),
+        languageCode: 'hi',
+        playerEngine: 'media3',
+        media3SurfaceView: true,
+      );
+      runtime.recordFocus(
+        control: UiDiagnosticContext.controlForLabel(
+          'accounts.private-person@example.com',
+        ),
+        ordinal: 4,
+        rect: [10, 20, 300, 40],
+        scrollOffset: 100,
+        scrollMaximum: 900,
+      );
+      runtime.recordNavigation('up');
+      runtime.recordFrame(buildMs: 4, rasterMs: 22);
+      final text = buildRedactedDiagnosticsText(
+        version: const AppVersionInfo(name: '2.0.74', code: 410051),
+        profile: _profile,
+        isTelevision: true,
+        diagnostics: const {},
+        generatedAt: DateTime.utc(2026, 9, 5),
+        uiDiagnostics: runtime,
+      );
+      final payload = jsonDecode(text) as Map<String, dynamic>;
+      final ui = payload['uiRuntime'] as Map<String, dynamic>;
+      expect(ui['current']['screen'], 'anime');
+      expect(ui['current']['language'], 'hi');
+      expect(ui['current']['player_engine'], 'media3');
+      expect(ui['current']['focus']['control'], 'settings.option');
+      expect(ui['current']['focus']['rect'], [10, 20, 300, 40]);
+      expect(ui['frames']['raster_max_ms'], 22);
+      expect(ui['bounds']['event_limit'], 64);
+      for (final private in [
+        'private-customer-title',
+        'private-token',
+        'private-person',
+      ]) {
+        expect(text, isNot(contains(private)));
+      }
+    },
+  );
+
   test('explicit report is per-share, bounded, and redacted', () {
     const token =
         '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
@@ -130,6 +209,33 @@ void main() {
     }
     expect(text, isNot(contains('2001:db8:85a3::8a2e:370:7334')));
     expect(text, contains('[NETWORK ADDRESS]'));
+  });
+
+  test('keeps public Aniyomi package identity but redacts media inputs', () {
+    final text = buildRedactedDiagnosticsText(
+      version: const AppVersionInfo(name: '2.0.74', code: 410051),
+      profile: _profile,
+      isTelevision: true,
+      diagnostics: const {
+        'diagnosticEvents': [
+          {
+            'component': 'aniyomi-runtime',
+            'context': {
+              'extension_package':
+                  'eu.kanade.tachiyomi.animeextension.en.fixture',
+              'operation': 'search',
+              'query': 'Private show title',
+              'url': 'https://private.example/series',
+            },
+          },
+        ],
+      },
+      generatedAt: DateTime.utc(2026, 9, 9),
+    );
+
+    expect(text, contains('eu.kanade.tachiyomi.animeextension.en.fixture'));
+    expect(text, isNot(contains('Private show title')));
+    expect(text, isNot(contains('private.example')));
   });
 
   test('removes audio product names but keeps technical capabilities', () {

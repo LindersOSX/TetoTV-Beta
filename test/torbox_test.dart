@@ -52,6 +52,18 @@ void main() {
     expect(selected.id, 10);
   });
 
+  test('does not trust an opaque TorBox preferred file', () {
+    const files = [
+      TorBoxFile(id: 10, name: 'feature-a.mkv', size: 900),
+      TorBoxFile(id: 11, name: 'feature-b.mkv', size: 950),
+    ];
+
+    expect(
+      () => selectTorBoxEpisodeFile(files, 1, preferredFileIndex: 1),
+      throwsA(isA<EpisodeIdentityAmbiguousException>()),
+    );
+  });
+
   test('falls back to episode matching for TorBox batches', () {
     const files = [
       TorBoxFile(id: 10, name: 'Example - 01.mkv', size: 900),

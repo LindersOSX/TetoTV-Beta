@@ -13,17 +13,19 @@ void main() {
   final now = DateTime.utc(2026, 9, 4, 18);
   setUpAll(sqfliteFfiInit);
 
-  for (final oldVersion in [1, 4, 12]) {
-    test('real SQLite v$oldVersion to v13 preserves existing data', () async {
-      final databasePath = await _temporaryDatabasePath();
-      var database = await databaseFactoryFfi.openDatabase(
-        databasePath,
-        options: OpenDatabaseOptions(
-          version: oldVersion,
-          onCreate: (db, _) async {
-            await _createPlaybackHistoryFixture(db, now);
-            if (oldVersion == 4) {
-              await db.execute('''
+  for (final oldVersion in [1, 4, 12, 13]) {
+    test(
+      'real SQLite v$oldVersion to current preserves existing data',
+      () async {
+        final databasePath = await _temporaryDatabasePath();
+        var database = await databaseFactoryFfi.openDatabase(
+          databasePath,
+          options: OpenDatabaseOptions(
+            version: oldVersion,
+            onCreate: (db, _) async {
+              await _createPlaybackHistoryFixture(db, now);
+              if (oldVersion == 4) {
+                await db.execute('''
                 CREATE TABLE diagnostic_events (
                   id INTEGER PRIMARY KEY AUTOINCREMENT,
                   category TEXT NOT NULL,
@@ -32,7 +34,7 @@ void main() {
                   created_at INTEGER NOT NULL
                 )
               ''');
-              await db.execute('''
+                await db.execute('''
                 CREATE TABLE provider_health (
                   provider_id TEXT PRIMARY KEY,
                   consecutive_failures INTEGER NOT NULL DEFAULT 0,
@@ -43,61 +45,107 @@ void main() {
                   quarantined_until INTEGER
                 )
               ''');
-            } else if (oldVersion > 1) {
-              await upgradeTetoTvDatabaseSchema(db, 1, oldVersion);
-            }
-            if (oldVersion > 1) {
-              await db.insert('diagnostic_events', {
-                'category': 'player-error',
-                'message': 'legacy diagnostic evidence',
-                'details_json': '{"attempt":2}',
-                'created_at': now.millisecondsSinceEpoch,
-              });
-              await db.insert('provider_health', {
-                'provider_id': 'fixture-provider',
-                'total_failures': 7,
-              });
-            }
-          },
-        ),
-      );
-      await database.close();
-      database = await databaseFactoryFfi.openDatabase(
-        databasePath,
-        options: OpenDatabaseOptions(
-          version: tetoTvDatabaseSchemaVersion,
-          onUpgrade: upgradeTetoTvDatabaseSchema,
-        ),
-      );
-      addTearDown(database.close);
-
-      expect(await database.getVersion(), 13);
-      final history = (await database.query('playback_history')).single;
-      expect(history['title'], 'Existing local title');
-      expect(history['position_ms'], 120000);
-      if (oldVersion > 1) {
-        final events = await database.query('diagnostic_events');
-        expect(events.single['message'], 'legacy diagnostic evidence');
-        expect(events.single['details_json'], '{"attempt":2}');
-        expect(
-          (await database.query('provider_health')).single['total_failures'],
-          7,
+              } else if (oldVersion > 1) {
+                await upgradeTetoTvDatabaseSchema(db, 1, oldVersion);
+              }
+              if (oldVersion > 1) {
+                await db.insert('diagnostic_events', {
+                  'category': 'player-error',
+                  'message': 'legacy diagnostic evidence',
+                  'details_json': '{"attempt":2}',
+                  'created_at': now.millisecondsSinceEpoch,
+                });
+                await db.insert('provider_health', {
+                  'provider_id': 'fixture-provider',
+                  'total_failures': 7,
+                });
+              }
+            },
+          ),
         );
-      }
-      await persistPlaybackPerformanceSnapshot(
-        database,
-        playbackPerformanceFixture(updatedAt: now),
-        now: now,
-      );
-      expect(
-        await database.query('playback_performance_snapshots'),
-        hasLength(1),
-      );
-      expect(await database.rawQuery('PRAGMA integrity_check'), [
-        {'integrity_check': 'ok'},
-      ]);
-    });
+        await database.close();
+        database = await databaseFactoryFfi.openDatabase(
+          databasePath,
+          options: OpenDatabaseOptions(
+            version: tetoTvDatabaseSchemaVersion,
+            onUpgrade: upgradeTetoTvDatabaseSchema,
+          ),
+        );
+        addTearDown(database.close);
+
+        expect(await database.getVersion(), tetoTvDatabaseSchemaVersion);
+        final history = (await database.query('playback_history')).single;
+        expect(history['title'], 'Existing local title');
+        expect(history['position_ms'], 120000);
+        if (oldVersion > 1) {
+          final events = await database.query('diagnostic_events');
+          expect(events.single['message'], 'legacy diagnostic evidence');
+          expect(events.single['details_json'], '{"attempt":2}');
+          expect(
+            (await database.query('provider_health')).single['total_failures'],
+            7,
+          );
+        }
+        await persistPlaybackPerformanceSnapshot(
+          database,
+          playbackPerformanceFixture(updatedAt: now),
+          now: now,
+        );
+        expect(
+          await database.query('playback_performance_snapshots'),
+          hasLength(1),
+        );
+        expect(await database.rawQuery('PRAGMA integrity_check'), [
+          {'integrity_check': 'ok'},
+        ]);
+      },
+    );
   }
+
+  test('real SQLite v14 adds redirected marketplace resource bases', () async {
+    final databasePath = await _temporaryDatabasePath();
+    var database = await databaseFactoryFfi.openDatabase(
+      databasePath,
+      options: OpenDatabaseOptions(
+        version: 14,
+        onCreate: (db, _) async {
+          await db.execute('''
+            CREATE TABLE marketplace_cache (
+              repository_url TEXT PRIMARY KEY,
+              payload_json TEXT NOT NULL,
+              fetched_at INTEGER NOT NULL
+            )
+          ''');
+          await db.insert('marketplace_cache', {
+            'repository_url': 'https://example.com/catalog.json',
+            'payload_json': '[{"id":"fixture"}]',
+            'fetched_at': now.millisecondsSinceEpoch,
+          });
+        },
+      ),
+    );
+    await database.close();
+
+    database = await databaseFactoryFfi.openDatabase(
+      databasePath,
+      options: OpenDatabaseOptions(
+        version: tetoTvDatabaseSchemaVersion,
+        onUpgrade: upgradeTetoTvDatabaseSchema,
+      ),
+    );
+    addTearDown(database.close);
+
+    final columns = await database.rawQuery(
+      'PRAGMA table_info(marketplace_cache)',
+    );
+    expect(
+      columns.map((column) => column['name']),
+      contains('resource_base_url'),
+    );
+    final cached = (await database.query('marketplace_cache')).single;
+    expect(cached['payload_json'], '[{"id":"fixture"}]');
+    expect(cached['resource_base_url'], isNull);
+  });
 
   test('real SQLite snapshots survive close and reopen', () async {
     final databasePath = await _temporaryDatabasePath();

@@ -1,7 +1,11 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:anime_tv/core/diagnostics/explicit_diagnostics_reporter.dart';
+import 'package:anime_tv/core/platform/android_tv_bridge.dart';
+import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/features/manga/data/manga_image_safety.dart';
 import 'package:anime_tv/features/manga/data/manga_page_fetch_client.dart';
 import 'package:anime_tv/features/manga/data/manga_uri_policy.dart';
@@ -10,6 +14,207 @@ import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  MangaRemotePageResource page(String name) => MangaRemotePageResource(
+    uri: Uri.parse('https://pages.example/$name.png'),
+  );
+
+  test(
+    'opaque images are coalesced and validated without a Dart URL',
+    () async {
+      final adapter = _GatePageAdapter();
+      final client = _client(adapter);
+      addTearDown(client.close);
+      var loads = 0;
+      final identity = Object();
+      final firstResource = MangaOpaquePageResource(
+        cacheIdentity: identity,
+        loadImage: () async {
+          loads++;
+          return _pngBytes;
+        },
+      );
+      final secondResource = MangaOpaquePageResource(
+        cacheIdentity: identity,
+        loadImage: () async {
+          loads++;
+          return _pngBytes;
+        },
+      );
+
+      final first = client.fetch(firstResource);
+      final second = client.fetch(secondResource);
+      expect(await first, _pngBytes);
+      expect(await second, _pngBytes);
+      expect(loads, 1);
+      expect(adapter.requests, isEmpty);
+      expect(firstResource.toString(), isNot(contains('http')));
+    },
+  );
+
+  test('opaque image bytes retain reader size and image validation', () async {
+    final client = _client(_GatePageAdapter(), maximumPageBytes: 64);
+    addTearDown(client.close);
+    final malformed = MangaOpaquePageResource(
+      cacheIdentity: Object(),
+      loadImage: () async =>
+          Uint8List.fromList(utf8.encode('<html>secret</html>')),
+    );
+    await expectLater(
+      client.fetch(malformed),
+      throwsA(
+        isA<MangaPageFetchException>().having(
+          (error) => error.reasonCode,
+          'reasonCode',
+          'unsupported_image',
+        ),
+      ),
+    );
+
+    final oversized = MangaOpaquePageResource(
+      cacheIdentity: Object(),
+      loadImage: () async => Uint8List(65),
+    );
+    await expectLater(
+      client.fetch(oversized),
+      throwsA(
+        isA<MangaPageFetchException>().having(
+          (error) => error.reasonCode,
+          'reasonCode',
+          'size_limit',
+        ),
+      ),
+    );
+  });
+
+  test('visible loads use a reserved slot ahead of speculative work', () async {
+    final adapter = _GatePageAdapter();
+    final client = _client(adapter, maximumConcurrentRequests: 2);
+    addTearDown(client.close);
+    final owner = Object();
+    final first = client.prefetch(page('first'), owner: owner);
+    final second = client.prefetch(page('second'), owner: owner);
+    final visible = client.fetch(page('visible'));
+    await _waitFor(() => adapter.requests.length == 2);
+    expect(adapter.requests.map((request) => request.uri.path), [
+      '/first.png',
+      '/visible.png',
+    ]);
+    adapter.release();
+    await Future.wait([first, second, visible]);
+    expect(adapter.maximumActive, 2);
+  });
+
+  test(
+    'a visible consumer promotes a queued prefetch without duplicating it',
+    () async {
+      final adapter = _GatePageAdapter();
+      final client = _client(adapter, maximumConcurrentRequests: 1);
+      addTearDown(client.close);
+      final owner = Object();
+      final active = client.fetch(page('active'));
+      final first = client.prefetch(page('first'), owner: owner);
+      final second = client.prefetch(page('second'), owner: owner);
+      final promoted = client.fetch(page('second'));
+      expect(promoted, same(second));
+      await _waitFor(() => adapter.requests.length == 1);
+      adapter.release();
+      await Future.wait([active, first, second, promoted]);
+      expect(adapter.requests.map((request) => request.uri.path), [
+        '/active.png',
+        '/second.png',
+        '/first.png',
+      ]);
+    },
+  );
+
+  test(
+    'stale prefetch cancellation never cancels a claimed visible page',
+    () async {
+      final adapter = _ControlledPageAdapter();
+      final reports = <MangaPageFetchException>[];
+      final client = _client(
+        adapter,
+        maximumConcurrentRequests: 2,
+        reportFailure: reports.add,
+      );
+      addTearDown(client.close);
+      final owner = Object();
+      final stale = client.prefetch(page('stale'), owner: owner);
+      final staleResult = expectLater(
+        stale,
+        throwsA(
+          isA<MangaPageFetchException>().having(
+            (error) => error.reasonCode,
+            'code',
+            'request_cancelled',
+          ),
+        ),
+      );
+      final promoted = client.prefetch(page('shared'), owner: owner);
+      final visible = client.fetch(page('shared'));
+      expect(visible, same(promoted));
+      await _waitFor(() => adapter.requests.length == 2);
+      client.cancelPrefetches(owner);
+      await staleResult;
+      expect(adapter.cancelled, ['/stale.png']);
+      adapter.complete('/shared.png');
+      expect(await visible, _pngBytes);
+      expect(reports, isEmpty);
+    },
+  );
+
+  test(
+    'prefetch shared by another reader survives one owner leaving',
+    () async {
+      final adapter = _ControlledPageAdapter();
+      final client = _client(adapter);
+      addTearDown(client.close);
+      final firstOwner = Object();
+      final secondOwner = Object();
+      final first = client.prefetch(page('shared'), owner: firstOwner);
+      expect(client.prefetch(page('shared'), owner: secondOwner), same(first));
+      await _waitFor(() => adapter.requests.isNotEmpty);
+      client.cancelPrefetches(firstOwner);
+      await Future<void>.delayed(Duration.zero);
+      expect(adapter.cancelled, isEmpty);
+      adapter.complete('/shared.png');
+      expect(await first, _pngBytes);
+    },
+  );
+
+  test(
+    'visible request can replace saturated speculative cache work',
+    () async {
+      final adapter = _ControlledPageAdapter();
+      final client = _client(
+        adapter,
+        maximumConcurrentRequests: 1,
+        maximumCacheEntries: 2,
+      );
+      addTearDown(client.close);
+      final owner = Object();
+      final first = client.prefetch(page('first'), owner: owner);
+      final cancelled = expectLater(
+        first,
+        throwsA(isA<MangaPageFetchException>()),
+      );
+      final second = client.prefetch(page('second'), owner: owner);
+      final secondCancelled = expectLater(
+        second,
+        throwsA(isA<MangaPageFetchException>()),
+      );
+      await _waitFor(() => adapter.requests.length == 1);
+      final visible = client.fetch(page('visible'));
+      await cancelled;
+      await _waitFor(() => adapter.requests.length == 2);
+      expect(adapter.requests.last.uri.path, '/visible.png');
+      client.cancelPrefetches(owner);
+      await secondCancelled;
+      adapter.complete('/visible.png');
+      expect(await visible, _pngBytes);
+    },
+  );
+
   test('canonicalizes safe manga Origin and Referer metadata', () {
     expect(
       canonicalMangaPageOriginHeader(' https://Reader.Example:443/ '),
@@ -193,6 +398,420 @@ void main() {
     );
     expect(adapter.requests.last.headers['X-Provider-Key'], 'same-origin-key');
   });
+
+  for (final accept in [
+    'image/avif,image/webp,image/*,*/*;q=0.8',
+    'IMAGE/AVIF ;q=1, image/png;q=0.8',
+    'image/heif,image/heic-sequence',
+  ]) {
+    test(
+      'unsupported Accept is narrowed without changing credentials: $accept',
+      () async {
+        final adapter = _PageRoutingAdapter(<String, _PageResponseFactory>{
+          'https://pages.example/start': (_) => ResponseBody.fromBytes(
+            const [],
+            HttpStatus.found,
+            headers: {
+              HttpHeaders.locationHeader: ['/same-origin'],
+            },
+          ),
+          'https://pages.example/same-origin': (_) => ResponseBody.fromBytes(
+            const [],
+            HttpStatus.found,
+            headers: {
+              HttpHeaders.locationHeader: ['https://cdn.example/page'],
+            },
+          ),
+          'https://cdn.example/page': (_) =>
+              ResponseBody.fromBytes(_pngBytes, HttpStatus.ok),
+        });
+        final client = _client(adapter);
+        addTearDown(client.close);
+        await client.fetch(
+          MangaRemotePageResource(
+            uri: Uri.parse('https://pages.example/start'),
+            headers: {
+              'Accept': accept,
+              HttpHeaders.authorizationHeader: 'Bearer credential-canary',
+              HttpHeaders.cookieHeader: 'session=cookie-canary',
+              'X-Provider-Key': 'key-canary',
+              HttpHeaders.userAgentHeader: 'Agent canary',
+            },
+          ),
+        );
+        for (final request in adapter.requests) {
+          expect(
+            request.headers[HttpHeaders.acceptHeader],
+            'image/jpeg,image/png,image/webp,image/gif;q=0.9',
+          );
+          expect(request.headers[HttpHeaders.userAgentHeader], 'Agent canary');
+        }
+        for (final request in adapter.requests.take(2)) {
+          expect(
+            request.headers[HttpHeaders.authorizationHeader],
+            'Bearer credential-canary',
+          );
+          expect(
+            request.headers[HttpHeaders.cookieHeader],
+            'session=cookie-canary',
+          );
+          expect(request.headers['X-Provider-Key'], 'key-canary');
+        }
+        expect(
+          adapter.requests.last.headers[HttpHeaders.authorizationHeader],
+          isNull,
+        );
+        expect(adapter.requests.last.headers[HttpHeaders.cookieHeader], isNull);
+        expect(adapter.requests.last.headers['X-Provider-Key'], isNull);
+      },
+    );
+  }
+
+  test(
+    'recognized AVIF is transcoded only for opted-in cover artwork',
+    () async {
+      final encoded = Uint8List.fromList(_ftypBytes('avif'));
+      final adapter = _PageRoutingAdapter(<String, _PageResponseFactory>{
+        'https://pages.example/reader': (_) =>
+            ResponseBody.fromBytes(encoded, HttpStatus.ok),
+        'https://pages.example/cover': (_) =>
+            ResponseBody.fromBytes(encoded, HttpStatus.ok),
+      });
+      var transcodes = 0;
+      final client = _client(
+        adapter,
+        transcodeUnsupportedArtwork: (value) async {
+          transcodes++;
+          expect(value, encoded);
+          return _pngBytes;
+        },
+      );
+      addTearDown(client.close);
+
+      await expectLater(
+        client.fetch(
+          MangaRemotePageResource(
+            uri: Uri.parse('https://pages.example/reader'),
+          ),
+        ),
+        throwsA(
+          isA<MangaPageFetchException>().having(
+            (failure) => failure.reasonCode,
+            'reason',
+            'unsupported_image',
+          ),
+        ),
+      );
+      expect(transcodes, 0);
+
+      final recovered = await client.fetch(
+        MangaRemotePageResource(
+          uri: Uri.parse('https://pages.example/cover'),
+          allowPlatformArtworkTranscode: true,
+        ),
+      );
+      expect(recovered, _pngBytes);
+      expect(transcodes, 1);
+    },
+  );
+
+  test(
+    'invalid native artwork output stays on the safe failure path',
+    () async {
+      final encoded = Uint8List.fromList(_ftypBytes('heic'));
+      final adapter = _PageRoutingAdapter(<String, _PageResponseFactory>{
+        'https://pages.example/cover': (_) =>
+            ResponseBody.fromBytes(encoded, HttpStatus.ok),
+      });
+      final client = _client(
+        adapter,
+        transcodeUnsupportedArtwork: (_) async => Uint8List.fromList(<int>[1]),
+      );
+      addTearDown(client.close);
+
+      await expectLater(
+        client.fetch(
+          MangaRemotePageResource(
+            uri: Uri.parse('https://pages.example/cover'),
+            allowPlatformArtworkTranscode: true,
+          ),
+        ),
+        throwsA(
+          isA<MangaPageFetchException>().having(
+            (failure) => failure.reasonCode,
+            'reason',
+            'unsupported_image',
+          ),
+        ),
+      );
+    },
+  );
+
+  final malformedFormats =
+      <(String, List<int>, MangaPageResponseFormat, String)>[
+        (
+          'jpeg',
+          [0xff, 0xd8, 0xff],
+          MangaPageResponseFormat.jpeg,
+          'malformed_image',
+        ),
+        (
+          'png',
+          _pngBytes.take(8).toList(),
+          MangaPageResponseFormat.png,
+          'malformed_image',
+        ),
+        (
+          'gif',
+          ascii.encode('GIF89a'),
+          MangaPageResponseFormat.gif,
+          'malformed_image',
+        ),
+        (
+          'webp',
+          [...ascii.encode('RIFF'), 0, 0, 0, 0, ...ascii.encode('WEBP')],
+          MangaPageResponseFormat.webp,
+          'malformed_image',
+        ),
+        (
+          'avif',
+          _ftypBytes('avif'),
+          MangaPageResponseFormat.avif,
+          'unsupported_image',
+        ),
+        (
+          'avif-compatible',
+          _ftypBytes('mif1', compatible: ['avif']),
+          MangaPageResponseFormat.avif,
+          'unsupported_image',
+        ),
+        (
+          'heif',
+          _ftypBytes('heic'),
+          MangaPageResponseFormat.heif,
+          'unsupported_image',
+        ),
+        (
+          'html',
+          utf8.encode(
+            '\ufeff \r\n<!DoCtYpE HTML><html>private-body-canary</html>',
+          ),
+          MangaPageResponseFormat.html,
+          'unsupported_image',
+        ),
+        (
+          'html-tag',
+          ascii.encode('<HTML lang="en">private-body-canary</HTML>'),
+          MangaPageResponseFormat.html,
+          'unsupported_image',
+        ),
+        (
+          'unknown',
+          ascii.encode('private-body-canary image/avif'),
+          MangaPageResponseFormat.unknown,
+          'unsupported_image',
+        ),
+        (
+          'false-html',
+          ascii.encode('<htmlish>private-body-canary'),
+          MangaPageResponseFormat.unknown,
+          'unsupported_image',
+        ),
+        (
+          'truncated-ftyp',
+          _ftypBytes('avif').take(12).toList(),
+          MangaPageResponseFormat.unknown,
+          'unsupported_image',
+        ),
+        (
+          'unbranded-ftyp',
+          _ftypBytes('xxxx'),
+          MangaPageResponseFormat.unknown,
+          'unsupported_image',
+        ),
+        ('empty', [], MangaPageResponseFormat.empty, 'empty_response'),
+        (
+          'png-dimensions',
+          _pngWithDimensions(maximumMangaImageWidth + 1, 1),
+          MangaPageResponseFormat.png,
+          'image_dimensions_exceeded',
+        ),
+      ];
+  for (final (name, bytes, format, reason) in malformedFormats) {
+    test(
+      'failure preserves observed $name format/status/byte count after redirect and export',
+      () async {
+        final failures = <MangaPageFetchException>[];
+        final adapter = _PageRoutingAdapter(<String, _PageResponseFactory>{
+          'https://pages.example/start': (_) => ResponseBody.fromBytes(
+            const [],
+            HttpStatus.found,
+            headers: {
+              HttpHeaders.locationHeader: [
+                'https://cdn.example/private-path-canary?credential=url-secret-canary',
+              ],
+            },
+          ),
+          'https://cdn.example/private-path-canary?credential=url-secret-canary':
+              (_) => ResponseBody.fromBytes(
+                bytes,
+                HttpStatus.ok,
+                headers: {
+                  // Deliberately false metadata must not determine the response format.
+                  HttpHeaders.contentTypeHeader: [
+                    'image/avif; private-header-canary',
+                  ],
+                  'x-private-header': ['response-header-canary'],
+                },
+              ),
+        });
+        final client = _client(adapter, reportFailure: failures.add);
+        addTearDown(client.close);
+        await expectLater(
+          client.fetch(
+            MangaRemotePageResource(
+              uri: Uri.parse('https://pages.example/start'),
+              headers: const {
+                HttpHeaders.authorizationHeader: 'Bearer request-secret-canary',
+              },
+            ),
+          ),
+          throwsA(isA<MangaPageFetchException>()),
+        );
+        expect(failures, hasLength(1));
+        final failure = failures.single;
+        expect(failure.reasonCode, reason);
+        expect(failure.statusCode, HttpStatus.ok);
+        expect(failure.responseFormat, format);
+        expect(failure.encodedByteCount, bytes.length);
+        expect(failure.redirectCount, 1);
+        expect(failure.crossOriginRedirect, isTrue);
+        final expectedMessage =
+            'format=${format.name} encoded_byte_count=${bytes.length} '
+            'redirect_hops=1 changed_site=true';
+        expect(failure.diagnosticDetails, {
+          'reason_code': reason,
+          'status': HttpStatus.ok,
+          'message': expectedMessage,
+        });
+        final copied = failure.withRedirectContext(
+          redirectCount: 2,
+          crossOriginRedirect: true,
+        );
+        expect(copied.statusCode, failure.statusCode);
+        expect(copied.responseFormat, failure.responseFormat);
+        expect(copied.encodedByteCount, failure.encodedByteCount);
+        final persisted = sanitizeDiagnosticContext(failure.diagnosticDetails);
+        expect(persisted, failure.diagnosticDetails);
+        final export = ExplicitDiagnosticsReport.fromSnapshot(
+          version: const AppVersionInfo(name: '2.0.74', code: 410051),
+          profile: const TvDeviceProfile(
+            manufacturer: 'Example',
+            model: 'TV',
+            sdk: 30,
+            abis: ['arm64-v8a'],
+            displayModes: [],
+            hdrTypes: [],
+            codecs: [],
+            audioOutputs: [],
+          ),
+          isTelevision: true,
+          diagnostics: {
+            'diagnosticEvents': [
+              {
+                'category': 'manga-reader',
+                'severity': 'warning',
+                'message': 'Manga page fetch failed',
+                'context': persisted,
+              },
+            ],
+          },
+        );
+        final report = jsonDecode(export.report) as Map<String, dynamic>;
+        final event =
+            (report['diagnostics']['diagnosticEvents'] as List).single as Map;
+        expect(event['context'], failure.diagnosticDetails);
+        expect(export.report, contains(expectedMessage));
+        expect(jsonEncode(export.toWireJson()), isNot(contains('canary')));
+        expect(export.report, isNot(contains('pages.example')));
+        expect(export.report, isNot(contains('cdn.example')));
+        expect(adapter.requests, hasLength(2)); // No retry or relaxed decoder.
+      },
+    );
+  }
+
+  test(
+    'stream failure keeps actual received count and current response status',
+    () async {
+      Stream<Uint8List> interrupted() async* {
+        yield Uint8List.fromList([1, 2, 3]);
+        throw const SocketException('private-transport-canary');
+      }
+
+      final adapter = _PageRoutingAdapter({
+        'https://pages.example/page': (_) =>
+            ResponseBody(interrupted(), HttpStatus.ok),
+      });
+      final failures = <MangaPageFetchException>[];
+      final client = _client(adapter, reportFailure: failures.add);
+      addTearDown(client.close);
+      await expectLater(
+        client.fetch(
+          MangaRemotePageResource(uri: Uri.parse('https://pages.example/page')),
+        ),
+        throwsA(isA<MangaPageFetchException>()),
+      );
+      expect(failures.single.statusCode, HttpStatus.ok);
+      expect(failures.single.encodedByteCount, 3);
+      expect(failures.single.responseFormat, MangaPageResponseFormat.unknown);
+      expect(
+        jsonEncode(failures.single.diagnosticDetails),
+        isNot(contains('canary')),
+      );
+    },
+  );
+
+  test(
+    'failed redirect target does not inherit the previous response status',
+    () async {
+      final adapter = _PageRoutingAdapter({
+        'https://pages.example/start': (_) => ResponseBody.fromBytes(
+          const [],
+          HttpStatus.found,
+          headers: {
+            HttpHeaders.locationHeader: ['https://cdn.example/page'],
+          },
+        ),
+      });
+      final failures = <MangaPageFetchException>[];
+      final client = _client(
+        adapter,
+        reportFailure: failures.add,
+        validateTarget: (uri) async {
+          if (uri.host == 'cdn.example') {
+            throw const SocketException('private-dns-canary');
+          }
+        },
+      );
+      addTearDown(client.close);
+      await expectLater(
+        client.fetch(
+          MangaRemotePageResource(
+            uri: Uri.parse('https://pages.example/start'),
+          ),
+        ),
+        throwsA(isA<MangaPageFetchException>()),
+      );
+      expect(failures.single.statusCode, isNull);
+      expect(failures.single.encodedByteCount, 0);
+      expect(failures.single.redirectCount, 1);
+      expect(failures.single.crossOriginRedirect, isTrue);
+      expect(
+        jsonEncode(failures.single.diagnosticDetails),
+        isNot(contains('canary')),
+      );
+    },
+  );
 
   test('reports a bounded reason without request details', () async {
     final reported = Completer<MangaPageFetchException>();
@@ -659,6 +1278,7 @@ MangaPageFetchClient _client(
   int maximumCacheEntries = 64,
   Duration requestDeadline = const Duration(seconds: 45),
   MangaPageFailureReporter? reportFailure,
+  MangaUnsupportedArtworkTranscoder? transcodeUnsupportedArtwork,
 }) {
   final dio = Dio()..httpClientAdapter = adapter;
   return MangaPageFetchClient(
@@ -670,6 +1290,7 @@ MangaPageFetchClient _client(
     maximumCacheEntries: maximumCacheEntries,
     requestDeadline: requestDeadline,
     reportFailure: reportFailure,
+    transcodeUnsupportedArtwork: transcodeUnsupportedArtwork,
   );
 }
 
@@ -692,6 +1313,37 @@ class _PageRoutingAdapter implements HttpClientAdapter {
         ResponseBody.fromString('not found', HttpStatus.notFound);
   }
 
+  @override
+  void close({bool force = false}) {}
+}
+
+class _ControlledPageAdapter implements HttpClientAdapter {
+  final List<RequestOptions> requests = [];
+  final List<String> cancelled = [];
+  final Map<String, Completer<ResponseBody>> pending = {};
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) {
+    requests.add(options);
+    final completer = pending.putIfAbsent(
+      options.uri.path,
+      Completer<ResponseBody>.new,
+    );
+    cancelFuture?.then((_) {
+      if (completer.isCompleted) return;
+      cancelled.add(options.uri.path);
+      completer.completeError(
+        DioException(requestOptions: options, type: DioExceptionType.cancel),
+      );
+    });
+    return completer.future;
+  }
+
+  void complete(String path) =>
+      pending[path]!.complete(ResponseBody.fromBytes(_pngBytes, HttpStatus.ok));
   @override
   void close({bool force = false}) {}
 }
@@ -848,6 +1500,23 @@ final Uint8List _pngBytes = Uint8List.fromList(<int>[
   0x00,
   0x00,
 ]);
+
+List<int> _ftypBytes(String major, {List<String> compatible = const []}) {
+  final size = 16 + compatible.length * 4;
+  return [
+    0,
+    0,
+    0,
+    size,
+    ...ascii.encode('ftyp'),
+    ...ascii.encode(major),
+    0,
+    0,
+    0,
+    0,
+    for (final brand in compatible) ...ascii.encode(brand),
+  ];
+}
 
 Uint8List _pngWithDimensions(int width, int height) {
   final bytes = Uint8List.fromList(_pngBytes);

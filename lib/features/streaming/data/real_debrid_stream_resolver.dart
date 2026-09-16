@@ -82,6 +82,11 @@ class RealDebridStreamResolver implements StreamResolver {
             info.files,
             episode.episode,
             requestedSeason: catalogSeasonNumber(episode),
+            requestedAbsoluteEpisode: absoluteEpisodeNumber(episode),
+            requestedSpecial: episodeReferenceIsSpecial(episode),
+            containerLabel: selectedRelease.releaseName,
+            requireNumberingSchemeEvidence:
+                episodeReferenceHasUnresolvedSequelNumbering(episode),
             preferredFileIndex: selectedRelease.preferredFileIndex,
           );
           await _client.selectFiles(torrentId, [file.id]);
@@ -120,12 +125,22 @@ class RealDebridStreamResolver implements StreamResolver {
         info.files,
         episode.episode,
         requestedSeason: catalogSeasonNumber(episode),
+        requestedAbsoluteEpisode: absoluteEpisodeNumber(episode),
+        requestedSpecial: episodeReferenceIsSpecial(episode),
+        containerLabel: selectedRelease.releaseName,
+        requireNumberingSchemeEvidence:
+            episodeReferenceHasUnresolvedSequelNumbering(episode),
         preferredFileIndex: selectedRelease.preferredFileIndex,
       );
       final link = selectEpisodeDownloadLink(
         info,
         episode.episode,
         requestedSeason: catalogSeasonNumber(episode),
+        requestedAbsoluteEpisode: absoluteEpisodeNumber(episode),
+        requestedSpecial: episodeReferenceIsSpecial(episode),
+        containerLabel: selectedRelease.releaseName,
+        requireNumberingSchemeEvidence:
+            episodeReferenceHasUnresolvedSequelNumbering(episode),
         preferredFileIndex: selectedRelease.preferredFileIndex,
       );
       final unrestricted = await _client.unrestrict(link);
@@ -193,19 +208,26 @@ String selectEpisodeDownloadLink(
   RealDebridTorrentInfo info,
   int episode, {
   int? requestedSeason,
+  int? requestedAbsoluteEpisode,
+  bool requestedSpecial = false,
+  String? containerLabel,
+  bool requireNumberingSchemeEvidence = false,
   int? preferredFileIndex,
 }) {
   if (info.links.isEmpty) {
     throw StateError('Real-Debrid returned no downloadable video link.');
   }
-  if (info.links.length == 1) return info.links.single;
-
   final episodeFile = selectEpisodeFile(
     info.files,
     episode,
     requestedSeason: requestedSeason,
+    requestedAbsoluteEpisode: requestedAbsoluteEpisode,
+    requestedSpecial: requestedSpecial,
+    containerLabel: containerLabel,
+    requireNumberingSchemeEvidence: requireNumberingSchemeEvidence,
     preferredFileIndex: preferredFileIndex,
   );
+  if (info.links.length == 1) return info.links.single;
   final selectedFiles = info.files.where((file) => file.selected).toList();
   final selectedIndex = selectedFiles.indexWhere(
     (file) => file.id == episodeFile.id,
@@ -234,6 +256,10 @@ RealDebridTorrentFile selectEpisodeFile(
   List<RealDebridTorrentFile> files,
   int episode, {
   int? requestedSeason,
+  int? requestedAbsoluteEpisode,
+  bool requestedSpecial = false,
+  String? containerLabel,
+  bool requireNumberingSchemeEvidence = false,
   int? preferredFileIndex,
 }) {
   final playable = files.where((file) => file.isPlayable).toList();
@@ -246,6 +272,10 @@ RealDebridTorrentFile selectEpisodeFile(
     sizes: files.map((file) => file.bytes).toList(growable: false),
     requestedEpisode: episode,
     requestedSeason: requestedSeason,
+    requestedAbsoluteEpisode: requestedAbsoluteEpisode,
+    requestedSpecial: requestedSpecial,
+    containerLabel: containerLabel,
+    requireNumberingSchemeEvidence: requireNumberingSchemeEvidence,
     preferredFileIndex: preferredFileIndex,
   );
   return files[selectedIndex];

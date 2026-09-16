@@ -6,6 +6,7 @@ import 'package:anime_tv/features/marketplace/domain/addon_models.dart';
 import 'package:anime_tv/features/player/presentation/player_stream_source_picker.dart';
 import 'package:anime_tv/features/streaming/domain/episode_identity_guard.dart';
 import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
+import 'package:anime_tv/features/watch_together/domain/watch_party_source_descriptor.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -44,6 +45,29 @@ void main() {
     expect(unlabeled.release.audioIntent, ReleaseAudioIntent.unknown);
   });
 
+  test('late web options use the stable Watch Together source identity', () {
+    final result = WebStreamResult(
+      providerId: 'Provider.One',
+      providerName: 'Provider One',
+      title: '1080p',
+      uri: Uri.parse('https://video.example/episode/master.m3u8?token=one'),
+    );
+
+    final option = playbackOptionForWebStream(result);
+
+    expect(
+      option.release.infoHash,
+      watchPartyWebReleaseIdentity(
+        providerId: result.providerId,
+        uri: result.uri,
+      ),
+    );
+    expect(
+      option.release.infoHash,
+      matches(RegExp(r'^web:provider\.one:[a-f0-9]{64}$')),
+    );
+  });
+
   test('web playback launch preserves external subtitle language metadata', () {
     final option = playbackOptionForWebStream(
       WebStreamResult(
@@ -61,6 +85,42 @@ void main() {
       Uri.parse('https://video.example/subtitles/es.vtt'),
     );
     expect(option.stream.externalSubtitleLanguage, 'Spanish');
+  });
+
+  test('web playback launch preserves pending external audio identity', () {
+    final base = WebStreamResult(
+      providerId: 'provider',
+      providerName: 'Provider',
+      title: '1080p',
+      uri: Uri.parse('https://video.example/episode.m3u8'),
+      externalAudioTracks: [
+        WebExternalAudioTrack(
+          uri: Uri.parse('https://audio.example/dub.aac'),
+          label: 'English Dub',
+          language: 'eng',
+          headers: const {'Referer': 'https://provider.example/'},
+        ),
+      ],
+    );
+    final withAudio = playbackOptionForWebStream(base);
+    final withoutAudio = playbackOptionForWebStream(
+      WebStreamResult(
+        providerId: base.providerId,
+        providerName: base.providerName,
+        title: base.title,
+        uri: base.uri,
+      ),
+    );
+
+    expect(withAudio.stream.pendingExternalAudioTracks, hasLength(1));
+    final track = withAudio.stream.pendingExternalAudioTracks.single;
+    expect(track.label, 'English Dub');
+    expect(track.language, 'eng');
+    expect(track.headers['Referer'], 'https://provider.example/');
+    expect(
+      playbackStreamOptionAttemptKey(withAudio),
+      isNot(playbackStreamOptionAttemptKey(withoutAudio)),
+    );
   });
 
   test(
@@ -97,24 +157,62 @@ void main() {
     },
   );
 
-  test('source merge deduplicates by URI and sorts highest quality first', () {
-    final low = _option(
-      'https://video.example/720.m3u8',
-      '720p',
-      providerId: 'same-provider',
+  test(
+    'source merge deduplicates an identical variant and sorts highest quality first',
+    () {
+      final low = _option(
+        'https://video.example/720.m3u8',
+        '720p',
+        providerId: 'same-provider',
+      );
+      final high = _option('https://video.example/1080.m3u8', '1080p');
+      final duplicate = _option(
+        'https://video.example/720.m3u8',
+        '4K',
+        providerId: 'same-provider',
+      );
+
+      final merged = mergePlaybackStreamOptions([low], [high, duplicate]);
+
+      expect(merged, hasLength(2));
+      expect(merged.first.stream.uri, high.stream.uri);
+      expect(merged.last.release.quality, '720p');
+    },
+  );
+
+  test('same provider URI preserves header, subtitle, and audio variants', () {
+    const sharedUri = 'https://cdn.example/shared/master.m3u8';
+    final sub = _option(
+      sharedUri,
+      '1080p',
+      providerId: 'provider-a',
+      headers: const {'Referer': 'https://sub.example/'},
+      externalSubtitle: Uri.parse('https://sub.example/en.vtt'),
+      externalSubtitleLanguage: 'eng',
+      audioIntent: ReleaseAudioIntent.sub,
     );
-    final high = _option('https://video.example/1080.m3u8', '1080p');
-    final duplicate = _option(
-      'https://video.example/720.m3u8',
-      '4K',
-      providerId: 'same-provider',
+    final dub = _option(
+      sharedUri,
+      '1080p',
+      providerId: 'provider-a',
+      headers: const {'Referer': 'https://dub.example/'},
+      audioIntent: ReleaseAudioIntent.dub,
+      isDubbed: true,
     );
 
-    final merged = mergePlaybackStreamOptions([low], [high, duplicate]);
+    final merged = mergePlaybackStreamOptions([sub], [dub]);
 
     expect(merged, hasLength(2));
-    expect(merged.first.stream.uri, high.stream.uri);
-    expect(merged.last.release.quality, '720p');
+    expect(merged.map(playbackStreamOptionAttemptKey).toSet(), hasLength(2));
+    expect(
+      hasUntriedDirectWebStream(
+        current: sub.stream,
+        currentRelease: sub.release,
+        currentFallbackProviderId: sub.release.sourceId,
+        options: merged,
+      ),
+      isTrue,
+    );
   });
 
   test('source merge exposes every provider before one provider repeats', () {
@@ -270,7 +368,7 @@ void main() {
 
     final options = replaceValidatedPlaybackStreamOption(
       options: [raw, fallback, redirected],
-      requestedUri: raw.stream.uri,
+      requested: raw,
       validated: redirected,
     );
 
@@ -333,7 +431,7 @@ void main() {
 
       final options = replaceValidatedPlaybackStreamOption(
         options: [rawA, providerB],
-        requestedUri: rawA.stream.uri,
+        requested: rawA,
         validated: validatedA,
       );
 
@@ -720,6 +818,9 @@ PlaybackStreamOption _option(
   String? providerName,
   Map<String, String> headers = const {},
   Uri? externalSubtitle,
+  String? externalSubtitleLanguage,
+  ReleaseAudioIntent audioIntent = ReleaseAudioIntent.unknown,
+  bool isDubbed = false,
 }) {
   final identity = providerId ?? quality;
   final displayProvider = providerName ?? 'Provider $quality';
@@ -728,6 +829,7 @@ PlaybackStreamOption _option(
     displayName: quality,
     headers: headers,
     externalSubtitle: externalSubtitle,
+    externalSubtitleLanguage: externalSubtitleLanguage,
     providerId: identity,
     providerName: displayProvider,
   );
@@ -741,6 +843,8 @@ PlaybackStreamOption _option(
       sourceId: 'web:$identity',
       quality: quality,
       provider: displayProvider,
+      audioIntent: audioIntent,
+      isDubbed: isDubbed,
     ),
   );
 }

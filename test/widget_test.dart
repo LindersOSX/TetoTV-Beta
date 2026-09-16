@@ -244,9 +244,7 @@ void main() {
 
     expect(find.text('Planning'), findsOneWidget);
     expect(
-      find.text(
-        'Add or update this show on your connected AniList and MAL accounts.',
-      ),
+      find.text('Add or update this show on every connected anime tracker.'),
       findsOneWidget,
     );
   });
@@ -515,16 +513,37 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 100));
 
-      expect(find.text('Local resume wins'), findsWidgets);
-      expect(find.text('AniList duplicate must be hidden'), findsNothing);
+      final continueCard = find.byKey(const ValueKey('home-continue-card-101'));
+      expect(continueCard, findsOneWidget);
+      expect(
+        find.descendant(
+          of: continueCard,
+          matching: find.text('Local resume wins'),
+        ),
+        findsNothing,
+      );
+      expect(
+        find.descendant(
+          of: continueCard,
+          matching: find.text('AniList duplicate must be hidden'),
+        ),
+        findsOneWidget,
+      );
       expect(find.text('MAL duplicate must be hidden'), findsNothing);
+      expect(
+        find.textContaining('Episode 4'),
+        findsWidgets,
+        reason: 'The local checkpoint still owns the resume episode.',
+      );
       expect(find.text('Distinct AniList title remains'), findsOneWidget);
       expect(find.text('Distinct MAL title remains'), findsOneWidget);
       expect(tester.takeException(), isNull);
     },
   );
 
-  testWidgets('fresh TV installs open setup and can defer it', (tester) async {
+  testWidgets('fresh TV installs choose a language then can defer setup', (
+    tester,
+  ) async {
     FlutterSecureStorage.setMockInitialValues({});
     // The production TV shell normalizes 1080p output to a 960x540 canvas.
     tester.view.physicalSize = const Size(1920, 1080);
@@ -549,6 +568,11 @@ void main() {
         child: const TetoTvApp(),
       ),
     );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Choose your language'), findsOneWidget);
+    expect(find.text('How would you like to set up TetoTV?'), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('choose-language-en')));
     await tester.pumpAndSettle();
 
     expect(find.text('How would you like to set up TetoTV?'), findsOneWidget);

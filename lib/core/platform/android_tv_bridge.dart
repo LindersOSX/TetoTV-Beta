@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:convert';
 
+import 'package:anime_tv/core/discord/manga_presence_artwork.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
@@ -560,6 +562,32 @@ class AndroidTvBridge {
       await getDeviceCategory(refresh: refresh) ==
       AndroidDeviceCategory.television;
 
+  /// Converts a recognized modern manga cover through Android's system image
+  /// decoder. The native side validates dimensions, downsizes for artwork,
+  /// and returns bounded WebP bytes; unsupported devices return `null`.
+  Future<Uint8List?> transcodeMangaArtwork(Uint8List encoded) async {
+    if (encoded.isEmpty ||
+        encoded.length > 20 * 1024 * 1024 ||
+        kIsWeb ||
+        defaultTargetPlatform != TargetPlatform.android) {
+      return null;
+    }
+    try {
+      final value = await _channel.invokeMethod<Uint8List>(
+        'transcodeMangaArtwork',
+        <String, Object?>{'encoded': encoded},
+      );
+      if (value == null || value.isEmpty || value.length > 20 * 1024 * 1024) {
+        return null;
+      }
+      return value;
+    } on PlatformException {
+      return null;
+    } on MissingPluginException {
+      return null;
+    }
+  }
+
   Future<dynamic> _handleMethod(MethodCall call) async {
     final args = (call.arguments as Map?)?.cast<Object?, Object?>();
     switch (call.method) {
@@ -649,8 +677,9 @@ class AndroidTvBridge {
 
   /// Publishes a privacy-bounded manga reading activity to Discord.
   ///
-  /// Source names, source URLs, account identifiers, request headers, and
-  /// local paths are deliberately not accepted by this API. Callers may also
+  /// Source names, page URLs, account identifiers, request headers, and
+  /// local paths are deliberately not accepted by this API. The optional
+  /// artwork is a strictly validated, header-free public cover URL. Callers may also
   /// replace [title] with the generic value `Reading manga` when the reader's
   /// title-sharing preference is disabled.
   Future<void> updateDiscordReadingPresence({
@@ -658,6 +687,7 @@ class AndroidTvBridge {
     required String chapterLabel,
     required int page,
     required int pageCount,
+    String? artworkUrl,
   }) async {
     final safeTitle = title.trim();
     final safeChapter = chapterLabel.trim();
@@ -677,6 +707,7 @@ class AndroidTvBridge {
         'chapterLabel': safeChapter,
         'page': page,
         'pageCount': pageCount,
+        'artworkUrl': ?safeMangaPresenceArtworkUrl(artworkUrl),
       });
     } on PlatformException {
       // Rich Presence is optional and must never interrupt reading.
@@ -787,6 +818,54 @@ class AndroidTvBridge {
       'pickLocalVideo',
     );
     return value == null ? null : LocalMediaDocument.fromMap(value);
+  }
+
+  /// Opens one user-selected encrypted JSON document with a transient SAF grant.
+  /// The backup service must authenticate/decrypt and validate the full schema.
+  Future<String?> importMangaBackup() async {
+    _requireMangaBackupPlatform();
+    final value = await _channel.invokeMethod<String>('importMangaBackup');
+    if (value != null &&
+        (value.isEmpty || utf8.encode(value).length > 12 * 1024 * 1024)) {
+      throw const FormatException('The manga backup file size is invalid.');
+    }
+    return value;
+  }
+
+  /// Saves encrypted bytes only. Android asks the viewer where to create the
+  /// document; no plaintext file, clipboard, raw path, or broad permission.
+  Future<bool> exportMangaBackup({
+    required String encryptedJson,
+    required String suggestedName,
+  }) async {
+    _requireMangaBackupPlatform();
+    if (utf8.encode(encryptedJson).length > 12 * 1024 * 1024 ||
+        !RegExp(r'^[A-Za-z0-9_-]{1,75}\.json$').hasMatch(suggestedName)) {
+      throw const FormatException('Invalid encrypted backup document.');
+    }
+    final envelope = jsonDecode(encryptedJson);
+    if (envelope is! Map<String, dynamic> ||
+        envelope['format'] != 'tetotv-manga-backup' ||
+        envelope['cipher'] != 'AES-256-GCM' ||
+        envelope['ciphertext'] is! String) {
+      throw const FormatException(
+        'Only encrypted manga backups can be exported.',
+      );
+    }
+    return await _channel.invokeMethod<bool>('exportMangaBackup', {
+          'encryptedJson': encryptedJson,
+          'suggestedName': suggestedName,
+        }) ??
+        false;
+  }
+
+  void _requireMangaBackupPlatform() {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
+      throw PlatformException(
+        code: 'MANGA_BACKUP_UNSUPPORTED',
+        message: 'Manga backup files are supported on Android only.',
+      );
+    }
   }
 
   /// Opens a validated provider trailer in TetoTV's private native player.
@@ -1032,6 +1111,10 @@ class AndroidTvBridge {
     required String magnet,
     required int episode,
     int? season,
+    int? absoluteEpisode,
+    bool requestedSpecial = false,
+    bool allowSeasonRelativeBare = false,
+    bool requireNumberingSchemeEvidence = false,
     int? preferredFileIndex,
   }) async {
     if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
@@ -1046,6 +1129,11 @@ class AndroidTvBridge {
           'magnet': magnet,
           'episode': episode,
           'season': ?season,
+          'absoluteEpisode': ?absoluteEpisode,
+          if (requestedSpecial) 'requestedSpecial': true,
+          if (allowSeasonRelativeBare) 'allowSeasonRelativeBare': true,
+          if (requireNumberingSchemeEvidence)
+            'requireNumberingSchemeEvidence': true,
           'preferredFileIndex': ?preferredFileIndex,
         });
     if (value == null) {

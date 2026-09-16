@@ -707,7 +707,8 @@ void main() {
       'if (!prepared.hasCompatibleEpisodeIdentity)',
       'await prepared.close()',
       'await _prepareForEngineHandoff(handoffPosition)',
-      'preparedNextEpisodePlayerLocation(prepared)',
+      'preparedNextEpisodePlayerLocation(',
+      'titleLanguage: ref.read(titleLanguagePreferenceProvider)',
       'extra: prepared.launch',
     ]);
     expect(source, contains('shouldPrepareNextEpisode(position: position'));

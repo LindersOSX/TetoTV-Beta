@@ -16,6 +16,22 @@ $discordAarSha256 = "85a5b0c9b2b828c84d27a7d7839d834bd7dac323895a691e2a19e056543
 $discordAarSize = 29838129
 
 $noticeFiles = @(
+    [pscustomobject]@{ Source = "assets/legal/aniyomi/ANIYOMI_RUNTIME_NOTICE.txt"; Destination = "assets/legal/aniyomi/ANIYOMI_RUNTIME_NOTICE.txt"; Marker = "TetoTV experimental Aniyomi" }
+    [pscustomobject]@{ Source = "assets/legal/aniyomi/ANIYOMI_LICENSE.txt"; Destination = "assets/legal/aniyomi/ANIYOMI_LICENSE.txt"; Marker = "Apache License" }
+    [pscustomobject]@{ Source = "assets/legal/aniyomi/INJEKT_LICENSE.txt"; Destination = "assets/legal/aniyomi/INJEKT_LICENSE.txt"; Marker = "Jayson Minard" }
+    [pscustomobject]@{ Source = "assets/legal/aniyomi/RXJAVA_LICENSE.txt"; Destination = "assets/legal/aniyomi/RXJAVA_LICENSE.txt"; Marker = "Copyright 2012 Netflix" }
+    [pscustomobject]@{ Source = "assets/legal/aniyomi/JSOUP_LICENSE.txt"; Destination = "assets/legal/aniyomi/JSOUP_LICENSE.txt"; Marker = "Jonathan Hedley" }
+    [pscustomobject]@{ Source = "assets/legal/aniyomi/OKHTTP_LICENSE.txt"; Destination = "assets/legal/aniyomi/OKHTTP_LICENSE.txt"; Marker = "Apache License" }
+    [pscustomobject]@{ Source = "assets/legal/aniyomi/OKIO_LICENSE.txt"; Destination = "assets/legal/aniyomi/OKIO_LICENSE.txt"; Marker = "Apache License" }
+    [pscustomobject]@{ Source = "assets/legal/aniyomi/KOTLINX_COROUTINES_LICENSE.txt"; Destination = "assets/legal/aniyomi/KOTLINX_COROUTINES_LICENSE.txt"; Marker = "JetBrains" }
+    [pscustomobject]@{ Source = "assets/legal/aniyomi/KOTLINX_SERIALIZATION_LICENSE.txt"; Destination = "assets/legal/aniyomi/KOTLINX_SERIALIZATION_LICENSE.txt"; Marker = "JetBrains" }
+    [pscustomobject]@{ Source = "assets/legal/aniyomi/ANDROIDX_AND_APKSIG_LICENSE.txt"; Destination = "assets/legal/aniyomi/ANDROIDX_AND_APKSIG_LICENSE.txt"; Marker = "Android apksig 9.0.1" }
+    [pscustomobject]@{ Source = "assets/legal/aniyomi/LICENSE_SOURCES.json"; Destination = "assets/legal/aniyomi/LICENSE_SOURCES.json"; Marker = "39e9a749590b89b432f04b83725aaa12591371b2" }
+    [pscustomobject]@{ Source = "third_party/aniyomi_compat/README.md"; Destination = "third_party/aniyomi_compat/README.md"; Marker = "Aniyomi" }
+    [pscustomobject]@{ Source = "third_party/aniyomi_compat/PROVENANCE.json"; Destination = "third_party/aniyomi_compat/PROVENANCE.json"; Marker = "39e9a749590b89b432f04b83725aaa12591371b2" }
+    [pscustomobject]@{ Source = "third_party/aniyomi_compat/NOTICE"; Destination = "third_party/aniyomi_compat/NOTICE"; Marker = "Aniyomi" }
+    [pscustomobject]@{ Source = "third_party/aniyomi_compat/LICENSE-ANIYOMI"; Destination = "third_party/aniyomi_compat/LICENSE-ANIYOMI"; Marker = "Apache License" }
+    [pscustomobject]@{ Source = "third_party/aniyomi_compat/LICENSE-INJEKT"; Destination = "third_party/aniyomi_compat/LICENSE-INJEKT"; Marker = "Jayson Minard" }
     [pscustomobject]@{ Source = "LICENSE"; Destination = "LICENSE"; Marker = "MIT License" }
     [pscustomobject]@{ Source = "docs/THIRD_PARTY_NOTICES.md"; Destination = "docs/THIRD_PARTY_NOTICES.md"; Marker = "libtorrent4j 2.1.0-38" }
     [pscustomobject]@{ Source = "docs/NATIVE_PLAYBACK_REDISTRIBUTION.md"; Destination = "docs/NATIVE_PLAYBACK_REDISTRIBUTION.md"; Marker = "native playback" }

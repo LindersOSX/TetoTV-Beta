@@ -21,6 +21,36 @@ void registerBundledThirdPartyLicenses({AssetBundle? bundle}) {
 
 const _bundledNotices = <_BundledNotice>[
   _BundledNotice([
+    'TetoTV experimental Aniyomi runtime provenance',
+  ], 'assets/legal/aniyomi/ANIYOMI_RUNTIME_NOTICE.txt'),
+  _BundledNotice([
+    'Aniyomi source API v0.18.1.2 (39e9a749)',
+  ], 'assets/legal/aniyomi/ANIYOMI_LICENSE.txt'),
+  _BundledNotice([
+    'Injekt core and API 1.16.1',
+    'Mihon Injekt registry patch 91edab2317',
+  ], 'assets/legal/aniyomi/INJEKT_LICENSE.txt'),
+  _BundledNotice(['RxJava 1.3.8'], 'assets/legal/aniyomi/RXJAVA_LICENSE.txt'),
+  _BundledNotice(['Jsoup 1.19.1'], 'assets/legal/aniyomi/JSOUP_LICENSE.txt'),
+  _BundledNotice(['OkHttp 5.4.0'], 'assets/legal/aniyomi/OKHTTP_LICENSE.txt'),
+  _BundledNotice(['Okio 3.17.0'], 'assets/legal/aniyomi/OKIO_LICENSE.txt'),
+  _BundledNotice([
+    'Cash App QuickJS Android 0.9.2 wrapper',
+  ], 'assets/legal/aniyomi/OKHTTP_LICENSE.txt'),
+  _BundledNotice([
+    'Cash App QuickJS Android 0.9.2 embedded QuickJS engine',
+  ], 'assets/addon_runtime/QUICKJS_LICENSE.txt'),
+  _BundledNotice([
+    'Kotlin coroutines 1.10.1',
+  ], 'assets/legal/aniyomi/KOTLINX_COROUTINES_LICENSE.txt'),
+  _BundledNotice([
+    'Kotlin serialization 1.9.0',
+  ], 'assets/legal/aniyomi/KOTLINX_SERIALIZATION_LICENSE.txt'),
+  _BundledNotice([
+    'AndroidX Preference and Preference KTX 1.2.1',
+    'Android apksig 9.0.1',
+  ], 'assets/legal/aniyomi/ANDROIDX_AND_APKSIG_LICENSE.txt'),
+  _BundledNotice([
     'Android JS Runtimes bridge 0.3.6',
   ], 'assets/addon_runtime/ANDROID_JS_RUNTIMES_LICENSE.txt'),
   _BundledNotice([
@@ -108,6 +138,9 @@ const _bundledNotices = <_BundledNotice>[
     'Direct torrent native component provenance',
   ], 'assets/legal/native/DIRECT_TORRENT_NATIVE_NOTICE.txt'),
   _BundledNotice(['Noto Sans Regular'], 'assets/fonts/OFL.txt'),
+  _BundledNotice([
+    'Noto Sans Devanagari',
+  ], 'assets/fonts/NotoSansDevanagari-OFL.txt'),
 ];
 
 class _BundledNotice {

@@ -19,12 +19,36 @@ void main() {
       isTrue,
     );
     expect(
+      isSafeAnimeTitleLogoUri(
+        Uri.parse('https://image.tmdb.org/t/p/original/english-logo.png'),
+      ),
+      isTrue,
+    );
+    expect(
+      isSafeAnimeTitleLogoUri(
+        Uri.parse('https://image.tmdb.org.attacker.example/logo.png'),
+      ),
+      isFalse,
+    );
+    expect(
+      isSafeAnimeTitleLogoUri(
+        Uri.parse('https://image.tmdb.org/t/p/original/logo.svg'),
+      ),
+      isFalse,
+    );
+    expect(
       isSafeAnimeTitleLogoUri(Uri.parse('https://attacker.example/logo.png')),
       isFalse,
     );
     expect(
       isSafeAnimeTitleLogoUri(
         Uri.parse('https://assets.fanart.tv:8443/logo.png'),
+      ),
+      isFalse,
+    );
+    expect(
+      isSafeAnimeTitleLogoUri(
+        Uri.parse('https://image.tmdb.org:8443/t/p/original/logo.png'),
       ),
       isFalse,
     );

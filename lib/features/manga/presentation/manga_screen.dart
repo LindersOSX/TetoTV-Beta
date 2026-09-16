@@ -1,22 +1,33 @@
+import 'package:anime_tv/core/localization/teto_localizations.dart';
+import 'package:anime_tv/features/aniyomi/application/aniyomi_controller.dart';
+import 'package:anime_tv/features/aniyomi/presentation/aniyomi_screen.dart';
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
+import 'package:anime_tv/core/tv/tv_navigation.dart';
 import 'package:anime_tv/core/widgets/teto_top_level_shell.dart';
 import 'package:anime_tv/core/widgets/tv_text_input.dart';
 import 'package:anime_tv/features/home/presentation/main_navigation_bar.dart';
 import 'package:anime_tv/features/manga/application/manga_acquisition_controller.dart';
 import 'package:anime_tv/features/manga/application/manga_extension_controller.dart';
 import 'package:anime_tv/features/manga/application/manga_hub_controller.dart';
+import 'package:anime_tv/features/manga/application/manga_continue_policy.dart';
 import 'package:anime_tv/features/manga/data/manga_acquisition_service.dart';
 import 'package:anime_tv/features/manga/data/manga_catalog_client.dart';
 import 'package:anime_tv/features/manga/data/manga_store.dart';
+import 'package:anime_tv/features/manga/data/manga_library_service.dart';
 import 'package:anime_tv/features/manga/domain/manga_reader_models.dart';
 import 'package:anime_tv/features/manga/domain/manga_extension_models.dart';
 import 'package:anime_tv/features/manga/domain/manga_source_models.dart';
 import 'package:anime_tv/features/manga/presentation/manga_artwork.dart';
 import 'package:anime_tv/features/manga/presentation/manga_reader_screen.dart';
+import 'package:anime_tv/features/manga/presentation/manga_library_view.dart';
+import 'package:anime_tv/features/manga/presentation/manga_tracking_dialog.dart';
+import 'package:anime_tv/features/manga/presentation/manga_backup_dialog.dart';
+import 'package:anime_tv/features/manga/presentation/manga_chapter_sheet.dart';
 import 'package:anime_tv/features/marketplace/application/marketplace_controller.dart';
 import 'package:anime_tv/features/marketplace/domain/addon_models.dart';
 import 'package:anime_tv/features/marketplace/domain/repository_format.dart';
@@ -28,6 +39,38 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 enum MangaHubSection { library, browse, downloads, sources }
+
+/// One user action keeps its original controllers and source across every
+/// asynchronous hop. Global local downloads remain shareable; adoption binds
+/// them to the profile that clicked, never the profile active when I/O finishes.
+class _MangaActionBinding {
+  _MangaActionBinding({
+    required this.hub,
+    required this.extension,
+    required this.downloads,
+    required this.store,
+    required this.isCurrent,
+  });
+  final MangaHubController hub;
+  final MangaExtensionController extension;
+  final MangaAcquisitionController downloads;
+  final MangaStore store;
+  final bool Function() isCurrent;
+  void check() {
+    if (!isCurrent()) {
+      throw StateError('Profile changed. Close and reopen this manga.');
+    }
+  }
+
+  Future<void> checkEntry(MangaLibraryEntry entry) async {
+    check();
+    final owner = await hub.ownerKey;
+    check();
+    if (entry.ownerKey != owner) {
+      throw StateError('This manga belongs to another profile.');
+    }
+  }
+}
 
 extension on MangaHubSection {
   String get label => switch (this) {
@@ -55,10 +98,19 @@ class MangaScreen extends ConsumerStatefulWidget {
 }
 
 class _MangaScreenState extends ConsumerState<MangaScreen> {
+  late TetoLocalizations _ui;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _ui = TetoLocalizations.of(context);
+  }
+
   final _queryController = TextEditingController();
   final _searchFocus = FocusNode(debugLabel: 'manga.search');
   final _fallbackContentFocus = FocusNode(debugLabel: 'manga.content.first');
   final _classicNavigationFocus = FocusNode(debugLabel: 'manga.navigation');
+  final _sourcesEntry = _MangaSourcesEntry();
   final _sectionFocus = <MangaHubSection, FocusNode>{
     for (final section in MangaHubSection.values)
       section: FocusNode(debugLabel: 'manga.section.${section.name}'),
@@ -69,11 +121,51 @@ class _MangaScreenState extends ConsumerState<MangaScreen> {
   MangaHubController get _controller =>
       ref.read(mangaHubControllerProvider.notifier);
 
+  _MangaActionBinding _bindAction({bool catalog = false}) {
+    final hub = _controller;
+    final extension = ref.read(mangaExtensionControllerProvider.notifier);
+    final source = hub.snapshot.selectedSource;
+    return _MangaActionBinding(
+      hub: hub,
+      extension: extension,
+      downloads: ref.read(mangaAcquisitionControllerProvider.notifier),
+      store: ref.read(mangaStoreProvider),
+      isCurrent: () =>
+          mounted &&
+          hub.mounted &&
+          extension.mounted &&
+          identical(_controller, hub) &&
+          identical(
+            ref.read(mangaExtensionControllerProvider.notifier),
+            extension,
+          ) &&
+          (!catalog ||
+              (hub.snapshot.selectedSource?.id == source?.id &&
+                  hub.snapshot.selectedSource?.uri == source?.uri)),
+    );
+  }
+
+  Future<void> _openBoundReader(
+    _MangaActionBinding binding,
+    MangaReaderRequest request,
+  ) async {
+    binding.check();
+    final resumed = await binding.hub.applySavedProgress(request);
+    binding.check();
+    if (!mounted) return;
+    await context.push<void>(MangaReaderScreen.routePath, extra: resumed);
+    if (binding.isCurrent()) await binding.hub.initialize();
+  }
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) unawaited(_controller.initialize());
+      if (!mounted) return;
+      if (!widget.autofocusNavigation && ref.read(isTelevisionProvider)) {
+        requestTvFocusAndReveal(_sectionFocus[MangaHubSection.library]!);
+      }
+      unawaited(_controller.initialize());
     });
   }
 
@@ -101,7 +193,10 @@ class _MangaScreenState extends ConsumerState<MangaScreen> {
   void _showMessage(String message) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message), duration: const Duration(seconds: 4)),
+      SnackBar(
+        content: Text(_ui.text(message)),
+        duration: const Duration(seconds: 4),
+      ),
     );
   }
 
@@ -158,6 +253,7 @@ class _MangaScreenState extends ConsumerState<MangaScreen> {
     final extensions = ref.watch(mangaExtensionControllerProvider);
     final acquisitions = ref.watch(mangaAcquisitionControllerProvider);
     final marketplace = ref.watch(marketplaceControllerProvider);
+    final aniyomiEnabled = ref.watch(aniyomiEnabledProvider);
     ref.listen<MangaHubState>(mangaHubControllerProvider, (previous, next) {
       final error = next.error;
       if (error != null && error != previous?.error) _showMessage(error);
@@ -180,10 +276,13 @@ class _MangaScreenState extends ConsumerState<MangaScreen> {
     return TetoTopLevelShell(
       preferences: preferences,
       activeDestination: TopNavigationDestination.manga,
-      firstContentFocusNode: _searchFocus,
+      firstContentFocusNode: _sectionFocus[_section]!,
       fallbackContentFocusNode: _fallbackContentFocus,
       autofocusRail: widget.autofocusNavigation,
-      onActiveDestinationPressed: _refresh,
+      onActiveDestinationPressed: () {
+        _refresh();
+        requestTvFocusAndReveal(_sectionFocus[_section]!);
+      },
       builder: (context, layout) => Focus(
         canRequestFocus: false,
         onKeyEvent: (_, event) => _handleHeaderKey(event, layout),
@@ -220,6 +319,14 @@ class _MangaScreenState extends ConsumerState<MangaScreen> {
                       selected: _section,
                       focusNodes: _sectionFocus,
                       onSelected: _setSection,
+                      onExitDown: () {
+                        if (_section == MangaHubSection.sources &&
+                            _sourcesEntry.focusFirst != null) {
+                          _sourcesEntry.focusFirst!();
+                        } else {
+                          requestTvFocusAndReveal(_fallbackContentFocus);
+                        }
+                      },
                       onExitLeft: layout.usesPersistentNavigation
                           ? layout.focusRail
                           : _classicNavigationFocus.requestFocus,
@@ -238,13 +345,27 @@ class _MangaScreenState extends ConsumerState<MangaScreen> {
                       child: AnimatedSwitcher(
                         duration: const Duration(milliseconds: 180),
                         child: switch (_section) {
-                          MangaHubSection.library => _MangaLibraryView(
+                          MangaHubSection.library => MangaLibraryView(
                             key: const ValueKey('manga-library'),
                             state: state,
                             firstFocusNode: _fallbackContentFocus,
+                            onExitUp: () => requestTvFocusAndReveal(
+                              _sectionFocus[MangaHubSection.library]!,
+                            ),
                             onBrowse: () => _setSection(MangaHubSection.browse),
                             onOpen: _openLibraryEntry,
                             onRemove: _removeLibraryEntry,
+                            onContinue: _continueLibraryEntry,
+                            onMigrate: _migrateLibraryEntry,
+                            onTracking: _trackLibraryEntry,
+                            onAcknowledge: _acknowledgeUpdates,
+                            onCheckUpdates: _checkLibraryUpdates,
+                            onBackup: () async {
+                              if (await showMangaBackupDialog(context, ref) &&
+                                  mounted) {
+                                await _controller.initialize();
+                              }
+                            },
                           ),
                           MangaHubSection.browse => _MangaBrowseView(
                             key: const ValueKey('manga-browse'),
@@ -277,15 +398,24 @@ class _MangaScreenState extends ConsumerState<MangaScreen> {
                             onBrowse: () => _setSection(MangaHubSection.browse),
                             onOpen: _openDownload,
                             onCancel: _cancelDownload,
+                            onPause: _pauseDownload,
                             onRetry: _retryDownload,
                             onDelete: _deleteDownload,
                           ),
                           MangaHubSection.sources => _MangaSourcesView(
                             key: const ValueKey('manga-sources'),
+                            showAniyomiExperiments: aniyomiEnabled,
+                            entry: _sourcesEntry,
                             sources: state.sources,
                             marketplace: marketplace,
                             selectedSourceId: state.selectedSource?.id,
                             firstFocusNode: _fallbackContentFocus,
+                            onExitUp: () => requestTvFocusAndReveal(
+                              _sectionFocus[MangaHubSection.sources]!,
+                            ),
+                            onExitLeft: layout.usesPersistentNavigation
+                                ? layout.focusRail
+                                : _classicNavigationFocus.requestFocus,
                             onAddRepository: _addMangaRepository,
                             onRefreshRepositories: () => unawaited(
                               ref
@@ -305,7 +435,6 @@ class _MangaScreenState extends ConsumerState<MangaScreen> {
                                 unawaited(_uninstallMangaExtension(addon)),
                             onBrowseExtensions: () =>
                                 _setSection(MangaHubSection.browse),
-                            onAddCatalog: _addSource,
                             onOpen: (source) async {
                               if (source.kind ==
                                   StoredMangaSourceKind.repository) {
@@ -341,19 +470,8 @@ class _MangaScreenState extends ConsumerState<MangaScreen> {
   }
 
   Future<void> _addSource() async {
-    final draft = await showDialog<_MangaSourceDraft>(
-      context: context,
-      builder: (context) => const _MangaSourceDialog(),
-    );
-    if (draft == null) return;
-    final added = await _controller.addSource(
-      draft.uri,
-      credential: draft.credential,
-    );
-    if (added && mounted) {
-      _showMessage('Manga source added.');
-      _setSection(MangaHubSection.sources);
-    }
+    _setSection(MangaHubSection.sources);
+    await _addMangaRepository();
   }
 
   Future<void> _addMangaRepository() async {
@@ -378,7 +496,7 @@ class _MangaScreenState extends ConsumerState<MangaScreen> {
           : '${result.summary} ${result.rejected.first}';
       _showMessage(detail);
     } catch (_) {
-      _showMessage('TetoTV could not add that manga repository.');
+      _showMessage(_ui.text("TetoTV could not add that manga repository."));
     }
   }
 
@@ -388,15 +506,16 @@ class _MangaScreenState extends ConsumerState<MangaScreen> {
           .read(marketplaceControllerProvider.notifier)
           .setRepositoryEnabled(repository, !repository.enabled);
     } catch (_) {
-      _showMessage('TetoTV could not update that repository.');
+      _showMessage(_ui.text("TetoTV could not update that repository."));
     }
   }
 
   Future<void> _removeMangaRepository(AddonRepository repository) async {
     final confirmed = await _confirm(
-      title: 'Remove repository?',
-      message:
-          'Installed extensions stay installed. Add this repository URL again later if you want to browse its catalog or receive updates.',
+      title: _ui.text("Remove repository?"),
+      message: _ui.text(
+        "Installed extensions stay installed. Add this repository URL again later if you want to browse its catalog or receive updates.",
+      ),
       action: 'Remove',
     );
     if (!confirmed) return;
@@ -404,9 +523,9 @@ class _MangaScreenState extends ConsumerState<MangaScreen> {
       await ref
           .read(marketplaceControllerProvider.notifier)
           .removeRepository(repository);
-      _showMessage('Manga repository removed.');
+      _showMessage(_ui.text("Manga repository removed."));
     } catch (_) {
-      _showMessage('TetoTV could not remove that repository.');
+      _showMessage(_ui.text("TetoTV could not remove that repository."));
     }
   }
 
@@ -416,8 +535,9 @@ class _MangaScreenState extends ConsumerState<MangaScreen> {
     final updating = installed != null;
     final confirmed = await _confirm(
       title: '${updating ? 'Update' : 'Install'} ${addon.name}?',
-      message:
-          'This third-party manga source can receive manga searches and selected title or chapter IDs and can make bounded public internet requests to validated HTTPS destinations. It runs in TetoTV’s restricted provider runtime and cannot access account tokens, device files, or native Android APIs. Only continue if you trust its repository.',
+      message: _ui.text(
+        "This third-party manga source can receive manga searches and selected title or chapter IDs and can make bounded public internet requests to validated HTTPS destinations. It runs in TetoTV’s restricted provider runtime and cannot access account tokens, device files, or native Android APIs. Only continue if you trust its repository.",
+      ),
       action: updating ? 'Update' : 'Install',
     );
     if (!confirmed) return;
@@ -427,7 +547,9 @@ class _MangaScreenState extends ConsumerState<MangaScreen> {
     } on FormatException catch (error) {
       _showMessage(error.message);
     } catch (_) {
-      _showMessage('TetoTV could not install ${addon.name}.');
+      _showMessage(
+        _ui.text("TetoTV could not install {value1}.", {'value1': addon.name}),
+      );
     }
   }
 
@@ -437,15 +559,20 @@ class _MangaScreenState extends ConsumerState<MangaScreen> {
           .read(marketplaceControllerProvider.notifier)
           .setAddonEnabled(addon.manifest.id, !addon.enabled);
     } catch (_) {
-      _showMessage('TetoTV could not update ${addon.manifest.name}.');
+      _showMessage(
+        _ui.text("TetoTV could not update {value1}.", {
+          'value1': addon.manifest.name,
+        }),
+      );
     }
   }
 
   Future<void> _uninstallMangaExtension(InstalledStreamingAddon addon) async {
     final confirmed = await _confirm(
-      title: 'Uninstall ${addon.manifest.name}?',
-      message:
-          'This source will stop appearing in Manga. Saved reading progress and downloaded chapters are kept.',
+      title: _ui.text("Uninstall {value1}?", {'value1': addon.manifest.name}),
+      message: _ui.text(
+        "This source will stop appearing in Manga. Saved reading progress and downloaded chapters are kept.",
+      ),
       action: 'Uninstall',
     );
     if (!confirmed) return;
@@ -453,9 +580,15 @@ class _MangaScreenState extends ConsumerState<MangaScreen> {
       await ref
           .read(marketplaceControllerProvider.notifier)
           .uninstall(addon.manifest.id);
-      _showMessage('${addon.manifest.name} uninstalled.');
+      _showMessage(
+        _ui.text("{value1} uninstalled.", {'value1': addon.manifest.name}),
+      );
     } catch (_) {
-      _showMessage('TetoTV could not uninstall ${addon.manifest.name}.');
+      _showMessage(
+        _ui.text("TetoTV could not uninstall {value1}.", {
+          'value1': addon.manifest.name,
+        }),
+      );
     }
   }
 
@@ -469,90 +602,375 @@ class _MangaScreenState extends ConsumerState<MangaScreen> {
       final store = ref.read(mangaSourceCredentialStoreProvider);
       if (draft.clear) {
         await store.delete(source.id);
-        _showMessage('Credentials removed from protected storage.');
+        _showMessage(_ui.text("Credentials removed from protected storage."));
         return;
       }
       final credential = draft.credential;
       if (credential == null) return;
       await store.write(source.id, credential);
-      _showMessage('Credentials saved in protected storage.');
+      _showMessage(_ui.text("Credentials saved in protected storage."));
     } on FormatException catch (error) {
       _showMessage(error.message);
     } catch (_) {
-      _showMessage('TetoTV could not update that protected credential.');
+      _showMessage(
+        _ui.text("TetoTV could not update that protected credential."),
+      );
     }
   }
 
   Future<void> _removeSource(StoredMangaSource source) async {
     final confirmed = await _confirm(
-      title: 'Remove ${source.name}?',
-      message:
-          'This removes the source, its protected credential, saved library entries, reading progress, and its manga downloads from TetoTV.',
+      title: _ui.text("Remove {value1}?", {'value1': source.name}),
+      message: _ui.text(
+        "This removes the source, its protected credential, saved library entries, reading progress, and its manga downloads from TetoTV.",
+      ),
       action: 'Remove',
     );
     if (!confirmed) return;
     try {
       final removed = await _controller.removeSource(source.id);
-      if (removed) _showMessage('Manga source and its local data removed.');
+      if (removed) {
+        _showMessage(_ui.text("Manga source and its local data removed."));
+      }
     } catch (_) {
       _showMessage(
-        'TetoTV could not safely remove all downloaded files. The source was kept.',
+        _ui.text(
+          "TetoTV could not safely remove all downloaded files. The source was kept.",
+        ),
       );
     }
   }
 
   Future<void> _removeLibraryEntry(MangaLibraryEntry entry) async {
+    if (!await _confirm(
+      title: _ui.text('Remove from library?'),
+      message: _ui.text(
+        'Downloaded chapters and reading history will be kept.',
+      ),
+      action: 'Remove',
+    )) {
+      return;
+    }
     final extensionController = ref.read(
       mangaExtensionControllerProvider.notifier,
     );
     if (extensionController.isExtensionLibraryEntry(entry)) {
       try {
-        final title = await extensionController.openLibraryEntry(entry);
-        if (title == null) return;
-        await extensionController.toggleLibrary(title);
+        await extensionController.removeLibraryEntry(entry);
         await _controller.initialize();
-        _showMessage('Removed from your manga library.');
+        _showMessage(_ui.text("Removed from your manga library."));
       } catch (error) {
         _showMessage(
           error is StateError
               ? error.message
-              : 'TetoTV could not remove that extension title.',
+              : _ui.text("TetoTV could not remove that extension title."),
         );
       }
       return;
     }
     if (await _controller.removeLibraryEntry(entry)) {
-      _showMessage('Removed from your manga library.');
+      _showMessage(_ui.text("Removed from your manga library."));
     }
   }
 
   Future<void> _openLibraryEntry(MangaLibraryEntry entry) async {
-    final extensionController = ref.read(
-      mangaExtensionControllerProvider.notifier,
+    final binding = _bindAction(catalog: true);
+    try {
+      await binding.checkEntry(entry);
+      if (binding.extension.isExtensionLibraryEntry(entry)) {
+        final title = await binding.extension.openLibraryEntry(entry);
+        binding.check();
+        if (title != null) await _showExtensionTitle(title, action: binding);
+        return;
+      }
+      final publication = await binding.hub.openLibraryEntry(entry);
+      // Catalog opening intentionally selects the saved catalog. Bind again
+      // only after checking that the owning controllers are still current.
+      if (!mounted ||
+          !binding.hub.mounted ||
+          !binding.extension.mounted ||
+          !identical(_controller, binding.hub) ||
+          !identical(
+            ref.read(mangaExtensionControllerProvider.notifier),
+            binding.extension,
+          )) {
+        return;
+      }
+      if (publication == null) {
+        if (binding.hub.snapshot.error case final message?) {
+          _showMessage(message);
+        }
+        return;
+      }
+      await _showPublication(publication);
+    } catch (_) {
+      if (mounted) {
+        _showMessage(_ui.text('TetoTV could not reopen that extension title.'));
+      }
+    }
+  }
+
+  Future<String> _checkLibraryUpdates() async {
+    final result = await ref
+        .read(mangaExtensionControllerProvider.notifier)
+        .checkLibraryUpdates();
+    if (mounted) await _controller.initialize();
+    return _ui.text(
+      'Checked {checked} titles • {new} new chapters • {failed} unavailable • {remaining} left to check',
+      {
+        'checked': result.checked,
+        'new': result.newChapters,
+        'failed': result.failed,
+        'remaining': result.remaining,
+      },
     );
-    if (extensionController.isExtensionLibraryEntry(entry)) {
-      try {
-        final title = await extensionController.openLibraryEntry(entry);
-        if (title != null) await _showExtensionTitle(title);
-      } catch (error) {
+  }
+
+  Future<void> _trackLibraryEntry(MangaLibraryEntry entry) async {
+    final binding = _bindAction();
+    try {
+      await binding.checkEntry(entry);
+      binding.check();
+      if (!mounted) return;
+      await showMangaTrackingDialog(
+        context,
+        ref,
+        ownerKey: entry.ownerKey,
+        sourceId: entry.sourceId,
+        publicationId: entry.entryId,
+        title: entry.title,
+      );
+    } catch (_) {}
+  }
+
+  Future<void> _acknowledgeUpdates(MangaLibraryEntry entry) async {
+    final binding = _bindAction();
+    try {
+      await binding.checkEntry(entry);
+      await binding.store.acknowledgeChapterUpdates(
+        ownerKey: entry.ownerKey,
+        sourceId: entry.sourceId,
+        entryId: entry.entryId,
+      );
+      if (binding.isCurrent()) {
+        await binding.hub.initialize();
+        _showMessage(_ui.text('Chapter updates marked as seen.'));
+      }
+    } catch (_) {
+      if (binding.isCurrent()) {
         _showMessage(
-          error is StateError
-              ? error.message
-              : 'TetoTV could not reopen that extension title.',
+          _ui.text('Chapter updates could not be marked as seen. Try again.'),
         );
       }
+    }
+  }
+
+  Future<void> _migrateLibraryEntry(MangaLibraryEntry source) async {
+    final extension = ref.read(mangaExtensionControllerProvider.notifier);
+    final alternatives = ref
+        .read(mangaHubControllerProvider)
+        .library
+        .where(
+          (e) =>
+              e.ownerKey == source.ownerKey &&
+              extension.isExtensionLibraryEntry(e) &&
+              (e.sourceId != source.sourceId || e.entryId != source.entryId),
+        )
+        .toList();
+    if (alternatives.isEmpty) {
+      _showMessage(
+        _ui.text(
+          'Add this manga from your new Seanime source to the library first, then choose Change source.',
+        ),
+      );
       return;
     }
-    final publication = await _controller.openLibraryEntry(entry);
-    if (publication == null) {
-      final message = ref.read(mangaHubControllerProvider).error;
-      if (message != null) _showMessage(message);
-      return;
+    final target = await showDialog<MangaLibraryEntry>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(context.tr('Choose the new source edition')),
+        content: SizedBox(
+          width: 620,
+          height: 360,
+          child: ListView.separated(
+            itemCount: alternatives.length,
+            separatorBuilder: (_, _) => const SizedBox(height: 8),
+            itemBuilder: (context, index) => ListTile(
+              title: Text(alternatives[index].title),
+              subtitle: Text(
+                alternatives[index].metadata['providerName'] as String? ?? '',
+              ),
+              onTap: () => Navigator.pop(context, alternatives[index]),
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text(context.tr('Cancel')),
+          ),
+        ],
+      ),
+    );
+    if (target == null || !mounted) return;
+    try {
+      final title = await extension.openLibraryEntry(target);
+      if (title == null) return;
+      await extension.chapters(title);
+      final store = ref.read(mangaStoreProvider);
+      final snapshots = await store.chapterSnapshots(
+        ownerKey: source.ownerKey,
+        sourceId: target.sourceId,
+        entryId: target.entryId,
+        includeUnavailable: false,
+      );
+      final service = MangaLibraryService(store);
+      final plan = await service.previewSourceMigration(
+        source: source,
+        target: target,
+        targetChapters: snapshots,
+      );
+      if (!mounted) return;
+      final confirmed = await _confirm(
+        title: _ui.text('Copy reading history?'),
+        message: _ui.text(
+          'Copy {matched} matched chapters to {title} on {source}. {unmatched} chapters could not be matched. Check that these are the same edition and chapter numbering. Your original manga, history and downloads will stay untouched.',
+          {
+            'matched': plan.chapterMatches.length,
+            'title': target.title,
+            'source': title.providerName,
+            'unmatched': plan.unmatchedChapterIds.length,
+          },
+        ),
+        action: 'Copy history',
+      );
+      if (!confirmed || !mounted) return;
+      if (await ref.read(mangaOwnerKeyProvider.future) != source.ownerKey) {
+        return;
+      }
+      await service.confirmSourceMigration(plan, confirmed: true);
+      if (mounted) await _controller.initialize();
+      _showMessage(
+        _ui.text(
+          'Reading history copied. Your original source is still in the library.',
+        ),
+      );
+    } catch (_) {
+      _showMessage(
+        _ui.text(
+          'Source migration could not be completed. Your original library is unchanged.',
+        ),
+      );
     }
-    await _showPublication(publication);
+  }
+
+  Future<void> _continueLibraryEntry(MangaLibraryEntry entry) async {
+    final binding = _bindAction();
+    try {
+      await binding.checkEntry(entry);
+      if (!binding.extension.isExtensionLibraryEntry(entry)) {
+        return _openLibraryEntry(entry);
+      }
+      final owner = entry.ownerKey;
+      final history = await binding.store.chapterProgressForEntry(
+        ownerKey: owner,
+        sourceId: entry.sourceId,
+        entryId: entry.entryId,
+      );
+      final latest = await binding.store.progress(
+        ownerKey: owner,
+        sourceId: entry.sourceId,
+        entryId: entry.entryId,
+      );
+      final cached = await binding.store.chapterSnapshots(
+        ownerKey: owner,
+        sourceId: entry.sourceId,
+        entryId: entry.entryId,
+      );
+      binding.check();
+      // Resolve device-local data before consulting the provider or identity.
+      final jobs = await binding.store.downloadJobs(
+        status: MangaDownloadJobStatus.completed,
+      );
+      binding.check();
+      final chapterIds = <String>{
+        ...cached.map((chapter) => chapter.chapterId),
+        ...history.map((row) => row.chapterId),
+        ...jobs
+            .where(
+              (job) =>
+                  job.sourceId == entry.sourceId &&
+                  job.entryId == entry.entryId,
+            )
+            .map((job) => job.chapterId),
+      }.toList();
+      final localChoice = selectMangaContinueChapter(
+        orderedChapterIds: chapterIds,
+        history: history,
+        lastRead: latest,
+      );
+      if (localChoice != null) {
+        final local = await binding.downloads.openCompleted(
+          mangaExtensionDownloadJobId(
+            entry.sourceId,
+            entry.entryId,
+            localChoice,
+          ),
+        );
+        binding.check();
+        if (local != null) {
+          await _openBoundReader(binding, local);
+          return;
+        }
+      }
+      final title = await binding.extension.openLibraryEntry(entry);
+      binding.check();
+      if (title == null) return;
+      final chapters = await binding.extension.chapters(title);
+      binding.check();
+      final key = selectMangaContinueChapter(
+        orderedChapterIds: [
+          for (final chapter in chapters)
+            mangaExtensionChapterId(title.providerId, title.id, chapter.id),
+        ],
+        history: history,
+        lastRead: latest,
+      );
+      final selected = chapters
+          .where(
+            (chapter) =>
+                mangaExtensionChapterId(
+                  title.providerId,
+                  title.id,
+                  chapter.id,
+                ) ==
+                key,
+          )
+          .firstOrNull;
+      if (selected == null) {
+        _showMessage(_ui.text('You have read all available chapters.'));
+        return;
+      }
+      final request = await _readerForExtensionChapter(
+        title,
+        selected,
+        chapterList: chapters,
+        action: binding,
+      );
+      await _openBoundReader(binding, request);
+    } catch (_) {
+      if (binding.isCurrent()) {
+        _showMessage(
+          _ui.text(
+            'This manga could not be resumed. Open Chapters to retry, or read a saved download.',
+          ),
+        );
+      }
+    }
   }
 
   Future<void> _showPublication(MangaPublication publication) async {
+    final binding = _bindAction(catalog: true);
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -560,134 +978,214 @@ class _MangaScreenState extends ConsumerState<MangaScreen> {
       backgroundColor: Colors.transparent,
       builder: (sheetContext) => _MangaPublicationSheet(
         publication: publication,
-        source: ref.read(mangaHubControllerProvider).selectedSource,
+        source: binding.hub.snapshot.selectedSource,
         inLibrary: _isInLibrary(publication),
         onRead: () async {
+          if (!binding.isCurrent()) return;
           Navigator.of(sheetContext).pop();
-          await _readPublication(publication);
+          await _readPublication(publication, action: binding);
         },
         onLibrary: () async {
-          await _controller.toggleLibrary(publication);
+          if (!binding.isCurrent()) return;
+          await binding.hub.toggleLibrary(publication);
           if (sheetContext.mounted) Navigator.of(sheetContext).pop();
         },
         onDownload: () {
+          if (!binding.isCurrent()) return;
           Navigator.of(sheetContext).pop();
-          unawaited(_downloadPublication(publication));
+          unawaited(_downloadPublication(publication, action: binding));
         },
       ),
     );
   }
 
-  Future<void> _showExtensionTitle(MangaExtensionTitle title) async {
-    final extensionController = ref.read(
-      mangaExtensionControllerProvider.notifier,
-    );
+  Future<void> _showExtensionTitle(
+    MangaExtensionTitle title, {
+    _MangaActionBinding? action,
+  }) async {
+    final binding = action ?? _bindAction();
     try {
-      final inLibrary = await extensionController.isInLibrary(title);
+      binding.check();
+      final inLibrary = await binding.extension.isInLibrary(title);
+      binding.check();
       if (!mounted) return;
       await showModalBottomSheet<void>(
         context: context,
         isScrollControlled: true,
         useSafeArea: true,
         backgroundColor: Colors.transparent,
-        builder: (sheetContext) => _MangaExtensionTitleSheet(
+        builder: (sheetContext) => MangaChapterSheet(
           title: title,
+          expectedController: binding.extension,
           initiallyInLibrary: inLibrary,
-          loadChapters: () => extensionController.chapters(title),
-          onRead: (chapter) async {
-            Navigator.of(sheetContext).pop();
-            await _readExtensionChapter(title, chapter);
+          loadChapters: () async {
+            binding.check();
+            final chapters = await binding.extension.chapters(title);
+            binding.check();
+            return chapters;
           },
-          onDownload: (chapter) {
+          onRead: (chapter, ordered) async {
+            binding.check();
             Navigator.of(sheetContext).pop();
-            unawaited(_downloadExtensionChapter(title, chapter));
+            await _readExtensionChapter(
+              title,
+              chapter,
+              chapterList: ordered,
+              action: binding,
+            );
+          },
+          onDownload: (chapter) async {
+            binding.check();
+            final request = await binding.extension.buildDownloadRequest(
+              title,
+              chapter,
+            );
+            binding.check();
+            if (!sheetContext.mounted) return;
+            await binding.downloads.start(
+              request,
+              validateAdmission: () {
+                binding.check();
+                if (!sheetContext.mounted) {
+                  throw StateError('Manga chapter browser closed.');
+                }
+              },
+            );
+            if (sheetContext.mounted) Navigator.of(sheetContext).pop();
+            if (binding.isCurrent()) _setSection(MangaHubSection.downloads);
+          },
+          onDownloadMany: (chapters) async {
+            for (final chapter in chapters.take(10)) {
+              binding.check();
+              if (!sheetContext.mounted) return;
+              final request = await binding.extension.buildDownloadRequest(
+                title,
+                chapter,
+              );
+              binding.check();
+              if (!sheetContext.mounted) return;
+              await binding.downloads.start(
+                request,
+                validateAdmission: () {
+                  binding.check();
+                  if (!sheetContext.mounted) {
+                    throw StateError('Manga chapter browser closed.');
+                  }
+                },
+              );
+            }
+            if (sheetContext.mounted) Navigator.of(sheetContext).pop();
+            if (binding.isCurrent()) _setSection(MangaHubSection.downloads);
           },
           onLibrary: () async {
-            final saved = await extensionController.toggleLibrary(title);
-            await _controller.initialize();
+            binding.check();
+            final saved = await binding.extension.toggleLibrary(title);
+            binding.check();
+            await binding.hub.initialize();
             return saved;
           },
         ),
       );
-    } catch (error) {
-      _showMessage(
-        error is StateError
-            ? error.message
-            : 'That manga source could not open this title.',
-      );
+    } catch (_) {
+      if (binding.isCurrent()) {
+        _showMessage(_ui.text('That manga source could not open this title.'));
+      }
     }
   }
 
   Future<void> _readExtensionChapter(
     MangaExtensionTitle title,
-    MangaExtensionChapter chapter,
-  ) async {
+    MangaExtensionChapter chapter, {
+    List<MangaExtensionChapter>? chapterList,
+    _MangaActionBinding? action,
+  }) async {
+    final binding = action ?? _bindAction();
     try {
-      final request = await ref
-          .read(mangaExtensionControllerProvider.notifier)
-          .buildReaderRequest(title, chapter);
-      if (mounted) {
-        await context.push<void>(MangaReaderScreen.routePath, extra: request);
-      }
-    } catch (error) {
-      _showMessage(
-        error is StateError
-            ? error.message
-            : 'That manga chapter could not be opened.',
+      final request = await _readerForExtensionChapter(
+        title,
+        chapter,
+        chapterList: chapterList,
+        action: binding,
       );
+      await _openBoundReader(binding, request);
+    } catch (_) {
+      if (binding.isCurrent()) {
+        _showMessage(_ui.text('That manga chapter could not be opened.'));
+      }
     }
   }
 
-  Future<void> _downloadExtensionChapter(
+  Future<MangaReaderRequest> _readerForExtensionChapter(
     MangaExtensionTitle title,
-    MangaExtensionChapter chapter,
-  ) async {
-    try {
-      final reader = await ref
-          .read(mangaExtensionControllerProvider.notifier)
-          .buildReaderRequest(title, chapter);
-      final pages = <MangaReadingOrderPage>[];
-      for (final page in reader.pages) {
-        final resource = page.resource;
-        if (resource is! MangaRemotePageResource) {
-          throw StateError('This chapter did not return remote image pages.');
-        }
-        pages.add(
-          MangaReadingOrderPage(
-            uri: resource.uri,
-            headers: resource.headers,
-            pixelWidth: page.pixelWidth,
-            pixelHeight: page.pixelHeight,
-            isCover: page.isCover,
-          ),
-        );
-      }
-      final request = MangaAcquisitionRequest(
-        jobId: _mangaDownloadJobId(reader),
-        sourceId: reader.sourceId,
-        publicationId: reader.publicationId,
-        chapterId: reader.chapterId,
-        seriesTitle: reader.seriesTitle,
-        chapterTitle: reader.chapterTitle,
-        chapterNumber: reader.chapterNumber,
-        initialPageIndex: reader.initialPageIndex,
-        acquisition: MangaReadingOrderAcquisition(pages),
-      );
-      await ref
-          .read(mangaAcquisitionControllerProvider.notifier)
-          .start(request);
-      if (!mounted) return;
-      _setSection(MangaHubSection.downloads);
-      _showMessage('Manga chapter download started.');
-    } catch (error) {
-      _showMessage(
-        error is StateError
-            ? error.message
-            : error is MangaAcquisitionException
-            ? error.message
-            : 'TetoTV could not start that manga download.',
-      );
+    MangaExtensionChapter chapter, {
+    List<MangaExtensionChapter>? chapterList,
+    _MangaActionBinding? action,
+  }) async {
+    final binding = action ?? _bindAction();
+    binding.check();
+    final owner = await binding.hub.ownerKey;
+    binding.check();
+    final source = mangaExtensionSourceId(title.providerId);
+    final entry = mangaExtensionEntryId(title.providerId, title.id);
+    final chapterKey = mangaExtensionChapterId(
+      title.providerId,
+      title.id,
+      chapter.id,
+    );
+    final local = await binding.downloads.openCompleted(
+      mangaExtensionDownloadJobId(source, entry, chapterKey),
+    );
+    binding.check();
+    final extension = binding.extension;
+    List<MangaExtensionChapter>? ordered = chapterList;
+    // A downloaded chapter remains readable when its source is unavailable.
+    if (ordered == null && local == null) {
+      ordered = await extension.chapters(title);
     }
+    final resolved =
+        local ??
+        await extension.buildReaderRequest(
+          title,
+          chapter,
+          chapterList: ordered,
+        );
+    binding.check();
+    final index = ordered?.indexWhere((item) => item.id == chapter.id) ?? -1;
+    final previous = index > 0 ? ordered![index - 1] : null;
+    final next = index >= 0 && index + 1 < ordered!.length
+        ? ordered[index + 1]
+        : null;
+    return binding.hub.applySavedProgress(
+      MangaReaderRequest(
+        ownerKey: owner,
+        sourceId: resolved.sourceId,
+        publicationId: resolved.publicationId,
+        chapterId: resolved.chapterId,
+        seriesTitle: resolved.seriesTitle,
+        coverUri:
+            resolved.coverUri ??
+            (title.imageHeaders.isEmpty ? title.image : null),
+        chapterTitle: resolved.chapterTitle,
+        chapterNumber: resolved.chapterNumber,
+        pages: resolved.pages,
+        resolvePreviousChapter: previous == null
+            ? null
+            : () => _readerForExtensionChapter(
+                title,
+                previous,
+                chapterList: ordered,
+                action: binding,
+              ),
+        resolveNextChapter: next == null
+            ? null
+            : () => _readerForExtensionChapter(
+                title,
+                next,
+                chapterList: ordered,
+                action: binding,
+              ),
+      ),
+    );
   }
 
   bool _isInLibrary(MangaPublication publication) {
@@ -700,35 +1198,36 @@ class _MangaScreenState extends ConsumerState<MangaScreen> {
     );
   }
 
-  Future<void> _readPublication(MangaPublication publication) async {
+  Future<void> _readPublication(
+    MangaPublication publication, {
+    _MangaActionBinding? action,
+  }) async {
+    final binding = action ?? _bindAction(catalog: true);
     try {
-      final request = await _controller.buildReaderRequest(publication);
+      binding.check();
+      final request = await binding.hub.buildReaderRequest(publication);
+      binding.check();
       final jobId = _mangaDownloadJobId(request);
       final existing = ref.read(mangaAcquisitionControllerProvider).job(jobId);
       if (existing?.status == MangaDownloadJobStatus.completed) {
-        final local = await ref
-            .read(mangaAcquisitionControllerProvider.notifier)
-            .openCompleted(jobId);
+        final local = await binding.downloads.openCompleted(jobId);
         if (local != null && mounted) {
-          final resumed = await _controller.applySavedProgress(local);
-          if (mounted) {
-            await context.push<void>(
-              MangaReaderScreen.routePath,
-              extra: resumed,
-            );
-          }
+          await _openBoundReader(binding, local);
           return;
         }
       }
       if (!mounted) return;
-      await context.push<void>(MangaReaderScreen.routePath, extra: request);
+      await _openBoundReader(binding, request);
     } on MangaReaderBuildException catch (error) {
       if (error.failure == MangaReaderBuildFailure.noImagePages) {
         try {
-          final request = await _buildDownloadRequest(publication);
-          final operation = await ref
-              .read(mangaAcquisitionControllerProvider.notifier)
-              .start(request);
+          final request = await _buildDownloadRequest(publication, binding);
+          binding.check();
+          final operation = await binding.downloads.start(
+            request,
+            validateAdmission: binding.check,
+          );
+          binding.check();
           if (!mounted) return;
           final local = await showDialog<MangaReaderRequest>(
             context: context,
@@ -739,13 +1238,7 @@ class _MangaScreenState extends ConsumerState<MangaScreen> {
             ),
           );
           if (local != null && mounted) {
-            final resumed = await _controller.applySavedProgress(local);
-            if (mounted) {
-              await context.push<void>(
-                MangaReaderScreen.routePath,
-                extra: resumed,
-              );
-            }
+            await _openBoundReader(binding, local);
           }
           return;
         } on MangaCbzAcquisitionException catch (acquisitionError) {
@@ -760,19 +1253,22 @@ class _MangaScreenState extends ConsumerState<MangaScreen> {
     } on MangaAcquisitionException catch (error) {
       _showMessage(error.message);
     } catch (_) {
-      _showMessage('TetoTV could not open that manga.');
+      _showMessage(_ui.text("TetoTV could not open that manga."));
     }
   }
 
-  Future<void> _downloadPublication(MangaPublication publication) async {
+  Future<void> _downloadPublication(
+    MangaPublication publication, {
+    _MangaActionBinding? action,
+  }) async {
+    final binding = action ?? _bindAction(catalog: true);
     try {
-      final request = await _buildDownloadRequest(publication);
-      await ref
-          .read(mangaAcquisitionControllerProvider.notifier)
-          .start(request);
-      if (!mounted) return;
+      final request = await _buildDownloadRequest(publication, binding);
+      binding.check();
+      await binding.downloads.start(request, validateAdmission: binding.check);
+      if (!binding.isCurrent()) return;
       _setSection(MangaHubSection.downloads);
-      _showMessage('Manga download started.');
+      _showMessage(_ui.text("Manga download started."));
     } on MangaReaderBuildException catch (error) {
       _showMessage(error.message);
     } on MangaCbzAcquisitionException catch (error) {
@@ -780,22 +1276,18 @@ class _MangaScreenState extends ConsumerState<MangaScreen> {
     } on MangaAcquisitionException catch (error) {
       _showMessage(error.message);
     } catch (_) {
-      _showMessage('TetoTV could not start that manga download.');
+      _showMessage(_ui.text("TetoTV could not start that manga download."));
     }
   }
 
   Future<MangaAcquisitionRequest> _buildDownloadRequest(
     MangaPublication publication,
+    _MangaActionBinding binding,
   ) async {
+    binding.check();
     try {
-      final reader = await _controller.buildReaderRequest(publication);
-      final source = ref.read(mangaHubControllerProvider).selectedSource;
-      if (source == null) {
-        throw const MangaReaderBuildException(
-          MangaReaderBuildFailure.noSourceSelected,
-          'Choose a manga source first.',
-        );
-      }
+      final reader = await binding.hub.buildReaderRequest(publication);
+      binding.check();
       final pages = <MangaReadingOrderPage>[];
       for (final page in reader.pages) {
         final resource = page.resource;
@@ -808,6 +1300,7 @@ class _MangaScreenState extends ConsumerState<MangaScreen> {
         pages.add(
           MangaReadingOrderPage(
             uri: resource.uri,
+            headers: resource.headers,
             pixelWidth: page.pixelWidth,
             pixelHeight: page.pixelHeight,
             isCover: page.isCover,
@@ -823,12 +1316,13 @@ class _MangaScreenState extends ConsumerState<MangaScreen> {
         chapterTitle: reader.chapterTitle,
         chapterNumber: reader.chapterNumber,
         initialPageIndex: reader.initialPageIndex,
-        credentialOrigin: source.uri,
         acquisition: MangaReadingOrderAcquisition(pages),
       );
     } on MangaReaderBuildException catch (error) {
       if (error.failure != MangaReaderBuildFailure.noImagePages) rethrow;
-      final selection = await _controller.selectCbzAcquisition(publication);
+      binding.check();
+      final selection = await binding.hub.selectCbzAcquisition(publication);
+      binding.check();
       final chapterTitle = publication.subtitle?.trim();
       final chapterId = mangaPublicationStableId(publication);
       return MangaAcquisitionRequest.fromCbzSelection(
@@ -848,24 +1342,19 @@ class _MangaScreenState extends ConsumerState<MangaScreen> {
   }
 
   Future<void> _openDownload(MangaDownloadJob job) async {
+    final binding = _bindAction();
     try {
-      final request = await ref
-          .read(mangaAcquisitionControllerProvider.notifier)
-          .openCompleted(job.id);
+      final request = await binding.downloads.openCompleted(job.id);
+      binding.check();
       if (request == null) {
-        _showMessage('That manga download is not ready yet.');
+        _showMessage(_ui.text('That manga download is not ready yet.'));
         return;
       }
-      if (mounted) {
-        final resumed = await _controller.applySavedProgress(request);
-        if (mounted) {
-          await context.push<void>(MangaReaderScreen.routePath, extra: resumed);
-        }
-      }
-    } on MangaAcquisitionException catch (error) {
-      _showMessage(error.message);
+      await _openBoundReader(binding, request);
     } catch (_) {
-      _showMessage('TetoTV could not open that manga download.');
+      if (binding.isCurrent()) {
+        _showMessage(_ui.text('TetoTV could not open that manga download.'));
+      }
     }
   }
 
@@ -874,30 +1363,44 @@ class _MangaScreenState extends ConsumerState<MangaScreen> {
       await ref
           .read(mangaAcquisitionControllerProvider.notifier)
           .cancel(job.id);
-      _showMessage('Manga download cancelled.');
+      _showMessage(_ui.text("Manga download cancelled."));
     } on MangaAcquisitionException catch (error) {
       _showMessage(error.message);
     } catch (_) {
-      _showMessage('TetoTV could not cancel that manga download.');
+      _showMessage(_ui.text("TetoTV could not cancel that manga download."));
     }
   }
 
   Future<void> _retryDownload(MangaDownloadJob job) async {
+    final binding = _bindAction();
     try {
-      await ref
-          .read(mangaAcquisitionControllerProvider.notifier)
-          .retryInSession(job.id);
-      _showMessage('Manga download restarted.');
+      await binding.downloads.resume(job.id, validateAdmission: binding.check);
+      if (binding.isCurrent()) {
+        _showMessage(_ui.text("Manga download restarted."));
+      }
     } on MangaAcquisitionException catch (error) {
-      _showMessage(error.message);
+      if (binding.isCurrent()) _showMessage(error.message);
+    } catch (_) {
+      if (binding.isCurrent()) {
+        _showMessage(_ui.text('TetoTV could not start that manga download.'));
+      }
+    }
+  }
+
+  Future<void> _pauseDownload(MangaDownloadJob job) async {
+    try {
+      await ref.read(mangaAcquisitionControllerProvider.notifier).pause(job.id);
+    } catch (_) {
+      _showMessage(_ui.text('This download could not be paused. Try again.'));
     }
   }
 
   Future<void> _deleteDownload(MangaDownloadJob job) async {
     final confirmed = await _confirm(
-      title: 'Delete ${job.seriesTitle}?',
-      message:
-          'This removes the downloaded pages from this device. Your library entry and reading progress are kept.',
+      title: _ui.text("Delete {value1}?", {'value1': job.seriesTitle}),
+      message: _ui.text(
+        "This removes the downloaded pages from this device. Your library entry and reading progress are kept.",
+      ),
       action: 'Delete',
     );
     if (!confirmed) return;
@@ -905,11 +1408,11 @@ class _MangaScreenState extends ConsumerState<MangaScreen> {
       await ref
           .read(mangaAcquisitionControllerProvider.notifier)
           .delete(job.id);
-      _showMessage('Downloaded manga removed.');
+      _showMessage(_ui.text("Downloaded manga removed."));
     } on MangaAcquisitionException catch (error) {
       _showMessage(error.message);
     } catch (_) {
-      _showMessage('TetoTV could not remove that manga download.');
+      _showMessage(_ui.text("TetoTV could not remove that manga download."));
     }
   }
 
@@ -926,11 +1429,11 @@ class _MangaScreenState extends ConsumerState<MangaScreen> {
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context, false),
-              child: const Text('Cancel'),
+              child: Text(_ui.text("Cancel")),
             ),
             FilledButton(
               onPressed: () => Navigator.pop(context, true),
-              child: Text(action),
+              child: Text(_ui.text(action)),
             ),
           ],
         ),
@@ -996,20 +1499,23 @@ class _MangaAcquisitionDialogState extends State<_MangaAcquisitionDialog> {
   Widget build(BuildContext context) {
     final fraction = _progress.fraction;
     return AlertDialog(
-      title: Text('Preparing ${widget.title}'),
+      title: Text(context.tr("Preparing {value1}", {'value1': widget.title})),
       content: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 460),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text(_error ?? _progressDescription(_progress)),
+            Text(context.tr(_error ?? _progressDescription(_progress))),
             const SizedBox(height: 16),
             LinearProgressIndicator(value: fraction),
             if (_progress.pageCount case final total?) ...[
               const SizedBox(height: 8),
               Text(
-                '${_progress.completedPages.clamp(0, total)} of $total pages',
+                context.tr("{value1} of {value2} pages", {
+                  'value1': _progress.completedPages.clamp(0, total),
+                  'value2': total,
+                }),
                 textAlign: TextAlign.right,
                 style: Theme.of(context).textTheme.bodySmall,
               ),
@@ -1021,11 +1527,17 @@ class _MangaAcquisitionDialogState extends State<_MangaAcquisitionDialog> {
         if (_error == null)
           TextButton(
             onPressed: _cancelling ? null : _cancel,
-            child: Text(_cancelling ? 'Cancelling…' : 'Cancel'),
+            child: Text(
+              _cancelling ? context.tr("Cancelling…") : context.tr("Cancel"),
+            ),
           ),
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
-          child: Text(_error == null ? 'Keep downloading' : 'Close'),
+          child: Text(
+            _error == null
+                ? context.tr("Keep downloading")
+                : context.tr("Close"),
+          ),
         ),
       ],
     );
@@ -1057,21 +1569,6 @@ class _MangaHeader extends StatelessWidget {
   Widget build(BuildContext context) => LayoutBuilder(
     builder: (context, constraints) {
       final compact = constraints.maxWidth < 720;
-      final previewBadge = Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-        decoration: BoxDecoration(
-          color: context.appPalette.accent.withValues(alpha: .18),
-          borderRadius: BorderRadius.circular(7),
-          border: Border.all(
-            color: context.appPalette.accent.withValues(alpha: .52),
-          ),
-        ),
-        child: const Text(
-          'DEVELOPER PREVIEW',
-          maxLines: 1,
-          style: TextStyle(fontSize: 9, fontWeight: FontWeight.w900),
-        ),
-      );
       final title = Row(
         children: [
           Icon(
@@ -1081,28 +1578,18 @@ class _MangaHeader extends StatelessWidget {
           ),
           const SizedBox(width: 10),
           Text(
-            'Manga',
+            context.tr("Manga"),
             style:
                 (compact
                         ? Theme.of(context).textTheme.headlineSmall
                         : Theme.of(context).textTheme.headlineMedium)
                     ?.copyWith(fontWeight: FontWeight.w900),
           ),
-          const SizedBox(width: 10),
-          if (compact)
-            Flexible(
-              child: FittedBox(
-                fit: BoxFit.scaleDown,
-                alignment: Alignment.centerLeft,
-                child: previewBadge,
-              ),
-            ),
-          if (!compact) previewBadge,
         ],
       );
       final refresh = _MangaIconAction(
         icon: Icons.refresh_rounded,
-        tooltip: 'Refresh manga',
+        tooltip: context.tr("Refresh manga"),
         onPressed: onRefresh,
       );
       if (!searchVisible) {
@@ -1118,9 +1605,9 @@ class _MangaHeader extends StatelessWidget {
         child: TvTextInput(
           controller: queryController,
           focusNode: searchFocus,
-          labelText: 'Search manga',
-          hintText: 'Title, author, or tag',
-          keyboardTitle: 'Search manga',
+          labelText: context.tr("Search manga"),
+          hintText: context.tr("Title, author, or tag"),
+          keyboardTitle: context.tr("Search manga"),
           compactHeader: true,
           variant: TvTextInputVariant.headerSearch,
           onEditingChanged: onSearchEditingChanged,
@@ -1160,12 +1647,14 @@ class _MangaSectionBar extends StatelessWidget {
     required this.focusNodes,
     required this.onSelected,
     required this.onExitLeft,
+    required this.onExitDown,
   });
 
   final MangaHubSection selected;
   final Map<MangaHubSection, FocusNode> focusNodes;
   final ValueChanged<MangaHubSection> onSelected;
   final VoidCallback onExitLeft;
+  final VoidCallback onExitDown;
 
   @override
   Widget build(BuildContext context) => SingleChildScrollView(
@@ -1179,14 +1668,18 @@ class _MangaSectionBar extends StatelessWidget {
             selected: section == selected,
             focusNode: focusNodes[section]!,
             onPressed: () => onSelected(section),
+            onExitDown: onExitDown,
             onExitLeft: section == MangaHubSection.library
                 ? onExitLeft
-                : () => focusNodes[MangaHubSection.values[section.index - 1]]!
-                      .requestFocus(),
+                : () => requestTvFocusAndReveal(
+                    focusNodes[MangaHubSection.values[section.index - 1]]!,
+                  ),
             onExitRight: section == MangaHubSection.values.last
-                ? null
-                : () => focusNodes[MangaHubSection.values[section.index + 1]]!
-                      .requestFocus(),
+                ? () {}
+                : () => requestTvFocusAndReveal(
+                    focusNodes[MangaHubSection.values[section.index + 1]]!,
+                    towardEnd: true,
+                  ),
           ),
           if (section != MangaHubSection.values.last) const SizedBox(width: 8),
         ],
@@ -1203,6 +1696,7 @@ class _MangaSectionButton extends StatelessWidget {
     required this.onPressed,
     required this.onExitLeft,
     required this.onExitRight,
+    required this.onExitDown,
   });
 
   final MangaHubSection section;
@@ -1211,27 +1705,21 @@ class _MangaSectionButton extends StatelessWidget {
   final VoidCallback onPressed;
   final VoidCallback onExitLeft;
   final VoidCallback? onExitRight;
+  final VoidCallback onExitDown;
 
   @override
   Widget build(BuildContext context) => TvFocusable(
     key: ValueKey('manga-section-${section.name}'),
     focusNode: focusNode,
     onPressed: onPressed,
-    onKeyEvent: (_, event) {
-      if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
-        return KeyEventResult.ignored;
-      }
-      if (event.logicalKey == LogicalKeyboardKey.arrowLeft) {
-        onExitLeft();
-        return KeyEventResult.handled;
-      }
-      if (event.logicalKey == LogicalKeyboardKey.arrowRight &&
-          onExitRight != null) {
-        onExitRight!();
-        return KeyEventResult.handled;
-      }
-      return KeyEventResult.ignored;
-    },
+    onKeyEvent: (_, event) => handleTvDirectionalFocusEvent(
+      event,
+      TvDirectionalFocusCallbacks(
+        left: onExitLeft,
+        right: onExitRight,
+        down: onExitDown,
+      ),
+    ),
     borderRadius: BorderRadius.circular(10),
     focusScale: 1.02,
     child: AnimatedContainer(
@@ -1255,7 +1743,7 @@ class _MangaSectionButton extends StatelessWidget {
           Icon(section.icon, size: 19),
           const SizedBox(width: 7),
           Text(
-            section.label,
+            context.tr(section.label),
             style: const TextStyle(fontWeight: FontWeight.w800),
           ),
         ],
@@ -1331,10 +1819,15 @@ class _MangaBrowseView extends StatelessWidget {
               hasScrollBody: false,
               child: _MangaEmptyState(
                 icon: Icons.search_off_rounded,
-                title: 'No extension results',
+                title: context.tr("No extension results"),
                 message: extensions.failures.isEmpty
-                    ? 'Try another title or choose Search all sources.'
-                    : '${extensions.failures.length} source(s) could not complete this search.',
+                    ? context.tr(
+                        "Try another title or choose Search all sources.",
+                      )
+                    : context.tr(
+                        "{value1} source(s) could not complete this search.",
+                        {'value1': extensions.failures.length},
+                      ),
               ),
             )
           else
@@ -1365,14 +1858,18 @@ class _MangaBrowseView extends StatelessWidget {
         padding: const EdgeInsets.fromLTRB(3, 3, 3, 24),
         children: [
           Text(
-            'Manga extensions',
+            context.tr("Manga extensions"),
             style: Theme.of(context).textTheme.titleLarge,
           ),
           const SizedBox(height: 6),
           Text(
             enabledExtensions.isEmpty
-                ? 'No manga extensions are enabled. TetoTV bundles and recommends no sources.'
-                : 'Choose one source or Search all, then enter a title in the search bar above.',
+                ? context.tr(
+                    "No manga extensions are enabled. TetoTV bundles and recommends no sources.",
+                  )
+                : context.tr(
+                    "Choose one source or Search all, then enter a title in the search bar above.",
+                  ),
             style: Theme.of(context).textTheme.bodyMedium,
           ),
           const SizedBox(height: 14),
@@ -1384,7 +1881,7 @@ class _MangaBrowseView extends StatelessWidget {
                 _MangaActionButton(
                   key: const ValueKey('manga-search-all-extensions'),
                   icon: Icons.manage_search_rounded,
-                  label: 'Search all sources',
+                  label: context.tr("Search all sources"),
                   focusNode: firstFocusNode,
                   prominent: extensions.selectedProviderId == null,
                   onPressed: () => onSelectExtensionProvider(null),
@@ -1400,7 +1897,7 @@ class _MangaBrowseView extends StatelessWidget {
               _MangaActionButton(
                 key: const ValueKey('manga-manage-extensions'),
                 icon: Icons.extension_rounded,
-                label: 'Manage extensions',
+                label: context.tr("Manage extensions"),
                 focusNode: enabledExtensions.isEmpty && catalogs.isEmpty
                     ? firstFocusNode
                     : null,
@@ -1410,12 +1907,12 @@ class _MangaBrowseView extends StatelessWidget {
           ),
           const SizedBox(height: 24),
           Text(
-            'Choose a catalog',
+            context.tr("Choose a catalog"),
             style: Theme.of(context).textTheme.titleLarge,
           ),
           const SizedBox(height: 6),
           Text(
-            'Only sources you add are shown here.',
+            context.tr("Only sources you add are shown here."),
             style: Theme.of(context).textTheme.bodyMedium,
           ),
           const SizedBox(height: 14),
@@ -1432,7 +1929,7 @@ class _MangaBrowseView extends StatelessWidget {
                 ),
               _MangaActionButton(
                 icon: Icons.add_link_rounded,
-                label: 'Add source',
+                label: context.tr("Add source"),
                 onPressed: onAddSource,
               ),
             ],
@@ -1461,7 +1958,7 @@ class _MangaBrowseView extends StatelessWidget {
                     if (state.breadcrumbs.isNotEmpty) ...[
                       _MangaIconAction(
                         icon: Icons.arrow_back_rounded,
-                        tooltip: 'Previous catalog',
+                        tooltip: context.tr("Previous catalog"),
                         onPressed: onBack,
                       ),
                       const SizedBox(width: 10),
@@ -1533,11 +2030,13 @@ class _MangaBrowseView extends StatelessWidget {
                   ? Icons.auto_stories_outlined
                   : Icons.search_off_rounded,
               title: state.query.isEmpty
-                  ? 'No manga on this page'
-                  : 'No matches',
+                  ? context.tr("No manga on this page")
+                  : context.tr("No matches"),
               message: state.query.isEmpty
-                  ? 'Open one of the catalog folders above or refresh this source.'
-                  : 'Try a different title, author, or tag.',
+                  ? context.tr(
+                      "Open one of the catalog folders above or refresh this source.",
+                    )
+                  : context.tr("Try a different title, author, or tag."),
             ),
           )
         else
@@ -1584,7 +2083,7 @@ class _MangaExtensionSearchHeader extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Text(
-          'Results for “${state.query}”',
+          context.tr("Results for “{value1}”", {'value1': state.query}),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           style: Theme.of(context).textTheme.titleLarge,
@@ -1592,8 +2091,14 @@ class _MangaExtensionSearchHeader extends StatelessWidget {
         const SizedBox(height: 5),
         Text(
           state.searching
-              ? '${state.results.length} result(s) so far • searching enabled sources…'
-              : '${state.results.length} result(s) from installed manga extensions',
+              ? context.tr(
+                  "{value1} result(s) so far • searching enabled sources…",
+                  {'value1': state.results.length},
+                )
+              : context.tr(
+                  "{value1} result(s) from installed manga extensions",
+                  {'value1': state.results.length},
+                ),
           style: Theme.of(context).textTheme.bodyMedium,
         ),
         const SizedBox(height: 11),
@@ -1604,7 +2109,7 @@ class _MangaExtensionSearchHeader extends StatelessWidget {
             children: [
               _MangaActionButton(
                 icon: Icons.manage_search_rounded,
-                label: 'Search all',
+                label: context.tr("Search all"),
                 prominent: state.selectedProviderId == null,
                 onPressed: () {
                   onSelectProvider(null);
@@ -1626,7 +2131,7 @@ class _MangaExtensionSearchHeader extends StatelessWidget {
               const SizedBox(width: 8),
               _MangaActionButton(
                 icon: Icons.settings_rounded,
-                label: 'Manage extensions',
+                label: context.tr("Manage extensions"),
                 onPressed: onManageExtensions,
               ),
             ],
@@ -1701,61 +2206,6 @@ class _MangaExtensionTitleCard extends StatelessWidget {
   );
 }
 
-class _MangaLibraryView extends StatelessWidget {
-  const _MangaLibraryView({
-    required this.state,
-    required this.firstFocusNode,
-    required this.onBrowse,
-    required this.onOpen,
-    required this.onRemove,
-    super.key,
-  });
-
-  final MangaHubState state;
-  final FocusNode firstFocusNode;
-  final VoidCallback onBrowse;
-  final ValueChanged<MangaLibraryEntry> onOpen;
-  final ValueChanged<MangaLibraryEntry> onRemove;
-
-  @override
-  Widget build(BuildContext context) {
-    if (state.library.isEmpty) {
-      return _MangaEmptyState(
-        icon: Icons.bookmark_add_outlined,
-        title: 'Your manga library is empty',
-        message:
-            'Browse a source and save titles here. Library and reading progress stay on this device and profile.',
-        actionLabel: 'Browse manga',
-        onAction: onBrowse,
-        focusNode: firstFocusNode,
-      );
-    }
-    return ListView.separated(
-      key: const ValueKey('manga-library-list'),
-      padding: const EdgeInsets.fromLTRB(3, 3, 3, 30),
-      itemCount: state.library.length,
-      separatorBuilder: (_, _) => const SizedBox(height: 10),
-      itemBuilder: (context, index) {
-        final entry = state.library[index];
-        StoredMangaSource? source;
-        for (final candidate in state.sources) {
-          if (candidate.id == entry.sourceId) {
-            source = candidate;
-            break;
-          }
-        }
-        return _MangaLibraryCard(
-          entry: entry,
-          source: source,
-          focusNode: index == 0 ? firstFocusNode : null,
-          onOpen: () => onOpen(entry),
-          onRemove: () => onRemove(entry),
-        );
-      },
-    );
-  }
-}
-
 class _MangaDownloadsView extends StatelessWidget {
   const _MangaDownloadsView({
     required this.state,
@@ -1763,6 +2213,7 @@ class _MangaDownloadsView extends StatelessWidget {
     required this.onBrowse,
     required this.onOpen,
     required this.onCancel,
+    required this.onPause,
     required this.onRetry,
     required this.onDelete,
     super.key,
@@ -1773,6 +2224,7 @@ class _MangaDownloadsView extends StatelessWidget {
   final VoidCallback onBrowse;
   final ValueChanged<MangaDownloadJob> onOpen;
   final ValueChanged<MangaDownloadJob> onCancel;
+  final ValueChanged<MangaDownloadJob> onPause;
   final ValueChanged<MangaDownloadJob> onRetry;
   final ValueChanged<MangaDownloadJob> onDelete;
 
@@ -1785,10 +2237,11 @@ class _MangaDownloadsView extends StatelessWidget {
     if (jobs.isEmpty) {
       return _MangaEmptyState(
         icon: Icons.download_for_offline_outlined,
-        title: 'No downloaded manga',
-        message:
-            'Download a title from one of your sources to read it without a connection.',
-        actionLabel: 'Browse manga',
+        title: context.tr("No downloaded manga"),
+        message: context.tr(
+          "Download a title from one of your sources to read it without a connection.",
+        ),
+        actionLabel: context.tr("Browse manga"),
         onAction: onBrowse,
         focusNode: firstFocusNode,
       );
@@ -1804,6 +2257,7 @@ class _MangaDownloadsView extends StatelessWidget {
         focusNode: index == 0 ? firstFocusNode : null,
         onOpen: () => onOpen(jobs[index]),
         onCancel: () => onCancel(jobs[index]),
+        onPause: () => onPause(jobs[index]),
         onRetry: () => onRetry(jobs[index]),
         onDelete: () => onDelete(jobs[index]),
       ),
@@ -1811,12 +2265,20 @@ class _MangaDownloadsView extends StatelessWidget {
   }
 }
 
+class _MangaSourcesEntry {
+  VoidCallback? focusFirst;
+}
+
 class _MangaSourcesView extends StatefulWidget {
   const _MangaSourcesView({
+    required this.showAniyomiExperiments,
     required this.sources,
     required this.marketplace,
     required this.selectedSourceId,
     required this.firstFocusNode,
+    required this.entry,
+    required this.onExitUp,
+    required this.onExitLeft,
     required this.onAddRepository,
     required this.onRefreshRepositories,
     required this.onToggleRepository,
@@ -1825,7 +2287,6 @@ class _MangaSourcesView extends StatefulWidget {
     required this.onToggleExtension,
     required this.onUninstallExtension,
     required this.onBrowseExtensions,
-    required this.onAddCatalog,
     required this.onOpen,
     required this.onToggle,
     required this.onCredentials,
@@ -1834,10 +2295,14 @@ class _MangaSourcesView extends StatefulWidget {
     super.key,
   });
 
+  final bool showAniyomiExperiments;
   final List<StoredMangaSource> sources;
   final MarketplaceState marketplace;
   final String? selectedSourceId;
   final FocusNode firstFocusNode;
+  final _MangaSourcesEntry entry;
+  final VoidCallback onExitUp;
+  final VoidCallback onExitLeft;
   final VoidCallback onAddRepository;
   final VoidCallback onRefreshRepositories;
   final ValueChanged<AddonRepository> onToggleRepository;
@@ -1846,7 +2311,6 @@ class _MangaSourcesView extends StatefulWidget {
   final ValueChanged<InstalledStreamingAddon> onToggleExtension;
   final ValueChanged<InstalledStreamingAddon> onUninstallExtension;
   final VoidCallback onBrowseExtensions;
-  final VoidCallback onAddCatalog;
   final ValueChanged<StoredMangaSource> onOpen;
   final ValueChanged<StoredMangaSource> onToggle;
   final ValueChanged<StoredMangaSource> onCredentials;
@@ -1859,11 +2323,132 @@ class _MangaSourcesView extends StatefulWidget {
 
 class _MangaSourcesViewState extends State<_MangaSourcesView> {
   final _filter = TextEditingController();
+  final _scroll = ScrollController();
+  final _focusNodes = <String, FocusNode>{};
+  List<List<FocusNode>> _navigationRows = const [];
+  bool _filterEditing = false;
+  bool _revealingTarget = false;
+  int _focusGeneration = 0;
   String? _language;
+  late final VoidCallback _entryCallback;
+
+  @override
+  void initState() {
+    super.initState();
+    _entryCallback = () {
+      _focusGeneration++;
+      _revealingTarget = false;
+      // Returning from the rail can happen while the first sliver is unmounted.
+      // Restore that viewport before asking its entry control for focus.
+      if (_scroll.hasClients) {
+        _scroll.jumpTo(_scroll.position.minScrollExtent);
+      }
+      requestTvFocusAndReveal(widget.firstFocusNode);
+    };
+    widget.entry.focusFirst = _entryCallback;
+  }
+
+  // Identity stays internal. Diagnostics see only a static control category,
+  // never repository URLs, provider IDs, titles or text entered into the filter.
+  FocusNode _node(String identity, [String? category]) =>
+      _focusNodes.putIfAbsent(
+        identity,
+        () => FocusNode(debugLabel: 'manga.sources.${category ?? identity}'),
+      );
+
+  KeyEventResult _handleNavigation(FocusNode _, KeyEvent event) {
+    final key = event.logicalKey;
+    final left = key == LogicalKeyboardKey.arrowLeft;
+    final right = key == LogicalKeyboardKey.arrowRight;
+    final up = key == LogicalKeyboardKey.arrowUp;
+    final down = key == LogicalKeyboardKey.arrowDown;
+    if (!left && !right && !up && !down) return KeyEventResult.ignored;
+    if (_filterEditing) return KeyEventResult.ignored;
+    final current = FocusManager.instance.primaryFocus;
+    for (var rowIndex = 0; rowIndex < _navigationRows.length; rowIndex++) {
+      final row = _navigationRows[rowIndex];
+      final column = row.indexWhere((node) => node == current || node.hasFocus);
+      if (column < 0) continue;
+      if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
+        return KeyEventResult.handled;
+      }
+      if (_revealingTarget) return KeyEventResult.handled;
+      if (left || right) {
+        final next = column + (left ? -1 : 1);
+        if (next >= 0 && next < row.length) {
+          unawaited(_focusAndReveal(row[next], towardEnd: right));
+        } else if (left) {
+          widget.onExitLeft();
+        }
+      } else {
+        final next = rowIndex + (up ? -1 : 1);
+        if (next < 0) {
+          widget.onExitUp();
+        } else if (next < _navigationRows.length) {
+          // Every semantic row is entered at its primary action. Left/right
+          // traverses the rest of that row; geometry never skips a short card.
+          unawaited(
+            _focusAndReveal(_navigationRows[next].first, towardEnd: down),
+          );
+        }
+      }
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
+  Future<void> _focusAndReveal(
+    FocusNode target, {
+    required bool towardEnd,
+  }) async {
+    final generation = ++_focusGeneration;
+    final origin = FocusManager.instance.primaryFocus;
+    _revealingTarget = true;
+    try {
+      // A next lazy sliver may not be mounted yet. Reveal it in bounded steps
+      // instead of silently jumping over it to another mounted control.
+      for (var attempt = 0; attempt < 12; attempt++) {
+        if (!mounted || generation != _focusGeneration) return;
+        if (FocusManager.instance.primaryFocus != origin &&
+            FocusManager.instance.primaryFocus != target) {
+          return;
+        }
+        if (target.context?.mounted == true && target.canRequestFocus) {
+          requestTvFocusAndReveal(target, towardEnd: towardEnd);
+          return;
+        }
+        if (!_scroll.hasClients || !_scroll.position.hasContentDimensions) {
+          return;
+        }
+        final position = _scroll.position;
+        final offset =
+            (position.pixels +
+                    (towardEnd ? 1 : -1) * position.viewportDimension * .65)
+                .clamp(position.minScrollExtent, position.maxScrollExtent);
+        if ((offset - position.pixels).abs() < .5) return;
+        await position.animateTo(
+          offset,
+          duration: const Duration(milliseconds: 110),
+          curve: Curves.easeOutCubic,
+        );
+        await WidgetsBinding.instance.endOfFrame;
+      }
+    } finally {
+      if (generation == _focusGeneration) _revealingTarget = false;
+    }
+  }
 
   @override
   void dispose() {
+    _focusGeneration++;
+    if (identical(widget.entry.focusFirst, _entryCallback)) {
+      widget.entry.focusFirst = null;
+    }
     _filter.dispose();
+    _scroll.dispose();
+    for (final node in _focusNodes.values) {
+      node.dispose();
+    }
     super.dispose();
   }
 
@@ -1901,256 +2486,372 @@ class _MangaSourcesViewState extends State<_MangaSourcesView> {
       sort: MarketplaceCatalogSort.language,
     );
 
-    return CustomScrollView(
-      key: const ValueKey('manga-sources-list'),
-      slivers: [
-        SliverPadding(
-          padding: const EdgeInsets.fromLTRB(3, 3, 3, 0),
-          sliver: SliverList(
-            delegate: SliverChildListDelegate([
-              _MangaPolicyBanner(
-                onAddRepository: widget.onAddRepository,
-                onBrowse: widget.onBrowseExtensions,
-                focusNode: widget.firstFocusNode,
-              ),
-              const SizedBox(height: 18),
-              _MangaSourceSectionHeader(
-                step: '1',
-                title: 'Manga repositories',
-                subtitle:
-                    'Add only repositories you choose. No source URL is bundled or prefilled.',
-                actions: [
-                  _MangaActionButton(
-                    key: const ValueKey('manga-add-extension-repository'),
-                    icon: Icons.add_link_rounded,
-                    label: 'Add repository',
-                    prominent: true,
-                    onPressed: widget.onAddRepository,
-                  ),
-                  _MangaIconAction(
-                    icon: Icons.refresh_rounded,
-                    tooltip: 'Refresh repositories',
-                    onPressed: widget.marketplace.loading
-                        ? null
-                        : widget.onRefreshRepositories,
-                  ),
-                ],
-              ),
-              const SizedBox(height: 10),
-              if (widget.marketplace.loading)
-                const Padding(
-                  padding: EdgeInsets.only(bottom: 10),
-                  child: LinearProgressIndicator(minHeight: 2),
+    _navigationRows = [
+      [widget.firstFocusNode, _node('policy.browse')],
+      [
+        _node('repository.add'),
+        if (widget.showAniyomiExperiments) _node('repository.aniyomi'),
+        if (!widget.marketplace.loading) _node('repository.refresh'),
+      ],
+      for (final repository in widget.marketplace.repositories)
+        [
+          _node('repository:${repository.url}:toggle', 'repository.toggle'),
+          _node('repository:${repository.url}:remove', 'repository.remove'),
+        ],
+      [_node('extensions.manage')],
+      [_node('extensions.filter'), _node('extensions.language')],
+      for (final addon in visibleAddons)
+        [
+          if (widget.marketplace.installedById(addon.id) == null ||
+              widget.marketplace.updateAvailable(addon))
+            if (addon.isCompatible &&
+                !marketplaceAddonIdsMatch(
+                  widget.marketplace.busyAddonId ?? '',
+                  addon.id,
+                ))
+              _node('extension:${addon.id}:install', 'extension.install'),
+          if (widget.marketplace.installedById(addon.id) != null &&
+              !marketplaceAddonIdsMatch(
+                widget.marketplace.busyAddonId ?? '',
+                addon.id,
+              )) ...[
+            _node('extension:${addon.id}:toggle', 'extension.toggle'),
+            _node('extension:${addon.id}:remove', 'extension.remove'),
+          ],
+        ],
+      [_node('extensions.browse')],
+      for (final source in widget.sources)
+        [
+          if (source.enabled)
+            _node('catalog:${source.id}:open', 'catalog.open'),
+          _node('catalog:${source.id}:toggle', 'catalog.toggle'),
+          _node('catalog:${source.id}:credentials', 'catalog.credentials'),
+          _node('catalog:${source.id}:remove', 'catalog.remove'),
+        ],
+    ].where((row) => row.isNotEmpty).toList(growable: false);
+
+    return Focus(
+      canRequestFocus: false,
+      onKeyEvent: _handleNavigation,
+      child: CustomScrollView(
+        key: const ValueKey('manga-sources-list'),
+        controller: _scroll,
+        slivers: [
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(3, 3, 3, 0),
+            sliver: SliverList(
+              delegate: SliverChildListDelegate([
+                _MangaPolicyBanner(
+                  onAddRepository: widget.onAddRepository,
+                  onBrowse: widget.onBrowseExtensions,
+                  focusNode: widget.firstFocusNode,
+                  browseFocusNode: _node('policy.browse'),
                 ),
-              if (widget.marketplace.repositories.isEmpty)
-                const _MangaEmptyState(
-                  icon: Icons.inventory_2_outlined,
-                  title: 'No manga repositories added',
-                  message:
-                      'Add a compatible Seanime/Teto manga-provider repository to see installable sources. Native Mihon/Tachiyomi .pb and APK repositories use a different runtime and are not installed.',
-                )
-              else
-                for (
-                  var index = 0;
-                  index < widget.marketplace.repositories.length;
-                  index++
-                ) ...[
-                  _MangaRepositoryCard(
-                    repository: widget.marketplace.repositories[index],
-                    mangaExtensionCount: widget.marketplace.catalog
-                        .where(
-                          (addon) =>
-                              addon.isMangaProvider &&
-                              addon.repositoryUrl ==
-                                  widget.marketplace.repositories[index].url,
-                        )
-                        .length,
-                    error:
-                        widget.marketplace.repositoryErrors[widget
-                            .marketplace
-                            .repositories[index]
-                            .url],
-                    onToggle: () => widget.onToggleRepository(
-                      widget.marketplace.repositories[index],
-                    ),
-                    onRemove: () => widget.onRemoveRepository(
-                      widget.marketplace.repositories[index],
-                    ),
+                const SizedBox(height: 18),
+                _MangaSourceSectionHeader(
+                  step: '1',
+                  title: context.tr("Manga repositories"),
+                  subtitle: context.tr(
+                    "Add only repositories you choose. No source URL is bundled or prefilled.",
                   ),
-                  if (index != widget.marketplace.repositories.length - 1)
-                    const SizedBox(height: 9),
-                ],
-              const SizedBox(height: 22),
-              _MangaSourceSectionHeader(
-                step: '2',
-                title: 'Manga extensions',
-                subtitle:
-                    'Install a source explicitly, then enable or disable it whenever you want.',
-                actions: [
-                  _MangaActionButton(
-                    icon: Icons.tune_rounded,
-                    label: 'All add-ons',
-                    onPressed: widget.onManageExtensions,
-                  ),
-                ],
-              ),
-              const SizedBox(height: 10),
-              LayoutBuilder(
-                builder: (context, constraints) {
-                  final search = SizedBox(
-                    width: constraints.maxWidth < 640
-                        ? double.infinity
-                        : constraints.maxWidth * .52,
-                    child: TvTextInput(
-                      key: const ValueKey('manga-extension-catalog-filter'),
-                      controller: _filter,
-                      labelText: 'Filter extensions',
-                      hintText: 'Name or author',
-                      keyboardTitle: 'Filter manga extensions',
-                      onChanged: (_) => setState(() {}),
+                  actions: [
+                    _MangaActionButton(
+                      key: const ValueKey('manga-add-extension-repository'),
+                      focusNode: _node('repository.add'),
+                      icon: Icons.add_link_rounded,
+                      label: context.tr("Add repository"),
+                      prominent: true,
+                      onPressed: widget.onAddRepository,
                     ),
-                  );
-                  final language = DropdownButton<String?>(
-                    key: const ValueKey('manga-extension-language-filter'),
-                    value: _language,
-                    borderRadius: BorderRadius.circular(12),
-                    hint: const Text('All languages'),
-                    items: [
-                      const DropdownMenuItem<String?>(
-                        value: null,
-                        child: Text('All languages'),
+                    if (widget.showAniyomiExperiments)
+                      _MangaActionButton(
+                        key: const ValueKey('manga-aniyomi-experiments'),
+                        focusNode: _node('repository.aniyomi'),
+                        icon: Icons.science_outlined,
+                        label: context.tr('Aniyomi • Experimental'),
+                        onPressed: () => context.push(AniyomiScreen.routePath),
                       ),
-                      for (final code in languages)
+                    _MangaIconAction(
+                      focusNode: _node('repository.refresh'),
+                      icon: Icons.refresh_rounded,
+                      tooltip: context.tr("Refresh repositories"),
+                      onPressed: widget.marketplace.loading
+                          ? null
+                          : widget.onRefreshRepositories,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                if (widget.marketplace.loading)
+                  const Padding(
+                    padding: EdgeInsets.only(bottom: 10),
+                    child: LinearProgressIndicator(minHeight: 2),
+                  ),
+                if (widget.marketplace.repositories.isEmpty)
+                  _MangaEmptyState(
+                    icon: Icons.inventory_2_outlined,
+                    title: context.tr("No manga repositories added"),
+                    message: context.tr(
+                      "Add a compatible Seanime/Teto manga-provider repository to see installable sources. Native Mihon/Tachiyomi .pb and APK repositories use a different runtime and are not installed.",
+                    ),
+                  )
+                else
+                  for (
+                    var index = 0;
+                    index < widget.marketplace.repositories.length;
+                    index++
+                  ) ...[
+                    _MangaRepositoryCard(
+                      repository: widget.marketplace.repositories[index],
+                      toggleFocusNode: _node(
+                        'repository:${widget.marketplace.repositories[index].url}:toggle',
+                        'repository.toggle',
+                      ),
+                      removeFocusNode: _node(
+                        'repository:${widget.marketplace.repositories[index].url}:remove',
+                        'repository.remove',
+                      ),
+                      mangaExtensionCount: widget.marketplace.catalog
+                          .where(
+                            (addon) =>
+                                addon.isMangaProvider &&
+                                addon.repositoryUrl ==
+                                    widget.marketplace.repositories[index].url,
+                          )
+                          .length,
+                      error:
+                          widget.marketplace.repositoryErrors[widget
+                              .marketplace
+                              .repositories[index]
+                              .url],
+                      onToggle: () => widget.onToggleRepository(
+                        widget.marketplace.repositories[index],
+                      ),
+                      onRemove: () => widget.onRemoveRepository(
+                        widget.marketplace.repositories[index],
+                      ),
+                    ),
+                    if (index != widget.marketplace.repositories.length - 1)
+                      const SizedBox(height: 9),
+                  ],
+                const SizedBox(height: 22),
+                _MangaSourceSectionHeader(
+                  step: '2',
+                  title: context.tr("Manga extensions"),
+                  subtitle: context.tr(
+                    "Install a source explicitly, then enable or disable it whenever you want.",
+                  ),
+                  actions: [
+                    _MangaActionButton(
+                      icon: Icons.tune_rounded,
+                      focusNode: _node('extensions.manage'),
+                      label: context.tr("All add-ons"),
+                      onPressed: widget.onManageExtensions,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    final search = SizedBox(
+                      width: constraints.maxWidth < 640
+                          ? double.infinity
+                          : constraints.maxWidth * .52,
+                      child: TvTextInput(
+                        key: const ValueKey('manga-extension-catalog-filter'),
+                        controller: _filter,
+                        focusNode: _node('extensions.filter'),
+                        onEditingChanged: (editing) => _filterEditing = editing,
+                        labelText: context.tr("Filter extensions"),
+                        hintText: context.tr("Name or author"),
+                        keyboardTitle: context.tr("Filter manga extensions"),
+                        onChanged: (_) => setState(() {}),
+                      ),
+                    );
+                    final language = DropdownButton<String?>(
+                      key: const ValueKey('manga-extension-language-filter'),
+                      value: _language,
+                      focusNode: _node('extensions.language'),
+                      borderRadius: BorderRadius.circular(12),
+                      hint: Text(context.tr("All languages")),
+                      items: [
                         DropdownMenuItem<String?>(
-                          value: code,
-                          child: Text(marketplaceCatalogLanguageLabel(code)),
+                          value: null,
+                          child: Text(context.tr("All languages")),
                         ),
-                    ],
-                    onChanged: (value) => setState(() => _language = value),
-                  );
-                  if (constraints.maxWidth < 640) {
-                    return Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                        for (final code in languages)
+                          DropdownMenuItem<String?>(
+                            value: code,
+                            child: Text(
+                              context.tr(marketplaceCatalogLanguageLabel(code)),
+                            ),
+                          ),
+                      ],
+                      onChanged: (value) => setState(() => _language = value),
+                    );
+                    if (constraints.maxWidth < 640) {
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          search,
+                          const SizedBox(height: 8),
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: language,
+                          ),
+                        ],
+                      );
+                    }
+                    return Row(
                       children: [
                         search,
-                        const SizedBox(height: 8),
-                        Align(alignment: Alignment.centerLeft, child: language),
+                        const SizedBox(width: 12),
+                        language,
+                        const Spacer(),
+                        Text(
+                          context.tr('Sources: {count}', {
+                            'count': visibleAddons.length,
+                          }),
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
                       ],
                     );
-                  }
-                  return Row(
-                    children: [
-                      search,
-                      const SizedBox(width: 12),
-                      language,
-                      const Spacer(),
-                      Text(
-                        '${visibleAddons.length} source${visibleAddons.length == 1 ? '' : 's'}',
-                        style: Theme.of(context).textTheme.bodyMedium,
-                      ),
-                    ],
-                  );
-                },
-              ),
-              const SizedBox(height: 10),
-              if (visibleAddons.isEmpty)
-                _MangaEmptyState(
-                  icon: Icons.extension_off_rounded,
-                  title: allMangaAddons.isEmpty
-                      ? 'No compatible manga extensions found'
-                      : 'No extensions match this filter',
-                  message: allMangaAddons.isEmpty
-                      ? 'Add or refresh a compatible manga repository first.'
-                      : 'Clear the name or language filter and try again.',
+                  },
                 ),
-            ]),
+                const SizedBox(height: 10),
+                if (visibleAddons.isEmpty)
+                  _MangaEmptyState(
+                    icon: Icons.extension_off_rounded,
+                    title: allMangaAddons.isEmpty
+                        ? context.tr("No compatible manga extensions found")
+                        : context.tr("No extensions match this filter"),
+                    message: allMangaAddons.isEmpty
+                        ? context.tr(
+                            "Add or refresh a compatible manga repository first.",
+                          )
+                        : context.tr(
+                            "Clear the name or language filter and try again.",
+                          ),
+                  ),
+              ]),
+            ),
           ),
-        ),
-        if (visibleAddons.isNotEmpty)
-          SliverPadding(
-            padding: const EdgeInsets.symmetric(horizontal: 3),
-            sliver: SliverList.builder(
-              itemCount: visibleAddons.length,
-              itemBuilder: (context, index) => Padding(
-                padding: EdgeInsets.only(
-                  bottom: index == visibleAddons.length - 1 ? 0 : 9,
-                ),
-                child: _MangaExtensionCatalogCard(
-                  addon: visibleAddons[index],
-                  installed: widget.marketplace.installedById(
-                    visibleAddons[index].id,
+          if (visibleAddons.isNotEmpty)
+            SliverPadding(
+              padding: const EdgeInsets.symmetric(horizontal: 3),
+              sliver: SliverList.builder(
+                itemCount: visibleAddons.length,
+                itemBuilder: (context, index) => Padding(
+                  padding: EdgeInsets.only(
+                    bottom: index == visibleAddons.length - 1 ? 0 : 9,
                   ),
-                  updateAvailable: widget.marketplace.updateAvailable(
-                    visibleAddons[index],
+                  child: _MangaExtensionCatalogCard(
+                    addon: visibleAddons[index],
+                    installFocusNode: _node(
+                      'extension:${visibleAddons[index].id}:install',
+                      'extension.install',
+                    ),
+                    toggleFocusNode: _node(
+                      'extension:${visibleAddons[index].id}:toggle',
+                      'extension.toggle',
+                    ),
+                    removeFocusNode: _node(
+                      'extension:${visibleAddons[index].id}:remove',
+                      'extension.remove',
+                    ),
+                    installed: widget.marketplace.installedById(
+                      visibleAddons[index].id,
+                    ),
+                    updateAvailable: widget.marketplace.updateAvailable(
+                      visibleAddons[index],
+                    ),
+                    busy: marketplaceAddonIdsMatch(
+                      widget.marketplace.busyAddonId ?? '',
+                      visibleAddons[index].id,
+                    ),
+                    onInstall: () =>
+                        widget.onInstallExtension(visibleAddons[index]),
+                    onToggle: widget.onToggleExtension,
+                    onUninstall: widget.onUninstallExtension,
                   ),
-                  busy: marketplaceAddonIdsMatch(
-                    widget.marketplace.busyAddonId ?? '',
-                    visibleAddons[index].id,
-                  ),
-                  onInstall: () =>
-                      widget.onInstallExtension(visibleAddons[index]),
-                  onToggle: widget.onToggleExtension,
-                  onUninstall: widget.onUninstallExtension,
                 ),
               ),
             ),
-          ),
-        SliverPadding(
-          padding: const EdgeInsets.fromLTRB(3, 12, 3, 30),
-          sliver: SliverList(
-            delegate: SliverChildListDelegate([
-              Align(
-                alignment: Alignment.centerLeft,
-                child: _MangaActionButton(
-                  key: const ValueKey('manga-browse-installed-extensions'),
-                  icon: Icons.explore_rounded,
-                  label: 'Browse installed sources',
-                  prominent: true,
-                  onPressed: widget.onBrowseExtensions,
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(3, 12, 3, 30),
+            sliver: SliverList(
+              delegate: SliverChildListDelegate([
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: _MangaActionButton(
+                    key: const ValueKey('manga-browse-installed-extensions'),
+                    focusNode: _node('extensions.browse'),
+                    icon: Icons.explore_rounded,
+                    label: context.tr("Browse installed sources"),
+                    prominent: true,
+                    onPressed: widget.onBrowseExtensions,
+                  ),
                 ),
-              ),
-              const SizedBox(height: 24),
-              _MangaSourceSectionHeader(
-                step: '3',
-                title: 'Optional OPDS & data catalogs',
-                subtitle:
-                    'Advanced: connect a public OPDS feed or declarative Teto catalog. These are separate from extension repositories.',
-                actions: [
-                  _MangaActionButton(
-                    key: const ValueKey('manga-add-data-catalog'),
-                    icon: Icons.add_rounded,
-                    label: 'Add catalog',
-                    onPressed: widget.onAddCatalog,
+                if (widget.sources.isNotEmpty) ...[
+                  const SizedBox(height: 24),
+                  _MangaSourceSectionHeader(
+                    step: '3',
+                    title: context.tr("Previously saved catalogs"),
+                    subtitle: context.tr(
+                      "Your existing catalogs remain available. Add new sources through Seanime extension repositories.",
+                    ),
+                    actions: const [],
                   ),
+                  const SizedBox(height: 10),
+                  if (widget.sources.isEmpty)
+                    _MangaEmptyState(
+                      icon: Icons.link_off_rounded,
+                      title: context.tr("No data catalogs added"),
+                      message: context.tr(
+                        "This section is optional. Nothing is bundled or recommended by TetoTV.",
+                      ),
+                    )
+                  else
+                    for (
+                      var index = 0;
+                      index < widget.sources.length;
+                      index++
+                    ) ...[
+                      _MangaSourceCard(
+                        source: widget.sources[index],
+                        openFocusNode: _node(
+                          'catalog:${widget.sources[index].id}:open',
+                          'catalog.open',
+                        ),
+                        toggleFocusNode: _node(
+                          'catalog:${widget.sources[index].id}:toggle',
+                          'catalog.toggle',
+                        ),
+                        credentialsFocusNode: _node(
+                          'catalog:${widget.sources[index].id}:credentials',
+                          'catalog.credentials',
+                        ),
+                        removeFocusNode: _node(
+                          'catalog:${widget.sources[index].id}:remove',
+                          'catalog.remove',
+                        ),
+                        selected:
+                            widget.sources[index].id == widget.selectedSourceId,
+                        onOpen: () => widget.onOpen(widget.sources[index]),
+                        onToggle: () => widget.onToggle(widget.sources[index]),
+                        onCredentials: () =>
+                            widget.onCredentials(widget.sources[index]),
+                        onRemove: () => widget.onRemove(widget.sources[index]),
+                      ),
+                      if (index != widget.sources.length - 1)
+                        const SizedBox(height: 10),
+                    ],
                 ],
-              ),
-              const SizedBox(height: 10),
-              if (widget.sources.isEmpty)
-                const _MangaEmptyState(
-                  icon: Icons.link_off_rounded,
-                  title: 'No data catalogs added',
-                  message:
-                      'This section is optional. Nothing is bundled or recommended by TetoTV.',
-                )
-              else
-                for (var index = 0; index < widget.sources.length; index++) ...[
-                  _MangaSourceCard(
-                    source: widget.sources[index],
-                    selected:
-                        widget.sources[index].id == widget.selectedSourceId,
-                    onOpen: () => widget.onOpen(widget.sources[index]),
-                    onToggle: () => widget.onToggle(widget.sources[index]),
-                    onCredentials: () =>
-                        widget.onCredentials(widget.sources[index]),
-                    onRemove: () => widget.onRemove(widget.sources[index]),
-                  ),
-                  if (index != widget.sources.length - 1)
-                    const SizedBox(height: 10),
-                ],
-            ]),
+              ]),
+            ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }
@@ -2160,11 +2861,13 @@ class _MangaPolicyBanner extends StatelessWidget {
     required this.onAddRepository,
     required this.onBrowse,
     required this.focusNode,
+    required this.browseFocusNode,
   });
 
   final VoidCallback onAddRepository;
   final VoidCallback onBrowse;
   final FocusNode focusNode;
+  final FocusNode browseFocusNode;
 
   @override
   Widget build(BuildContext context) => Container(
@@ -2178,14 +2881,15 @@ class _MangaPolicyBanner extends StatelessWidget {
           children: [
             _MangaActionButton(
               icon: Icons.add_link_rounded,
-              label: 'Add repository',
+              label: context.tr("Add repository"),
               focusNode: focusNode,
               prominent: true,
               onPressed: onAddRepository,
             ),
             _MangaActionButton(
               icon: Icons.explore_rounded,
-              label: 'Browse manga',
+              focusNode: browseFocusNode,
+              label: context.tr("Browse manga"),
               onPressed: onBrowse,
             ),
           ],
@@ -2194,12 +2898,14 @@ class _MangaPolicyBanner extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'Add a repository. Install a source. Start reading.',
+              context.tr("Add a repository. Install a source. Start reading."),
               style: Theme.of(context).textTheme.titleMedium,
             ),
             const SizedBox(height: 4),
             Text(
-              'Manga repositories are always user-added, and installing an extension is a separate confirmation. TetoTV bundles, prefills, and recommends no source. Only use sources you trust and are authorized to access.',
+              context.tr(
+                "Manga repositories are always user-added, and installing an extension is a separate confirmation. TetoTV bundles, prefills, and recommends no source. Only use sources you trust and are authorized to access.",
+              ),
               style: Theme.of(context).textTheme.bodyMedium,
             ),
           ],
@@ -2296,6 +3002,8 @@ class _MangaRepositoryCard extends StatelessWidget {
     required this.error,
     required this.onToggle,
     required this.onRemove,
+    required this.toggleFocusNode,
+    required this.removeFocusNode,
   });
 
   final AddonRepository repository;
@@ -2303,6 +3011,8 @@ class _MangaRepositoryCard extends StatelessWidget {
   final String? error;
   final VoidCallback onToggle;
   final VoidCallback onRemove;
+  final FocusNode toggleFocusNode;
+  final FocusNode removeFocusNode;
 
   @override
   Widget build(BuildContext context) {
@@ -2348,7 +3058,9 @@ class _MangaRepositoryCard extends StatelessWidget {
                     Text(
                       error != null
                           ? error!
-                          : '$mangaExtensionCount compatible manga extension${mangaExtensionCount == 1 ? '' : 's'}',
+                          : context.tr('Compatible manga extensions: {count}', {
+                              'count': mangaExtensionCount,
+                            }),
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       style: Theme.of(context).textTheme.bodyMedium?.copyWith(
@@ -2367,15 +3079,19 @@ class _MangaRepositoryCard extends StatelessWidget {
             runSpacing: 8,
             children: [
               _MangaActionButton(
+                focusNode: toggleFocusNode,
                 icon: repository.enabled
                     ? Icons.pause_circle_outline_rounded
                     : Icons.play_circle_outline_rounded,
-                label: repository.enabled ? 'Disable' : 'Enable',
+                label: repository.enabled
+                    ? context.tr("Disable")
+                    : context.tr("Enable"),
                 onPressed: onToggle,
               ),
               _MangaIconAction(
+                focusNode: removeFocusNode,
                 icon: Icons.delete_outline_rounded,
-                tooltip: 'Remove manga repository',
+                tooltip: context.tr("Remove manga repository"),
                 onPressed: onRemove,
               ),
             ],
@@ -2408,6 +3124,9 @@ class _MangaExtensionCatalogCard extends StatelessWidget {
     required this.onInstall,
     required this.onToggle,
     required this.onUninstall,
+    required this.installFocusNode,
+    required this.toggleFocusNode,
+    required this.removeFocusNode,
   });
 
   final MarketplaceAddon addon;
@@ -2417,6 +3136,9 @@ class _MangaExtensionCatalogCard extends StatelessWidget {
   final VoidCallback onInstall;
   final ValueChanged<InstalledStreamingAddon> onToggle;
   final ValueChanged<InstalledStreamingAddon> onUninstall;
+  final FocusNode installFocusNode;
+  final FocusNode toggleFocusNode;
+  final FocusNode removeFocusNode;
 
   @override
   Widget build(BuildContext context) => Container(
@@ -2458,12 +3180,12 @@ class _MangaExtensionCatalogCard extends StatelessWidget {
                       const SizedBox(width: 8),
                       _MangaStatusBadge(
                         label: !compatible
-                            ? 'UNSUPPORTED'
+                            ? context.tr("UNSUPPORTED")
                             : current == null
-                            ? 'AVAILABLE'
+                            ? context.tr("AVAILABLE")
                             : current.enabled
-                            ? 'ENABLED'
-                            : 'DISABLED',
+                            ? context.tr("ENABLED")
+                            : context.tr("DISABLED"),
                       ),
                     ],
                   ),
@@ -2497,25 +3219,34 @@ class _MangaExtensionCatalogCard extends StatelessWidget {
             if (current == null || updateAvailable)
               _MangaActionButton(
                 key: ValueKey('manga-extension-install-${addon.id}'),
+                focusNode: installFocusNode,
                 icon: updateAvailable
                     ? Icons.system_update_alt_rounded
                     : Icons.download_rounded,
-                label: updateAvailable ? 'Update' : 'Install',
+                label: updateAvailable
+                    ? context.tr("Update")
+                    : context.tr("Install"),
                 prominent: true,
                 onPressed: compatible && !busy ? onInstall : null,
               ),
             if (current != null) ...[
               _MangaActionButton(
                 key: ValueKey('manga-extension-toggle-${addon.id}'),
+                focusNode: toggleFocusNode,
                 icon: current.enabled
                     ? Icons.pause_circle_outline_rounded
                     : Icons.play_circle_outline_rounded,
-                label: current.enabled ? 'Disable' : 'Enable',
+                label: current.enabled
+                    ? context.tr("Disable")
+                    : context.tr("Enable"),
                 onPressed: busy ? null : () => onToggle(current),
               ),
               _MangaIconAction(
+                focusNode: removeFocusNode,
                 icon: Icons.delete_outline_rounded,
-                tooltip: 'Uninstall ${addon.name}',
+                tooltip: context.tr("Uninstall {value1}", {
+                  'value1': addon.name,
+                }),
                 onPressed: busy ? null : () => onUninstall(current),
               ),
             ],
@@ -2613,85 +3344,12 @@ class _MangaPublicationCard extends StatelessWidget {
   );
 }
 
-class _MangaLibraryCard extends StatelessWidget {
-  const _MangaLibraryCard({
-    required this.entry,
-    required this.source,
-    required this.onOpen,
-    required this.onRemove,
-    this.focusNode,
-  });
-
-  final MangaLibraryEntry entry;
-  final StoredMangaSource? source;
-  final VoidCallback onOpen;
-  final VoidCallback onRemove;
-  final FocusNode? focusNode;
-
-  @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.all(10),
-    decoration: _panelDecoration(context),
-    child: Row(
-      children: [
-        ClipRRect(
-          borderRadius: BorderRadius.circular(8),
-          child: SizedBox(
-            width: 62,
-            height: 88,
-            child: MangaArtwork(
-              uri: entry.coverUri,
-              sourceId: source?.id,
-              sourceUri: source?.uri,
-              icon: Icons.menu_book_rounded,
-              cacheWidth: 180,
-            ),
-          ),
-        ),
-        const SizedBox(width: 13),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                entry.title,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-              const SizedBox(height: 5),
-              Text(
-                _libraryByline(entry),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.bodyMedium,
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(width: 10),
-        _MangaActionButton(
-          icon: Icons.auto_stories_rounded,
-          label: 'Open',
-          focusNode: focusNode,
-          onPressed: onOpen,
-        ),
-        const SizedBox(width: 8),
-        _MangaIconAction(
-          icon: Icons.bookmark_remove_outlined,
-          tooltip: 'Remove from library',
-          onPressed: onRemove,
-        ),
-      ],
-    ),
-  );
-}
-
 class _MangaDownloadCard extends StatelessWidget {
   const _MangaDownloadCard({
     required this.job,
     required this.onOpen,
     required this.onCancel,
+    required this.onPause,
     required this.onRetry,
     required this.onDelete,
     this.progress,
@@ -2703,6 +3361,7 @@ class _MangaDownloadCard extends StatelessWidget {
   final FocusNode? focusNode;
   final VoidCallback onOpen;
   final VoidCallback onCancel;
+  final VoidCallback onPause;
   final VoidCallback onRetry;
   final VoidCallback onDelete;
 
@@ -2717,7 +3376,7 @@ class _MangaDownloadCard extends StatelessWidget {
     final primary = switch (job.status) {
       MangaDownloadJobStatus.completed => _MangaActionButton(
         icon: Icons.auto_stories_rounded,
-        label: 'Read',
+        label: context.tr("Read"),
         focusNode: focusNode,
         prominent: true,
         onPressed: onOpen,
@@ -2725,14 +3384,16 @@ class _MangaDownloadCard extends StatelessWidget {
       MangaDownloadJobStatus.queued ||
       MangaDownloadJobStatus.resolving ||
       MangaDownloadJobStatus.downloading => _MangaActionButton(
-        icon: Icons.close_rounded,
-        label: 'Cancel',
+        icon: Icons.pause_rounded,
+        label: context.tr("Pause"),
         focusNode: focusNode,
-        onPressed: onCancel,
+        onPressed: onPause,
       ),
       _ => _MangaActionButton(
         icon: Icons.refresh_rounded,
-        label: 'Retry',
+        label: job.status == MangaDownloadJobStatus.paused
+            ? context.tr('Resume')
+            : context.tr("Retry"),
         focusNode: focusNode,
         onPressed: onRetry,
       ),
@@ -2770,8 +3431,8 @@ class _MangaDownloadCard extends StatelessWidget {
                         ),
                         _MangaStatusBadge(
                           label: progress == null
-                              ? _downloadLabel(job.status)
-                              : _progressLabel(progress!),
+                              ? context.tr(_downloadLabel(job.status))
+                              : context.tr(_progressLabel(progress!)),
                         ),
                       ],
                     ),
@@ -2805,10 +3466,20 @@ class _MangaDownloadCard extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             children: [
               primary,
+              if (active) ...[
+                const SizedBox(width: 8),
+                _MangaIconAction(
+                  icon: Icons.close_rounded,
+                  tooltip: context.tr('Cancel'),
+                  onPressed: onCancel,
+                ),
+              ],
               const SizedBox(width: 8),
               _MangaIconAction(
                 icon: Icons.delete_outline_rounded,
-                tooltip: active ? 'Cancel and delete' : 'Delete download',
+                tooltip: active
+                    ? context.tr("Cancel and delete")
+                    : context.tr("Delete download"),
                 onPressed: onDelete,
               ),
             ],
@@ -2844,6 +3515,10 @@ class _MangaSourceCard extends StatelessWidget {
     required this.onToggle,
     required this.onCredentials,
     required this.onRemove,
+    required this.openFocusNode,
+    required this.toggleFocusNode,
+    required this.credentialsFocusNode,
+    required this.removeFocusNode,
   });
 
   final StoredMangaSource source;
@@ -2852,6 +3527,10 @@ class _MangaSourceCard extends StatelessWidget {
   final VoidCallback onToggle;
   final VoidCallback onCredentials;
   final VoidCallback onRemove;
+  final FocusNode openFocusNode;
+  final FocusNode toggleFocusNode;
+  final FocusNode credentialsFocusNode;
+  final FocusNode removeFocusNode;
 
   @override
   Widget build(BuildContext context) => Container(
@@ -2898,13 +3577,13 @@ class _MangaSourceCard extends StatelessWidget {
                       ),
                       if (selected) ...[
                         const SizedBox(width: 8),
-                        const _MangaStatusBadge(label: 'OPEN'),
+                        _MangaStatusBadge(label: context.tr("OPEN")),
                       ],
                     ],
                   ),
                   const SizedBox(height: 3),
                   Text(
-                    '${_sourceKindLabel(source.kind)} · ${source.uri.host}',
+                    '${context.tr(_sourceKindLabel(source.kind))} · ${source.uri.host}',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: Theme.of(context).textTheme.bodyMedium,
@@ -2919,29 +3598,35 @@ class _MangaSourceCard extends StatelessWidget {
           runSpacing: 8,
           children: [
             _MangaActionButton(
+              focusNode: openFocusNode,
               icon: source.kind == StoredMangaSourceKind.repository
                   ? Icons.sync_rounded
                   : Icons.open_in_new_rounded,
               label: source.kind == StoredMangaSourceKind.repository
-                  ? 'Sync'
-                  : 'Open',
+                  ? context.tr("Sync")
+                  : context.tr("Open"),
               onPressed: source.enabled ? onOpen : null,
             ),
             _MangaActionButton(
+              focusNode: toggleFocusNode,
               icon: source.enabled
                   ? Icons.pause_circle_outline_rounded
                   : Icons.play_circle_outline_rounded,
-              label: source.enabled ? 'Disable' : 'Enable',
+              label: source.enabled
+                  ? context.tr("Disable")
+                  : context.tr("Enable"),
               onPressed: onToggle,
             ),
             _MangaIconAction(
+              focusNode: credentialsFocusNode,
               icon: Icons.key_rounded,
-              tooltip: 'Protected credentials',
+              tooltip: context.tr("Protected credentials"),
               onPressed: onCredentials,
             ),
             _MangaIconAction(
+              focusNode: removeFocusNode,
               icon: Icons.delete_outline_rounded,
-              tooltip: 'Remove source',
+              tooltip: context.tr("Remove source"),
               onPressed: onRemove,
             ),
           ],
@@ -2960,208 +3645,6 @@ class _MangaSourceCard extends StatelessWidget {
           ],
         );
       },
-    ),
-  );
-}
-
-class _MangaExtensionTitleSheet extends StatefulWidget {
-  const _MangaExtensionTitleSheet({
-    required this.title,
-    required this.initiallyInLibrary,
-    required this.loadChapters,
-    required this.onRead,
-    required this.onDownload,
-    required this.onLibrary,
-  });
-
-  final MangaExtensionTitle title;
-  final bool initiallyInLibrary;
-  final Future<List<MangaExtensionChapter>> Function() loadChapters;
-  final ValueChanged<MangaExtensionChapter> onRead;
-  final ValueChanged<MangaExtensionChapter> onDownload;
-  final Future<bool> Function() onLibrary;
-
-  @override
-  State<_MangaExtensionTitleSheet> createState() =>
-      _MangaExtensionTitleSheetState();
-}
-
-class _MangaExtensionTitleSheetState extends State<_MangaExtensionTitleSheet> {
-  late final Future<List<MangaExtensionChapter>> _chapters;
-  late bool _inLibrary;
-  bool _libraryBusy = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _chapters = widget.loadChapters();
-    _inLibrary = widget.initiallyInLibrary;
-  }
-
-  Future<void> _toggleLibrary() async {
-    if (_libraryBusy) return;
-    setState(() => _libraryBusy = true);
-    try {
-      final saved = await widget.onLibrary();
-      if (mounted) setState(() => _inLibrary = saved);
-    } finally {
-      if (mounted) setState(() => _libraryBusy = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) => Align(
-    alignment: Alignment.bottomCenter,
-    child: ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: 940, maxHeight: 760),
-      child: Material(
-        color: context.appPalette.surface,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(22)),
-        clipBehavior: Clip.antiAlias,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 18, 14, 14),
-              child: Row(
-                children: [
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(9),
-                    child: SizedBox(
-                      width: 72,
-                      height: 102,
-                      child: MangaArtwork(
-                        uri: widget.title.image,
-                        headers: widget.title.imageHeaders,
-                        cacheWidth: 220,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 14),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          widget.title.title,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.headlineSmall,
-                        ),
-                        const SizedBox(height: 5),
-                        Text(
-                          '${widget.title.providerName} • ${widget.title.language.toUpperCase()}'
-                          '${widget.title.year == null ? '' : ' • ${widget.title.year}'}',
-                          style: Theme.of(context).textTheme.bodyMedium,
-                        ),
-                        const SizedBox(height: 10),
-                        _MangaActionButton(
-                          icon: _inLibrary
-                              ? Icons.bookmark_remove_rounded
-                              : Icons.bookmark_add_rounded,
-                          label: _libraryBusy
-                              ? 'Updating…'
-                              : _inLibrary
-                              ? 'Remove from library'
-                              : 'Add to library',
-                          onPressed: _libraryBusy ? null : _toggleLibrary,
-                        ),
-                      ],
-                    ),
-                  ),
-                  _MangaIconAction(
-                    icon: Icons.close_rounded,
-                    tooltip: 'Close',
-                    onPressed: () => Navigator.of(context).pop(),
-                  ),
-                ],
-              ),
-            ),
-            Divider(
-              color: context.appPalette.primaryText.withValues(alpha: .1),
-            ),
-            Expanded(
-              child: FutureBuilder<List<MangaExtensionChapter>>(
-                future: _chapters,
-                builder: (context, snapshot) {
-                  if (snapshot.connectionState != ConnectionState.done) {
-                    return const Center(child: CircularProgressIndicator());
-                  }
-                  if (snapshot.hasError) {
-                    return const _MangaEmptyState(
-                      icon: Icons.error_outline_rounded,
-                      title: 'Chapters unavailable',
-                      message: 'This manga source could not load its chapters.',
-                    );
-                  }
-                  final chapters = snapshot.data ?? const [];
-                  if (chapters.isEmpty) {
-                    return const _MangaEmptyState(
-                      icon: Icons.menu_book_outlined,
-                      title: 'No chapters found',
-                      message: 'This source did not return any chapters.',
-                    );
-                  }
-                  return ListView.separated(
-                    key: const ValueKey('manga-extension-chapters'),
-                    padding: const EdgeInsets.fromLTRB(18, 10, 18, 28),
-                    itemCount: chapters.length,
-                    separatorBuilder: (_, _) => const SizedBox(height: 8),
-                    itemBuilder: (context, index) {
-                      final chapter = chapters[index];
-                      return Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: _panelDecoration(context, radius: 11),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    chapter.title,
-                                    maxLines: 2,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(
-                                      fontWeight: FontWeight.w800,
-                                    ),
-                                  ),
-                                  if (chapter.scanlator case final group?)
-                                    Text(
-                                      group,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: Theme.of(
-                                        context,
-                                      ).textTheme.bodySmall,
-                                    ),
-                                ],
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            _MangaActionButton(
-                              icon: Icons.auto_stories_rounded,
-                              label: 'Read',
-                              prominent: true,
-                              onPressed: () => widget.onRead(chapter),
-                            ),
-                            const SizedBox(width: 8),
-                            _MangaIconAction(
-                              icon: Icons.download_rounded,
-                              tooltip: 'Download chapter',
-                              onPressed: () => widget.onDownload(chapter),
-                            ),
-                          ],
-                        ),
-                      );
-                    },
-                  );
-                },
-              ),
-            ),
-          ],
-        ),
-      ),
     ),
   );
 }
@@ -3256,7 +3739,7 @@ class _MangaPublicationSheet extends StatelessWidget {
                     ),
                   ),
                   IconButton(
-                    tooltip: 'Close',
+                    tooltip: context.tr("Close"),
                     onPressed: () => Navigator.of(context).pop(),
                     icon: const Icon(Icons.close_rounded),
                   ),
@@ -3284,7 +3767,7 @@ class _MangaPublicationSheet extends StatelessWidget {
                 children: [
                   _MangaActionButton(
                     icon: Icons.auto_stories_rounded,
-                    label: 'Read now',
+                    label: context.tr("Read now"),
                     autofocus: true,
                     prominent: true,
                     onPressed: onRead,
@@ -3293,12 +3776,14 @@ class _MangaPublicationSheet extends StatelessWidget {
                     icon: inLibrary
                         ? Icons.bookmark_remove_rounded
                         : Icons.bookmark_add_rounded,
-                    label: inLibrary ? 'Remove from library' : 'Add to library',
+                    label: inLibrary
+                        ? context.tr("Remove from library")
+                        : context.tr("Add to library"),
                     onPressed: onLibrary,
                   ),
                   _MangaActionButton(
                     icon: Icons.download_rounded,
-                    label: 'Download',
+                    label: context.tr("Download"),
                     onPressed: onDownload,
                   ),
                 ],
@@ -3454,16 +3939,23 @@ class _MangaIconAction extends StatelessWidget {
     required this.icon,
     required this.tooltip,
     required this.onPressed,
+    this.focusNode,
   });
 
   final IconData icon;
   final String tooltip;
   final VoidCallback? onPressed;
+  final FocusNode? focusNode;
 
   @override
   Widget build(BuildContext context) => Tooltip(
     message: tooltip,
-    child: _MangaActionButton(icon: icon, label: '', onPressed: onPressed),
+    child: _MangaActionButton(
+      icon: icon,
+      label: '',
+      onPressed: onPressed,
+      focusNode: focusNode,
+    ),
   );
 }
 
@@ -3500,13 +3992,6 @@ class _MangaSourceBadge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => _MangaStatusBadge(label: source.name);
-}
-
-class _MangaSourceDraft {
-  const _MangaSourceDraft(this.uri, this.credential);
-
-  final Uri uri;
-  final MangaSourceCredential? credential;
 }
 
 class _MangaRepositoryDialog extends StatefulWidget {
@@ -3556,7 +4041,7 @@ class _MangaRepositoryDialogState extends State<_MangaRepositoryDialog> {
 
   @override
   Widget build(BuildContext context) => AlertDialog(
-    title: const Text('Add manga extension repository'),
+    title: Text(context.tr('Add manga extension repository')),
     content: ConstrainedBox(
       constraints: const BoxConstraints(maxWidth: 660),
       child: SingleChildScrollView(
@@ -3564,12 +4049,16 @@ class _MangaRepositoryDialogState extends State<_MangaRepositoryDialog> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const Text(
-              'Paste a public HTTPS Seanime/Teto repository containing manga-provider extensions. You can separate multiple URLs with spaces.',
+            Text(
+              context.tr(
+                'Paste a public HTTPS Seanime/Teto repository containing manga-provider extensions. You can separate multiple URLs with spaces.',
+              ),
             ),
             const SizedBox(height: 8),
             Text(
-              'The field starts empty. TetoTV does not bundle, prefill, or recommend repositories.',
+              context.tr(
+                'The field starts empty. TetoTV does not bundle, prefill, or recommend repositories.',
+              ),
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
                 color: context.appPalette.mutedText,
               ),
@@ -3578,9 +4067,9 @@ class _MangaRepositoryDialogState extends State<_MangaRepositoryDialog> {
             TvTextInput(
               key: const ValueKey('manga-extension-repository-input'),
               controller: _urls,
-              labelText: 'Repository URL',
+              labelText: context.tr('Repository URL'),
               hintText: 'https://example.org/manga-marketplace.json',
-              keyboardTitle: 'Manga repository URL',
+              keyboardTitle: context.tr('Manga repository URL'),
               keyboardType: TextInputType.url,
               autofocus: true,
               onChanged: (_) {
@@ -3602,13 +4091,16 @@ class _MangaRepositoryDialogState extends State<_MangaRepositoryDialog> {
       TextButton.icon(
         onPressed: _paste,
         icon: const Icon(Icons.content_paste_rounded),
-        label: const Text('Paste'),
+        label: Text(context.tr('Paste')),
       ),
       TextButton(
         onPressed: () => Navigator.pop(context),
-        child: const Text('Cancel'),
+        child: Text(context.tr('Cancel')),
       ),
-      FilledButton(onPressed: _submit, child: const Text('Add repository')),
+      FilledButton(
+        onPressed: _submit,
+        child: Text(context.tr('Add repository')),
+      ),
     ],
   );
 }
@@ -3632,141 +4124,6 @@ class _MangaCredentialDraft {
 }
 
 enum _MangaCredentialKind { none, basic, bearer, apiKey }
-
-class _MangaSourceDialog extends StatefulWidget {
-  const _MangaSourceDialog();
-
-  @override
-  State<_MangaSourceDialog> createState() => _MangaSourceDialogState();
-}
-
-class _MangaSourceDialogState extends State<_MangaSourceDialog> {
-  final _url = TextEditingController();
-  final _username = TextEditingController();
-  final _secret = TextEditingController();
-  final _header = TextEditingController(text: 'X-API-Key');
-  _MangaCredentialKind _kind = _MangaCredentialKind.none;
-  String? _error;
-
-  @override
-  void dispose() {
-    _url.dispose();
-    _username.dispose();
-    _secret.dispose();
-    _header.dispose();
-    super.dispose();
-  }
-
-  void _submit() {
-    final uri = Uri.tryParse(_url.text.trim());
-    if (uri == null ||
-        uri.scheme.toLowerCase() != 'https' ||
-        uri.host.isEmpty) {
-      setState(
-        () => _error = 'Enter a public HTTPS catalog or repository URL.',
-      );
-      return;
-    }
-    try {
-      final credential = _credentialFromFields(
-        kind: _kind,
-        username: _username.text,
-        secret: _secret.text,
-        header: _header.text,
-      );
-      Navigator.of(context).pop(_MangaSourceDraft(uri, credential));
-    } on FormatException catch (error) {
-      setState(() => _error = error.message);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) => AlertDialog(
-    title: const Text('Add OPDS or data catalog'),
-    content: ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: 620),
-      child: SingleChildScrollView(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const Text(
-              'Add an OPDS 1, OPDS 2, or declarative Teto data catalog. Extension repositories belong in the Manga repositories section. TetoTV does not provide a source list.',
-            ),
-            const SizedBox(height: 14),
-            TvTextInput(
-              controller: _url,
-              labelText: 'Catalog URL',
-              hintText: 'https://example.org/opds',
-              keyboardTitle: 'Manga catalog URL',
-              keyboardType: TextInputType.url,
-              autofocus: true,
-            ),
-            const SizedBox(height: 12),
-            DropdownButtonFormField<_MangaCredentialKind>(
-              initialValue: _kind,
-              decoration: const InputDecoration(labelText: 'Authentication'),
-              items: const [
-                DropdownMenuItem(
-                  value: _MangaCredentialKind.none,
-                  child: Text('None'),
-                ),
-                DropdownMenuItem(
-                  value: _MangaCredentialKind.basic,
-                  child: Text('Username and password'),
-                ),
-                DropdownMenuItem(
-                  value: _MangaCredentialKind.bearer,
-                  child: Text('Bearer token'),
-                ),
-                DropdownMenuItem(
-                  value: _MangaCredentialKind.apiKey,
-                  child: Text('API key header'),
-                ),
-              ],
-              onChanged: (value) =>
-                  setState(() => _kind = value ?? _MangaCredentialKind.none),
-            ),
-            if (_kind == _MangaCredentialKind.basic) ...[
-              const SizedBox(height: 12),
-              TvTextInput(controller: _username, labelText: 'Username'),
-            ],
-            if (_kind != _MangaCredentialKind.none) ...[
-              if (_kind == _MangaCredentialKind.apiKey) ...[
-                const SizedBox(height: 12),
-                TvTextInput(controller: _header, labelText: 'Header name'),
-              ],
-              const SizedBox(height: 12),
-              TvTextInput(
-                controller: _secret,
-                labelText: _kind == _MangaCredentialKind.basic
-                    ? 'Password'
-                    : _kind == _MangaCredentialKind.bearer
-                    ? 'Token'
-                    : 'API key',
-                obscureText: true,
-              ),
-            ],
-            if (_error case final error?) ...[
-              const SizedBox(height: 10),
-              Text(
-                error,
-                style: TextStyle(color: Theme.of(context).colorScheme.error),
-              ),
-            ],
-          ],
-        ),
-      ),
-    ),
-    actions: [
-      TextButton(
-        onPressed: () => Navigator.pop(context),
-        child: const Text('Cancel'),
-      ),
-      FilledButton(onPressed: _submit, child: const Text('Add catalog')),
-    ],
-  );
-}
 
 class _MangaCredentialDialog extends StatefulWidget {
   const _MangaCredentialDialog({required this.sourceName});
@@ -3811,7 +4168,9 @@ class _MangaCredentialDialogState extends State<_MangaCredentialDialog> {
 
   @override
   Widget build(BuildContext context) => AlertDialog(
-    title: Text('${widget.sourceName} credentials'),
+    title: Text(
+      context.tr("{value1} credentials", {'value1': widget.sourceName}),
+    ),
     content: ConstrainedBox(
       constraints: const BoxConstraints(maxWidth: 560),
       child: SingleChildScrollView(
@@ -3819,25 +4178,29 @@ class _MangaCredentialDialogState extends State<_MangaCredentialDialog> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const Text(
-              'Credentials are kept in protected device storage and are sent only to this source’s origin.',
+            Text(
+              context.tr(
+                "Credentials are kept in protected device storage and are sent only to this source’s origin.",
+              ),
             ),
             const SizedBox(height: 14),
             DropdownButtonFormField<_MangaCredentialKind>(
               initialValue: _kind,
-              decoration: const InputDecoration(labelText: 'Authentication'),
-              items: const [
+              decoration: InputDecoration(
+                labelText: context.tr("Authentication"),
+              ),
+              items: [
                 DropdownMenuItem(
                   value: _MangaCredentialKind.basic,
-                  child: Text('Username and password'),
+                  child: Text(context.tr("Username and password")),
                 ),
                 DropdownMenuItem(
                   value: _MangaCredentialKind.bearer,
-                  child: Text('Bearer token'),
+                  child: Text(context.tr("Bearer token")),
                 ),
                 DropdownMenuItem(
                   value: _MangaCredentialKind.apiKey,
-                  child: Text('API key header'),
+                  child: Text(context.tr("API key header")),
                 ),
               ],
               onChanged: (value) =>
@@ -3845,20 +4208,26 @@ class _MangaCredentialDialogState extends State<_MangaCredentialDialog> {
             ),
             if (_kind == _MangaCredentialKind.basic) ...[
               const SizedBox(height: 12),
-              TvTextInput(controller: _username, labelText: 'Username'),
+              TvTextInput(
+                controller: _username,
+                labelText: context.tr("Username"),
+              ),
             ],
             if (_kind == _MangaCredentialKind.apiKey) ...[
               const SizedBox(height: 12),
-              TvTextInput(controller: _header, labelText: 'Header name'),
+              TvTextInput(
+                controller: _header,
+                labelText: context.tr("Header name"),
+              ),
             ],
             const SizedBox(height: 12),
             TvTextInput(
               controller: _secret,
               labelText: _kind == _MangaCredentialKind.basic
-                  ? 'Password'
+                  ? context.tr("Password")
                   : _kind == _MangaCredentialKind.bearer
-                  ? 'Token'
-                  : 'API key',
+                  ? context.tr("Token")
+                  : context.tr("API key"),
               obscureText: true,
               autofocus: true,
             ),
@@ -3877,13 +4246,13 @@ class _MangaCredentialDialogState extends State<_MangaCredentialDialog> {
       TextButton(
         onPressed: () =>
             Navigator.pop(context, const _MangaCredentialDraft.clear()),
-        child: const Text('Remove saved credential'),
+        child: Text(context.tr("Remove saved credential")),
       ),
       TextButton(
         onPressed: () => Navigator.pop(context),
-        child: const Text('Cancel'),
+        child: Text(context.tr("Cancel")),
       ),
-      FilledButton(onPressed: _save, child: const Text('Save securely')),
+      FilledButton(onPressed: _save, child: Text(context.tr("Save securely"))),
     ],
   );
 }
@@ -3943,18 +4312,6 @@ Uri? _cover(MangaPublication publication) {
   return publication.images.isEmpty ? null : publication.images.first.uri;
 }
 
-String _libraryByline(MangaLibraryEntry entry) {
-  final authors = entry.metadata['authors'];
-  if (authors is List) {
-    final values = authors.whereType<String>().where(
-      (value) => value.isNotEmpty,
-    );
-    if (values.isNotEmpty) return values.join(', ');
-  }
-  final subtitle = entry.metadata['subtitle'];
-  return subtitle is String && subtitle.isNotEmpty ? subtitle : 'Saved manga';
-}
-
 String _sourceKindLabel(StoredMangaSourceKind kind) => switch (kind) {
   StoredMangaSourceKind.repository => 'Teto repository',
   StoredMangaSourceKind.opds1 => 'OPDS 1',
@@ -3975,6 +4332,7 @@ String _downloadLabel(MangaDownloadJobStatus status) => switch (status) {
 String _progressLabel(MangaAcquisitionProgress progress) =>
     switch (progress.phase) {
       MangaAcquisitionPhase.queued => 'QUEUED',
+      MangaAcquisitionPhase.paused => 'PAUSED',
       MangaAcquisitionPhase.resolving => 'PREPARING',
       MangaAcquisitionPhase.downloading => 'DOWNLOADING',
       MangaAcquisitionPhase.extracting => 'EXTRACTING',
@@ -3986,6 +4344,8 @@ String _progressLabel(MangaAcquisitionProgress progress) =>
 String _progressDescription(MangaAcquisitionProgress progress) =>
     switch (progress.phase) {
       MangaAcquisitionPhase.queued => 'Waiting to start…',
+      MangaAcquisitionPhase.paused =>
+        'The manga download is paused. Resume it when you are ready.',
       MangaAcquisitionPhase.resolving => 'Checking the source securely…',
       MangaAcquisitionPhase.downloading => 'Downloading manga pages…',
       MangaAcquisitionPhase.extracting => 'Checking and preparing the CBZ…',

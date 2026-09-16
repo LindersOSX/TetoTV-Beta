@@ -2,6 +2,28 @@ import 'package:anime_tv/features/manga/application/manga_preferences_controller
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
+/// Commands target only the active page/spread, never a neighboring preload.
+class MangaReaderZoomController extends ChangeNotifier {
+  double _factor = 1;
+  Offset _pan = Offset.zero;
+  bool _reset = false;
+
+  void zoomBy(double factor) => _command(factor: factor);
+  void panBy(Offset fraction) => _command(pan: fraction);
+  void reset() => _command(reset: true);
+
+  void _command({
+    double factor = 1,
+    Offset pan = Offset.zero,
+    bool reset = false,
+  }) {
+    _factor = factor;
+    _pan = pan;
+    _reset = reset;
+    notifyListeners();
+  }
+}
+
 /// Tap navigation and local zoom for one finite-sized page or spread.
 ///
 /// Give each logical page/layout its own key so a newly selected page starts at
@@ -15,6 +37,9 @@ class MangaReaderPageSurface extends StatefulWidget {
     required this.onTurnPage,
     this.onZoomChanged,
     this.resetToken = 0,
+    this.remoteController,
+    this.remoteViewportSize,
+    this.remoteFocusFraction,
     super.key,
   });
 
@@ -36,6 +61,9 @@ class MangaReaderPageSurface extends StatefulWidget {
   /// The owner resets its scroll lock alongside this token; no callback fires
   /// during the update/build lifecycle.
   final int resetToken;
+  final MangaReaderZoomController? remoteController;
+  final Size? remoteViewportSize;
+  final Offset? remoteFocusFraction;
 
   @override
   State<MangaReaderPageSurface> createState() => _MangaReaderPageSurfaceState();
@@ -53,8 +81,62 @@ class _MangaReaderPageSurfaceState extends State<MangaReaderPageSurface> {
   bool get _zoomed => _scale > 1.001;
 
   @override
+  void initState() {
+    super.initState();
+    widget.remoteController?.addListener(_remoteCommand);
+  }
+
+  @override
+  void dispose() {
+    widget.remoteController?.removeListener(_remoteCommand);
+    super.dispose();
+  }
+
+  void _remoteCommand() {
+    final command = widget.remoteController;
+    if (command == null || !mounted) return;
+    final size = _viewportSize;
+    if (command._reset) {
+      _zoomRecognizer?.reset();
+      setState(() {
+        _scale = 1;
+        _translation = Offset.zero;
+        _interactionActive = false;
+      });
+    } else if (command._factor != 1) {
+      final fraction = widget.remoteFocusFraction ?? const Offset(.5, .5);
+      final center = Offset(
+        size.width * fraction.dx.clamp(0, 1),
+        size.height * fraction.dy.clamp(0, 1),
+      );
+      _updateTransform(center, center, command._factor);
+    } else {
+      final viewport = widget.remoteViewportSize ?? size;
+      setState(
+        () => _translation = _boundedTranslation(
+          _translation +
+              Offset(
+                command._pan.dx *
+                    (viewport.width < size.width ? viewport.width : size.width),
+                command._pan.dy *
+                    (viewport.height < size.height
+                        ? viewport.height
+                        : size.height),
+              ),
+          _scale,
+        ),
+      );
+    }
+    _notifyZoomChanged();
+  }
+
+  @override
   void didUpdateWidget(covariant MangaReaderPageSurface oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.remoteController != widget.remoteController) {
+      oldWidget.remoteController?.removeListener(_remoteCommand);
+      widget.remoteController?.addListener(_remoteCommand);
+    }
     if (oldWidget.resetToken == widget.resetToken) return;
     _zoomRecognizer?.reset();
     _scale = 1;

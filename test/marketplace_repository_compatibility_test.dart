@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:anime_tv/features/marketplace/application/marketplace_controller.dart';
 import 'package:anime_tv/features/marketplace/data/marketplace_client.dart';
 import 'package:anime_tv/features/marketplace/domain/addon_models.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -305,7 +306,6 @@ void main() {
         'marketplace': {
           'extensions': {
             'mapped-provider': {
-              'identifier': 'mapped-provider',
               'title': 'Mapped provider',
               'manifest': './mapped/manifest.json',
               'kind': 'anime_stream_provider',
@@ -324,6 +324,40 @@ void main() {
       Uri.parse('https://example.com/marketplace/mapped/manifest.json'),
     );
   });
+
+  test(
+    'preserves same-ID catalog variants for maintained-candidate selection',
+    () {
+      final catalog = parseMarketplaceCatalog(
+        jsonEncode([
+          {
+            'id': 'duplicate-provider',
+            'name': 'Broken duplicate',
+            'manifestURI': 'https://example.com/broken/manifest.json',
+            'type': 'onlinestream-provider',
+            'language': 'javascript',
+            'version': '99.0.0',
+            'brokenTag': true,
+          },
+          {
+            'id': 'duplicate-provider',
+            'name': 'Maintained duplicate',
+            'manifestURI': 'https://example.com/working/manifest.json',
+            'type': 'onlinestream-provider',
+            'language': 'javascript',
+            'version': '1.2.0',
+            'workingTag': true,
+          },
+        ]),
+        repositoryUrl: repository,
+      );
+
+      expect(catalog, hasLength(2));
+      final selected = selectMarketplaceCatalogCandidates(catalog);
+      expect(selected, hasLength(1));
+      expect(selected.single.name, 'Maintained duplicate');
+    },
+  );
 
   test('unwraps a manifest and preserves catalog-only executable fields', () {
     final summary = parseMarketplaceCatalog(

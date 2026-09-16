@@ -63,6 +63,59 @@ void main() {
     expect(report.issues.first, contains('Primary text'));
   });
 
+  test('dark accents keep chromatic focus rings and dark tinted keylines', () {
+    for (final accent in [
+      const Color(0xFF5000A0),
+      const Color(0xFF202080),
+      const Color(0xFF004040),
+      const Color(0xFF603060),
+    ]) {
+      final palette = AppThemePalette.defaults.withRole(
+        AppThemeColorRole.accent,
+        accent,
+      );
+      final seed = HSLColor.fromColor(accent);
+      final ring = HSLColor.fromColor(palette.focusRing);
+      // Flutter HSL-to-RGB rounds to 8-bit channels.
+      expect(ring.hue, closeTo(seed.hue, 1));
+      expect(ring.saturation, closeTo(seed.saturation, .01));
+      expect(ring.lightness, greaterThan(seed.lightness));
+      expect(
+        palette.focusRing.computeLuminance(),
+        closeTo(
+          Color.lerp(accent, Colors.white, .27)!.computeLuminance(),
+          .005,
+        ),
+        reason: 'Preserve previous visibility instead of dimming dark accents.',
+      );
+      expect(palette.focusInnerKeyline.computeLuminance(), lessThan(.04));
+      expect(
+        palette.focusInnerKeyline.computeLuminance(),
+        lessThan(accent.computeLuminance()),
+      );
+      expect(
+        HSLColor.fromColor(palette.focusInnerKeyline).hue,
+        closeTo(seed.hue, .01),
+      );
+      expect(palette.focusGlow.withValues(alpha: 1), palette.focusRing);
+      expect(palette.focusGlow.a, closeTo(.6, .001));
+      expect(palette.accent, accent);
+    }
+  });
+
+  test('neutral and light accents remain finite and use a dark keyline', () {
+    for (final accent in [Colors.black, Colors.grey, Colors.white]) {
+      final palette = AppThemePalette.defaults.withRole(
+        AppThemeColorRole.accent,
+        accent,
+      );
+      final ring = HSLColor.fromColor(palette.focusRing);
+      expect(ring.saturation, closeTo(0, .001));
+      expect(ring.lightness.isFinite, isTrue);
+      expect(palette.focusInnerKeyline.computeLuminance(), lessThan(.06));
+    }
+  });
+
   testWidgets('darkFor exposes palette through ThemeExtension', (tester) async {
     final palette = AppThemePalette.fromSeeds(
       background: const Color(0xFF101728),

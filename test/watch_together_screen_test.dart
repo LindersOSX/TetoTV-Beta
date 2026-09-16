@@ -1,9 +1,11 @@
 import 'dart:convert';
 
+import 'package:anime_tv/core/preferences/title_language_preference.dart';
 import 'package:anime_tv/core/widgets/network_artwork.dart';
 import 'package:anime_tv/core/widgets/tv_text_input.dart';
 import 'package:anime_tv/features/auth/application/tracking_token_service.dart';
 import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
+import 'package:anime_tv/features/settings/application/display_preferences_controller.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:anime_tv/features/settings/application/tracking_accounts_controller.dart';
 import 'package:anime_tv/features/watch_together/application/watch_party_controller.dart';
@@ -133,6 +135,48 @@ void main() {
       FocusManager.instance.primaryFocus?.debugLabel,
       'watch-together.copy',
     );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('active room media follows the local Title Language preference', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1280, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final client = _ScreenWatchPartyClient()
+      ..media = const WatchPartyMedia(
+        kind: 'anilist',
+        title: 'Canonical shared title',
+        titleEnglish: 'English room title',
+        titleRomaji: 'Romaji room title',
+        anilistId: 12,
+        episode: 2,
+      );
+    final controller = WatchPartyController(client);
+    expect(await controller.create(), isTrue);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          settingsPreferencesProvider.overrideWith(
+            (_) => _WatchSettingsController(),
+          ),
+          titleLanguagePreferenceProvider.overrideWith(
+            (_) =>
+                _WatchTitleLanguageController(TitleLanguagePreference.romaji),
+          ),
+          watchPartyControllerProvider.overrideWith((_) => controller),
+        ],
+        child: const MaterialApp(home: WatchTogetherScreen()),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Romaji room title • Episode 2'), findsOneWidget);
+    expect(find.text('English room title • Episode 2'), findsNothing);
+    expect(find.text('Canonical shared title • Episode 2'), findsNothing);
     expect(tester.takeException(), isNull);
   });
 
@@ -325,6 +369,16 @@ class _WatchSettingsController extends SettingsPreferencesController {
   Future<void> load() async {}
 }
 
+class _WatchTitleLanguageController extends TitleLanguagePreferenceController {
+  _WatchTitleLanguageController(TitleLanguagePreference initial)
+    : super(const FlutterSecureStorage()) {
+    state = initial;
+  }
+
+  @override
+  Future<void> load() async {}
+}
+
 class _ScreenWatchPartyClient extends WatchPartyClient {
   _ScreenWatchPartyClient()
     : super(baseUrl: 'https://tetotv.example', dio: Dio());
@@ -338,6 +392,7 @@ class _ScreenWatchPartyClient extends WatchPartyClient {
   );
   List<WatchPartyParticipant> participants = const [];
   List<WatchPartyEvent> events = const [];
+  WatchPartyMedia? media;
   WatchPartyPublicIdentity? lastIdentity;
 
   @override
@@ -364,6 +419,7 @@ class _ScreenWatchPartyClient extends WatchPartyClient {
         readyCount: 0,
         participants: participants,
         events: events,
+        media: media,
         expiresAt: session.expiresAt,
       );
 

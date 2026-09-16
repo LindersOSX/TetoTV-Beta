@@ -1,3 +1,5 @@
+import 'package:anime_tv/core/localization/app_language.dart';
+import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'package:anime_tv/core/storage/storage_providers.dart';
 import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
@@ -23,6 +25,7 @@ import 'package:anime_tv/features/tracking/application/my_list_controller.dart';
 import 'package:anime_tv/features/tracking/domain/tracking_repository.dart';
 import 'package:anime_tv/features/tracking/presentation/my_list_screen.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -30,6 +33,125 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  testWidgets(
+    'Spanish hero measures the Title Language result without translating it',
+    (tester) async {
+      const selectedTitle =
+          'The legendary heroine returns to the forgotten kingdom to recover '
+          'every lost memory before the stars disappear and a new adventure '
+          'begins beyond the final horizon';
+      await _pumpFeaturedHomeHero(
+        tester,
+        viewport: const Size(960, 540),
+        isTelevision: true,
+        preferences: const SettingsPreferences(
+          interfaceMode: InterfaceMode.television,
+          interfaceLanguage: AppLanguage.spanish,
+          showTitleStyle: ShowTitleStyle.englishLogo,
+          showHero: true,
+          loaded: true,
+        ),
+        hero: const AnimeSummary(
+          id: 81,
+          title: selectedTitle,
+          description: '',
+          episodes: 12,
+          score: 8.8,
+        ),
+      );
+      await tester.pumpAndSettle();
+      final titleSlot = find.byKey(const ValueKey('hero-title-81'));
+      final text = find.descendant(
+        of: titleSlot,
+        matching: find.text(selectedTitle),
+      );
+      expect(text, findsOneWidget);
+      final paragraph = tester.renderObject<RenderParagraph>(text);
+      expect(paragraph.didExceedMaxLines, isFalse);
+      expect(tester.widget<Text>(text).maxLines, isNull);
+      final slot = tester.getRect(titleSlot);
+      final rendered = tester.getRect(text);
+      expect(slot.height, greaterThan(102));
+      expect(slot.contains(rendered.topLeft), isTrue);
+      expect(
+        slot.contains(rendered.bottomRight - const Offset(.1, .1)),
+        isTrue,
+      );
+      expect(
+        rendered.bottom,
+        lessThanOrEqualTo(tester.getRect(find.text('8.8')).top),
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('Spanish Home localizes UI copy but preserves media titles', (
+    tester,
+  ) async {
+    await _pumpFeaturedHomeHero(
+      tester,
+      viewport: const Size(1280, 720),
+      isTelevision: true,
+      preferences: const SettingsPreferences(
+        interfaceMode: InterfaceMode.television,
+        interfaceLanguage: AppLanguage.spanish,
+        showHero: false,
+        showCardSubtitles: true,
+        loaded: true,
+      ),
+      hero: const AnimeSummary(
+        id: 81,
+        title: 'Hero',
+        description: '',
+        episodes: 1,
+        score: null,
+      ),
+      seasonal: const [
+        AnimeSummary(
+          id: 82,
+          title: 'Original seasonal title',
+          description: '',
+          episodes: 4,
+          score: null,
+        ),
+      ],
+      recent: [
+        PlaybackCheckpoint(
+          anilistMediaId: 83,
+          title: 'Original history title',
+          episode: 2,
+          position: const Duration(minutes: 3),
+          duration: const Duration(minutes: 24),
+          updatedAt: DateTime.utc(2026),
+        ),
+      ],
+    );
+    await tester.pumpAndSettle();
+    final poster = find.byKey(const ValueKey('home-poster-card-82'));
+    final history = find.byKey(const ValueKey('home-continue-card-83'));
+    expect(
+      find.descendant(
+        of: poster,
+        matching: find.text('Original seasonal title'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: poster, matching: find.text('4 episodios')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: history,
+        matching: find.text('Original history title'),
+      ),
+      findsOneWidget,
+    );
+    expect(find.text('Título de temporada'), findsNothing);
+    expect(find.text('Título del historial'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
   test('Modern Layout rail metrics scale on common TV canvases', () {
     const expectedWidths = <int, List<double>>{
       960: [48, 60, 72],
@@ -98,7 +220,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    for (var index = 0; index < 7; index++) {
+    for (var index = 0; index < 8; index++) {
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
       await tester.pumpAndSettle();
     }
@@ -300,7 +422,7 @@ void main() {
   });
 
   testWidgets(
-    'featured TV hero always uses localized text without synopsis and preserves explicit D-pad navigation',
+    'featured TV hero always uses text and preserves D-pad navigation',
     (tester) async {
       FlutterSecureStorage.setMockInitialValues({
         initialSetupCompletedStorageKey: 'true',
@@ -478,86 +600,166 @@ void main() {
     },
   );
 
-  testWidgets('featured Home hero uses the localized Romaji title as text', (
-    tester,
-  ) async {
-    FlutterSecureStorage.setMockInitialValues({
-      initialSetupCompletedStorageKey: 'true',
-    });
-    tester.view.physicalSize = const Size(1280, 720);
-    tester.view.devicePixelRatio = 1;
-    addTearDown(tester.view.resetPhysicalSize);
-    addTearDown(tester.view.resetDevicePixelRatio);
+  testWidgets(
+    'featured Home hero keeps Romaji text without requesting logo artwork',
+    (tester) async {
+      FlutterSecureStorage.setMockInitialValues({
+        initialSetupCompletedStorageKey: 'true',
+      });
+      tester.view.physicalSize = const Size(1280, 720);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
 
-    final logoRequests = <TitleLanguagePreference>[];
-    const hero = AnimeSummary(
-      id: 2718,
-      title: 'Generic fallback title',
-      titleEnglish: 'English localized title',
-      titleRomaji: 'Romaji localized title',
-      description: 'Localized fallback description.',
-      episodes: 12,
-      score: 8.1,
-    );
-    await tester.pumpWidget(
-      ProviderScope(
-        overrides: [
-          settingsPreferencesProvider.overrideWith(
-            (_) => _RailSettingsController(
-              const SettingsPreferences(
-                interfaceMode: InterfaceMode.television,
-                showHero: true,
-                showTitleStyle: ShowTitleStyle.englishLogo,
-                loaded: true,
+      final logoRequests = <TitleLanguagePreference>[];
+      const hero = AnimeSummary(
+        id: 2718,
+        title: 'Generic fallback title',
+        titleEnglish: 'English localized title',
+        titleRomaji: 'Romaji localized title',
+        description: 'Localized fallback description.',
+        episodes: 12,
+        score: 8.1,
+      );
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            settingsPreferencesProvider.overrideWith(
+              (_) => _RailSettingsController(
+                const SettingsPreferences(
+                  interfaceMode: InterfaceMode.television,
+                  showHero: true,
+                  showTitleStyle: ShowTitleStyle.englishLogo,
+                  loaded: true,
+                ),
               ),
             ),
-          ),
-          titleLanguagePreferenceProvider.overrideWith(
-            (_) =>
-                _StaticTitleLanguageController(TitleLanguagePreference.romaji),
-          ),
-          animeTitleLogoProvider.overrideWith((_, request) async {
-            logoRequests.add(request.titleLanguage);
-            return null;
-          }),
-          trendingAnimeProvider.overrideWith((_) async => const [hero]),
-          seasonalAnimeProvider.overrideWith((_) async => const []),
-          trackingHomeProvider.overrideWith(
-            (_) async => const TrackingHomeData(
-              watching: [],
-              planToWatch: [],
-              completed: [],
+            titleLanguagePreferenceProvider.overrideWith(
+              (_) => _StaticTitleLanguageController(
+                TitleLanguagePreference.romaji,
+              ),
             ),
-          ),
-          recentPlaybackProvider.overrideWith((_) async => const []),
-          dismissedContinueWatchingProvider.overrideWith(
-            (_) async => const <int>{},
+            animeTitleLogoProvider.overrideWith((_, request) async {
+              logoRequests.add(request.titleLanguage);
+              return null;
+            }),
+            trendingAnimeProvider.overrideWith((_) async => const [hero]),
+            seasonalAnimeProvider.overrideWith((_) async => const []),
+            trackingHomeProvider.overrideWith(
+              (_) async => const TrackingHomeData(
+                watching: [],
+                planToWatch: [],
+                completed: [],
+              ),
+            ),
+            recentPlaybackProvider.overrideWith((_) async => const []),
+            dismissedContinueWatchingProvider.overrideWith(
+              (_) async => const <int>{},
+            ),
+          ],
+          child: const MaterialApp(home: HomeScreen()),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 180));
+
+      final titleFinder = find.byKey(const ValueKey('hero-title-2718'));
+      expect(logoRequests, isEmpty);
+      expect(find.text('Romaji localized title'), findsOneWidget);
+      expect(find.text('English localized title'), findsNothing);
+      expect(
+        find.byKey(const ValueKey('hero-title-text-2718')),
+        findsOneWidget,
+      );
+      expect(find.text(hero.description), findsNothing);
+      final titleRect = tester.getRect(titleFinder);
+      final heroRect = tester.getRect(find.byKey(const ValueKey('home-hero')));
+      expect(titleRect.width, closeTo(1280 * .5, .01));
+      expect(titleRect.right, lessThan(heroRect.left + heroRect.width * .58));
+      expect(titleRect.height, lessThan(heroRect.height * .3));
+      expect(heroRect.contains(titleRect.topLeft), isTrue);
+      expect(
+        heroRect.contains(titleRect.bottomRight - const Offset(.1, .1)),
+        isTrue,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'Continue Watching applies Title Language to a matching local checkpoint',
+    (tester) async {
+      await _pumpFeaturedHomeHero(
+        tester,
+        viewport: const Size(1280, 720),
+        isTelevision: true,
+        preferences: const SettingsPreferences(
+          interfaceMode: InterfaceMode.television,
+          showHero: true,
+          loaded: true,
+        ),
+        hero: const AnimeSummary(
+          id: 1,
+          title: 'Featured fixture',
+          description: '',
+          episodes: null,
+          score: null,
+        ),
+        titlePreference: TitleLanguagePreference.romaji,
+        recent: [
+          PlaybackCheckpoint(
+            anilistMediaId: 4242,
+            episode: 3,
+            title: 'Stale checkpoint title',
+            position: const Duration(minutes: 8),
+            duration: const Duration(minutes: 24),
+            updatedAt: DateTime(2026, 9, 7),
           ),
         ],
-        child: const MaterialApp(home: HomeScreen()),
-      ),
-    );
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 180));
+        tracking: const TrackingHomeData(
+          watching: [
+            HomeTrackedAnime(
+              tracked: TrackedAnime(
+                mediaId: 4242,
+                title: 'Canonical tracking title',
+                titleEnglish: 'English Continue title',
+                titleRomaji: 'Romaji Continue title',
+                status: TrackingListStatus.watching,
+                progress: 3,
+              ),
+              provider: TrackingProvider.anilist,
+              anilistId: 4242,
+              coverImageUrl: null,
+            ),
+          ],
+          planToWatch: [],
+          completed: [],
+        ),
+      );
 
-    final titleFinder = find.byKey(const ValueKey('hero-title-2718'));
-    expect(logoRequests, isEmpty);
-    expect(find.text('Romaji localized title'), findsOneWidget);
-    expect(find.text('English localized title'), findsNothing);
-    expect(find.byKey(const ValueKey('hero-title-text-2718')), findsOneWidget);
-    expect(find.text(hero.description), findsNothing);
-    final titleRect = tester.getRect(titleFinder);
-    final heroRect = tester.getRect(find.byKey(const ValueKey('home-hero')));
-    expect(titleRect.width, closeTo(1280 * .5, .01));
-    expect(titleRect.right, lessThan(heroRect.left + heroRect.width * .58));
-    expect(titleRect.height, lessThan(heroRect.height * .3));
-    expect(heroRect.contains(titleRect.topLeft), isTrue);
-    expect(
-      heroRect.contains(titleRect.bottomRight - const Offset(.1, .1)),
-      isTrue,
-    );
-    expect(tester.takeException(), isNull);
-  });
+      final card = find.byKey(const ValueKey('home-continue-card-4242'));
+      expect(card, findsOneWidget);
+      expect(
+        find.descendant(of: card, matching: find.text('Romaji Continue title')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: card,
+          matching: find.text('English Continue title'),
+        ),
+        findsNothing,
+      );
+      expect(
+        find.descendant(
+          of: card,
+          matching: find.text('Stale checkpoint title'),
+        ),
+        findsNothing,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets(
     'TV featured hero wraps a long title at the same size without truncation',
@@ -738,53 +940,59 @@ void main() {
     },
   );
 
-  testWidgets('tablet hero keeps its existing title bounds and rendering', (
-    tester,
-  ) async {
-    const tabletTitle = 'The Apothecary Diaries';
-    await _pumpFeaturedHomeHero(
-      tester,
-      viewport: const Size(1200, 800),
-      isTelevision: false,
-      preferences: const SettingsPreferences(
-        interfaceMode: InterfaceMode.phone,
-        showHero: true,
-        loaded: true,
-      ),
-      hero: const AnimeSummary(
-        id: 2048,
-        title: tabletTitle,
-        description: 'A tablet regression fixture.',
-        episodes: 24,
-        score: 8.9,
-      ),
-    );
+  testWidgets(
+    'automatic tablet Home keeps mobile navigation and title bounds',
+    (tester) async {
+      const tabletTitle = 'The Apothecary Diaries';
+      await _pumpFeaturedHomeHero(
+        tester,
+        viewport: const Size(1200, 800),
+        isTelevision: false,
+        preferences: const SettingsPreferences(
+          interfaceMode: InterfaceMode.automatic,
+          showHero: true,
+          loaded: true,
+        ),
+        hero: const AnimeSummary(
+          id: 2048,
+          title: tabletTitle,
+          description: 'A tablet regression fixture.',
+          episodes: 24,
+          score: 8.9,
+        ),
+      );
 
-    final titleSlot = find.byKey(const ValueKey('hero-title-2048'));
-    final currentTitle = find.byKey(const ValueKey('hero-title-text-2048'));
-    final titleText = find.descendant(
-      of: currentTitle,
-      matching: find.text(tabletTitle),
-    );
-
-    expect(titleText, findsOneWidget);
-    expect(
-      find.descendant(
+      final titleSlot = find.byKey(const ValueKey('hero-title-2048'));
+      final currentTitle = find.byKey(const ValueKey('hero-title-text-2048'));
+      final titleText = find.descendant(
         of: currentTitle,
-        matching: find.byKey(const ValueKey('home-hero-title-fit')),
-      ),
-      findsNothing,
-    );
-    final textWidget = tester.widget<Text>(titleText);
-    expect(textWidget.maxLines, 2);
-    expect(textWidget.overflow, TextOverflow.ellipsis);
-    expect(
-      tester.renderObject<RenderParagraph>(titleText).didExceedMaxLines,
-      isFalse,
-    );
-    expect(tester.getSize(titleSlot), const Size(570, 68));
-    expect(tester.takeException(), isNull);
-  });
+        matching: find.text(tabletTitle),
+      );
+
+      expect(titleText, findsOneWidget);
+      expect(
+        find.descendant(
+          of: currentTitle,
+          matching: find.byKey(const ValueKey('home-hero-title-fit')),
+        ),
+        findsNothing,
+      );
+      final textWidget = tester.widget<Text>(titleText);
+      expect(textWidget.maxLines, 2);
+      expect(textWidget.overflow, TextOverflow.ellipsis);
+      expect(
+        tester.renderObject<RenderParagraph>(titleText).didExceedMaxLines,
+        isFalse,
+      );
+      expect(find.byKey(const ValueKey('main-navigation')), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('phone-bottom-navigation')),
+        findsNothing,
+      );
+      expect(tester.getSize(titleSlot), const Size(570, 68));
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets(
     'TV home uses explicit shelf movement and restores the selected card',
@@ -1541,6 +1749,7 @@ void main() {
         'navigation_show_discover': 'false',
         'navigation_show_calendar': 'false',
         'navigation_show_watch_together': 'false',
+        'features_manga_reader_enabled': 'false',
         'navigation_show_downloads': 'false',
         'navigation_settings_entry_placement': 'profileMenu',
       });
@@ -1608,6 +1817,7 @@ void main() {
         'main-nav-discover',
         'main-nav-calendar',
         'main-nav-watch-together',
+        'main-nav-manga',
         'main-nav-downloads',
         'main-nav-settings',
       ]) {
@@ -1642,6 +1852,14 @@ Future<void> _pumpFeaturedHomeHero(
   required bool isTelevision,
   required SettingsPreferences preferences,
   required AnimeSummary hero,
+  List<AnimeSummary> seasonal = const [],
+  List<PlaybackCheckpoint> recent = const [],
+  TrackingHomeData tracking = const TrackingHomeData(
+    watching: [],
+    planToWatch: [],
+    completed: [],
+  ),
+  TitleLanguagePreference titlePreference = TitleLanguagePreference.english,
 }) async {
   FlutterSecureStorage.setMockInitialValues({
     initialSetupCompletedStorageKey: 'true',
@@ -1658,21 +1876,29 @@ Future<void> _pumpFeaturedHomeHero(
         settingsPreferencesProvider.overrideWith(
           (_) => _RailSettingsController(preferences),
         ),
-        trendingAnimeProvider.overrideWith((_) async => [hero]),
-        seasonalAnimeProvider.overrideWith((_) async => const []),
-        trackingHomeProvider.overrideWith(
-          (_) async => const TrackingHomeData(
-            watching: [],
-            planToWatch: [],
-            completed: [],
-          ),
+        titleLanguagePreferenceProvider.overrideWith(
+          (_) => _StaticTitleLanguageController(titlePreference),
         ),
-        recentPlaybackProvider.overrideWith((_) async => const []),
+        trendingAnimeProvider.overrideWith((_) async => [hero]),
+        seasonalAnimeProvider.overrideWith((_) async => seasonal),
+        animeTitleLogoProvider.overrideWith((_, _) async => null),
+        trackingHomeProvider.overrideWith((_) async => tracking),
+        recentPlaybackProvider.overrideWith((_) async => recent),
         dismissedContinueWatchingProvider.overrideWith(
           (_) async => const <int>{},
         ),
       ],
-      child: const MaterialApp(home: HomeScreen()),
+      child: MaterialApp(
+        locale: preferences.interfaceLanguage.locale,
+        supportedLocales: TetoLocalizations.supportedLocales,
+        localizationsDelegates: const [
+          TetoLocalizations.delegate,
+          GlobalMaterialLocalizations.delegate,
+          GlobalWidgetsLocalizations.delegate,
+          GlobalCupertinoLocalizations.delegate,
+        ],
+        home: const HomeScreen(),
+      ),
     ),
   );
   await tester.pump();

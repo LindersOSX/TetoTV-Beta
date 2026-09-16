@@ -6,6 +6,7 @@ import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
+import 'package:anime_tv/core/tv/tv_shortcuts.dart';
 import 'package:anime_tv/core/widgets/tv_text_input.dart';
 import 'package:anime_tv/features/manga/application/manga_acquisition_controller.dart';
 import 'package:anime_tv/features/manga/application/manga_extension_controller.dart';
@@ -22,10 +23,12 @@ import 'package:anime_tv/features/manga/presentation/manga_reader_screen.dart';
 import 'package:anime_tv/features/marketplace/application/marketplace_controller.dart';
 import 'package:anime_tv/features/marketplace/data/addon_store.dart';
 import 'package:anime_tv/features/marketplace/data/marketplace_client.dart';
+import 'package:anime_tv/features/marketplace/data/seanime_javascript_provider.dart';
 import 'package:anime_tv/features/marketplace/domain/addon_models.dart';
 import 'package:anime_tv/features/settings/application/app_update_controller.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -41,6 +44,298 @@ void main() {
 
   tearDown(() {
     FlutterSecureStorage.setMockInitialValues(<String, String>{});
+  });
+
+  testWidgets(
+    'profile replacement during title lookup cannot open a stale chapter sheet',
+    (tester) async {
+      _setViewport(tester, const Size(1280, 720));
+      addTearDown(() => _resetViewport(tester));
+      final lookup = Completer<bool>();
+      final old = _TestMangaExtensionController(
+        MangaExtensionState(
+          providers: [_mangaExtensionAddon()],
+          results: [
+            MangaExtensionTitle(
+              providerId: 'manga.fixture',
+              providerName: 'Fixture',
+              id: 'title',
+              title: 'Old profile title',
+            ),
+          ],
+        ),
+        libraryLookup: lookup.future,
+      );
+      var selected = old;
+      final scope = ProviderContainer(
+        overrides: [
+          ..._overrides(
+            _TestMangaHubController(MangaHubState()),
+            isTelevision: true,
+          ),
+          mangaExtensionControllerProvider.overrideWith((_) => selected),
+        ],
+      );
+      addTearDown(scope.dispose);
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: scope,
+          child: MaterialApp(
+            theme: AppTheme.dark,
+            home: const TvShortcuts(child: MangaScreen()),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('manga-section-browse')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Old profile title'));
+      await tester.pump();
+      selected = _TestMangaExtensionController(MangaExtensionState());
+      scope.invalidate(mangaExtensionControllerProvider);
+      await tester.pump();
+      lookup.complete(false);
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('manga-chapter-scroll')), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('TV Manga starts on Library and arrows stay in the tab row', (
+    tester,
+  ) async {
+    _setViewport(tester, const Size(1280, 720));
+    addTearDown(() => _resetViewport(tester));
+    await _pumpScreen(
+      tester,
+      _TestMangaHubController(MangaHubState()),
+      isTelevision: true,
+    );
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'manga.section.library',
+    );
+    for (final section in ['browse', 'downloads', 'sources']) {
+      await _pressMangaKey(tester, LogicalKeyboardKey.arrowRight);
+      expect(
+        FocusManager.instance.primaryFocus?.debugLabel,
+        'manga.section.$section',
+      );
+    }
+    await _pressMangaKey(tester, LogicalKeyboardKey.arrowRight);
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'manga.section.sources',
+    );
+    for (final section in ['downloads', 'browse', 'library']) {
+      await _pressMangaKey(tester, LogicalKeyboardKey.arrowLeft);
+      expect(
+        FocusManager.instance.primaryFocus?.debugLabel,
+        'manga.section.$section',
+      );
+    }
+    await _pressMangaKey(tester, LogicalKeyboardKey.arrowLeft);
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'top-level.active-navigation',
+    );
+    await _pressMangaKey(tester, LogicalKeyboardKey.arrowRight);
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'manga.section.library',
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Sources traverses every semantic row and card action in order', (
+    tester,
+  ) async {
+    _setViewport(tester, const Size(1280, 720));
+    addTearDown(() => _resetViewport(tester));
+    final installed = _mangaExtensionAddon();
+    await _pumpScreen(
+      tester,
+      _TestMangaHubController(MangaHubState(sources: [_source()])),
+      isTelevision: true,
+      marketplace: _TestMarketplaceController(
+        MarketplaceState(
+          repositories: [_mangaRepository()],
+          installed: [installed],
+          catalog: [installed.manifest, _mangaCatalogAddon(2)],
+          loading: false,
+        ),
+      ),
+    );
+    await tester.tap(find.byKey(const ValueKey('manga-section-sources')));
+    await tester.pumpAndSettle();
+    Future<void> move(LogicalKeyboardKey key, String expected) async {
+      await _pressMangaKey(tester, key);
+      expect(FocusManager.instance.primaryFocus?.debugLabel, expected);
+      final node = FocusManager.instance.primaryFocus!;
+      final viewport = tester.getRect(
+        find.byKey(const ValueKey('manga-sources-list')),
+      );
+      expect(node.rect.top, greaterThanOrEqualTo(viewport.top - 1));
+      expect(node.rect.bottom, lessThanOrEqualTo(viewport.bottom + 1));
+    }
+
+    await move(LogicalKeyboardKey.arrowDown, 'manga.content.first');
+    await move(LogicalKeyboardKey.arrowRight, 'manga.sources.policy.browse');
+    await move(LogicalKeyboardKey.arrowDown, 'manga.sources.repository.add');
+    await move(
+      LogicalKeyboardKey.arrowRight,
+      'manga.sources.repository.aniyomi',
+    );
+    await move(
+      LogicalKeyboardKey.arrowRight,
+      'manga.sources.repository.refresh',
+    );
+    await move(LogicalKeyboardKey.arrowDown, 'manga.sources.repository.toggle');
+    await move(
+      LogicalKeyboardKey.arrowRight,
+      'manga.sources.repository.remove',
+    );
+    await move(LogicalKeyboardKey.arrowDown, 'manga.sources.extensions.manage');
+    await move(LogicalKeyboardKey.arrowDown, 'manga.sources.extensions.filter');
+    await move(
+      LogicalKeyboardKey.arrowRight,
+      'manga.sources.extensions.language',
+    );
+    await move(LogicalKeyboardKey.arrowDown, 'manga.sources.extension.toggle');
+    await move(LogicalKeyboardKey.arrowRight, 'manga.sources.extension.remove');
+    await move(LogicalKeyboardKey.arrowDown, 'manga.sources.extension.install');
+    await move(LogicalKeyboardKey.arrowDown, 'manga.sources.extensions.browse');
+    await move(LogicalKeyboardKey.arrowDown, 'manga.sources.catalog.open');
+    await move(LogicalKeyboardKey.arrowRight, 'manga.sources.catalog.toggle');
+    await move(
+      LogicalKeyboardKey.arrowRight,
+      'manga.sources.catalog.credentials',
+    );
+    await move(LogicalKeyboardKey.arrowRight, 'manga.sources.catalog.remove');
+    for (final expected in [
+      'extensions.browse',
+      'extension.install',
+      'extension.toggle',
+      'extensions.filter',
+      'extensions.manage',
+      'repository.toggle',
+      'repository.add',
+    ]) {
+      await move(LogicalKeyboardKey.arrowUp, 'manga.sources.$expected');
+    }
+    await move(LogicalKeyboardKey.arrowUp, 'manga.content.first');
+    await _pressMangaKey(tester, LogicalKeyboardKey.arrowUp);
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'manga.section.sources',
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Aniyomi source controls stay hidden outside Developer Mode', (
+    tester,
+  ) async {
+    _setViewport(tester, const Size(1280, 720));
+    addTearDown(() => _resetViewport(tester));
+    await _pumpScreen(
+      tester,
+      _TestMangaHubController(MangaHubState()),
+      isTelevision: true,
+      developerMode: false,
+    );
+
+    await tester.tap(find.byKey(const ValueKey('manga-section-sources')));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('manga-aniyomi-experiments')),
+      findsNothing,
+    );
+    expect(find.text('Aniyomi • Experimental'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Sources D-pad reaches lazy extension rows without skipping', (
+    tester,
+  ) async {
+    _setViewport(tester, const Size(1280, 720));
+    addTearDown(() => _resetViewport(tester));
+    final catalog = [
+      for (var index = 0; index < 35; index++) _mangaCatalogAddon(index * 2),
+    ];
+    await _pumpScreen(
+      tester,
+      _TestMangaHubController(MangaHubState()),
+      isTelevision: true,
+      marketplace: _TestMarketplaceController(
+        MarketplaceState(
+          repositories: [_mangaRepository()],
+          catalog: catalog,
+          loading: false,
+        ),
+      ),
+    );
+    await tester.tap(find.byKey(const ValueKey('manga-section-sources')));
+    await tester.pumpAndSettle();
+    for (var step = 0; step < 6; step++) {
+      await _pressMangaKey(tester, LogicalKeyboardKey.arrowDown);
+    }
+    for (var index = 0; index < catalog.length; index++) {
+      final button = tester.widget<TvFocusable>(
+        find.descendant(
+          of: find.byKey(
+            ValueKey('manga-extension-install-${catalog[index].id}'),
+          ),
+          matching: find.byType(TvFocusable),
+        ),
+      );
+      expect(button.focusNode?.hasFocus, isTrue, reason: 'row $index');
+      if (index + 1 < catalog.length) {
+        await _pressMangaKey(tester, LogicalKeyboardKey.arrowDown);
+      }
+    }
+    for (var index = catalog.length - 2; index >= 0; index--) {
+      await _pressMangaKey(tester, LogicalKeyboardKey.arrowUp);
+      final button = tester.widget<TvFocusable>(
+        find.descendant(
+          of: find.byKey(
+            ValueKey('manga-extension-install-${catalog[index].id}'),
+          ),
+          matching: find.byType(TvFocusable),
+        ),
+      );
+      expect(button.focusNode?.hasFocus, isTrue, reason: 'reverse row $index');
+    }
+    // The entry control is lazily detached when the Sources list is far down.
+    // Leaving for the rail and returning must still restore its visible top.
+    final sourcesScroll = tester.state<ScrollableState>(
+      find.descendant(
+        of: find.byKey(const ValueKey('manga-sources-list')),
+        matching: find.byType(Scrollable),
+      ),
+    );
+    sourcesScroll.position.jumpTo(sourcesScroll.position.maxScrollExtent);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('manga-section-sources')));
+    for (var step = 0; step < 4; step++) {
+      await _pressMangaKey(tester, LogicalKeyboardKey.arrowLeft);
+    }
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'top-level.active-navigation',
+    );
+    await _pressMangaKey(tester, LogicalKeyboardKey.arrowRight);
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'manga.section.sources',
+    );
+    await _pressMangaKey(tester, LogicalKeyboardKey.arrowDown);
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'manga.content.first',
+    );
+    expect(sourcesScroll.position.pixels, 0);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('real /manga route shows the empty profile-local Library', (
@@ -67,13 +362,8 @@ void main() {
     expect(appRouter.routeInformationProvider.value.uri.path, '/manga');
     expect(find.byKey(const ValueKey('manga-library')), findsOneWidget);
     expect(find.text('Your manga library is empty'), findsOneWidget);
-    expect(
-      find.text(
-        'Browse a source and save titles here. Library and reading progress stay on this device and profile.',
-      ),
-      findsOneWidget,
-    );
-    expect(find.text('DEVELOPER PREVIEW'), findsOneWidget);
+    expect(find.text('Search library'), findsWidgets);
+    expect(find.text('DEVELOPER PREVIEW'), findsNothing);
     expect(tester.takeException(), isNull);
   });
 
@@ -113,47 +403,12 @@ void main() {
       await tester.tap(find.text('Cancel').last, warnIfMissed: false);
       await tester.pumpAndSettle();
 
-      await tester.scrollUntilVisible(
-        find.text('No data catalogs added', skipOffstage: false),
-        180,
-        scrollable: find.descendant(
-          of: find.byKey(const ValueKey('manga-sources-list')),
-          matching: find.byType(Scrollable),
-        ),
-      );
-      await tester.pumpAndSettle();
-      expect(find.text('No data catalogs added'), findsOneWidget);
       expect(
-        find.textContaining('Nothing is bundled or recommended by TetoTV.'),
-        findsOneWidget,
-      );
-      expect(controller.state.sources, isEmpty);
-
-      await tester.scrollUntilVisible(
-        find.byKey(
-          const ValueKey('manga-add-data-catalog'),
-          skipOffstage: false,
-        ),
-        180,
-        scrollable: find.descendant(
-          of: find.byKey(const ValueKey('manga-sources-list')),
-          matching: find.byType(Scrollable),
-        ),
-      );
-      await tester.pumpAndSettle();
-      await tester.tap(
         find.byKey(const ValueKey('manga-add-data-catalog')),
-        warnIfMissed: false,
+        findsNothing,
       );
-      await tester.pumpAndSettle();
-
-      expect(find.text('Add OPDS or data catalog'), findsOneWidget);
-      expect(
-        find.textContaining('TetoTV does not provide a source list.'),
-        findsOneWidget,
-      );
-      final input = tester.widget<TvTextInput>(find.byType(TvTextInput).last);
-      expect(input.controller.text, isEmpty);
+      expect(find.text('Add OPDS or data catalog'), findsNothing);
+      expect(controller.state.sources, isEmpty);
       expect(tester.takeException(), isNull);
     },
   );
@@ -421,12 +676,15 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 240));
       expect(
-        find.byKey(const ValueKey('manga-extension-chapters')),
+        find.byKey(const ValueKey('manga-chapter-scroll')),
         findsOneWidget,
       );
       expect(find.text('Chapter 1: The Journey'), findsOneWidget);
       expect(find.text('Read'), findsOneWidget);
-      expect(find.byTooltip('Download chapter'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('manga-chapter-download-chapter.1')),
+        findsOneWidget,
+      );
       expect(find.text('Add to library'), findsOneWidget);
       expect(tester.takeException(), isNull);
     },
@@ -495,7 +753,7 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    expect(find.text('Optional OPDS & data catalogs'), findsOneWidget);
+    expect(find.text('Previously saved catalogs'), findsOneWidget);
     expect(find.text('My added catalog'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
@@ -588,7 +846,7 @@ void main() {
       findsWidgets,
     );
     expect(
-      find.descendant(of: downloadList, matching: find.text('Cancel')),
+      find.descendant(of: downloadList, matching: find.text('Pause')),
       findsOneWidget,
     );
     await _pumpUntil(
@@ -616,6 +874,161 @@ void main() {
     );
     expect(tester.takeException(), isNull);
   });
+
+  for (final sourceState in ['missing', 'disabled']) {
+    testWidgets(
+      'Library Continue opens a verified local chapter with its extension $sourceState',
+      (tester) async {
+        _setViewport(tester, const Size(1280, 720));
+        addTearDown(() => _resetViewport(tester));
+        final fixture = _OfflineContinueFixture();
+        final store = _OfflineContinueStore(fixture);
+        final extension = _OfflineOnlyExtensionController(
+          disabled: sourceState == 'disabled',
+        );
+        final hub = _TestMangaHubController(
+          MangaHubState(library: [fixture.entry]),
+        );
+        final downloads = _RecordingMangaAcquisitionController(
+          MangaAcquisitionState(isInitializing: false, jobs: [fixture.job]),
+          completedRequest: fixture.reader,
+        );
+        MangaReaderRequest? opened;
+        final router = GoRouter(
+          routes: [
+            GoRoute(path: '/', builder: (_, _) => const MangaScreen()),
+            GoRoute(
+              path: MangaReaderScreen.routePath,
+              builder: (_, state) {
+                opened = state.extra! as MangaReaderRequest;
+                return const Scaffold(body: Text('offline-library-reader'));
+              },
+            ),
+          ],
+        );
+        addTearDown(router.dispose);
+        await tester.pumpWidget(
+          ProviderScope(
+            overrides: [
+              ..._overrides(
+                hub,
+                isTelevision: true,
+                acquisitions: downloads,
+                extensions: extension,
+              ),
+              mangaOwnerKeyProvider.overrideWith((_) async => 'owner.test'),
+              mangaStoreProvider.overrideWithValue(store),
+            ],
+            child: MaterialApp.router(
+              theme: AppTheme.dark,
+              routerConfig: router,
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        await tester.ensureVisible(find.text('Continue reading'));
+        await tester.tap(find.text('Continue reading'));
+        await tester.pumpAndSettle();
+        expect(find.text('offline-library-reader'), findsOneWidget);
+        expect(downloads.openedJobIds, [fixture.job.id]);
+        expect(hub.resumedRequests, [fixture.reader]);
+        expect(opened, same(fixture.reader));
+        expect(
+          opened!.pages.every(
+            (page) => page.resource is MangaTrustedLocalPageResource,
+          ),
+          isTrue,
+        );
+        expect(
+          store.reads,
+          containsAll([
+            'history',
+            'latest',
+            'snapshots',
+            'completed downloads',
+          ]),
+        );
+        expect(store.owners, everyElement('owner.test'));
+        expect(
+          extension.providerCalls,
+          isEmpty,
+          reason:
+              'Offline Continue must not consult provider identity, chapter lists, or page resolution.',
+        );
+        expect(tester.takeException(), isNull);
+      },
+    );
+  }
+
+  testWidgets(
+    'Library Continue rejects a profile switch during verified local chapter lookup',
+    (tester) async {
+      _setViewport(tester, const Size(1280, 720));
+      addTearDown(() => _resetViewport(tester));
+      final fixture = _OfflineContinueFixture();
+      final store = _OfflineContinueStore(fixture);
+      final extension = _OfflineOnlyExtensionController();
+      final verification = Completer<void>();
+      final downloads = _RecordingMangaAcquisitionController(
+        MangaAcquisitionState(isInitializing: false, jobs: [fixture.job]),
+        completedRequest: fixture.reader,
+        completedWait: verification.future,
+      );
+      final originalHub = _TestMangaHubController(
+        MangaHubState(library: [fixture.entry]),
+      );
+      var selectedHub = originalHub;
+      var selectedOwner = 'owner.test';
+      final scope = ProviderContainer(
+        overrides: [
+          ..._overrides(
+            originalHub,
+            isTelevision: true,
+            acquisitions: downloads,
+            extensions: extension,
+          ).skip(1),
+          mangaHubControllerProvider.overrideWith((_) => selectedHub),
+          mangaOwnerKeyProvider.overrideWith((_) async => selectedOwner),
+          mangaStoreProvider.overrideWithValue(store),
+        ],
+      );
+      addTearDown(scope.dispose);
+      final router = GoRouter(
+        routes: [
+          GoRoute(path: '/', builder: (_, _) => const MangaScreen()),
+          GoRoute(
+            path: MangaReaderScreen.routePath,
+            builder: (_, _) =>
+                const Scaffold(body: Text('offline-library-reader')),
+          ),
+        ],
+      );
+      addTearDown(router.dispose);
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: scope,
+          child: MaterialApp.router(theme: AppTheme.dark, routerConfig: router),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(find.text('Continue reading'));
+      await tester.tap(find.text('Continue reading'));
+      await tester.pump();
+      expect(downloads.openedJobIds, [fixture.job.id]);
+      selectedOwner = 'owner.other';
+      selectedHub = _TestMangaHubController(MangaHubState());
+      scope.invalidate(mangaOwnerKeyProvider);
+      scope.invalidate(mangaHubControllerProvider);
+      await tester.pump();
+      verification.complete();
+      await tester.pumpAndSettle();
+      expect(find.text('offline-library-reader'), findsNothing);
+      expect(originalHub.resumedRequests, isEmpty);
+      expect(selectedHub.resumedRequests, isEmpty);
+      expect(extension.providerCalls, isEmpty);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets('completed download card opens the local reader request', (
     tester,
@@ -679,6 +1092,89 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  for (final delayedStage in ['local verification', 'progress restore']) {
+    testWidgets(
+      'profile change during $delayedStage cannot launch an old reader',
+      (tester) async {
+        _setViewport(tester, const Size(1280, 720));
+        addTearDown(() => _resetViewport(tester));
+        final wait = Completer<void>();
+        final job = _downloadJob(
+          id: 'completed-job',
+          status: MangaDownloadJobStatus.completed,
+          pageCount: 1,
+          completedPages: 1,
+        );
+        final reader = _readerRequest(
+          sourceId: job.sourceId,
+          publicationId: job.entryId,
+          chapterId: job.chapterId,
+          title: job.seriesTitle,
+          pageUri: Uri.parse('https://catalog.example/page.png'),
+        );
+        final acquisitions = _RecordingMangaAcquisitionController(
+          MangaAcquisitionState(isInitializing: false, jobs: [job]),
+          completedRequest: reader,
+          completedWait: delayedStage == 'local verification'
+              ? wait.future
+              : null,
+        );
+        final oldHub = _TestMangaHubController(
+          MangaHubState(),
+          resumeWait: delayedStage == 'progress restore' ? wait.future : null,
+        );
+        var currentHub = oldHub;
+        final container = ProviderContainer(
+          overrides: [
+            ..._overrides(
+              oldHub,
+              isTelevision: true,
+              acquisitions: acquisitions,
+            ).skip(1),
+            mangaHubControllerProvider.overrideWith((_) => currentHub),
+          ],
+        );
+        addTearDown(container.dispose);
+        final router = GoRouter(
+          routes: [
+            GoRoute(path: '/', builder: (_, _) => const MangaScreen()),
+            GoRoute(
+              path: MangaReaderScreen.routePath,
+              builder: (_, _) => const Scaffold(body: Text('reader-target')),
+            ),
+          ],
+        );
+        addTearDown(router.dispose);
+        await tester.pumpWidget(
+          UncontrolledProviderScope(
+            container: container,
+            child: MaterialApp.router(
+              theme: AppTheme.dark,
+              routerConfig: router,
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const ValueKey('manga-section-downloads')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Read'));
+        await tester.pump();
+        expect(acquisitions.openedJobIds, ['completed-job']);
+        if (delayedStage == 'progress restore') {
+          expect(oldHub.resumedRequests, [reader]);
+        }
+        currentHub = _TestMangaHubController(MangaHubState());
+        container.invalidate(mangaHubControllerProvider);
+        await tester.pump();
+        wait.complete();
+        await tester.pumpAndSettle();
+        expect(find.text('reader-target'), findsNothing);
+        expect(currentHub.resumedRequests, isEmpty);
+        expect(tester.takeException(), isNull);
+      },
+    );
+  }
+
   testWidgets('download cards invoke cancel retry and delete callbacks', (
     tester,
   ) async {
@@ -712,7 +1208,7 @@ void main() {
     );
     await tester.pump(const Duration(milliseconds: 180));
 
-    await tester.tap(find.text('Cancel'), warnIfMissed: false);
+    await tester.tap(find.byTooltip('Cancel'), warnIfMissed: false);
     await tester.pump();
     await tester.tap(find.text('Retry'), warnIfMissed: false);
     await tester.pump();
@@ -840,6 +1336,7 @@ void main() {
 List<Override> _overrides(
   _TestMangaHubController controller, {
   required bool isTelevision,
+  bool developerMode = true,
   MangaAcquisitionController? acquisitions,
   MangaExtensionController? extensions,
   MarketplaceController? marketplace,
@@ -862,7 +1359,9 @@ List<Override> _overrides(
   settingsPreferencesProvider.overrideWith(
     (_) => _TestSettingsController(isTelevision: isTelevision),
   ),
-  appUpdateControllerProvider.overrideWith((_) => _TestAppUpdateController()),
+  appUpdateControllerProvider.overrideWith(
+    (_) => _TestAppUpdateController(developerMode: developerMode),
+  ),
   isTelevisionProvider.overrideWithValue(isTelevision),
 ];
 
@@ -870,6 +1369,7 @@ Future<void> _pumpScreen(
   WidgetTester tester,
   _TestMangaHubController controller, {
   required bool isTelevision,
+  bool developerMode = true,
   MangaAcquisitionController? acquisitions,
   MangaExtensionController? extensions,
   MarketplaceController? marketplace,
@@ -879,15 +1379,24 @@ Future<void> _pumpScreen(
       overrides: _overrides(
         controller,
         isTelevision: isTelevision,
+        developerMode: developerMode,
         acquisitions: acquisitions,
         extensions: extensions,
         marketplace: marketplace,
       ),
-      child: MaterialApp(theme: AppTheme.dark, home: const MangaScreen()),
+      child: MaterialApp(
+        theme: AppTheme.dark,
+        home: const TvShortcuts(child: MangaScreen()),
+      ),
     ),
   );
   await tester.pump();
   await tester.pump(const Duration(milliseconds: 240));
+}
+
+Future<void> _pressMangaKey(WidgetTester tester, LogicalKeyboardKey key) async {
+  await tester.sendKeyEvent(key);
+  await tester.pumpAndSettle();
 }
 
 void _setViewport(WidgetTester tester, Size size) {
@@ -993,6 +1502,7 @@ class _TestMangaExtensionController extends MangaExtensionController {
   _TestMangaExtensionController(
     MangaExtensionState initial, {
     this.chapterFixtures = const [],
+    this.libraryLookup,
   }) : super(
          addonStore: AddonStore(TetoTvDatabase.instance),
          mangaStore: MangaStore(),
@@ -1003,14 +1513,216 @@ class _TestMangaExtensionController extends MangaExtensionController {
   }
 
   final List<MangaExtensionChapter> chapterFixtures;
+  final Future<bool>? libraryLookup;
 
   @override
   Future<List<MangaExtensionChapter>> chapters(
-    MangaExtensionTitle title,
-  ) async => chapterFixtures;
+    MangaExtensionTitle title, {
+    String? expectedOwnerKey,
+    WebProviderCancellation? cancellation,
+  }) async => chapterFixtures;
 
   @override
-  Future<bool> isInLibrary(MangaExtensionTitle title) async => false;
+  Future<bool> isInLibrary(MangaExtensionTitle title) async =>
+      libraryLookup == null ? false : await libraryLookup!;
+}
+
+class _OfflineOnlyExtensionController extends _TestMangaExtensionController {
+  _OfflineOnlyExtensionController({bool disabled = false})
+    : super(
+        MangaExtensionState(
+          providers: disabled
+              ? [
+                  InstalledStreamingAddon(
+                    manifest: _mangaExtensionAddon().manifest,
+                    payload: 'class Provider {}',
+                    enabled: false,
+                    installedAt: DateTime.utc(2026, 9, 5),
+                    updatedAt: DateTime.utc(2026, 9, 5),
+                  ),
+                ]
+              : const [],
+        ),
+      );
+
+  final providerCalls = <String>[];
+
+  Never _reject(String stage) {
+    providerCalls.add(stage);
+    throw StateError('Offline regression: provider access is forbidden.');
+  }
+
+  @override
+  Future<MangaExtensionTitle?> openLibraryEntry(
+    MangaLibraryEntry entry,
+  ) async => _reject('identity');
+
+  @override
+  Future<List<MangaExtensionChapter>> chapters(
+    MangaExtensionTitle title, {
+    String? expectedOwnerKey,
+    WebProviderCancellation? cancellation,
+  }) async => _reject('chapters');
+
+  @override
+  Future<MangaReaderRequest> buildReaderRequest(
+    MangaExtensionTitle title,
+    MangaExtensionChapter chapter, {
+    List<MangaExtensionChapter>? chapterList,
+  }) async => _reject('pages');
+}
+
+class _OfflineContinueFixture {
+  final sourceId = mangaExtensionSourceId('manga.fixture');
+  final entryId = mangaExtensionEntryId('manga.fixture', 'offline-title');
+  String chapterId(int number) => mangaExtensionChapterId(
+    'manga.fixture',
+    'offline-title',
+    'chapter-$number',
+  );
+  late final entry = MangaLibraryEntry(
+    ownerKey: 'owner.test',
+    sourceId: sourceId,
+    entryId: entryId,
+    title: 'Offline library manga',
+    metadata: const {
+      'kind': 'seanime-manga-extension',
+      'providerId': 'manga.fixture',
+    },
+    updatedAt: DateTime.utc(2026, 9, 5),
+  );
+  late final history = [
+    for (var n = 1; n <= 2; n++)
+      MangaReadingProgress(
+        ownerKey: 'owner.test',
+        sourceId: sourceId,
+        entryId: entryId,
+        chapterId: chapterId(n),
+        chapterNumber: n.toDouble(),
+        pageIndex: n == 1 ? 2 : 1,
+        pageOffset: n == 1 ? 0 : .35,
+        pageCount: 3,
+        completed: n == 1,
+        updatedAt: DateTime.utc(2026, 9, 5, 0, n),
+      ),
+  ];
+  late final snapshots = [
+    for (var n = 1; n <= 3; n++)
+      MangaChapterSnapshot(
+        chapterId: chapterId(n),
+        title: 'Chapter $n',
+        ordinal: n - 1,
+        chapterNumber: n.toDouble(),
+      ),
+  ];
+  late final job = MangaDownloadJob(
+    id: mangaExtensionDownloadJobId(sourceId, entryId, chapterId(2)),
+    sourceId: sourceId,
+    entryId: entryId,
+    chapterId: chapterId(2),
+    seriesTitle: entry.title,
+    chapterLabel: 'Chapter 2',
+    status: MangaDownloadJobStatus.completed,
+    relativeDirectory: 'jobs/offline-verified',
+    pageCount: 3,
+    completedPages: 3,
+    receivedBytes: 128,
+    queuePosition: 0,
+    retryCount: 0,
+    createdAt: DateTime.utc(2026, 9, 5),
+    updatedAt: DateTime.utc(2026, 9, 5),
+  );
+  // The acquisition-controller seam returns an already verified local request;
+  // this routing test never opens a file, socket, or real database.
+  late final reader = MangaReaderRequest(
+    sourceId: sourceId,
+    publicationId: entryId,
+    chapterId: chapterId(2),
+    seriesTitle: entry.title,
+    chapterTitle: 'Chapter 2',
+    chapterNumber: 2,
+    pages: [
+      for (var index = 0; index < 3; index++)
+        MangaReaderPage(
+          id: 'page-$index',
+          index: index,
+          resource: MangaTrustedLocalPageResource(
+            area: MangaLocalStorageArea.downloadedPages,
+            relativePath: 'jobs/offline-verified/page-$index.png',
+          ),
+        ),
+    ],
+  );
+}
+
+class _OfflineContinueStore extends MangaStore {
+  _OfflineContinueStore(this.fixture)
+    : super(
+        databaseProvider: () async => throw StateError(
+          'Offline Continue regression must never use the real database.',
+        ),
+      );
+  final _OfflineContinueFixture fixture;
+  final reads = <String>[];
+  final owners = <String>[];
+
+  @override
+  Future<List<MangaReadingProgress>> latestProgressForOwner(
+    String ownerKey,
+  ) async {
+    owners.add(ownerKey);
+    return ownerKey == fixture.entry.ownerKey ? [fixture.history.last] : [];
+  }
+
+  @override
+  Future<List<MangaReadingProgress>> chapterProgressForEntry({
+    required String ownerKey,
+    required String sourceId,
+    required String entryId,
+  }) async {
+    reads.add('history');
+    owners.add(ownerKey);
+    expect(sourceId, fixture.sourceId);
+    expect(entryId, fixture.entryId);
+    return fixture.history;
+  }
+
+  @override
+  Future<MangaReadingProgress?> progress({
+    required String ownerKey,
+    required String sourceId,
+    required String entryId,
+  }) async {
+    reads.add('latest');
+    owners.add(ownerKey);
+    expect(sourceId, fixture.sourceId);
+    expect(entryId, fixture.entryId);
+    return fixture.history.last;
+  }
+
+  @override
+  Future<List<MangaChapterSnapshot>> chapterSnapshots({
+    required String ownerKey,
+    required String sourceId,
+    required String entryId,
+    bool includeUnavailable = true,
+  }) async {
+    reads.add('snapshots');
+    owners.add(ownerKey);
+    expect(sourceId, fixture.sourceId);
+    expect(entryId, fixture.entryId);
+    return fixture.snapshots;
+  }
+
+  @override
+  Future<List<MangaDownloadJob>> downloadJobs({
+    MangaDownloadJobStatus? status,
+    int limit = 500,
+  }) async {
+    expect(status, MangaDownloadJobStatus.completed);
+    reads.add('completed downloads');
+    return [fixture.job];
+  }
 }
 
 class _MemoryMangaExtensionIdentityStore
@@ -1052,6 +1764,7 @@ class _TestMangaHubController extends MangaHubController {
     MangaHubState initial, {
     this.feeds = const <String, MangaCatalogFeed>{},
     this.readerRequest,
+    this.resumeWait,
     this.removalEvents,
   }) : super(
          client: MangaCatalogClient(
@@ -1068,6 +1781,7 @@ class _TestMangaHubController extends MangaHubController {
 
   final Map<String, MangaCatalogFeed> feeds;
   final MangaReaderRequest? readerRequest;
+  final Future<void>? resumeWait;
   final List<String>? removalEvents;
   final List<String> selectedSourceIds = <String>[];
   final List<MangaReaderRequest> resumedRequests = <MangaReaderRequest>[];
@@ -1118,6 +1832,7 @@ class _TestMangaHubController extends MangaHubController {
     MangaReaderRequest request,
   ) async {
     resumedRequests.add(request);
+    if (resumeWait != null) await resumeWait;
     return request;
   }
 
@@ -1137,12 +1852,14 @@ class _RecordingMangaAcquisitionController extends MangaAcquisitionController {
   _RecordingMangaAcquisitionController(
     MangaAcquisitionState initial, {
     this.completedRequest,
+    this.completedWait,
     this.removalEvents,
   }) : super(service: Completer<MangaAcquisitionService>().future) {
     state = initial;
   }
 
   final MangaReaderRequest? completedRequest;
+  final Future<void>? completedWait;
   final List<String>? removalEvents;
   final List<String> openedJobIds = <String>[];
   final List<String> cancelledJobIds = <String>[];
@@ -1158,6 +1875,7 @@ class _RecordingMangaAcquisitionController extends MangaAcquisitionController {
   @override
   Future<MangaReaderRequest?> openCompleted(String jobId) async {
     openedJobIds.add(jobId);
+    if (completedWait != null) await completedWait;
     return completedRequest;
   }
 
@@ -1165,7 +1883,11 @@ class _RecordingMangaAcquisitionController extends MangaAcquisitionController {
   Future<void> cancel(String jobId) async => cancelledJobIds.add(jobId);
 
   @override
-  Future<MangaAcquisitionOperation> retryInSession(String jobId) {
+  Future<MangaAcquisitionOperation> resume(
+    String jobId, {
+    VoidCallback? validateAdmission,
+  }) {
+    validateAdmission?.call();
     retriedJobIds.add(jobId);
     return Future<MangaAcquisitionOperation>.error(
       const MangaAcquisitionException(
@@ -1363,7 +2085,7 @@ class _TestSettingsController extends SettingsPreferencesController {
 }
 
 class _TestAppUpdateController extends AppUpdateController {
-  _TestAppUpdateController()
+  _TestAppUpdateController({bool developerMode = true})
     : super(
         const FlutterSecureStorage(),
         _UnusedReleaseSource(),
@@ -1372,7 +2094,7 @@ class _TestAppUpdateController extends AppUpdateController {
         () async => Directory.systemTemp,
         (_) async => '',
       ) {
-    state = const AppUpdateState(loaded: true, developerMode: true);
+    state = AppUpdateState(loaded: true, developerMode: developerMode);
   }
 
   @override

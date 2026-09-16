@@ -1,3 +1,4 @@
+import 'package:anime_tv/core/preferences/title_language_preference.dart';
 import 'package:flutter/foundation.dart';
 import 'package:anime_tv/features/watch_together/domain/watch_party_source_descriptor.dart';
 import 'package:anime_tv/features/watch_together/domain/watch_party_timeline.dart';
@@ -232,6 +233,16 @@ class WatchPartyMedia {
 
   bool get isCatalogEpisode =>
       kind == 'anilist' && anilistId != null && episode != null;
+
+  /// Watch Party identity stays canonical on the wire while each participant
+  /// renders it with their own independent Title Language preference.
+  String displayTitle(TitleLanguagePreference preference) =>
+      preferredAnimeTitle(
+        preference: preference,
+        fallback: title,
+        english: titleEnglish,
+        romaji: titleRomaji,
+      );
 
   Map<String, Object> toJson() {
     final value = <String, Object>{'kind': kind, 'title': title};

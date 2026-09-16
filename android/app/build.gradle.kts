@@ -310,7 +310,7 @@ dependencies {
     implementation(project(":aniyomi-compat"))
     implementation("com.android.tools.build:apksig:9.0.1")
     implementation(files(discordSocialSdkAar))
-    implementation("androidx.browser:browser:1.8.0")
+    implementation("androidx.browser:browser:1.10.0")
     // Version 2.1.0-38 remains the last API-24-compatible libtorrent4j line,
     // but TetoTV now compiles it from the pinned upstream source instead of
     // resolving Maven Central's prebuilt JNI artifacts.

@@ -56,11 +56,14 @@ class WebPlaybackProxyLimits {
     this.maximumKeyBytes = 1024 * 1024,
     this.maximumSegmentBytes = 256 * 1024 * 1024,
     this.maximumProgressiveBytes = 32 * 1024 * 1024 * 1024,
+    this.maximumAudioSidecars = 8,
     this.maximumManifestReferences = 8 * 1024,
     this.maximumNestedManifests = 32,
     this.maximumManifestDepth = 4,
     this.maximumRedirects = 4,
     this.preparationTimeout = const Duration(seconds: 20),
+    this.audioSidecarProbeTimeout = const Duration(seconds: 2),
+    this.preparationCommitReserve = const Duration(milliseconds: 250),
     this.sessionIdleTimeout = const Duration(minutes: 10),
     this.sessionMaximumAge = const Duration(hours: 6),
     this.upstreamConnectTimeout = const Duration(seconds: 8),
@@ -79,11 +82,14 @@ class WebPlaybackProxyLimits {
   final int maximumKeyBytes;
   final int maximumSegmentBytes;
   final int maximumProgressiveBytes;
+  final int maximumAudioSidecars;
   final int maximumManifestReferences;
   final int maximumNestedManifests;
   final int maximumManifestDepth;
   final int maximumRedirects;
   final Duration preparationTimeout;
+  final Duration audioSidecarProbeTimeout;
+  final Duration preparationCommitReserve;
   final Duration sessionIdleTimeout;
   final Duration sessionMaximumAge;
   final Duration upstreamConnectTimeout;
@@ -270,6 +276,8 @@ class WebPlaybackSession implements PlaybackResourceLease {
     required this.contentType,
     this.subtitles = const [],
     this.subtitleRejected = false,
+    this.audioTracks = const [],
+    this.rejectedAudioTrackCount = 0,
   });
 
   final WebPlaybackProxy _proxy;
@@ -278,6 +286,8 @@ class WebPlaybackSession implements PlaybackResourceLease {
   final String contentType;
   final List<WebPlaybackSubtitle> subtitles;
   final bool subtitleRejected;
+  final List<WebPlaybackAudio> audioTracks;
+  final int rejectedAudioTrackCount;
   bool _released = false;
 
   Uri? get subtitleUri => subtitles.firstOrNull?.playbackUri;
@@ -301,6 +311,22 @@ class WebPlaybackSubtitle {
   final Uri sourceUri;
   final Uri playbackUri;
   final String contentType;
+}
+
+class WebPlaybackAudio {
+  const WebPlaybackAudio({
+    required this.sourceUri,
+    required this.playbackUri,
+    required this.contentType,
+    this.label,
+    this.language,
+  });
+
+  final Uri sourceUri;
+  final Uri playbackUri;
+  final String contentType;
+  final String? label;
+  final String? language;
 }
 
 class WebPlaybackProxy {
@@ -389,6 +415,7 @@ class WebPlaybackProxy {
     Map<String, String> headers = const {},
     Uri? subtitleUri,
     List<Uri> subtitleUris = const [],
+    List<WebExternalAudioTrack> audioTracks = const [],
   }) async {
     await start();
     _removeExpiredSessions();
@@ -454,9 +481,66 @@ class WebPlaybackProxy {
           subtitleRejected = true;
         }
       }
+      var rejectedAudioTrackCount = 0;
+      final seenAudio = <Uri>{};
+      for (final requestedAudio in audioTracks.take(
+        limits.maximumAudioSidecars,
+      )) {
+        if (!seenAudio.add(requestedAudio.uri)) continue;
+        if (preparation.expired) {
+          rejectedAudioTrackCount++;
+          continue;
+        }
+        final audioPreparation = preparation.child(
+          maximumDuration: limits.audioSidecarProbeTimeout,
+          reserve: limits.preparationCommitReserve,
+        );
+        if (audioPreparation == null) {
+          rejectedAudioTrackCount++;
+          continue;
+        }
+        try {
+          final audio = await _prepareAudio(
+            state,
+            requestedAudio,
+            preparation: audioPreparation,
+          );
+          state.audioTracks.add(
+            _PreparedProxyAudio(
+              sourceUri: requestedAudio.uri,
+              token: audio.token,
+              contentType: audio.contentType,
+              label: requestedAudio.label,
+              language: requestedAudio.language,
+            ),
+          );
+        } catch (_) {
+          rejectedAudioTrackCount++;
+        } finally {
+          audioPreparation.cancel();
+        }
+      }
+      if (audioTracks.length > limits.maximumAudioSidecars) {
+        rejectedAudioTrackCount +=
+            audioTracks.length - limits.maximumAudioSidecars;
+      }
+      if (audioTracks.isNotEmpty) {
+        _recordDiagnostic(
+          stage: 'audio_sidecars',
+          status: state.audioTracks.isEmpty ? 'rejected' : 'ready',
+          reasonCode: state.audioTracks.isEmpty
+              ? 'no_supported_tracks'
+              : rejectedAudioTrackCount == 0
+              ? 'tracks_ready'
+              : 'partial_tracks_ready',
+        );
+      }
       state.playbackToken = playback.token;
       state.contentType = playback.contentType;
       state.subtitleRejected = subtitleRejected;
+      state.rejectedAudioTrackCount = rejectedAudioTrackCount;
+      // Optional sidecars may be salvaged independently, but an exhausted or
+      // cancelled overall preparation budget must never publish a session.
       preparation.check();
       _sessions[sessionId] = state;
       _recordDiagnostic(
@@ -563,6 +647,18 @@ class WebPlaybackProxy {
         ),
       ),
       subtitleRejected: state.subtitleRejected,
+      audioTracks: List.unmodifiable(
+        state.audioTracks.map(
+          (audio) => WebPlaybackAudio(
+            sourceUri: audio.sourceUri,
+            playbackUri: _resourceUri(state.id, audio.token),
+            contentType: audio.contentType,
+            label: audio.label,
+            language: audio.language,
+          ),
+        ),
+      ),
+      rejectedAudioTrackCount: state.rejectedAudioTrackCount,
     );
   }
 
@@ -622,6 +718,94 @@ class WebPlaybackProxy {
     throw FormatException(
       'The provider returned an unsupported media response ($mime).',
     );
+  }
+
+  _RootResourceKind _classifyAudioRoot(_LoadedBytes loaded) {
+    final mime = _mimeType(loaded.contentType);
+    final sample = loaded.text.trimLeft();
+    final path = loaded.uri.path.toLowerCase();
+    if (mime == 'application/dash+xml' ||
+        sample.toLowerCase().contains('<mpd') ||
+        path.endsWith('.mpd')) {
+      throw const FormatException(
+        'DASH external audio is disabled because dynamic templates cannot be safely rewritten.',
+      );
+    }
+    if (const {
+          'application/vnd.apple.mpegurl',
+          'application/x-mpegurl',
+        }.contains(mime) ||
+        sample.startsWith('#EXTM3U') ||
+        path.endsWith('.m3u8')) {
+      if (loaded.truncated || !sample.startsWith('#EXTM3U')) {
+        throw const FormatException(
+          'The external audio HLS manifest is incomplete or oversized.',
+        );
+      }
+      return _RootResourceKind.hls;
+    }
+    if (mime == 'text/html' ||
+        sample.toLowerCase().startsWith('<!doctype html')) {
+      throw const FormatException(
+        'The provider returned a web page instead of external audio.',
+      );
+    }
+    if (mime.startsWith('audio/') ||
+        mime == 'application/octet-stream' ||
+        const [
+          '.aac',
+          '.ac3',
+          '.eac3',
+          '.flac',
+          '.m4a',
+          '.mp3',
+          '.oga',
+          '.ogg',
+          '.opus',
+          '.wav',
+          '.weba',
+        ].any(path.endsWith)) {
+      return _RootResourceKind.progressive;
+    }
+    throw FormatException(
+      'The provider returned an unsupported external audio response ($mime).',
+    );
+  }
+
+  Future<_ProxyResource> _prepareAudio(
+    _ProxySessionState state,
+    WebExternalAudioTrack track, {
+    required _PreparationBudget preparation,
+  }) async {
+    preparation.check();
+    final loaded = await preparation.wait(
+      _fetchProbe(track.uri, sanitizeAddonHeaders(track.headers)),
+    );
+    preparation.check();
+    switch (_classifyAudioRoot(loaded)) {
+      case _RootResourceKind.hls:
+        final budget = state.manifestBudget ??= _ManifestBudget(limits);
+        return _prepareHlsManifest(
+          state,
+          loaded,
+          budget: budget,
+          preparation: preparation,
+          depth: 0,
+          ancestors: const {},
+        );
+      case _RootResourceKind.progressive:
+        return _registerUpstreamResource(
+          state,
+          uri: loaded.uri,
+          headers: loaded.requestHeaders,
+          // Classification may have relied on a trustworthy file extension
+          // when the origin omitted or misreported Content-Type. Never pass
+          // that untrusted value into Media3, where one invalid optional
+          // sidecar would otherwise reject the entire primary open request.
+          contentType: _externalAudioContentType(loaded),
+          maximumBytes: limits.maximumProgressiveBytes,
+        );
+    }
   }
 
   Future<_ProxyResource> _prepareHlsManifest(
@@ -1467,6 +1651,7 @@ class _ProxySessionState {
   final Set<WebProxyUpstreamResponse> activeUpstreams = {};
   final Set<_ProxyRequestAdmission> pendingAdmissions = {};
   final List<_PreparedProxySubtitle> subtitles = [];
+  final List<_PreparedProxyAudio> audioTracks = [];
   _ManifestBudget? manifestBudget;
   int activeRequests = 0;
   int totalRequests = 0;
@@ -1474,6 +1659,7 @@ class _ProxySessionState {
   String? playbackToken;
   String contentType = 'application/octet-stream';
   bool subtitleRejected = false;
+  int rejectedAudioTrackCount = 0;
   bool runtimeReadyRecorded = false;
   bool runtimeFailureRecorded = false;
   bool closed = false;
@@ -1490,6 +1676,7 @@ class _ProxySessionState {
     upstreamResourceTokens.clear();
     activeManifestUris.clear();
     subtitles.clear();
+    audioTracks.clear();
   }
 
   void cancelPendingAdmissions() {
@@ -1569,6 +1756,22 @@ class _PreparedProxySubtitle {
   final String contentType;
 }
 
+class _PreparedProxyAudio {
+  const _PreparedProxyAudio({
+    required this.sourceUri,
+    required this.token,
+    required this.contentType,
+    this.label,
+    this.language,
+  });
+
+  final Uri sourceUri;
+  final String token;
+  final String contentType;
+  final String? label;
+  final String? language;
+}
+
 class _ManifestBudget {
   _ManifestBudget(this.limits);
 
@@ -1604,7 +1807,22 @@ class _PreparationBudget {
   final DateTime deadline;
   bool _cancelled = false;
 
+  bool get expired => _cancelled || !clock().isBefore(deadline);
+
   void cancel() => _cancelled = true;
+
+  _PreparationBudget? child({
+    required Duration maximumDuration,
+    required Duration reserve,
+  }) {
+    check();
+    final now = clock();
+    final latest = deadline.subtract(reserve);
+    final requested = now.add(maximumDuration);
+    final childDeadline = requested.isBefore(latest) ? requested : latest;
+    if (!now.isBefore(childDeadline)) return null;
+    return _PreparationBudget(clock: clock, deadline: childDeadline);
+  }
 
   void check() {
     if (_cancelled || !clock().isBefore(deadline)) {
@@ -1751,6 +1969,28 @@ bool _isSupportedSubtitle(_LoadedBytes loaded) {
         'text/xml',
         'application/octet-stream',
       }.contains(mime);
+}
+
+String _externalAudioContentType(_LoadedBytes loaded) {
+  final mime = _mimeType(loaded.contentType);
+  if (mime.startsWith('audio/') || mime == 'application/octet-stream') {
+    return mime;
+  }
+  return switch (loaded.uri.path.toLowerCase().split('.').lastOrNull) {
+    'aac' => 'audio/aac',
+    'ac3' => 'audio/ac3',
+    'eac3' => 'audio/eac3',
+    'flac' => 'audio/flac',
+    'm4a' => 'audio/mp4',
+    'mp3' => 'audio/mpeg',
+    'oga' || 'ogg' => 'audio/ogg',
+    'opus' => 'audio/opus',
+    'wav' => 'audio/wav',
+    'weba' => 'audio/webm',
+    _ => throw const FormatException(
+      'The external audio type could not be determined safely.',
+    ),
+  };
 }
 
 String _subtitleContentType(_LoadedBytes loaded) {

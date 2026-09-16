@@ -524,6 +524,10 @@ void main() {
   testWidgets(
     'production wrapper keeps focus visible across the middle Discover row',
     (tester) async {
+      FlutterSecureStorage.setMockInitialValues({
+        interfaceLanguageStorageKey: 'en',
+        interfaceLanguageChosenStorageKey: 'true',
+      });
       tester.view.physicalSize = const Size(1920, 1080);
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.resetPhysicalSize);

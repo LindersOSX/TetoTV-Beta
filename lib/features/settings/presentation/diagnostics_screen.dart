@@ -1,3 +1,4 @@
+import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'dart:async';
 
 import 'package:anime_tv/core/diagnostics/diagnostics_exporter.dart';
@@ -73,7 +74,7 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
               ),
               const SizedBox(width: 16),
               Expanded(
-                child: Text(
+                child: LocalizedText(
                   'Diagnostics',
                   style: Theme.of(context).textTheme.headlineSmall,
                 ),
@@ -92,7 +93,9 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
               builder: (context, snapshot) {
                 if (snapshot.hasError) {
                   return Center(
-                    child: Text('Diagnostics failed: ${snapshot.error}'),
+                    child: LocalizedText(
+                      'Diagnostics failed: ${snapshot.error}',
+                    ),
                   );
                 }
                 final data = snapshot.data;
@@ -148,7 +151,7 @@ class _DiagnosticsBody extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
+              LocalizedText(
                 'SUPPORT REPORT',
                 style: TextStyle(
                   color: palette.accentBright,
@@ -157,7 +160,7 @@ class _DiagnosticsBody extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 6),
-              Text(
+              LocalizedText(
                 'A complete bounded dump of device capabilities, player health, performance timings, provider health, and the preceding 48 hours of persisted app events and crash summaries. Account identity, credentials, watch-room secrets, direct media sources, URLs, file paths, and network addresses are removed before it leaves the TV.',
                 style: TextStyle(color: palette.mutedText),
               ),
@@ -177,7 +180,9 @@ class _DiagnosticsBody extends StatelessWidget {
                       if (!context.mounted) return;
                       ScaffoldMessenger.of(context).showSnackBar(
                         const SnackBar(
-                          content: Text('Full redacted report copied.'),
+                          content: LocalizedText(
+                            'Full redacted report copied.',
+                          ),
                         ),
                       );
                     },
@@ -190,7 +195,9 @@ class _DiagnosticsBody extends StatelessWidget {
                       await Clipboard.setData(ClipboardData(text: file.path));
                       if (!context.mounted) return;
                       ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(content: Text('Saved report: ${file.path}')),
+                        SnackBar(
+                          content: LocalizedText('Saved report: ${file.path}'),
+                        ),
                       );
                     },
                   ),
@@ -250,7 +257,7 @@ class _DiagnosticsBody extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
+              LocalizedText(
                 'RECENT REDACTED EVENTS',
                 style: TextStyle(
                   color: palette.accentBright,
@@ -260,7 +267,7 @@ class _DiagnosticsBody extends StatelessWidget {
               ),
               const SizedBox(height: 8),
               if (events.isEmpty)
-                Text(
+                LocalizedText(
                   'No recent playback or provider failures.',
                   style: TextStyle(color: palette.mutedText),
                 )
@@ -319,7 +326,7 @@ class PlaybackSessionDiagnosticsPanel extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
+          LocalizedText(
             'PLAYBACK SESSION TIMELINES',
             style: TextStyle(
               color: palette.accentBright,
@@ -328,17 +335,17 @@ class PlaybackSessionDiagnosticsPanel extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 5),
-          Text(
+          LocalizedText(
             'Privacy-safe stages correlate source selection, stream opening, decoder choice, fallback attempts, and the final result. Media names, addresses, URLs, filenames, headers, and server IDs are never shown.',
             style: TextStyle(color: palette.mutedText, fontSize: 11),
           ),
           const SizedBox(height: 6),
-          Text(
+          LocalizedText(
             'Started means video parameters became available, not that playback was smooth. Decoder choice is a requested policy; the full report includes sampled engine performance when available. UI frame timings describe the app interface, not video frame rate or dropped video frames.',
             style: TextStyle(color: palette.mutedText, fontSize: 11),
           ),
           const SizedBox(height: 12),
-          Text(
+          LocalizedText(
             'STARTED VS FAILED PLAYBACK',
             style: TextStyle(
               color: palette.primaryText,
@@ -348,7 +355,7 @@ class PlaybackSessionDiagnosticsPanel extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           if (comparison['available'] != true)
-            Text(
+            LocalizedText(
               'A session that started and a failed session are needed before TetoTV can compare them. This is not a smooth-versus-stuttering comparison.',
               style: TextStyle(color: palette.mutedText, fontSize: 11),
             )
@@ -384,7 +391,7 @@ class PlaybackSessionDiagnosticsPanel extends StatelessWidget {
             ),
           const SizedBox(height: 14),
           if (sessions.isEmpty)
-            Text(
+            LocalizedText(
               'No correlated playback sessions have been recorded yet.',
               style: TextStyle(color: palette.mutedText, fontSize: 11),
             )
@@ -438,7 +445,7 @@ class _PlaybackComparisonCard extends StatelessWidget {
                   color: accent,
                 ),
                 const SizedBox(width: 7),
-                Text(
+                LocalizedText(
                   title,
                   style: TextStyle(
                     color: accent,
@@ -449,23 +456,23 @@ class _PlaybackComparisonCard extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 7),
-            Text(
+            LocalizedText(
               '${_sourceKindLabel(value['sourceKind'])} • ${_decoderLabel(value['decoder'])}',
               style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 11),
             ),
             const SizedBox(height: 3),
-            Text(
+            LocalizedText(
               'Codec ${_technicalLabel(value['codec'])}${value['decoderName'] == null || value['decoderName'] == 'unknown' ? '' : ' • ${_technicalLabel(value['decoderName'])}'} • ${value['fallbackAttempts'] ?? 0} fallback attempt(s) • ${value['observedStageCount'] ?? 0}/5 stages observed',
               style: TextStyle(color: palette.mutedText, fontSize: 10),
             ),
             const SizedBox(height: 3),
-            Text(
+            LocalizedText(
               '${_outcomeLabel(value['finalOutcome'])} • ${_timestampLabel(value['lastEventAt'])}',
               style: TextStyle(color: palette.mutedText, fontSize: 10),
             ),
             if (value['finalReasonCode'] != null) ...[
               const SizedBox(height: 3),
-              Text(
+              LocalizedText(
                 'Reason: ${_technicalLabel(value['finalReasonCode'])}',
                 style: TextStyle(color: palette.mutedText, fontSize: 10),
               ),
@@ -499,7 +506,7 @@ class _PlaybackTimelineCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
+          LocalizedText(
             'SESSION $index • ${_outcomeLabel(session['finalOutcome'])} • ${_timestampLabel(session['startedAt'])}',
             style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 10),
           ),
@@ -553,7 +560,7 @@ class _PlaybackTimelineRow extends StatelessWidget {
           Expanded(
             child: Padding(
               padding: EdgeInsets.only(bottom: last ? 0 : 8),
-              child: Text(
+              child: LocalizedText(
                 _timelineEventLabel(event),
                 style: TextStyle(color: palette.mutedText, fontSize: 10),
               ),
@@ -677,19 +684,19 @@ class _SendDiagnosticsActionState extends State<_SendDiagnosticsAction> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: const Text('Send diagnostic report?'),
-        content: const Text(
+        title: const LocalizedText('Send diagnostic report?'),
+        content: const LocalizedText(
           'This posts the complete bounded, redacted technical dump shown in Diagnostics to TetoTV’s private Discord support channel. It includes the app build, device capabilities, player and provider health, performance timings, and the preceding 48 hours of persisted events and crash summaries. Account identity, credentials, watch-room secrets, direct media sources, file paths, and network addresses are excluded.',
         ),
         actions: [
           TextButton(
             autofocus: true,
             onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('Cancel'),
+            child: const LocalizedText('Cancel'),
           ),
           FilledButton(
             onPressed: () => Navigator.of(dialogContext).pop(true),
-            child: const Text('Send report'),
+            child: const LocalizedText('Send report'),
           ),
         ],
       ),
@@ -710,7 +717,7 @@ class _SendDiagnosticsActionState extends State<_SendDiagnosticsAction> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(
+          content: LocalizedText(
             acknowledgement.duplicate
                 ? 'Diagnostic report was already received. Reference: ${acknowledgement.reference}'
                 : 'Diagnostic report sent. Reference: ${acknowledgement.reference}',
@@ -726,7 +733,7 @@ class _SendDiagnosticsActionState extends State<_SendDiagnosticsAction> {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text(
+          content: LocalizedText(
             'The diagnostic report could not be sent. Try again shortly.',
           ),
         ),
@@ -787,7 +794,7 @@ class _DiagnosticCard extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
+              LocalizedText(
                 title,
                 style: TextStyle(
                   color: context.appPalette.mutedText,
@@ -795,14 +802,14 @@ class _DiagnosticCard extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 4),
-              Text(
+              LocalizedText(
                 value,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(fontWeight: FontWeight.w900),
               ),
               const SizedBox(height: 4),
-              Text(
+              LocalizedText(
                 detail,
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
@@ -857,7 +864,7 @@ class _DiagnosticsAction extends StatelessWidget {
           children: [
             Icon(icon, size: 18, color: foreground),
             const SizedBox(width: 7),
-            Text(
+            LocalizedText(
               label,
               style: TextStyle(color: foreground, fontWeight: FontWeight.w900),
             ),

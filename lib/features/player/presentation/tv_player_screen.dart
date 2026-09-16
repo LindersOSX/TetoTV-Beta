@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'package:anime_tv/core/localization/teto_localizations.dart';
+import 'package:anime_tv/core/localization/app_language.dart';
 import 'package:anime_tv/core/diagnostics/anonymous_crash_reporter.dart';
 import 'package:anime_tv/core/telemetry/anonymous_usage_reporter.dart';
 import 'package:anime_tv/core/diagnostics/playback_diagnostic_recorder.dart';
@@ -40,12 +42,16 @@ import 'package:anime_tv/features/player/presentation/watch_party_player_status.
 import 'package:anime_tv/features/player/presentation/watch_party_player_dialog.dart';
 import 'package:anime_tv/features/marketplace/application/web_stream_aggregator.dart';
 import 'package:anime_tv/features/marketplace/data/web_stream_validator.dart';
+import 'package:anime_tv/features/marketplace/data/web_playback_proxy.dart';
+import 'package:anime_tv/features/marketplace/domain/addon_models.dart';
+import 'package:anime_tv/features/settings/application/display_preferences_controller.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:anime_tv/features/streaming/application/debrid_resolver_factory.dart';
 import 'package:anime_tv/features/streaming/application/debrid_token_service.dart';
 import 'package:anime_tv/features/streaming/application/next_episode_preparation_controller.dart';
 import 'package:anime_tv/features/streaming/domain/debrid_service.dart';
 import 'package:anime_tv/features/streaming/domain/episode_identity_guard.dart';
+import 'package:anime_tv/features/streaming/domain/external_audio_track.dart';
 import 'package:anime_tv/features/streaming/domain/release_audio_preference.dart';
 import 'package:anime_tv/features/streaming/domain/stream_ranking_preferences.dart';
 import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
@@ -84,6 +90,7 @@ const tetoTvVideoControllerConfiguration = VideoControllerConfiguration(
 // platform callback must not keep an engine handoff or route disposal pending
 // forever. New mutations are already closed before either drain begins.
 const _playerMutationReleaseTimeout = Duration(seconds: 5);
+const _playerSubscriptionCancelTimeout = Duration(seconds: 1);
 
 enum PlaybackDecoderMode { hardwareSafe, hardwareDirect, software }
 
@@ -280,8 +287,9 @@ bool shouldFailOverPrematureNetworkCompletion({
   return true;
 }
 
-/// MPV remains the default independent of stream class. An explicit Android
-/// Media3 preference is applied when the shared player screen is initialized.
+/// Stream class never disables MPV when the viewer explicitly selects it.
+/// The saved app preference chooses the default engine; fresh installs now use
+/// Media3, independently of whether the source is web or debrid-backed.
 bool preferMpvForInitialStream(StreamReady stream) => true;
 
 /// Provisional scene-preview seeks are safe only when every byte is already on
@@ -695,6 +703,9 @@ class _TvPlayerScreenRouterState extends ConsumerState<TvPlayerScreen> {
     ReleaseCandidate release,
   ) async {
     final previous = _activeLaunch.stream;
+    final adoptedKey = playbackStreamOptionAttemptKey(
+      PlaybackStreamOption(stream: stream, release: release),
+    );
     _activeSource = stream.uri.toString();
     _activeLaunch = PlaybackLaunch(
       stream: stream,
@@ -705,7 +716,9 @@ class _TvPlayerScreenRouterState extends ConsumerState<TvPlayerScreen> {
           .where((candidate) => candidate.infoHash != release.infoHash)
           .toList(growable: false),
       directAlternatives: _activeLaunch.directAlternatives
-          .where((option) => option.stream.uri != stream.uri)
+          .where(
+            (option) => playbackStreamOptionAttemptKey(option) != adoptedKey,
+          )
           .toList(growable: false),
     );
     _watchPartyPlayback.updateMedia(
@@ -773,9 +786,14 @@ class _TvPlayerScreenRouterState extends ConsumerState<TvPlayerScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final title = _isLibraryPlayback
+        ? widget.title
+        : _activeLaunch.episode.playbackDisplayTitle(
+            ref.watch(titleLanguagePreferenceProvider),
+          );
     return MpvTvPlayerScreen(
       source: _activeSource,
-      title: widget.title,
+      title: title,
       debridService: widget.debridService,
       launch: _activeLaunch,
       watchPartyPlayback: _watchPartyPlayback,
@@ -834,6 +852,14 @@ class MpvTvPlayerScreen extends ConsumerStatefulWidget {
 
 class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
     with WidgetsBindingObserver {
+  // Async player callbacks must never look up inherited widgets after a
+  // handoff/disposal. Refresh this UI-only snapshot when the locale changes.
+  TetoLocalizations _uiLocalizations = const TetoLocalizations(
+    AppLanguage.english,
+  );
+  String _tr(String source, [Map<String, Object> arguments = const {}]) =>
+      _uiLocalizations.text(source, arguments);
+
   late final Player _player;
   VideoController? _controller;
   late final bool _usesMedia3;
@@ -1017,6 +1043,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
     current: _currentStream,
     options: _directStreamOptions,
     currentFallbackProviderId: _currentRelease.sourceId,
+    currentRelease: _currentRelease,
     failedStreamKeys: _failedDirectStreamKeys,
   );
   PlaybackAudioPreference get _effectiveAudioPreference =>
@@ -1398,8 +1425,10 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
       if (resume != null && mounted && !_engineHandoffInProgress) {
         _showTrackMessage(
           _lastResumeSeekSucceeded
-              ? 'Resumed at ${_formatPlayerDuration(resume)}'
-              : 'Could not restore the saved position',
+              ? _tr("Resumed at {value1}", {
+                  'value1': _formatPlayerDuration(resume),
+                })
+              : _tr("Could not restore the saved position"),
         );
       }
     } finally {
@@ -1748,7 +1777,9 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
       _playControlFocus.requestFocus();
       if (_currentStream.externalSubtitleRejected) {
         _showTrackMessage(
-          'External subtitles were blocked because they were unsafe or unsupported.',
+          _tr(
+            "External subtitles were blocked because they were unsafe or unsupported.",
+          ),
         );
       }
     });
@@ -1760,6 +1791,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    _uiLocalizations = TetoLocalizations.of(context);
     _updatePerformanceDisplayRate();
   }
 
@@ -2267,8 +2299,8 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
       if (mounted && !_engineHandoffInProgress) {
         _showTrackMessage(
           segment.kind == SkipSegmentKind.opening
-              ? 'Intro skipped'
-              : 'Outro skipped',
+              ? _tr("Intro skipped")
+              : _tr("Outro skipped"),
         );
       }
       if (!wasPlaying &&
@@ -2301,7 +2333,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
         );
         _consumedSkipSegments.remove(segmentKey);
         if (mounted && !_engineHandoffInProgress) {
-          _showTrackMessage('Could not skip this segment');
+          _showTrackMessage(_tr("Could not skip this segment"));
         }
       }
     } finally {
@@ -2594,7 +2626,9 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
             _skips.isEmpty &&
             !_skipTimingUnavailableNoticeShown) {
           _skipTimingUnavailableNoticeShown = true;
-          _showTrackMessage('Intro/outro timing is temporarily unavailable');
+          _showTrackMessage(
+            _tr("Intro/outro timing is temporarily unavailable"),
+          );
         }
         final retryDelay = skipSegmentLookupRetryDelay(
           lookupComplete: _skipLoadComplete,
@@ -2906,7 +2940,10 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
     }
     try {
       final navigation = GoRouter.of(context).pushReplacement<void>(
-        preparedNextEpisodePlayerLocation(prepared),
+        preparedNextEpisodePlayerLocation(
+          prepared,
+          titleLanguage: ref.read(titleLanguagePreferenceProvider),
+        ),
         extra: prepared.launch,
       );
       unawaited(
@@ -3156,6 +3193,13 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
       requestedDecoder: _diagnosticDecoder.wireValue,
     );
     try {
+      final externalAudioTracks = expectedStream.externalAudioTracks
+          .where(
+            (track) =>
+                WebPlaybackProxy.instance.isOwnedPlaybackProxyUri(track.uri),
+          )
+          .take(8)
+          .toList(growable: false);
       await _player.open(
         Media(
           expectedSource,
@@ -3190,10 +3234,61 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
                       'mimeType': expectedStream.subtitleContentType,
                   },
               ],
+            if (_usesMedia3 && externalAudioTracks.isNotEmpty)
+              'audioTracks': [
+                for (final track in externalAudioTracks)
+                  {
+                    'uri': track.uri.toString(),
+                    'title': track.label,
+                    'language': track.language,
+                    'mimeType': track.contentType,
+                  },
+              ],
           },
         ),
         play: play,
       );
+      if (!_usesMedia3 && externalAudioTracks.isNotEmpty) {
+        final platform = _player.platform;
+        if (platform is NativePlayer) {
+          final attachment = await attachOptionalExternalAudioTracks(
+            tracks: externalAudioTracks,
+            isCurrent: () =>
+                playerMediaOpenCanCommit(
+                  expectedRevision: revision,
+                  activeRevision: _mediaOpenRevision,
+                  expectedStream: expectedStream,
+                  activeStream: _currentStream,
+                ) &&
+                _canApplyTrackSelection,
+            attach: (track) async {
+              await platform.command([
+                'audio-add',
+                track.uri.toString(),
+                'auto',
+                track.label ?? 'External audio',
+                track.language ?? 'auto',
+              ]);
+            },
+          );
+          unawaited(
+            _database.recordDiagnosticEvent(
+              category: 'player-external-audio',
+              message: 'External audio attachment',
+              details: <String, Object?>{
+                'engine': 'mpv',
+                'requested_count': attachment.requestedCount,
+                'attached_count': attachment.attachedCount,
+                'failed_count': attachment.failedCount,
+                'stale_count': attachment.staleCount,
+                'preflight_rejected_count': expectedStream
+                    .rejectedExternalAudioTrackCount
+                    .clamp(0, 64),
+              },
+            ),
+          );
+        }
+      }
     } catch (_) {
       _playbackPerformance.failed();
       rethrow;
@@ -3770,7 +3865,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
         }
       } catch (_) {
         if (revisionIsActive()) {
-          _showTrackMessage('External captions could not be loaded');
+          _showTrackMessage(_tr("External captions could not be loaded"));
         }
       }
     }
@@ -3809,7 +3904,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
         externalSubtitleSelected = true;
       } catch (_) {
         if (revisionIsActive()) {
-          _showTrackMessage('External captions could not be loaded');
+          _showTrackMessage(_tr("External captions could not be loaded"));
         }
       }
     }
@@ -3885,12 +3980,15 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
     _lastCheckpointSave = now;
     final completed =
         effectivePosition.inMilliseconds / duration.inMilliseconds >= .93;
+    final displayTitle = widget.launch.episode.displayTitle(
+      ref.read(titleLanguagePreferenceProvider),
+    );
     await _database.saveCheckpoint(
       PlaybackCheckpoint(
         anilistMediaId: mediaId,
         malMediaId: widget.malMediaId,
         episode: episode,
-        title: widget.launch.episode.title,
+        title: displayTitle,
         coverImageUrl: widget.coverImageUrl,
         position: completed ? duration : effectivePosition,
         duration: duration,
@@ -3906,7 +4004,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
       await AndroidTvBridge.instance.publishWatchNext(
         mediaId: mediaId,
         episode: episode,
-        title: widget.launch.episode.title,
+        title: displayTitle,
         posterUrl: widget.coverImageUrl,
         position: effectivePosition,
         duration: duration,
@@ -3923,8 +4021,11 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
       return;
     }
     _lastMediaSessionUpdate = now;
+    final displayTitle = widget.launch.episode.displayTitle(
+      ref.read(titleLanguagePreferenceProvider),
+    );
     await AndroidTvBridge.instance.updateMediaSession(
-      title: widget.launch.episode.title,
+      title: displayTitle,
       episode: _catalogEpisodeNumber ?? 1,
       position: _player.state.position,
       duration: _player.state.duration,
@@ -4355,6 +4456,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
         playbackStreamReadyAttemptKey(
           _currentStream,
           fallbackProviderId: _currentRelease.sourceId,
+          release: _currentRelease,
         ),
       );
     }
@@ -4590,7 +4692,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
         propagateFailure: true,
         requireDecodedVideo: _animeFeaturesEnabled,
       );
-      if (opened) _showTrackMessage('Stream restarted');
+      if (opened) _showTrackMessage(_tr("Stream restarted"));
     } catch (error) {
       if (mounted) setState(() => _playbackError = error.toString());
     }
@@ -4767,22 +4869,57 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
     } catch (_) {
       // Preferences are best effort; decoder ownership still has to end.
     }
-    try {
-      await _progressSubscription?.cancel();
-      await _durationSubscription?.cancel();
-      await _tracksSubscription?.cancel();
-      await _errorSubscription?.cancel();
-      await _completedSubscription?.cancel();
-      await _videoParamsSubscription?.cancel();
-      await _playingSubscription?.cancel();
-      await _bufferingSubscription?.cancel();
-      await _mediaActionSubscription?.cancel();
-      await _sourceDiscoverySubscription?.cancel();
-    } catch (_) {
-      // Stream callbacks guard on _engineHandoffInProgress. Native release is
-      // still the authoritative safety boundary if a Dart cancellation fails.
+    Future<void> cancelBestEffort(Future<void> Function() action) async {
+      try {
+        await action();
+      } catch (_) {
+        // Stream callbacks guard on _engineHandoffInProgress. Cancel every
+        // remaining subscription even when one stream cleanup fails.
+      }
     }
-    final released = await _handoffRelease.release(() async {
+
+    try {
+      // Start every cancellation before applying one collective deadline. A
+      // broken subscription can neither skip its siblings nor indefinitely
+      // delay the authoritative native decoder release below.
+      await Future.wait<void>([
+        cancelBestEffort(() async {
+          await _progressSubscription?.cancel();
+        }),
+        cancelBestEffort(() async {
+          await _durationSubscription?.cancel();
+        }),
+        cancelBestEffort(() async {
+          await _tracksSubscription?.cancel();
+        }),
+        cancelBestEffort(() async {
+          await _errorSubscription?.cancel();
+        }),
+        cancelBestEffort(() async {
+          await _completedSubscription?.cancel();
+        }),
+        cancelBestEffort(() async {
+          await _videoParamsSubscription?.cancel();
+        }),
+        cancelBestEffort(() async {
+          await _playingSubscription?.cancel();
+        }),
+        cancelBestEffort(() async {
+          await _bufferingSubscription?.cancel();
+        }),
+        cancelBestEffort(() async {
+          await _mediaActionSubscription?.cancel();
+        }),
+        cancelBestEffort(() async {
+          await _sourceDiscoverySubscription?.cancel();
+        }),
+      ]).timeout(_playerSubscriptionCancelTimeout);
+    } catch (_) {
+      // Every callback is already gated by _engineHandoffInProgress. Let any
+      // pathological cancellation finish in the background while ownership
+      // teardown continues.
+    }
+    Future<void> releasePlayer() async {
       try {
         await _player.stop();
       } catch (_) {
@@ -4792,17 +4929,32 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
       await _detachAndroidVideoOutputBeforeRelease();
       await _player.dispose();
       _playerReleasedForHandoff = true;
-    });
+    }
+
+    final released = await _handoffRelease.release(releasePlayer);
     if (!released) {
       _handoffAttemptActive = false;
       _handoffReleaseFailed = true;
+      final reasonCode = playerReleaseFailureCode(_handoffRelease.lastFailure);
+      _recordPlayerReleaseDiagnostic(status: 'failed');
       if (mounted) {
         setState(() {
-          _trackMessage =
-              'Could not release the player safely. Press Exit to retry.';
+          _trackMessage = reasonCode == 'media3_release_pending'
+              ? _tr(
+                  'Media3 cleanup is taking longer than expected. Wait a moment and press Exit to retry; restart TetoTV if it continues.',
+                )
+              : _tr(
+                  'Could not release the player safely. Press Exit to retry.',
+                );
         });
       }
       return false;
+    }
+    final media3Release = _player is Media3PlatformPlayer
+        ? (_player as Media3PlatformPlayer).releaseDiagnostic
+        : const <String, Object?>{};
+    if (media3Release['status'] == 'completed_after_wait') {
+      _recordPlayerReleaseDiagnostic(status: 'completed_after_wait');
     }
     try {
       await AndroidTvBridge.instance.clearMediaSession();
@@ -4814,6 +4966,60 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
     _nativePlaybackStateClearedForHandoff = true;
     _handoffAttemptActive = false;
     return mounted;
+  }
+
+  void _recordPlayerReleaseDiagnostic({
+    required String status,
+    Object? failure,
+  }) {
+    final cause =
+        failure ?? (status == 'failed' ? _handoffRelease.lastFailure : null);
+    final releaseDetails = _player is Media3PlatformPlayer
+        ? (_player as Media3PlatformPlayer).releaseDiagnostic
+        : const <String, Object?>{};
+    final recordedReasonCode = releaseDetails['reason_code'];
+    final reasonCode = cause == null && recordedReasonCode is String
+        ? recordedReasonCode
+        : playerReleaseFailureCode(cause);
+    final diagnosticFailure = PlayerReleaseDiagnosticFailure(
+      engine: _engineKey,
+      reasonCode: reasonCode,
+    );
+    unawaited(
+      _database.recordDiagnosticEvent(
+        category: 'player-release',
+        severity: status == 'failed' ? 'error' : 'warning',
+        message: status == 'failed'
+            ? 'Player teardown did not complete'
+            : 'Player teardown completed after a bounded wait',
+        details: <String, Object?>{
+          'stage': 'release_waiting',
+          'status': status,
+          'engine': _engineKey,
+          'reason_code': reasonCode,
+          'attempt_count': _handoffRelease.attemptCount.clamp(0, 8),
+          if (releaseDetails['wait_elapsed_ms'] is int)
+            'wait_elapsed_ms': releaseDetails['wait_elapsed_ms'],
+          if (releaseDetails['timeout_ms'] is int)
+            'timeout_ms': releaseDetails['timeout_ms'],
+          if (releaseDetails['playback_thread_alive'] is bool)
+            'playback_thread_alive': releaseDetails['playback_thread_alive'],
+          if (_usesMedia3) 'surface_view': _media3SurfaceViewEnabled,
+        },
+      ),
+    );
+    if (status == 'failed') {
+      // This is caught application damage rather than a process crash. Submit
+      // it through the loaded, user-disableable handled-error channel so a
+      // future customer report includes the otherwise invisible failure.
+      unawaited(
+        recordAnonymousHandledError(
+          area: AnonymousErrorArea.playback,
+          error: diagnosticFailure,
+          stack: _handoffRelease.lastFailureStackTrace,
+        ),
+      );
+    }
   }
 
   void _showAutomaticFailoverNotice(
@@ -5270,7 +5476,9 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
             automatic
                 ? reason ??
                       'Video failed to start; software compatibility enabled'
-                : '${playbackDecoderLabel(mode)} enabled',
+                : _tr("{value1} enabled", {
+                    'value1': playbackDecoderLabel(mode),
+                  }),
           );
         }
       } catch (error) {
@@ -5330,8 +5538,9 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
         // Rejected before native mutation: keep the current selection, active
         // performance attempt, watchdog, captions and saved MPV preferences.
         _showTrackMessage(
-          'That decoder is unavailable for this video in Media3 on this '
-          'device. Your current decoder is unchanged.',
+          _tr(
+            "That decoder is unavailable for this video in Media3 on this device. Your current decoder is unchanged.",
+          ),
         );
         return;
       }
@@ -5365,7 +5574,9 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
       _startVideoWatchdog();
       _startPerformanceWatchdog();
       setState(() => _playbackError = null);
-      _showTrackMessage('${playbackDecoderLabel(mode)} enabled');
+      _showTrackMessage(
+        _tr("{value1} enabled", {'value1': playbackDecoderLabel(mode)}),
+      );
     } catch (error) {
       if (!_canApplyTrackSelection) return;
       final reasonCode = playbackDiagnosticFailureReasonCode(error);
@@ -5441,7 +5652,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
         await _applyPlayerTuning();
         _startVideoWatchdog();
         _startPerformanceWatchdog();
-        _showTrackMessage('Stream restarted');
+        _showTrackMessage(_tr("Stream restarted"));
       } catch (error) {
         final reasonCode = playbackDiagnosticFailureReasonCode(error);
         _recordDiagnosticStreamOpenResult(
@@ -5513,13 +5724,27 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
     if (!mounted || _engineHandoffInProgress) return null;
     if (!option.stream.isWebStream) return option;
     if (!silent) {
-      _showTrackMessage('Checking ${playbackStreamOptionLabel(option)}...');
+      _showTrackMessage(
+        _tr("Checking {value1}...", {
+          'value1': playbackStreamOptionLabel(option),
+        }),
+      );
     }
     try {
       final validated = await const WebStreamValidator().validate(
         option.stream.uri,
         option.stream.headers,
         subtitleUri: option.stream.externalSubtitle,
+        audioTracks: option.stream.pendingExternalAudioTracks
+            .map(
+              (track) => WebExternalAudioTrack(
+                uri: track.uri,
+                label: track.label,
+                language: track.language,
+                headers: track.headers,
+              ),
+            )
+            .toList(growable: false),
       );
       if (!mounted || _engineHandoffInProgress) {
         await validated.session?.close();
@@ -5535,6 +5760,8 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
           mediaContentType: validated.contentType,
           subtitleContentType: validated.subtitleContentType,
           externalSubtitleRejected: validated.subtitleRejected,
+          externalAudioTracks: validated.audioTracks,
+          rejectedExternalAudioTrackCount: validated.rejectedAudioTrackCount,
           playbackLease: validated.session,
           providerId: option.stream.providerId,
           providerName: option.stream.providerName,
@@ -5568,6 +5795,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
         selectedStreamKey: playbackStreamReadyAttemptKey(
           _currentStream,
           fallbackProviderId: _currentRelease.sourceId,
+          release: _currentRelease,
         ),
         onOptionsChanged: (options) {
           if (mounted) setState(() => _directStreamOptions = options);
@@ -5589,6 +5817,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
             playbackStreamReadyAttemptKey(
               _currentStream,
               fallbackProviderId: _currentRelease.sourceId,
+              release: _currentRelease,
             )) {
       _showControls();
       return;
@@ -5637,6 +5866,10 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
       final previousProvider = playbackStreamOptionProviderIdentity(
         PlaybackStreamOption(stream: previousStream, release: previousRelease),
       );
+      final selectedKey = playbackStreamOptionAttemptKey(selected);
+      final previousKey = playbackStreamOptionAttemptKey(
+        PlaybackStreamOption(stream: previousStream, release: previousRelease),
+      );
       _failedDirectStreamKeys.clear();
       _currentStream = option.stream;
       _source = option.stream.uri.toString();
@@ -5646,13 +5879,11 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
         [option],
         _directStreamOptions.where((candidate) {
           final provider = playbackStreamOptionProviderIdentity(candidate);
-          if (provider == selectedProvider &&
-              (candidate.stream.uri == selected.stream.uri ||
-                  candidate.stream.uri == option.stream.uri)) {
+          final candidateKey = playbackStreamOptionAttemptKey(candidate);
+          if (provider == selectedProvider && candidateKey == selectedKey) {
             return false;
           }
-          if (provider == previousProvider &&
-              candidate.stream.uri == previousStream.uri) {
+          if (provider == previousProvider && candidateKey == previousKey) {
             return false;
           }
           return true;
@@ -5712,10 +5943,12 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
       _resetSkipSegmentsForSourceChange();
       if (option.stream.externalSubtitleRejected) {
         _showTrackMessage(
-          'Playing without the unsafe or unsupported external subtitles.',
+          _tr("Playing without the unsafe or unsupported external subtitles."),
         );
       }
-      _showTrackMessage('Playing ${playbackStreamOptionLabel(option)}');
+      _showTrackMessage(
+        _tr("Playing {value1}", {'value1': playbackStreamOptionLabel(option)}),
+      );
       _showControls();
     } catch (_) {
       if (!identical(_currentStream, option.stream)) {
@@ -5735,7 +5968,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
         final restored = await _openMedia(resume: resume);
         if (restored) {
           _showTrackMessage(
-            'That source could not start. Restored the previous stream.',
+            _tr("That source could not start. Restored the previous stream."),
           );
         }
       }
@@ -5808,22 +6041,30 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
         await _openExternalPlayer();
       case 'subtitleSize':
         setState(() => _subtitleSize = result.value as double);
-        _showTrackMessage('Subtitle size ${_subtitleSize.round()}');
+        _showTrackMessage(
+          _tr("Subtitle size {value1}", {'value1': _subtitleSize.round()}),
+        );
       case 'subtitlePosition':
         setState(() => _subtitlePosition = result.value as int);
-        _showTrackMessage('Subtitle position $_subtitlePosition%');
+        _showTrackMessage(
+          _tr("Subtitle position {value1}%", {'value1': _subtitlePosition}),
+        );
       case 'subtitleDelay':
         setState(() => _subtitleDelayMs = result.value as int);
-        _showTrackMessage('Subtitle delay ${_subtitleDelayMs}ms');
+        _showTrackMessage(
+          _tr("Subtitle delay {value1}ms", {'value1': _subtitleDelayMs}),
+        );
       case 'audioDelay':
         setState(() => _audioDelayMs = result.value as int);
-        _showTrackMessage('Audio delay ${_audioDelayMs}ms');
+        _showTrackMessage(
+          _tr("Audio delay {value1}ms", {'value1': _audioDelayMs}),
+        );
       case 'contrast':
         setState(() => _highContrastSubtitles = result.value as bool);
         _showTrackMessage(
           _highContrastSubtitles
-              ? 'High contrast subtitles on'
-              : 'High contrast subtitles off',
+              ? _tr("High contrast subtitles on")
+              : _tr("High contrast subtitles off"),
         );
       case 'nextStream':
         await _tryNextStream('Stream changed manually.', notify: false);
@@ -5843,7 +6084,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
   Future<void> _openPlaybackSpeedPicker() async {
     if (_blockGuestLocalControl()) return;
     if (_watchPartyActive) {
-      _showTrackMessage('Playback speed stays at 1x during a Watch Party');
+      _showTrackMessage(_tr("Playback speed stays at 1x during a Watch Party"));
       return;
     }
     _controlsTimer?.cancel();
@@ -5861,7 +6102,9 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
   Future<void> _openExternalPlayer() async {
     final target = _externalPlayerTarget;
     if (target == null) {
-      _showTrackMessage('External playback is unavailable for this source');
+      _showTrackMessage(
+        _tr("External playback is unavailable for this source"),
+      );
       return;
     }
     final wasPlaying = _player.state.playing;
@@ -5889,7 +6132,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
           message: 'The external player did not open.',
         );
       }
-      if (mounted) _showTrackMessage('Opened in external player');
+      if (mounted) _showTrackMessage(_tr("Opened in external player"));
     } on PlatformException catch (error) {
       if (error.code == 'EXTERNAL_PLAYER_MISSING' &&
           ref.read(settingsPreferencesProvider).preferredPlayer ==
@@ -5908,8 +6151,8 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
       if (!mounted) return;
       _showTrackMessage(
         error.code == 'EXTERNAL_PLAYER_MISSING'
-            ? 'No compatible external player is installed'
-            : 'Could not open an external player',
+            ? _tr("No compatible external player is installed")
+            : _tr("Could not open an external player"),
       );
     } catch (_) {
       if (pausedForHandoff) {
@@ -5917,7 +6160,9 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
           await _player.play();
         } catch (_) {}
       }
-      if (mounted) _showTrackMessage('Could not open an external player');
+      if (mounted) {
+        _showTrackMessage(_tr("Could not open an external player"));
+      }
     }
   }
 
@@ -5967,8 +6212,8 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
       if (mounted) {
         _showTrackMessage(
           error.code == 'EXTERNAL_PLAYER_MISSING'
-              ? 'Default player is unavailable — using MPV'
-              : 'That app could not open this stream — using MPV',
+              ? _tr("Default player is unavailable — using MPV")
+              : _tr("That app could not open this stream — using MPV"),
         );
       }
       return false;
@@ -5976,7 +6221,9 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
       if (retainedProxyLease) {
         await ExternalPlayerProxyLeaseKeeper.instance.release();
       }
-      if (mounted) _showTrackMessage('External player failed — using MPV');
+      if (mounted) {
+        _showTrackMessage(_tr("External player failed — using MPV"));
+      }
       return false;
     }
   }
@@ -5987,7 +6234,11 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
     if (!mounted) return;
     setState(() => _playbackRate = rate);
     unawaited(_updateMediaSession(force: true));
-    _showTrackMessage('Playback speed ${playerPlaybackSpeedLabel(rate)}');
+    _showTrackMessage(
+      _tr("Playback speed {value1}", {
+        'value1': playerPlaybackSpeedLabel(rate),
+      }),
+    );
   }
 
   Future<void> _resetPlaybackRateForWatchParty() async {
@@ -5995,7 +6246,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
     if (!mounted || _playbackRate == 1) return;
     setState(() => _playbackRate = 1);
     unawaited(_updateMediaSession(force: true));
-    _showTrackMessage('Playback speed reset to 1x for Watch Party sync');
+    _showTrackMessage(_tr("Playback speed reset to 1x for Watch Party sync"));
   }
 
   Future<void> _openWatchParty() async {
@@ -6140,7 +6391,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
     if (key == LogicalKeyboardKey.keyC) {
       if (_blockGuestLocalControl()) return KeyEventResult.handled;
       if (_softwareFallbackUsed) {
-        _showTrackMessage('Compatibility decoder is already enabled');
+        _showTrackMessage(_tr("Compatibility decoder is already enabled"));
       } else {
         unawaited(
           _switchDecoder(
@@ -6231,7 +6482,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
       _queuedSeekCapturePreview = false;
       _queuedSeekGeneration = 0;
       if (mounted && !_engineHandoffInProgress) {
-        _showTrackMessage('Could not seek to that position');
+        _showTrackMessage(_tr("Could not seek to that position"));
       }
     } finally {
       if (identical(_seekDrainCompleter, drain)) {
@@ -6286,7 +6537,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
       _currentRelease.releaseName,
     );
     if (expectsMultipleAudio) {
-      _showTrackMessage('Checking every embedded audio track…');
+      _showTrackMessage(_tr("Checking every embedded audio track…"));
     }
     final tracks = await _withHudAutoHideSuspended(
       () => waitForStableTrackSnapshot<List<AudioTrack>>(
@@ -6329,7 +6580,9 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
       final selectedId = await _withHudAutoHideSuspended(
         () => showPlayerTrackPicker<String>(
           context: context,
-          title: 'Audio tracks (${serverTracks.length} found)',
+          title: _tr("Audio tracks ({value1} found)", {
+            'value1': serverTracks.length,
+          }),
           icon: Icons.audiotrack_rounded,
           selectedValue: selectedValue,
           options: serverTracks
@@ -6361,10 +6614,10 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
       );
       final handoff = widget.onLibraryEpisodeHandoff;
       if (handoff == null) {
-        _showTrackMessage('This server audio track could not be selected');
+        _showTrackMessage(_tr("This server audio track could not be selected"));
         return;
       }
-      _showTrackMessage('Switching audio track…');
+      _showTrackMessage(_tr("Switching audio track…"));
       try {
         final adopted = await handoffLibraryServerAudioTrack(
           request: libraryRequest,
@@ -6377,7 +6630,9 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
         );
         if (!mounted || mediaRevision != _mediaOpenRevision) return;
         if (!adopted && mounted) {
-          _showTrackMessage('This server audio track could not be selected');
+          _showTrackMessage(
+            _tr("This server audio track could not be selected"),
+          );
         }
         if (adopted) {
           final language = canonicalPlayerLanguage(selected.language);
@@ -6391,14 +6646,18 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
         }
       } catch (_) {
         if (mounted) {
-          _showTrackMessage('This server audio track could not be selected');
+          _showTrackMessage(
+            _tr("This server audio track could not be selected"),
+          );
           _showControls();
         }
       }
       return;
     }
     if (tracks.isEmpty) {
-      _showTrackMessage('This file has no selectable embedded audio tracks');
+      _showTrackMessage(
+        _tr("This file has no selectable embedded audio tracks"),
+      );
       return;
     }
     _controlsTimer?.cancel();
@@ -6408,16 +6667,19 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
         context: context,
         title: tracks.length == 1
             ? expectsMultipleAudio
-                  ? 'Audio track (only 1 detected)'
-                  : 'Audio track (1 found)'
-            : 'Audio tracks (${tracks.length} found)',
+                  ? _tr("Audio track (only 1 detected)")
+                  : _tr("Audio track (1 found)")
+            : _tr("Audio tracks ({value1} found)", {'value1': tracks.length}),
         icon: Icons.audiotrack_rounded,
         selectedValue: currentId,
         options: tracks
             .map(
               (track) => PlayerTrackOption<String>(
                 value: track.id,
-                label: track.title ?? track.language ?? 'Track ${track.id}',
+                label:
+                    track.title ??
+                    track.language ??
+                    _tr('Track {value1}', {'value1': track.id}),
                 detail: mediaKitAudioTrackDetail(track),
                 icon: Icons.surround_sound_rounded,
               ),
@@ -6490,7 +6752,9 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
     );
     if (!applied) return;
     _showTrackMessage(
-      'Audio: ${selected.title ?? selected.language ?? 'Track ${selected.id}'}',
+      _tr("Audio: {value1}", {
+        'value1': selected.title ?? selected.language ?? 'Track ${selected.id}',
+      }),
     );
     _showControls();
   }
@@ -6573,7 +6837,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
         );
         _consumedSkipSegments.remove(segmentKey);
         if (mounted && !_engineHandoffInProgress) {
-          _showTrackMessage('Could not skip this segment');
+          _showTrackMessage(_tr("Could not skip this segment"));
         }
       }
     } finally {
@@ -6588,7 +6852,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
     if (_blockGuestLocalControl()) return;
     final mediaRevision = _mediaOpenRevision;
     _controlsTimer?.cancel();
-    _showTrackMessage('Checking embedded and external captions…');
+    _showTrackMessage(_tr("Checking embedded and external captions…"));
     final discovered = await _withHudAutoHideSuspended(
       () => waitForStableTrackSnapshot<List<SubtitleTrack>>(
         read: () async {
@@ -6632,7 +6896,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
     final selectedId = await _withHudAutoHideSuspended(
       () => showPlayerTrackPicker<String>(
         context: context,
-        title: 'Closed captions',
+        title: _tr("Closed captions"),
         icon: Icons.closed_caption_rounded,
         selectedValue: currentId,
         options: tracks
@@ -6644,13 +6908,15 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
               return PlayerTrackOption<String>(
                 value: track.id,
                 label: track.id == 'no'
-                    ? 'Off'
-                    : track.title ?? track.language ?? 'Track ${track.id}',
+                    ? _tr("Off")
+                    : track.title ??
+                          track.language ??
+                          _tr('Track {value1}', {'value1': track.id}),
                 detail: track.id == 'no'
-                    ? 'Disable captions'
+                    ? _tr('Disable captions')
                     : trackLanguage.isEmpty
                     ? track.language
-                    : captionLanguageDisplayName(trackLanguage),
+                    : _tr(captionLanguageDisplayName(trackLanguage)),
                 icon: track.id == 'no'
                     ? Icons.closed_caption_disabled_rounded
                     : Icons.closed_caption_rounded,
@@ -6718,7 +6984,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
     } catch (error, stackTrace) {
       if (mounted && !_engineHandoffInProgress) {
         debugPrint('MPV caption preference failed: $error\n$stackTrace');
-        _showTrackMessage('Could not change captions. Please try again.');
+        _showTrackMessage(_tr("Could not change captions. Please try again."));
         _showControls();
       }
       return;
@@ -6726,18 +6992,23 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
     if (!applied) return;
     _showTrackMessage(
       selected.id == 'no'
-          ? 'Subtitles: Off'
-          : 'Subtitles: '
-                '${selected.title ?? selected.language ?? 'Track ${selected.id}'}',
+          ? _tr("Subtitles: Off")
+          : _tr('Subtitles: {track}', {
+              'track':
+                  selected.title ??
+                  selected.language ??
+                  _tr('Track {value1}', {'value1': selected.id}),
+            }),
     );
     _showControls();
   }
 
   void _showTrackMessage(String message) {
     if (!mounted) return;
-    setState(() => _trackMessage = message);
+    final localizedMessage = _tr(message);
+    setState(() => _trackMessage = localizedMessage);
     Timer(const Duration(seconds: 2), () {
-      if (mounted && _trackMessage == message) {
+      if (mounted && _trackMessage == localizedMessage) {
         setState(() => _trackMessage = null);
       }
     });
@@ -6750,7 +7021,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
     }
     _lastGuestControlNotice = now;
     _showTrackMessage(
-      'Only the host can control playback while you are synced',
+      _tr("Only the host can control playback while you are synced"),
     );
   }
 
@@ -6954,6 +7225,42 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
     }
   }
 
+  Future<void> _releaseAfterUnexpectedRouteDispose() async {
+    final released = await _handoffRelease.release(() async {
+      try {
+        await _waitForPlayerMutations().timeout(_playerMutationReleaseTimeout);
+        final trickplayOperations = List<Future<void>>.of(_trickplayOperations);
+        if (trickplayOperations.isNotEmpty) {
+          await Future.wait(trickplayOperations);
+        }
+      } catch (_) {
+        // A failed command or screenshot is already terminal. Decoder disposal
+        // remains authoritative during unexpected route teardown.
+      }
+      try {
+        await _player.stop();
+      } catch (_) {
+        // dispose() is still authoritative for a failed decoder.
+      }
+      await _detachAndroidVideoOutputBeforeRelease();
+      await _player.dispose();
+    });
+    if (!released) {
+      // All dependencies used here were cached during initState. Never read a
+      // provider after widget disposal begins. The shared recorder admits only
+      // its fixed category and scalar/allowlisted release fields, and also
+      // forwards its typed failure through opted-in handled-error reporting.
+      _recordPlayerReleaseDiagnostic(status: 'failed');
+      return;
+    }
+    final media3Release = _player is Media3PlatformPlayer
+        ? (_player as Media3PlatformPlayer).releaseDiagnostic
+        : const <String, Object?>{};
+    if (media3Release['status'] == 'completed_after_wait') {
+      _recordPlayerReleaseDiagnostic(status: 'completed_after_wait');
+    }
+  }
+
   @override
   void dispose() {
     if (_diagnosticLastOutcome != PlaybackDiagnosticOutcome.failed &&
@@ -7018,31 +7325,7 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
     _watchTogetherFocus.dispose();
     _playbackSpeedFocus.dispose();
     if (!_playerReleasedForHandoff) {
-      unawaited(
-        _handoffRelease.release(() async {
-          try {
-            await _waitForPlayerMutations().timeout(
-              _playerMutationReleaseTimeout,
-            );
-            final trickplayOperations = List<Future<void>>.of(
-              _trickplayOperations,
-            );
-            if (trickplayOperations.isNotEmpty) {
-              await Future.wait(trickplayOperations);
-            }
-          } catch (_) {
-            // A failed command or screenshot is already terminal. Decoder
-            // disposal remains authoritative during unexpected route teardown.
-          }
-          try {
-            await _player.stop();
-          } catch (_) {
-            // dispose() is still authoritative for a failed decoder.
-          }
-          await _detachAndroidVideoOutputBeforeRelease();
-          await _player.dispose();
-        }),
-      );
+      unawaited(_releaseAfterUnexpectedRouteDispose());
     }
     super.dispose();
   }
@@ -7166,7 +7449,10 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
                                 _currentStream.providerName ??
                                 '${widget.debridService.displayName} stream',
                             decoderMode: _decoderMode,
-                            partyStatus: _watchPartyStatus,
+                            partyStatus: watchPartyPlayerStatus(
+                              ref.read(watchPartyControllerProvider),
+                              localizations: _uiLocalizations,
+                            ),
                             watchingCount: _watchPartyWatchingCount,
                             playbackControlsLocked: _guestControlsLocked,
                             playFocusNode: _playControlFocus,
@@ -7242,8 +7528,11 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
                       scrubbing: _progressScrubActive,
                     ),
                     child: TetoSkipSegmentOverlay(
+                      key: ValueKey(
+                        'player-skip-${skipSegmentKey(_activeSkip!)}',
+                      ),
                       focusNode: _skipControlFocus,
-                      label: _activeSkip!.actionLabel,
+                      label: _tr(_activeSkip!.actionLabel),
                       onPressed: () {
                         _handlePlayerHudInteraction();
                         unawaited(_skipCurrentSegment());
@@ -7537,19 +7826,19 @@ class _PlaybackOptionsDialog extends StatelessWidget {
                     Icon(Icons.tune_rounded, color: palette.accentBright),
                     const SizedBox(width: 9),
                     Text(
-                      'Playback options',
+                      context.tr("Playback options"),
                       style: Theme.of(context).textTheme.headlineSmall,
                     ),
                     const Spacer(),
                     Text(
-                      'Changes apply immediately',
+                      context.tr("Changes apply immediately"),
                       style: TextStyle(color: palette.mutedText, fontSize: 11),
                     ),
                   ],
                 ),
                 const SizedBox(height: 16),
                 _OptionSection(
-                  title: 'DECODER',
+                  title: context.tr("DECODER"),
                   children: [
                     for (final mode in PlaybackDecoderMode.values.where(
                       (mode) =>
@@ -7557,31 +7846,31 @@ class _PlaybackOptionsDialog extends StatelessWidget {
                           mode != PlaybackDecoderMode.hardwareDirect,
                     ))
                       _OptionChip(
-                        label: playbackDecoderLabel(mode),
+                        label: context.tr(playbackDecoderLabel(mode)),
                         selected: decoderMode == mode,
                         autofocus: decoderMode == mode,
                         onPressed: () => _close(context, 'decoder', mode),
                       ),
                     _OptionChip(
-                      label: 'Restart stream',
+                      label: context.tr("Restart stream"),
                       icon: Icons.refresh_rounded,
                       onPressed: () => _close(context, 'retry', true),
                     ),
                     if (hasAlternateStreams)
                       _OptionChip(
-                        label: 'Try next stream',
+                        label: context.tr("Try next stream"),
                         icon: Icons.swap_horiz_rounded,
                         onPressed: () => _close(context, 'nextStream', true),
                       ),
                     if (hasDirectSources)
                       _OptionChip(
-                        label: 'Sources & quality',
+                        label: context.tr("Sources & quality"),
                         icon: Icons.video_library_rounded,
                         onPressed: () => _close(context, 'sources', true),
                       ),
                     if (canOpenExternally)
                       _OptionChip(
-                        label: 'Open externally',
+                        label: context.tr("Open externally"),
                         icon: Icons.open_in_new_rounded,
                         onPressed: () => _close(context, 'external', true),
                       ),
@@ -7589,20 +7878,20 @@ class _PlaybackOptionsDialog extends StatelessWidget {
                 ),
                 const SizedBox(height: 12),
                 _OptionSection(
-                  title: 'PICTURE',
+                  title: context.tr("PICTURE"),
                   children: [
                     _OptionChip(
-                      label: 'Fit',
+                      label: context.tr("Fit"),
                       selected: videoFit == BoxFit.contain,
                       onPressed: () => _close(context, 'fit', BoxFit.contain),
                     ),
                     _OptionChip(
-                      label: 'Fill screen',
+                      label: context.tr("Fill screen"),
                       selected: videoFit == BoxFit.cover,
                       onPressed: () => _close(context, 'fit', BoxFit.cover),
                     ),
                     _OptionChip(
-                      label: 'Stretch',
+                      label: context.tr("Stretch"),
                       selected: videoFit == BoxFit.fill,
                       onPressed: () => _close(context, 'fit', BoxFit.fill),
                     ),
@@ -7611,7 +7900,7 @@ class _PlaybackOptionsDialog extends StatelessWidget {
                 if (playbackSpeedEnabled) ...[
                   const SizedBox(height: 12),
                   _OptionSection(
-                    title: 'SPEED',
+                    title: context.tr("SPEED"),
                     children: [
                       for (final rate in playerPlaybackSpeedValues)
                         _OptionChip(
@@ -7624,15 +7913,15 @@ class _PlaybackOptionsDialog extends StatelessWidget {
                 ],
                 const SizedBox(height: 12),
                 _OptionSection(
-                  title: 'SUBTITLE SIZE',
+                  title: context.tr("SUBTITLE SIZE"),
                   children: [
                     for (final size in const [28.0, 34.0, 42.0, 50.0])
                       _OptionChip(
                         label: switch (size) {
-                          28 => 'Small',
-                          34 => 'Medium',
-                          42 => 'Large',
-                          _ => 'Extra large',
+                          28 => context.tr("Small"),
+                          34 => context.tr("Medium"),
+                          42 => context.tr("Large"),
+                          _ => context.tr("Extra large"),
                         },
                         selected: subtitleSize == size,
                         onPressed: () => _close(context, 'subtitleSize', size),
@@ -7641,14 +7930,14 @@ class _PlaybackOptionsDialog extends StatelessWidget {
                 ),
                 const SizedBox(height: 12),
                 _OptionSection(
-                  title: 'SUBTITLE STYLE',
+                  title: context.tr("SUBTITLE STYLE"),
                   children: [
                     for (final position in const [78, 90, 100])
                       _OptionChip(
                         label: switch (position) {
-                          78 => 'Higher',
-                          90 => 'Raised',
-                          _ => 'Bottom',
+                          78 => context.tr("Higher"),
+                          90 => context.tr("Raised"),
+                          _ => context.tr("Bottom"),
                         },
                         selected: subtitlePosition == position,
                         onPressed: () =>
@@ -7656,8 +7945,8 @@ class _PlaybackOptionsDialog extends StatelessWidget {
                       ),
                     _OptionChip(
                       label: highContrastSubtitles
-                          ? 'High contrast on'
-                          : 'High contrast off',
+                          ? context.tr("High contrast on")
+                          : context.tr("High contrast off"),
                       selected: highContrastSubtitles,
                       onPressed: () =>
                           _close(context, 'contrast', !highContrastSubtitles),
@@ -7666,19 +7955,22 @@ class _PlaybackOptionsDialog extends StatelessWidget {
                 ),
                 const SizedBox(height: 12),
                 _OptionSection(
-                  title: 'SYNC',
+                  title: context.tr("SYNC"),
                   children: [
                     if (usesMedia3)
                       Text(
-                        'Audio and caption timing offsets are available in '
-                        'MPV. Switch the built-in player in Playback settings '
-                        'when a stream needs manual timing adjustment.',
+                        context.tr(
+                          "Audio and caption timing offsets are available in MPV. Switch the built-in player in Playback settings when a stream needs manual timing adjustment.",
+                        ),
                         style: TextStyle(color: palette.mutedText),
                       ),
                     if (!usesMedia3)
                       for (final delay in const [-500, -250, 0, 250, 500])
                         _OptionChip(
-                          label: 'Subs ${delay > 0 ? '+' : ''}${delay}ms',
+                          label: context.tr("Subs {value1}{value2}ms", {
+                            'value1': delay > 0 ? '+' : '',
+                            'value2': delay,
+                          }),
                           selected: subtitleDelayMs == delay,
                           onPressed: () =>
                               _close(context, 'subtitleDelay', delay),
@@ -7686,7 +7978,10 @@ class _PlaybackOptionsDialog extends StatelessWidget {
                     if (!usesMedia3)
                       for (final delay in const [-250, 0, 250])
                         _OptionChip(
-                          label: 'Audio ${delay > 0 ? '+' : ''}${delay}ms',
+                          label: context.tr("Audio {value1}{value2}ms", {
+                            'value1': delay > 0 ? '+' : '',
+                            'value2': delay,
+                          }),
                           selected: audioDelayMs == delay,
                           onPressed: () => _close(context, 'audioDelay', delay),
                         ),
@@ -7845,7 +8140,9 @@ class _PlaybackError extends StatelessWidget {
             const SizedBox(height: 10),
             if (controlsLocked)
               Text(
-                'The host controls playback. Open Watch Party or Exit.',
+                context.tr(
+                  "The host controls playback. Open Watch Party or Exit.",
+                ),
                 style: TextStyle(color: palette.mutedText),
               )
             else
@@ -7854,19 +8151,19 @@ class _PlaybackError extends StatelessWidget {
                 runSpacing: 8,
                 children: [
                   _RecoveryAction(
-                    label: 'Retry stream',
+                    label: context.tr("Retry stream"),
                     icon: Icons.refresh_rounded,
                     primary: true,
                     onPressed: onRetry,
                   ),
                   if (onNextStream case final callback?)
                     _RecoveryAction(
-                      label: 'Next stream',
+                      label: context.tr("Next stream"),
                       icon: Icons.skip_next_rounded,
                       onPressed: callback,
                     ),
                   _RecoveryAction(
-                    label: 'Choose stream',
+                    label: context.tr("Choose stream"),
                     icon: Icons.list_rounded,
                     onPressed: onChooseStream,
                   ),
@@ -7949,16 +8246,17 @@ class DebridOnlyPlaybackScreen extends StatelessWidget {
           children: [
             Icon(Icons.lock_rounded, size: 68, color: palette.secondaryAccent),
             const SizedBox(height: 18),
-            const Text(
-              'Playback blocked',
+            Text(
+              context.tr("Playback blocked"),
               style: TextStyle(fontSize: 30, fontWeight: FontWeight.w800),
             ),
             const SizedBox(height: 10),
             SizedBox(
               width: 620,
               child: Text(
-                'TetoTV only accepts streams resolved through a connected '
-                'supported debrid account.',
+                context.tr(
+                  "TetoTV only accepts streams resolved through a connected supported debrid account.",
+                ),
                 textAlign: TextAlign.center,
                 style: TextStyle(color: palette.mutedText, fontSize: 18),
               ),

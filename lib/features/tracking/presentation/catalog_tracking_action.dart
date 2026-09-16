@@ -1,3 +1,4 @@
+import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
 import 'package:anime_tv/features/settings/application/display_preferences_controller.dart';
@@ -90,13 +91,21 @@ Future<void> manageCatalogTrackingStatus({
           );
     if (!context.mounted) return;
     final action = selection.remove
-        ? 'Removed from ${result.updatedProviderNames}'
-        : 'Moved to ${selection.status!.displayName} on ${result.updatedProviderNames}';
+        ? context.tr('Removed from {provider}', {
+            'provider': result.updatedProviderNames,
+          })
+        : context.tr('Moved to {status} on {provider}', {
+            'status': context.tr(selection.status!.displayName),
+            'provider': result.updatedProviderNames,
+          });
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
           result.isPartial
-              ? '$action; one linked tracker could not be updated.'
+              ? context.tr(
+                  "{value1}; one linked tracker could not be updated.",
+                  {'value1': action},
+                )
               : '$action.',
         ),
         backgroundColor: result.isPartial
@@ -111,7 +120,7 @@ Future<void> manageCatalogTrackingStatus({
         : 'Could not update this show. Try again.';
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(message),
+        content: Text(context.tr(message)),
         backgroundColor: const Color(0xFF7D1E32),
       ),
     );

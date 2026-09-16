@@ -28,6 +28,7 @@ void main() {
     await controller.setShowDiscover(false);
     await controller.setShowCalendar(false);
     await controller.setShowWatchTogether(false);
+    await controller.setMangaReaderEnabled(false);
     await controller.setOfflineDownloadsEnabled(false);
     await controller.setShowHero(false);
     await controller.setShowPosterMetadata(false);
@@ -86,6 +87,7 @@ void main() {
     expect(restored.state.showDiscover, isFalse);
     expect(restored.state.showCalendar, isFalse);
     expect(restored.state.showWatchTogether, isFalse);
+    expect(restored.state.mangaReaderEnabled, isFalse);
     expect(restored.state.offlineDownloadsEnabled, isFalse);
     expect(
       restored.state.isTopNavigationDestinationVisible(
@@ -132,6 +134,7 @@ void main() {
     expect(restored.state.navigationChromeSize, NavigationChromeSize.large);
     expect(restored.state.topNavigationOrder, [
       TopNavigationDestination.watchTogether,
+      TopNavigationDestination.manga,
       TopNavigationDestination.downloads,
       TopNavigationDestination.settings,
       TopNavigationDestination.calendar,
@@ -177,7 +180,36 @@ void main() {
   );
 
   test(
-    'fresh installs keep anonymous crash reporting off by default',
+    'Manga preference defaults on and preserves an explicit opt-out',
+    () async {
+      FlutterSecureStorage.setMockInitialValues({});
+      const storage = FlutterSecureStorage();
+      final fresh = SettingsPreferencesController(storage);
+
+      await fresh.load();
+      expect(fresh.state.mangaReaderEnabled, isTrue);
+      expect(
+        fresh.state.isTopNavigationDestinationVisible(
+          TopNavigationDestination.manga,
+        ),
+        isTrue,
+      );
+
+      await fresh.setMangaReaderEnabled(false);
+      final restored = SettingsPreferencesController(storage);
+      await restored.load();
+      expect(restored.state.mangaReaderEnabled, isFalse);
+      expect(
+        restored.state.isTopNavigationDestinationVisible(
+          TopNavigationDestination.manga,
+        ),
+        isFalse,
+      );
+    },
+  );
+
+  test(
+    'fresh installs enable and persist anonymous crash reporting by default',
     () async {
       FlutterSecureStorage.setMockInitialValues({});
       final controller = SettingsPreferencesController(
@@ -215,6 +247,7 @@ void main() {
         TopNavigationDestination.discover,
         TopNavigationDestination.calendar,
         TopNavigationDestination.watchTogether,
+        TopNavigationDestination.manga,
         TopNavigationDestination.downloads,
         TopNavigationDestination.settings,
       ]);
@@ -222,15 +255,23 @@ void main() {
       expect(controller.state.showDiscover, isTrue);
       expect(controller.state.showCalendar, isTrue);
       expect(controller.state.showWatchTogether, isTrue);
+      expect(controller.state.mangaReaderEnabled, isTrue);
       expect(controller.state.showDownloads, isTrue);
       expect(controller.state.offlineDownloadsEnabled, isTrue);
-      expect(controller.state.anonymousCrashReportingEnabled, isFalse);
+      expect(controller.state.anonymousCrashReportingEnabled, isTrue);
+      expect(
+        await const FlutterSecureStorage().read(
+          key: 'privacy_anonymous_crash_reporting',
+        ),
+        'true',
+      );
       expect(controller.state.anonymousUsageCountEnabled, isTrue);
       expect(controller.state.subEpisodeNotificationsEnabled, isFalse);
       expect(controller.state.dubEpisodeNotificationsEnabled, isFalse);
       expect(controller.state.externalPlayerEnabled, isFalse);
       expect(controller.state.preferredAudio, PlaybackAudioPreference.dub);
-      expect(controller.state.preferredPlayer, PreferredPlayer.mpv);
+      expect(controller.state.preferredPlayer, PreferredPlayer.media3);
+      expect(controller.state.media3SurfaceViewEnabled, isTrue);
       expect(controller.state.debridStreamSort, DebridStreamSort.bestQuality);
       expect(
         controller.state.streamSourcePriority,
@@ -548,29 +589,31 @@ void main() {
   });
 
   test(
-    'MPV stays the default and Media3 persists as a built-in choice',
+    'Media3 SurfaceView is the default and an explicit MPV choice persists',
     () async {
       FlutterSecureStorage.setMockInitialValues({});
       const storage = FlutterSecureStorage();
       final controller = SettingsPreferencesController(storage);
       await controller.load();
 
-      expect(controller.state.preferredPlayer, PreferredPlayer.mpv);
+      expect(controller.state.preferredPlayer, PreferredPlayer.media3);
+      expect(controller.state.media3SurfaceViewEnabled, isTrue);
       expect(PreferredPlayer.media3.displayName, 'Media3 (Built in)');
 
-      await controller.setPreferredPlayer(PreferredPlayer.media3);
-      expect(await storage.read(key: 'player_preferred_engine'), 'media3');
+      await controller.setPreferredPlayer(PreferredPlayer.mpv);
+      expect(await storage.read(key: 'player_preferred_engine'), 'mpv');
       final restored = SettingsPreferencesController(storage);
       await restored.load();
 
-      expect(restored.state.preferredPlayer, PreferredPlayer.media3);
+      expect(restored.state.preferredPlayer, PreferredPlayer.mpv);
+      expect(restored.state.media3SurfaceViewEnabled, isTrue);
       expect(restored.state.externalPlayerEnabled, isFalse);
       expect(restored.state.selectedExternalPlayerPackage, isNull);
 
-      await restored.setPreferredPlayer(PreferredPlayer.mpv);
-      final switchedBack = SettingsPreferencesController(storage);
-      await switchedBack.load();
-      expect(switchedBack.state.preferredPlayer, PreferredPlayer.mpv);
+      await restored.setPreferredPlayer(PreferredPlayer.media3);
+      final switchedToDefault = SettingsPreferencesController(storage);
+      await switchedToDefault.load();
+      expect(switchedToDefault.state.preferredPlayer, PreferredPlayer.media3);
     },
   );
 
@@ -597,24 +640,52 @@ void main() {
   );
 
   test(
-    'Media3 rendering defaults to TextureView for existing installs',
+    'SurfaceView default preserves explicit true and false choices',
     () async {
-      for (final storedValue in [null, 'false', 'invalid']) {
+      for (final testCase in const [
+        (null, true),
+        ('true', true),
+        ('false', false),
+        ('invalid', true),
+      ]) {
         FlutterSecureStorage.setMockInitialValues({
           'player_preferred_engine': 'media3',
-          'player_media3_surface_view_enabled': ?storedValue,
+          'player_media3_surface_view_enabled': ?testCase.$1,
         });
         final controller = SettingsPreferencesController(
           const FlutterSecureStorage(),
         );
         addTearDown(controller.dispose);
-        expect(controller.state.media3SurfaceViewEnabled, isFalse);
+        expect(controller.state.media3SurfaceViewEnabled, isTrue);
         await controller.load();
-        expect(controller.state.media3SurfaceViewEnabled, isFalse);
+        expect(
+          controller.state.media3SurfaceViewEnabled,
+          testCase.$2,
+          reason: 'stored value: ${testCase.$1}',
+        );
         expect(controller.state.preferredPlayer, PreferredPlayer.media3);
       }
     },
   );
+
+  test('player preference read failures use compatibility defaults', () async {
+    final controller = SettingsPreferencesController(
+      const FlutterSecureStorage(),
+      readValue: (key) async {
+        if (key == 'player_preferred_engine' ||
+            key == 'player_media3_surface_view_enabled') {
+          throw StateError('secure storage unavailable');
+        }
+        return null;
+      },
+    );
+    addTearDown(controller.dispose);
+
+    await controller.load();
+
+    expect(controller.state.preferredPlayer, PreferredPlayer.mpv);
+    expect(controller.state.media3SurfaceViewEnabled, isFalse);
+  });
 
   test(
     'enabling SurfaceView selects Media3 and persists both choices',
@@ -681,19 +752,20 @@ void main() {
     expect(await storage.read(key: 'player_preferred_engine'), 'mpv');
   });
 
-  test('full preference reset restores Media3 TextureView', () async {
+  test('full preference reset restores Media3 SurfaceView', () async {
     FlutterSecureStorage.setMockInitialValues({});
     const storage = FlutterSecureStorage();
     final controller = SettingsPreferencesController(storage);
     addTearDown(controller.dispose);
-    await controller.setMedia3SurfaceViewEnabled(true);
+    await controller.setMedia3SurfaceViewEnabled(false);
+    await controller.setPreferredPlayer(PreferredPlayer.mpv);
     expect(
       controller.state.copyWith(loaded: true).media3SurfaceViewEnabled,
-      isTrue,
+      isFalse,
     );
     await controller.resetAppearance();
-    expect(controller.state.media3SurfaceViewEnabled, isFalse);
-    expect(controller.state.preferredPlayer, PreferredPlayer.mpv);
+    expect(controller.state.media3SurfaceViewEnabled, isTrue);
+    expect(controller.state.preferredPlayer, PreferredPlayer.media3);
     expect(
       await storage.read(key: 'player_media3_surface_view_enabled'),
       isNull,
@@ -702,7 +774,8 @@ void main() {
     final restored = SettingsPreferencesController(storage);
     addTearDown(restored.dispose);
     await restored.load();
-    expect(restored.state.media3SurfaceViewEnabled, isFalse);
+    expect(restored.state.media3SurfaceViewEnabled, isTrue);
+    expect(restored.state.preferredPlayer, PreferredPlayer.media3);
   });
 
   for (final beforeLoad in [true, false]) {
@@ -734,7 +807,7 @@ void main() {
   }
 
   test(
-    'specific default external player persists and can fall back to MPV',
+    'specific external player persists and returns to the Media3 default',
     () async {
       FlutterSecureStorage.setMockInitialValues({});
       const storage = FlutterSecureStorage();
@@ -758,28 +831,33 @@ void main() {
       await restored.setExternalPlayerEnabled(false);
       final fallback = SettingsPreferencesController(storage);
       await fallback.load();
-      expect(fallback.state.preferredPlayer, PreferredPlayer.mpv);
+      expect(fallback.state.preferredPlayer, PreferredPlayer.media3);
+      expect(fallback.state.media3SurfaceViewEnabled, isTrue);
       expect(fallback.state.externalPlayerEnabled, isFalse);
       expect(fallback.state.selectedExternalPlayerPackage, isNull);
       expect(fallback.state.selectedExternalPlayerLabel, isNull);
     },
   );
 
-  test('invalid persisted external package safely migrates to MPV', () async {
-    FlutterSecureStorage.setMockInitialValues({
-      'player_preferred_engine': 'external',
-      'player_external_default_package': '../not-a-package',
-      'player_external_default_label': 'Unsafe',
-    });
-    final controller = SettingsPreferencesController(
-      const FlutterSecureStorage(),
-    );
+  test(
+    'invalid persisted external package safely migrates to Media3',
+    () async {
+      FlutterSecureStorage.setMockInitialValues({
+        'player_preferred_engine': 'external',
+        'player_external_default_package': '../not-a-package',
+        'player_external_default_label': 'Unsafe',
+      });
+      final controller = SettingsPreferencesController(
+        const FlutterSecureStorage(),
+      );
 
-    await controller.load();
+      await controller.load();
 
-    expect(controller.state.preferredPlayer, PreferredPlayer.mpv);
-    expect(controller.state.selectedExternalPlayerPackage, isNull);
-  });
+      expect(controller.state.preferredPlayer, PreferredPlayer.media3);
+      expect(controller.state.media3SurfaceViewEnabled, isTrue);
+      expect(controller.state.selectedExternalPlayerPackage, isNull);
+    },
+  );
 
   test('disabled external playback cannot remain the default', () async {
     FlutterSecureStorage.setMockInitialValues({
@@ -795,10 +873,11 @@ void main() {
     await controller.load();
 
     expect(controller.state.externalPlayerEnabled, isFalse);
-    expect(controller.state.preferredPlayer, PreferredPlayer.mpv);
+    expect(controller.state.preferredPlayer, PreferredPlayer.media3);
+    expect(controller.state.media3SurfaceViewEnabled, isTrue);
   });
 
-  test('unsupported legacy player choices migrate to MPV', () async {
+  test('unsupported legacy player choices migrate to Media3', () async {
     for (final legacyValue in ['automatic', 'vlc', 'unknown']) {
       FlutterSecureStorage.setMockInitialValues({
         'player_preferred_engine': legacyValue,
@@ -809,12 +888,13 @@ void main() {
 
       await controller.load();
 
-      expect(controller.state.preferredPlayer, PreferredPlayer.mpv);
+      expect(controller.state.preferredPlayer, PreferredPlayer.media3);
+      expect(controller.state.media3SurfaceViewEnabled, isTrue);
     }
   });
 
   test(
-    'legacy custom navigation keeps its order and inserts Watch Together',
+    'legacy custom navigation keeps its order and inserts new destinations',
     () async {
       const customOrder = <TopNavigationDestination>[
         TopNavigationDestination.calendar,
@@ -838,6 +918,7 @@ void main() {
       expect(controller.state.topNavigationOrder, const [
         TopNavigationDestination.calendar,
         TopNavigationDestination.watchTogether,
+        TopNavigationDestination.manga,
         TopNavigationDestination.downloads,
         TopNavigationDestination.settings,
         TopNavigationDestination.discover,
@@ -1060,6 +1141,7 @@ void main() {
       await controller.setContentDensity(ContentDensity.compact);
       await controller.setShowTitleStyle(ShowTitleStyle.text);
       await controller.setShowHero(false);
+      await controller.setMangaReaderEnabled(false);
       await controller.setCaptionTextColor(0xFF00FF00);
       await controller.setSeekBackSeconds(30);
       await controller.setPreferredAudio(PlaybackAudioPreference.sub);
@@ -1074,6 +1156,7 @@ void main() {
       expect(controller.state.contentDensity, ContentDensity.standard);
       expect(controller.state.showTitleStyle, ShowTitleStyle.englishLogo);
       expect(controller.state.showHero, isTrue);
+      expect(controller.state.mangaReaderEnabled, isFalse);
       expect(controller.state.captionTextColor, 0xFF00FF00);
       expect(controller.state.seekBackSeconds, 30);
       expect(controller.state.preferredAudio, PlaybackAudioPreference.sub);
@@ -1087,6 +1170,7 @@ void main() {
       await restored.load();
       expect(restored.state.interfaceScale, 1);
       expect(restored.state.showTitleStyle, ShowTitleStyle.englishLogo);
+      expect(restored.state.mangaReaderEnabled, isFalse);
       expect(restored.state.captionTextColor, 0xFF00FF00);
       expect(restored.state.seekBackSeconds, 30);
       expect(restored.state.preferredAudio, PlaybackAudioPreference.sub);
@@ -1171,19 +1255,129 @@ void main() {
     expect(controller.state.useBuiltInKeyboard, isFalse);
   });
 
+  test('anonymous crash reporting preserves an explicit opt out', () async {
+    FlutterSecureStorage.setMockInitialValues({});
+    const storage = FlutterSecureStorage();
+    final controller = SettingsPreferencesController(storage);
+
+    await controller.load();
+    expect(controller.state.anonymousCrashReportingEnabled, isTrue);
+    await controller.setAnonymousCrashReportingEnabled(false);
+    final restored = SettingsPreferencesController(storage);
+    await restored.load();
+
+    expect(restored.state.anonymousCrashReportingEnabled, isFalse);
+  });
+
+  test('legacy install without crash preference remains opted out', () async {
+    FlutterSecureStorage.setMockInitialValues({
+      initialSetupCompletedStorageKey: 'true',
+      'appearance_home_layout': HomeLayout.compact.name,
+    });
+    const storage = FlutterSecureStorage();
+    final controller = SettingsPreferencesController(storage);
+
+    await controller.load();
+
+    expect(controller.state.anonymousCrashReportingEnabled, isFalse);
+    expect(
+      await storage.read(key: 'privacy_anonymous_crash_reporting'),
+      isNull,
+    );
+  });
+
   test(
-    'anonymous crash reporting persists only after explicit opt in',
+    'incomplete legacy install with another preference remains opted out',
     () async {
-      FlutterSecureStorage.setMockInitialValues({});
+      FlutterSecureStorage.setMockInitialValues({
+        interfaceLanguageStorageKey: 'es',
+        interfaceLanguageChosenStorageKey: 'true',
+      });
       const storage = FlutterSecureStorage();
       final controller = SettingsPreferencesController(storage);
 
-      expect(controller.state.anonymousCrashReportingEnabled, isFalse);
-      await controller.setAnonymousCrashReportingEnabled(true);
-      final restored = SettingsPreferencesController(storage);
-      await restored.load();
+      await controller.load();
 
-      expect(restored.state.anonymousCrashReportingEnabled, isTrue);
+      expect(controller.state.anonymousCrashReportingEnabled, isFalse);
+      expect(
+        await storage.read(key: 'privacy_anonymous_crash_reporting'),
+        isNull,
+      );
+    },
+  );
+
+  test('crash preference read failure stays opted out', () async {
+    final controller = SettingsPreferencesController(
+      const FlutterSecureStorage(),
+      readValue: (key) async {
+        if (key == 'privacy_anonymous_crash_reporting') {
+          throw StateError('secure storage unavailable');
+        }
+        return null;
+      },
+    );
+
+    await controller.load();
+
+    expect(controller.state.anonymousCrashReportingEnabled, isFalse);
+  });
+
+  test(
+    'missing crash preference fails closed when install evidence cannot be read',
+    () async {
+      FlutterSecureStorage.setMockInitialValues({});
+      const storage = FlutterSecureStorage();
+      final controller = SettingsPreferencesController(
+        storage,
+        readValue: (key) async {
+          if (key == 'appearance_home_layout') {
+            throw StateError('encrypted preference temporarily unavailable');
+          }
+          return storage.read(key: key);
+        },
+      );
+
+      await controller.load();
+
+      expect(controller.state.anonymousCrashReportingEnabled, isFalse);
+      expect(
+        await storage.read(key: 'privacy_anonymous_crash_reporting'),
+        isNull,
+      );
+    },
+  );
+
+  test(
+    'explicit crash choice survives unrelated install-evidence read failure',
+    () async {
+      for (final savedChoice in const ['true', 'false']) {
+        FlutterSecureStorage.setMockInitialValues({
+          'privacy_anonymous_crash_reporting': savedChoice,
+        });
+        const storage = FlutterSecureStorage();
+        final controller = SettingsPreferencesController(
+          storage,
+          readValue: (key) async {
+            if (key == 'appearance_home_layout') {
+              throw StateError('encrypted preference temporarily unavailable');
+            }
+            return storage.read(key: key);
+          },
+        );
+        addTearDown(controller.dispose);
+
+        await controller.load();
+
+        expect(
+          controller.state.anonymousCrashReportingEnabled,
+          savedChoice == 'true',
+          reason: 'stored choice: $savedChoice',
+        );
+        expect(
+          await storage.read(key: 'privacy_anonymous_crash_reporting'),
+          savedChoice,
+        );
+      }
     },
   );
 
@@ -1265,12 +1459,14 @@ void main() {
         SettingsEntryPlacement.profileMenu,
       );
       await controller.setShowWatchTogether(false);
+      await controller.setMangaReaderEnabled(false);
       expect(
         controller.state.settingsEntryPlacement,
         SettingsEntryPlacement.profileMenu,
       );
       expect(controller.state.showSettings, isTrue);
       expect(controller.state.showWatchTogether, isFalse);
+      expect(controller.state.mangaReaderEnabled, isFalse);
 
       final restored = SettingsPreferencesController(storage);
       await restored.load();
@@ -1279,6 +1475,7 @@ void main() {
         SettingsEntryPlacement.profileMenu,
       );
       expect(restored.state.showWatchTogether, isFalse);
+      expect(restored.state.mangaReaderEnabled, isFalse);
 
       await restored.resetCustomization();
       expect(
@@ -1286,6 +1483,7 @@ void main() {
         SettingsEntryPlacement.topNavigation,
       );
       expect(restored.state.showWatchTogether, isTrue);
+      expect(restored.state.mangaReaderEnabled, isFalse);
       final resetRestored = SettingsPreferencesController(storage);
       await resetRestored.load();
       expect(
@@ -1293,6 +1491,7 @@ void main() {
         SettingsEntryPlacement.topNavigation,
       );
       expect(resetRestored.state.showWatchTogether, isTrue);
+      expect(resetRestored.state.mangaReaderEnabled, isFalse);
     },
   );
 
@@ -1307,6 +1506,7 @@ void main() {
     ]);
     expect(controller.state.topNavigationOrder, [
       TopNavigationDestination.watchTogether,
+      TopNavigationDestination.manga,
       TopNavigationDestination.downloads,
       TopNavigationDestination.settings,
       TopNavigationDestination.search,
@@ -1335,7 +1535,7 @@ void main() {
     );
   });
 
-  test('manga is an append-only fixed runtime destination', () async {
+  test('manga stays append-only and can be disabled', () async {
     FlutterSecureStorage.setMockInitialValues({});
     const preferences = SettingsPreferences();
     final controller = SettingsPreferencesController(
@@ -1356,12 +1556,19 @@ void main() {
       preferences.canHideTopNavigationDestination(
         TopNavigationDestination.manga,
       ),
-      isFalse,
+      isTrue,
     );
 
     await controller.setTopNavigationDestinationVisible(
       TopNavigationDestination.manga,
       false,
+    );
+    expect(controller.state.mangaReaderEnabled, isFalse);
+    expect(
+      controller.state.isTopNavigationDestinationVisible(
+        TopNavigationDestination.manga,
+      ),
+      isFalse,
     );
     expect(controller.state.topNavigationOrder, defaultTopNavigationOrder);
   });
@@ -1446,7 +1653,7 @@ void main() {
       gate.complete();
       await Future.wait([firstLoad, duplicateLoad]);
 
-      expect(reads, 62, reason: 'duplicate startup loads must be coalesced');
+      expect(reads, 66, reason: 'duplicate startup loads must be coalesced');
       expect(controller.state.webStreamsEnabled, isTrue);
       expect(controller.state.navigationSounds, isFalse);
     },

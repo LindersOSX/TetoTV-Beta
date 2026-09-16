@@ -998,7 +998,7 @@ void main() {
           ),
         ],
         resolver: (_) => throw StateError('debrid must not run'),
-        webPreflight: (uri, headers, {subtitleUri}) async {
+        webPreflight: (uri, headers, {audioTracks, subtitleUri}) async {
           attempted.add(uri);
           return ValidatedWebStream(
             uri: uri,
@@ -1045,14 +1045,15 @@ void main() {
           ),
         ],
         resolver: (_) => throw StateError('debrid must not run'),
-        webPreflight: (candidateUri, headers, {subtitleUri}) async {
-          attempted.add(candidateUri);
-          return ValidatedWebStream(
-            uri: candidateUri,
-            headers: headers,
-            contentType: 'video/mp4',
-          );
-        },
+        webPreflight:
+            (candidateUri, headers, {audioTracks, subtitleUri}) async {
+              attempted.add(candidateUri);
+              return ValidatedWebStream(
+                uri: candidateUri,
+                headers: headers,
+                contentType: 'video/mp4',
+              );
+            },
       );
 
       final prepared = await controller.warm(
@@ -1498,6 +1499,49 @@ void main() {
     await controller.dispose();
   });
 
+  test(
+    'changed current Web request headers reject a stale prepared episode',
+    () async {
+      final lease = _FakeLease();
+      final controller = _controller(
+        releases: [
+          _release(
+            hash: 'header-bound-next',
+            name: '[Safe] Show - 02 1080p x264',
+            codec: 'H.264',
+          ),
+        ],
+        resolver: (_) => Stream.value(
+          StreamReady(
+            uri: Uri.parse('https://cdn.example/header-bound-next.mkv'),
+            displayName: 'Header-bound next',
+            debridService: DebridService.realDebrid,
+            playbackLease: lease,
+          ),
+        ),
+      );
+      await controller.warm(
+        _request(
+          currentWebProviderId: 'web-provider',
+          currentHeaders: const {'Referer': 'https://first.example/'},
+        ),
+      );
+
+      final taken = await controller.take(
+        7,
+        1,
+        currentRequest: _request(
+          currentWebProviderId: 'web-provider',
+          currentHeaders: const {'Referer': 'https://second.example/'},
+        ),
+      );
+
+      expect(taken, isNull);
+      expect(lease.closeCount, 1);
+      await controller.dispose();
+    },
+  );
+
   for (final subtitleChange
       in <
         ({
@@ -1850,12 +1894,16 @@ NextEpisodePreparationController _controller({
   },
   webPreflight:
       webPreflight ??
-      (Uri uri, Map<String, String> headers, {Uri? subtitleUri}) async =>
-          ValidatedWebStream(
-            uri: uri,
-            headers: headers,
-            contentType: 'video/mp4',
-          ),
+      (
+        Uri uri,
+        Map<String, String> headers, {
+        Uri? subtitleUri,
+        List<WebExternalAudioTrack>? audioTracks,
+      }) async => ValidatedWebStream(
+        uri: uri,
+        headers: headers,
+        contentType: 'video/mp4',
+      ),
   resolutionTimeout: resolutionTimeout,
   preparedTtl: preparedTtl,
   clock: clock,
@@ -1865,6 +1913,7 @@ NextEpisodePreparationRequest _request({
   bool skipFillerEpisodes = false,
   String currentUri = 'https://cdn.example/episode-1.mkv',
   String? currentWebProviderId,
+  Map<String, String> currentHeaders = const {},
   String audioLanguage = 'eng',
   String subtitleLanguage = 'eng',
   bool subtitleEnabled = true,
@@ -1898,6 +1947,7 @@ NextEpisodePreparationRequest _request({
             : null,
         providerId: currentWebProviderId,
         providerName: currentWebProviderId == null ? null : 'Web current',
+        headers: currentHeaders,
       ),
       episode: EpisodeReference(
         anilistMediaId: 7,

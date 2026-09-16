@@ -1,3 +1,4 @@
+import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'dart:async';
 
 import 'package:anime_tv/core/tv/tv_focusable.dart';
@@ -74,8 +75,8 @@ class _CopyableCodeInteractionState extends State<CopyableCodeInteraction> {
     } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-        const SnackBar(
-          content: Text('Clipboard is unavailable on this device.'),
+        SnackBar(
+          content: Text(context.tr("Clipboard is unavailable on this device.")),
         ),
       );
       return;
@@ -89,7 +90,9 @@ class _CopyableCodeInteractionState extends State<CopyableCodeInteraction> {
 
   @override
   Widget build(BuildContext context) => Semantics(
-    label: '${widget.semanticsLabel}. Double select to copy code.',
+    label: context.tr("{value1}. Double select to copy code.", {
+      'value1': widget.semanticsLabel,
+    }),
     hint: 'Double-click, double-tap, or press OK twice to copy.',
     button: true,
     child: TvFocusable(

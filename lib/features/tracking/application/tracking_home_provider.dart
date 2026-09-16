@@ -114,7 +114,15 @@ final linkedTrackingProgressProvider = FutureProvider.autoDispose
             repositoryFactory: repositoryFactory,
           ),
         if (ids.anilistMediaId != null || ids.malMediaId != null)
-          _loadSimklProgress(
+          _loadExternalProgress(
+            provider: TrackingProvider.kitsu,
+            ids: ids,
+            tokenService: tokenService,
+            repositoryFactory: repositoryFactory,
+          ),
+        if (ids.anilistMediaId != null || ids.malMediaId != null)
+          _loadExternalProgress(
+            provider: TrackingProvider.simkl,
             ids: ids,
             tokenService: tokenService,
             repositoryFactory: repositoryFactory,
@@ -145,15 +153,16 @@ Future<int> _loadLinkedProgress({
   }
 }
 
-Future<int> _loadSimklProgress({
+Future<int> _loadExternalProgress({
+  required TrackingProvider provider,
   required LinkedTrackingProgressIds ids,
   required TrackingTokenService tokenService,
   required TrackingRepositoryFactory repositoryFactory,
 }) async {
   try {
-    final token = await tokenService.accessToken(TrackingProvider.simkl);
+    final token = await tokenService.accessToken(provider);
     if (token == null || token.isEmpty) return 0;
-    final repository = repositoryFactory(TrackingProvider.simkl, token);
+    final repository = repositoryFactory(provider, token);
     final externalRepository = switch (repository) {
       ExternalIdTrackingRepository value => value,
       _ => null,

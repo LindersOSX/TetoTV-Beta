@@ -1,6 +1,6 @@
 # TetoTV privacy disclosure
 
-Effective date: September 3, 2026
+Effective date: September 5, 2026 (local unreleased build)
 
 The stable public copy is available without an account or authentication at
 <https://tetotv-bot.wisp.uno/privacy>.
@@ -19,9 +19,11 @@ and diagnostic features unless a release note says otherwise. They query
 different public GitHub release repositories for updates. The material privacy
 difference is the **anonymous aggregate live count**: it is available and
 enabled by default in Beta, with an opt-out during setup and in Settings, and
-is disabled in Public and debug/test builds. Anonymous crash reporting remains
-off by default in both channels, and manually sending diagnostics always
-requires a separate user action.
+is disabled in Public and debug/test builds. Anonymous crash reporting starts
+enabled only on genuinely new installs, with an opt-out during setup and in
+Settings. Existing installs keep their stored choice; an upgrade never turns a
+missing legacy preference on. Manually sending diagnostics always requires a
+separate user action.
 
 ## Data kept on the device
 
@@ -36,20 +38,30 @@ TetoTV stores the following data locally:
 - playback history, resume positions, per-series preferences, tracker-sync
   outbox entries, an account-scoped SIMKL profile/list/activity cache, installed
   source definitions, and app preferences;
-- when the Developer Mode Manga Preview is used, user-added OPDS or declarative
-  repository definitions, bounded catalog cache data, local library entries,
-  reading progress, chapter/page counts, reader preferences, and download-job
-  metadata. Optional Basic, Bearer, and API-key credentials are stored
-  separately in Android Keystore-backed secure storage. They are not stored in
-  the catalog cache or diagnostics;
-- saved manga pages downloaded from a compatible OPDS reading order or
-  extracted from a compatible ZIP/CBZ chapter archive in app-private storage,
-  plus app-private relative paths and verification metadata needed to verify
-  and display a completed download. A bounded cached OPDS document can retain
-  the remote links declared by that server until the source/cache is removed.
-  Resolved reader headers, page/archive acquisition URLs, and download request
-  headers are runtime-only capabilities and are not written to manga progress
-  or download-job records;
+- when the optional manga reader is used, user-added Seanime-compatible
+  extension repository/install definitions, previously saved OPDS/declarative
+  catalog definitions and bounded catalog cache data. Local library entries,
+  categories/statuses, chapter snapshots, new-chapter counts, reading
+  history/bookmarks and chapter/page positions are associated with the local
+  manga owner. Reader defaults and source/title-specific layout preferences
+  remain device-local settings shared across library profiles. Protected title
+  identities support reopening saved Seanime titles and explicitly resuming
+  their downloads. Legacy Basic, Bearer, and API-key credentials are stored
+  separately in Android Keystore-backed secure storage, not the catalog cache
+  or diagnostics;
+- saved manga pages downloaded through a compatible Seanime provider or legacy
+  OPDS reading order, or extracted from a compatible ZIP/CBZ archive, in
+  app-private storage. Download records retain queue/status/error state,
+  chapter/page counts, relative local paths, hashes and verification metadata.
+  Verified pages can remain after a pause or interrupted/failed transfer for
+  validated reuse. A bounded cached OPDS document can retain its declared
+  remote links until the source/cache is removed. Resolved reader headers,
+  page/archive acquisition URLs and download request headers are runtime-only
+  capabilities and are not written to progress or download-job records;
+- if manga tracking is explicitly linked, the selected AniList/MAL manga
+  record, local owner/tracking profile, verified numeric account identifier,
+  and pending chapter updates with attempt/error/backoff state in protected
+  local storage. This record contains no access token or source page URL;
 - saved offline episode files in app-private storage; downloaded public catalog
   and episode metadata; pinned cover and banner artwork; and durable download
   job state such as public media identifiers, episode and title labels, source
@@ -84,7 +96,7 @@ Storage > Clear storage** both remove all TetoTV local data. The separate
 **Clear cache** action removes only temporary files and retains accounts,
 preferences, sources, history, and saved offline downloads.
 
-Removing an individual manga source or manga download through the preview's
+Removing an individual manga source or manga download through the reader's
 own controls removes its associated local source credential/cache or saved
 page files. Library state, reading progress, and reader preferences can remain
 for other entries. To remove all manga data and credentials together, use
@@ -92,12 +104,35 @@ for other entries. To remove all manga data and credentials together, use
 TetoTV. Android **Clear cache** removes temporary extracted pages but retains
 persistent manga settings, source definitions, progress, and downloads.
 
+Unlinking a manga tracker removes that local title/provider mapping and its
+pending updates, not the entry in the online tracker list. Account reconnection
+does not silently reassign a saved mapping to a different remote account.
+
+The optional manga backup dialog exports an encrypted file through Android's
+document picker to a location selected by the user. Its bounded payload includes
+supported Seanime library metadata, categories/statuses, chapter history and
+bookmarks, chapter snapshots, protected title identities, and reader settings;
+supported history for titles no longer saved can also be included. It excludes
+source repository/install definitions, source/account credentials, downloaded
+pages, resolved page capabilities, legacy OPDS library titles, and manga tracker
+links/outbox entries. The file uses AES-256-GCM and a passphrase-derived key;
+the passphrase is not saved and cannot be recovered by TetoTV. Import decrypts
+locally, shows a preview and conflict policy, and requires confirmation for the
+selected local owner. It does not automatically install sources, download pages,
+or send tracker updates. TetoTV does not upload the backup to its own server;
+the document provider/location chosen by the user can have its own storage or
+cloud-sync behavior. Exported files remain outside app-private storage and must
+be deleted separately, even after TetoTV data is reset or the app is uninstalled.
+
 ## Data sent to services selected by the user
 
 TetoTV makes network requests only for app features the user uses:
 
-- AniList, MAL, and SIMKL receive the profile, list, status, and progress
-  requests needed for the tracker features the user chooses. SIMKL can receive
+- AniList, MAL, Kitsu, and SIMKL receive the profile, list, status, and progress
+  requests needed for the tracker features the user chooses. Kitsu can also
+  receive a 1–10 rating converted exactly to its `ratingTwenty` field, plus a
+  public AniList or MAL identifier used with Kitsu's mapping endpoint; TetoTV
+  does not match account-library titles by name. SIMKL can receive
   its supported AniList or MAL title identifier, list request, status,
   watched-episode number and time, and activity timestamps used to avoid
   unnecessary cache refreshes. TetoTV does not timer-poll a full SIMKL library.
@@ -109,6 +144,19 @@ TetoTV makes network requests only for app features the user uses:
   unavailable, Kitsu can receive bounded read-only title or identifier lookups
   for search/details and for mapping backup catalog results back to real
   AniList and MAL identifiers;
+- optional manga tracking uses AniList or MAL, not SIMKL. Searching sends the
+  entered manga title query to the selected official service. Confirming an
+  explicit manga match requests that record and the connected account identity;
+  it does not upload prior local history. Future reader completions with
+  positive whole-number chapter numbers can send the chosen manga identifier
+  and chapter count. Scores, volume counts and online list status are not
+  changed by this manga path. Persisted pending updates can retry while the
+  Manga feature is enabled and the app is running or resumes, subject to
+  account/owner checks, attempt limits, backoff and service retry delays.
+  Disabling Manga suspends those retries without erasing the protected outbox;
+  re-enabling Manga permits due retries again. The dialog's manual retry is scoped to the
+  selected title and tracker. Local reading progress is kept independently;
+  a local storage error can prevent a tracker update from being queued;
 - SIMKL list cards can load a poster through `wsrv.nl` using a validated
   `simkl.in` poster path and expose a user-invoked **View on SIMKL** link to the
   corresponding `simkl.com` title page. Those hosts receive the ordinary IP,
@@ -159,6 +207,28 @@ TetoTV makes network requests only for app features the user uses:
   episode count, and confirmed filler episode numbers) is treated as valid for
   24 hours; expired records are ignored and can remain in application cache
   storage until they are overwritten or application data is cleared;
+- when **Show title style** is set to title artwork and show details are
+  displayed, `api.ani.zip` may receive the public numeric AniList ID to resolve
+  language-tagged logo metadata. If the build includes the optional Fanart.tv
+  key, `webservice.fanart.tv` may also receive the corresponding public TVDB ID.
+  TetoTV filters artwork locally to the independent English/Romaji **Title
+  language** choice; the App language does not select titles, initiate this
+  lookup, or get sent with it. The selected public artwork host receives the
+  ordinary HTTPS request needed to load the image. No account credentials,
+  search text, private-library records or stream URLs are sent. Valid artwork
+  metadata is cached for 14 days and a missing match for 12 hours; missing,
+  untagged or mismatched artwork falls back to the selected text title;
+- when a supported non-English interface displays show details,
+  `api.ani.zip` may receive the public numeric AniList ID to resolve the
+  corresponding public TMDB media ID. The public TMDB title page then receives
+  that TV or movie ID and the allowlisted interface locale, along with ordinary
+  HTTPS connection data such as the device's public IP address, time, user
+  agent, and request path. No account credential, search text, private-library
+  record, playback history, filename, or stream URL is sent. The app accepts a
+  synopsis only when the mapping identity and returned page language match,
+  bounds and sanitizes both responses, caches a valid result for seven days and
+  a missing result for 12 hours, and otherwise keeps the existing catalog
+  synopsis;
 - marketplace repository and manifest URLs are supplied by the user; TetoTV
   ships no default source catalog. Adding or refreshing one fetches that
   catalog from its public HTTPS host. Installing an extension fetches its
@@ -171,12 +241,13 @@ TetoTV makes network requests only for app features the user uses:
   the results of requests it makes within TetoTV's bounded runtime. Users
   should install only extensions and catalogs they trust and are authorized to
   use;
-- Manga Preview repository and OPDS URLs are supplied by the user; TetoTV
-  ships no default or recommended manga catalog or provider. Adding, browsing,
-  refreshing, reading, or downloading from an OPDS source contacts that
-  source's public HTTPS server and any public HTTPS image or acquisition hosts
-  declared by its documents. A viewer can instead install a Seanime-format
-  manga-provider extension from a Marketplace repository they entered. That
+- Manga repository URLs are supplied by the user; TetoTV ships no
+  default or recommended manga catalog or provider. New additions use
+  Seanime-compatible manga-provider repositories, with a separate confirmation
+  before installing or updating an extension. Previously saved OPDS/data
+  catalogs remain available; browsing, refreshing, reading or downloading from
+  them contacts the source's public HTTPS server and image/acquisition hosts
+  declared by its documents. An installed Seanime-format
   executable extension receives the viewer's manga search, selected opaque
   title/chapter identifiers, and the results of its bounded public-HTTPS
   requests. The extension and contacted hosts can observe the requested path,
@@ -274,14 +345,18 @@ and the service does not send data to a TetoTV server. A force-stop or process
 death ends the foreground work; persisted queue and season state can be
 restored when TetoTV is opened again.
 
-The Developer Mode Manga Preview uses the same best-effort foreground-service
-lease for an active compatible chapter download. Completed manga pages and
-verification rows are durable, but the remote reading-order/archive URL and
-request headers are deliberately not. A force-stop or process death therefore
-ends the active transfer; on the next launch it is marked as needing
-reauthorization, and the viewer must reconnect or reselect the source before a
-fresh retry. TetoTV does not schedule or continue a manga transfer on a
-TetoTV-operated server.
+The optional manga reader uses the same best-effort foreground-service
+lease for an active compatible chapter download. Its sequential bounded queue,
+verified page files and verification rows are durable, but remote page/archive
+URLs and request headers are deliberately not. Force-stop or process death ends
+the transfer. Startup restores local interrupted state without automatically
+fetching fresh source capabilities. An explicit Seanime resume uses the active
+profile's saved title identity and matching chapter to ask the enabled provider
+for fresh pages; retained files are reused only after fingerprint/hash checks.
+Changed capabilities can require downloading pages again. Missing identities,
+unavailable sources and legacy interrupted transfers may require reconnection or
+reselection. Paused jobs are not automatically resumed. TetoTV does not schedule
+or continue a manga transfer on a TetoTV-operated server.
 
 External-player support is optional. If the user chooses a default installed
 video player, TetoTV stores that app's Android package name and display label
@@ -307,17 +382,21 @@ TetoTV never asks for or stores the user's Discord password. Playback opened
 from USB, internal storage, Jellyfin, or Plex is excluded from Rich Presence so
 private filenames and media-library titles are not shared.
 
-While the Developer Mode Manga Preview is open, the same optional Discord Rich
+While the optional manga reader is open, the same optional Discord Rich
 Presence connection can instead send a reading activity containing a title,
-chapter label, current page, and total page count. Page updates are
-rate-limited. Turning off the manga **Share title on Discord** preference
-replaces the title with **Reading manga** while retaining the chapter/page
-activity. Disabling Rich Presence or unlinking Discord stops manga activity
-entirely. TetoTV does not send Discord the manga source, repository or catalog
-URL, cover or page URL, request header, credential, download path, or local
-library identifier. This no-artwork boundary applies to Manga Preview because
-a user-added image URL may itself be a private or signed capability; ordinary
-anime Rich Presence artwork behavior is unchanged.
+chapter label, current page, total page count, and a public book-cover URL.
+Page updates are rate-limited. Cover sharing accepts only bounded HTTPS URLs
+with public-looking domain names and no query, fragment, user info, or request
+headers. Local/IP destinations, protected or signed covers, and unavailable
+covers use the TetoTV logo instead. URL validation does not prove DNS ownership;
+Discord fetches/displays the cover under its own service policies. TetoTV does
+not upload local image files or proxy covers through a TetoTV server.
+Turning off **Show manga title on Discord** hides both the title and cover,
+using **Reading manga** and **Private chapter** while retaining page/total.
+Disabling Rich Presence or unlinking Discord stops manga activity entirely.
+TetoTV does not send Discord the manga source, repository or catalog URL,
+page URL, request header, credential, download path, or local library identifier.
+Ordinary anime Rich Presence artwork behavior is unchanged.
 
 Before TetoTV starts a new Discord authorization, the user must confirm that
 they meet Discord's minimum age of at least 13, or the older minimum required
@@ -357,13 +436,33 @@ credential database, but it necessarily handles the following transient data:
   address.
 - In unified phone setup, the browser can select app preferences, marketplace
   repository URLs, torrent-manifest URLs, and linked services. When an
-  official AniList, MyAnimeList, SIMKL PIN, debrid, or Discord flow completes,
+  AniList, MyAnimeList, Kitsu, SIMKL PIN, debrid, or Discord connection completes,
   the resulting access token, refresh token, API key, provider-issued client
   credentials, expiry, and scopes are temporarily readable by the broker
   process. They are not end-to-end encrypted while the broker is receiving and
   holding them. This short plaintext interval is required to receive a provider
   callback or poll a device/PIN flow and deliver the result to the already-bound
   browser.
+- Kitsu currently does not offer a native TV device-code or browser
+  authorization-code grant. After the browser displays this limitation and
+  the user chooses to continue, the Kitsu email/username and password are
+  posted to the HTTPS companion. The companion receives them transiently in
+  that request, immediately forwards them once in a form body to Kitsu's
+  official `https://kitsu.io/api/oauth/token` endpoint, and does not persist,
+  log, return, or include them in diagnostics. The password never enters the
+  TV app or encrypted setup bundle. Only Kitsu's returned access token,
+  refresh token, and expiry enter the normal volatile pairing state described
+  below. Wispbyte and the configured reverse proxy necessarily process the
+  HTTPS request under their own infrastructure policies.
+- Later Kitsu renewal sends the stored Kitsu refresh token from the TV in an
+  HTTPS request body to the configured companion. The TetoTV companion holds
+  it only for that live request, forwards it once to Kitsu's official token
+  endpoint, and does not persist, log, or include it in diagnostics. It then
+  returns Kitsu's replacement token metadata to the TV over HTTPS. This hop is
+  protected by TLS but is not end-to-end encrypted from the operator: an
+  operator or TLS-terminating reverse proxy for a custom companion can
+  technically observe the refresh token and controls its own logging and
+  retention. Users should configure only a companion and proxy they trust.
 - Standalone SIMKL linking obtains the registered application's public client
   ID from the companion capability response, then requests and polls SIMKL's
   official PIN endpoints directly. SIMKL returns the access token directly to
@@ -484,9 +583,11 @@ timeline warning and use coarse synchronization when fingerprints differ.
 
 ## Diagnostics and sharing
 
-Anonymous crash reporting is disabled by default. First-time setup and Settings
-both let the user explicitly enable or disable it. When enabled, an unexpected
-handled app error or unhandled Flutter error can be sent immediately; a JVM
+Anonymous crash reporting starts enabled only on genuinely new installs.
+First-time setup clearly offers an opt-out, and Settings can disable or
+re-enable it at any time. Existing installs preserve their current choice; a
+missing legacy preference and any unreadable preference both remain disabled.
+When enabled, an unexpected handled app error or unhandled Flutter error can be sent immediately; a JVM
 crash is kept locally and sent after the next launch because a terminated
 process cannot use the network. On
 Android versions that expose historical process-exit details, native crashes
@@ -500,6 +601,21 @@ library basenames, function names, and native build IDs from Android's
 tombstone format; it never sends the raw tombstone. It does not intentionally include the show,
 episode, account, device or installation identifier, source/provider, URL,
 credential, playback history, or full diagnostics database.
+
+An opted-in Dart crash can also include a compact crash-time UI snapshot:
+allowlisted screen/control categories, remote navigation directions, temporary
+per-run focus ordinals and control rectangles, scroll offsets, UI language,
+configured player/rendering mode, viewport/text scaling, and aggregate Flutter
+build/raster timings. No typed characters, key identities/positions inside a
+text-entry control or custom keyboard, text lengths, widget/semantics dumps,
+route parameters, screen images, usernames, or title text are recorded by this
+UI recorder. Its rolling trail is limited to 64 coalesced events from the last
+five minutes and 120 recent frame samples, held only in process memory. The
+compact crash snapshot is frozen before asynchronous delivery; queued reports
+retain the original crash build. Native context can also include coarse
+null/near-null/non-null fault-address categories, process uptime, allowlisted
+memory-pressure events, and thread state/flags, not raw addresses or thread
+names.
 
 The app sends reports over HTTPS to the dedicated TetoTV crash-report receiver
 at <https://tetotv-bot.wisp.uno>. That receiver validates and rate-limits each
@@ -525,7 +641,17 @@ show or episode name, provider/server ID, media URL, request header, filename,
 local path, account value, or room identity. The report also compares the most
 recent working and failed sessions using only those technical fields.
 
-Manga Preview diagnostics are limited to bounded technical status and counts;
+Explicit support reports also include the bounded process-local UI trail
+described above. It is collected locally for troubleshooting even when
+automatic reporting is off, but is not persisted or uploaded independently.
+It disappears when the process ends. Frame timings describe the app UI, not
+the video's actual frame rate. Missing callbacks, truncated history, and
+unavailable Android exit details are limitations, not evidence that no issue
+occurred.
+
+Manga-reader diagnostics are limited to bounded technical status and counts;
+these can include an allowlisted image-format category, actual received-byte
+count, HTTP status, redirect count, and whether a redirect changed origin;
 they do not include a manga search, title, chapter, page identity, source or
 repository URL, page/acquisition URL, request header, credential, archive
 filename, or local page path.
@@ -551,6 +677,18 @@ or export. Users should still review a
 manually exported report before sharing it through another app.
 
 ## Security and user choices
+
+Developer Mode optionally enables an experimental Aniyomi-compatible Android
+extension runtime. No repository or provider is included. Repository URLs are
+stored locally in protected storage. Installing a provider downloads its APK
+from the user-selected repository, verifies its actual package/signature, and
+requires explicit trust before execution in a permissionless isolated process.
+The provider receives the searches and source-relative identifiers needed for
+its requested operation, but is not given TetoTV's account credentials or private
+files. Public HTTPS requests pass through a bounded broker; the destination still
+sees ordinary network information such as the request and IP address. Turning
+Developer Mode off revokes execution approval. Provider code is not automatically
+uploaded to TetoTV, and signature checking is not a guarantee of safety.
 
 Network integrations require HTTPS except an explicitly approved Jellyfin or Plex
 connection to a numeric private-network address or localhost. User-added

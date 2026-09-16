@@ -2,6 +2,7 @@ package dev.animetv.anime_tv
 
 import android.app.ActivityManager
 import android.app.ApplicationExitInfo
+import android.content.ComponentCallbacks2
 import android.content.Context
 import android.content.res.Configuration
 import android.os.Build
@@ -50,11 +51,15 @@ object AnonymousCrashStore {
     private const val MAX_LOCAL_CRASH_SUMMARIES = 12
     private const val MAX_BREADCRUMBS = 16
     private const val MAX_PROCESS_STATE_BYTES = 120
+    private const val DETAILS_TRUNCATED_MARKER = "\ndetails_truncated=true"
     private const val LOCAL_HISTORY_MILLIS = 48L * 60L * 60L * 1_000L
     private const val BREADCRUMB_HISTORY_MILLIS = 10L * 60L * 1_000L
 
     @Volatile
     private var processBreadcrumbsInitialized = false
+
+    private var processBuildInitialized = false
+    private var processBuild: CrashBuildMetadata? = null
 
     /**
      * Records one fixed, privacy-safe lifecycle marker for crash correlation.
@@ -68,6 +73,7 @@ object AnonymousCrashStore {
         if (eventCode !in BREADCRUMB_CODES) return
         val now = System.currentTimeMillis()
         synchronized(this) {
+            val runningBuild = currentProcessBuild(context)
             val preferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             val existing = if (processBreadcrumbsInitialized) {
                 decodeBreadcrumbs(preferences.getString(BREADCRUMBS_KEY, null))
@@ -83,7 +89,7 @@ object AnonymousCrashStore {
                 .putString(BREADCRUMBS_KEY, encodeBreadcrumbs(bounded))
                 .apply()
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                val processSummary = encodeProcessStateSummary(bounded)
+                val processSummary = encodeProcessStateSummary(bounded, runningBuild)
                 runCatching {
                     val activityManager =
                         context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
@@ -91,6 +97,47 @@ object AnonymousCrashStore {
                 }
             }
         }
+    }
+
+    /**
+     * Gives Android enough fixed context to attribute a crash in the isolated
+     * Aniyomi worker without opening app storage from that sandboxed process.
+     *
+     * The snapshot contains only the installed package version, build number,
+     * a fixed worker-created marker and its wall-clock time. In particular it
+     * never reads SharedPreferences and cannot contain a provider, title, URL,
+     * account, request, or extension-supplied value.
+     */
+    fun recordAniyomiWorkerProcessState(context: Context) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
+        val summary = synchronized(this) {
+            aniyomiWorkerProcessStateSummary(
+                build = currentProcessBuild(context),
+                occurredAtMillis = System.currentTimeMillis(),
+            )
+        }
+        runCatching {
+            val activityManager =
+                context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+            activityManager.setProcessStateSummary(summary)
+        }
+    }
+
+    /** OS callback categories only; no allocation snapshots or arbitrary text. */
+    fun recordMemoryTrim(context: Context, level: Int) {
+        memoryTrimBreadcrumb(level)?.let { recordBreadcrumb(context, it) }
+    }
+
+    @Suppress("DEPRECATION")
+    internal fun memoryTrimBreadcrumb(level: Int): String? = when {
+        level >= ComponentCallbacks2.TRIM_MEMORY_COMPLETE -> "memory_trim_complete"
+        level >= ComponentCallbacks2.TRIM_MEMORY_MODERATE -> "memory_trim_moderate"
+        level >= ComponentCallbacks2.TRIM_MEMORY_BACKGROUND -> "memory_trim_background"
+        level >= ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN -> "memory_ui_hidden"
+        level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL -> "memory_running_critical"
+        level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW -> "memory_running_low"
+        level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_MODERATE -> "memory_running_moderate"
+        else -> null
     }
 
     fun setEnabled(context: Context, enabled: Boolean) {
@@ -133,6 +180,7 @@ object AnonymousCrashStore {
         val writer = StringWriter()
         runCatching { error.printStackTrace(PrintWriter(writer)) }
         val now = System.currentTimeMillis()
+        val crashBuild = currentProcessBuild(context)
         val isTelevision =
             context.resources.configuration.uiMode and Configuration.UI_MODE_TYPE_MASK ==
                 Configuration.UI_MODE_TYPE_TELEVISION
@@ -145,14 +193,17 @@ object AnonymousCrashStore {
                 ),
                 "stack" to composeCrashDetails(
                     contextLines = listOf(
+                        crashBuildContext(crashBuild, "crash_process"),
                         currentProcessContext(),
                         currentBreadcrumbContext(context, now),
-                        "java_context thread=${if (Looper.getMainLooper().thread === thread) "main" else "background"}",
+                        javaThreadContext(thread, Looper.getMainLooper().thread === thread),
                     ),
                     trace = sanitizeStack(writer.toString(), MAX_TRACE_CHARS),
                     maximum = MAX_TRACE_CHARS,
                 ),
                 "occurred_at_ms" to now,
+                "app_version" to (crashBuild?.version ?: "0.0.0"),
+                "build_number" to (crashBuild?.number ?: 1L),
                 "android_sdk" to Build.VERSION.SDK_INT,
                 "abi" to (Build.SUPPORTED_ABIS.firstOrNull() ?: "unknown"),
                 "device_class" to if (isTelevision) "tv" else "phone",
@@ -216,7 +267,7 @@ object AnonymousCrashStore {
         val preferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         if (!preferences.getBoolean(ENABLED_KEY, false)) return null
         preferences.getString(QUEUED_REPORT_KEY, null)?.let { encoded ->
-            decode(encoded)?.let { return it }
+            decode(encoded)?.let { return normalizePersistedBuildAttribution(it) }
         }
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
 
@@ -240,7 +291,8 @@ object AnonymousCrashStore {
             else -> "Android reported an unhandled TetoTV process crash."
         }
         val trace = exitTrace(exit, MAX_TRACE_CHARS)
-        val details = exitDetails(context, exit, trace, MAX_TRACE_CHARS)
+        val crashBuild = historicalExitBuild(exit)
+        val details = exitDetails(context, exit, trace, MAX_TRACE_CHARS, crashBuild)
         val isTelevision =
             context.resources.configuration.uiMode and Configuration.UI_MODE_TYPE_MASK ==
                 Configuration.UI_MODE_TYPE_TELEVISION
@@ -250,6 +302,8 @@ object AnonymousCrashStore {
             "message" to message,
             "stack" to details,
             "occurred_at_ms" to exit.timestamp,
+            "app_version" to (crashBuild?.version ?: "0.0.0"),
+            "build_number" to (crashBuild?.number ?: 1L),
             "android_sdk" to Build.VERSION.SDK_INT,
             "abi" to (Build.SUPPORTED_ABIS.firstOrNull() ?: "unknown"),
             "device_class" to if (isTelevision) "tv" else "phone",
@@ -296,7 +350,8 @@ object AnonymousCrashStore {
             else -> "Android reported an unhandled TetoTV process crash."
         }
         val trace = exitTrace(exit, MAX_LOCAL_TRACE_CHARS)
-        val details = exitDetails(context, exit, trace, MAX_LOCAL_TRACE_CHARS)
+        val crashBuild = historicalExitBuild(exit)
+        val details = exitDetails(context, exit, trace, MAX_LOCAL_TRACE_CHARS, crashBuild)
         val isTelevision =
             context.resources.configuration.uiMode and Configuration.UI_MODE_TYPE_MASK ==
                 Configuration.UI_MODE_TYPE_TELEVISION
@@ -306,6 +361,8 @@ object AnonymousCrashStore {
             "message" to message,
             "stack" to details,
             "occurred_at_ms" to exit.timestamp,
+            "app_version" to (crashBuild?.version ?: "0.0.0"),
+            "build_number" to (crashBuild?.number ?: 1L),
             "android_sdk" to Build.VERSION.SDK_INT,
             "abi" to (Build.SUPPORTED_ABIS.firstOrNull() ?: "unknown"),
             "device_class" to if (isTelevision) "tv" else "phone",
@@ -462,6 +519,8 @@ object AnonymousCrashStore {
             add("thread_selection=${tombstone.selection}")
             add("parser_status=${tombstone.parserStatus}")
             if (signals.isNotEmpty()) add("signals=${signals.joinToString(",")}")
+            tombstone.faultAddressClass?.let { add("fault_address_class=$it") }
+            tombstone.processUptimeSeconds?.let { add("process_uptime_s=$it") }
             if (reasons.isNotEmpty()) add("reason=${reasons.joinToString(",")}")
             if (threads.isNotEmpty()) add("threads=${threads.joinToString(",")}")
             if (libraries.isNotEmpty()) add("libraries=${libraries.joinToString(",")}")
@@ -476,7 +535,7 @@ object AnonymousCrashStore {
                 )
             }
         }.joinToString("\n")
-        return lines.take(maximum)
+        return boundCrashDetails(lines, maximum)
     }
 
     private fun parseNativeTombstone(value: ByteArray): NativeTombstoneEvidence {
@@ -484,6 +543,8 @@ object AnonymousCrashStore {
         var crashedTid: Long? = null
         var signal: String? = null
         var signalCode: String? = null
+        var faultAddressClass: String? = null
+        var processUptimeSeconds: Long? = null
         var reason: String? = null
         var fieldCount = 0
         // Protobuf field order is not guaranteed. First obtain Tombstone.tid
@@ -497,10 +558,16 @@ object AnonymousCrashStore {
                 }
                 field.number == 10 && field.bytes != null -> {
                     val parsed = parseSignal(field.bytes)
-                    signal = parsed.first
-                    signalCode = parsed.second
+                    signal = parsed.name
+                    signalCode = parsed.code
+                    faultAddressClass = parsed.faultAddressClass
                 }
-                field.number == 15 && field.bytes != null -> reason = parseCause(field.bytes)
+                field.number == 15 && field.bytes != null -> reason = parseCause(field.bytes) ?: reason
+                field.number == 20 && field.varint != null -> {
+                    // AOSP Tombstone.process_uptime is a duration, not a wall
+                    // clock, process ID, device uptime or build fingerprint.
+                    processUptimeSeconds = field.varint.takeIf { it in 0..0xffffffffL }
+                }
             }
         }
         var parserStatus = when {
@@ -539,41 +606,75 @@ object AnonymousCrashStore {
         }
         return NativeTombstoneEvidence(
             signal, signalCode, reason, thread?.name, thread?.frames.orEmpty(),
-            selection, parserStatus,
+            selection, parserStatus, faultAddressClass, processUptimeSeconds,
         )
     }
 
-    private fun parseSignal(value: ByteArray): Pair<String?, String?> {
+    private fun parseSignal(value: ByteArray): NativeSignalEvidence {
         val reader = ProtoReader(value)
         var signal: String? = null
         var code: String? = null
+        var hasFaultAddress = false
+        // Proto3 omits zero: has_fault_address=true with an absent address is
+        // an actual null address. Never retain/export the raw value itself.
+        var faultAddress = 0L
         repeat(32) {
-            val field = reader.next() ?: return@repeat
+            val field = reader.next { it == 2 || it == 4 } ?: return@repeat
+            if (field.number == 8 && field.varint != null) hasFaultAddress = field.varint != 0L
+            if (field.number == 9 && field.varint != null) faultAddress = field.varint
             if (field.bytes != null) {
                 val candidate = safeProtoString(field.bytes, 48)
                 if (field.number == 2 && candidate?.matches(Regex("SIG[A-Z0-9]+")) == true) signal = candidate
                 if (field.number == 4 && candidate?.matches(Regex("[A-Z0-9_]+")) == true) code = candidate
             }
         }
-        return signal to code
+        val addressClass = if (!hasFaultAddress || reader.malformed || !reader.finished) null else when {
+            faultAddress == 0L -> "null"
+            faultAddress in 1..4_095L -> "near_null_lt4096"
+            else -> "non_null"
+        }
+        return NativeSignalEvidence(signal, code, addressClass)
     }
 
     private fun parseCause(value: ByteArray): String? {
         val reader = ProtoReader(value)
+        var reason: String? = null
+        var memoryError: String? = null
         repeat(24) {
-            val field = reader.next() ?: return@repeat
+            val field = reader.next { it == 1 || it == 2 } ?: return@repeat
             if (field.number == 1 && field.bytes != null) {
                 val description = safeProtoString(field.bytes, 160).orEmpty().lowercase()
-                return when {
+                reason = when {
                     "null pointer dereference" in description -> "null_pointer_dereference"
                     "stack overflow" in description -> "stack_overflow"
                     "destroyed mutex" in description -> "destroyed_mutex"
                     "fortify" in description -> "fortify_abort"
-                    else -> null
+                    else -> reason
                 }
+            } else if (field.number == 2 && field.bytes != null) {
+                memoryError = parseMemoryErrorKind(field.bytes) ?: memoryError
             }
         }
-        return null
+        return (memoryError ?: reason).takeUnless { reader.malformed || !reader.finished }
+    }
+
+    private fun parseMemoryErrorKind(value: ByteArray): String? {
+        val reader = ProtoReader(value)
+        var reason: String? = null
+        repeat(24) {
+            // MemoryError.heap includes addresses and allocation backtraces.
+            // Only its enum type is needed, so no nested bytes are retained.
+            val field = reader.next { false } ?: return@repeat
+            if (field.number == 2) reason = when (field.varint) {
+                1L -> "use_after_free"
+                2L -> "double_free"
+                3L -> "invalid_free"
+                4L -> "buffer_overflow"
+                5L -> "buffer_underflow"
+                else -> null
+            }
+        }
+        return reason.takeUnless { reader.malformed || !reader.finished }
     }
 
     private fun parseThreadEntry(value: ByteArray): Pair<Long, ByteArray>? {
@@ -755,6 +856,14 @@ object AnonymousCrashStore {
         val frames: List<NativeFrameEvidence>,
         val selection: String,
         val parserStatus: String,
+        val faultAddressClass: String?,
+        val processUptimeSeconds: Long?,
+    )
+
+    private data class NativeSignalEvidence(
+        val name: String?,
+        val code: String?,
+        val faultAddressClass: String?,
     )
 
     @RequiresApi(Build.VERSION_CODES.R)
@@ -763,18 +872,19 @@ object AnonymousCrashStore {
         exit: ApplicationExitInfo,
         trace: TraceEvidence,
         maximum: Int,
+        crashBuild: CrashBuildMetadata?,
     ): String {
         val processTimeline = runCatching {
             breadcrumbContextFromProcessSummary(exit.processStateSummary, exit.timestamp)
         }.getOrDefault("")
         val contextLines = listOf(
+            crashBuildContext(crashBuild, "exit_process_snapshot"),
             "exit_context reason=${exitReasonName(exit.reason)} " +
                 "reason_code=${exit.reason.coerceIn(0, 999)} " +
                 "status=${exit.status.coerceIn(-999, 999)} " +
                 "importance=${importanceName(exit.importance)} " +
                 "pss_mb=${memoryMegabytes(exit.pss)} rss_mb=${memoryMegabytes(exit.rss)} " +
-                "trace_format=${trace.format} trace_bytes=${trace.rawBytes.coerceIn(0, MAX_TEXT_TRACE_BYTES)} " +
-                "trace_truncated=${trace.truncated}",
+                traceContext(trace),
             processTimeline.ifEmpty { currentBreadcrumbContext(context, exit.timestamp) },
             sanitize(exit.description.orEmpty(), 500)
                 .takeIf { it.isNotEmpty() }
@@ -784,17 +894,84 @@ object AnonymousCrashStore {
         return composeCrashDetails(contextLines, trace.text, maximum)
     }
 
+    internal data class CrashBuildMetadata(val version: String, val number: Long)
+
+    internal fun safeCrashBuildMetadata(version: String?, number: Long?): CrashBuildMetadata? {
+        if (
+            version == null || version == "0.0.0" || version.length > 40 ||
+            !version.matches(Regex("^[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$")) ||
+            number == null || number !in 1L..999_999_999L
+        ) return null
+        return CrashBuildMetadata(version, number)
+    }
+
+    @Suppress("DEPRECATION")
+    private fun currentProcessBuild(context: Context): CrashBuildMetadata? = synchronized(this) {
+        if (!processBuildInitialized) {
+            processBuildInitialized = true
+            // Capture once while this process is running; never use a later
+            // launch's PackageManager result to label a historic exit.
+            processBuild = runCatching {
+                val info = context.packageManager.getPackageInfo(context.packageName, 0)
+                val code = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    info.longVersionCode
+                } else {
+                    info.versionCode.toLong()
+                }
+                safeCrashBuildMetadata(info.versionName, code)
+            }.getOrNull()
+        }
+        processBuild
+    }
+
+    @RequiresApi(Build.VERSION_CODES.R)
+    private fun historicalExitBuild(exit: ApplicationExitInfo): CrashBuildMetadata? = runCatching {
+        buildMetadataFromProcessSummary(exit.processStateSummary, exit.timestamp)
+    }.getOrNull()
+
+    private fun crashBuildContext(build: CrashBuildMetadata?, knownAttribution: String): String =
+        if (build == null) {
+            "build_attribution=unknown app_version=0.0.0 build_number=1"
+        } else {
+            "build_attribution=$knownAttribution app_version=${build.version} build_number=${build.number}"
+        }
+
+    /** Legacy reports must not acquire the currently installed build on replay. */
+    internal fun normalizePersistedBuildAttribution(report: Map<String, Any?>): Map<String, Any?> {
+        val rawNumber = report["build_number"] as? Number
+        val number = rawNumber?.toLong()?.takeIf { rawNumber.toDouble() == it.toDouble() }
+        val build = safeCrashBuildMetadata(report["app_version"] as? String, number)
+        if (build != null) return report
+        val stack = report["stack"] as? String ?: ""
+        return report + mapOf(
+            "app_version" to "0.0.0",
+            // The live v1 receiver requires a positive integer. This is an
+            // explicit unknown sentinel, not a claim that the crash was build 1.
+            "build_number" to 1L,
+            "stack" to if (stack.lineSequence().any { it.startsWith("build_attribution=unknown ") }) stack else {
+                composeCrashDetails(listOf(crashBuildContext(null, "unknown")), stack, MAX_TRACE_CHARS)
+            },
+        )
+    }
+
     internal fun composeCrashDetails(
         contextLines: List<String>,
         trace: String,
         maximum: Int,
     ): String {
         if (maximum <= 0) return ""
-        val context = contextLines
+        val contextRows = contextLines
             .asSequence()
-            .map { sanitize(it, 700) }
+            .map { sanitize(it, Int.MAX_VALUE) }
             .filter { it.isNotEmpty() }
-            .take(8)
+            .take(9)
+            .toList()
+        var contextTruncated = contextRows.size > 8
+        val context = contextRows.take(8)
+            .map {
+                if (it.length > 700) contextTruncated = true
+                it.take(700)
+            }
             .joinToString("\n")
         val safeTrace = sanitizeStack(trace, maximum)
         val combined = when {
@@ -802,7 +979,25 @@ object AnonymousCrashStore {
             safeTrace.isEmpty() -> context
             else -> "$context\ntrace:\n$safeTrace"
         }
-        return combined.take(maximum)
+        return boundCrashDetails(combined, maximum, contextTruncated)
+    }
+
+    internal fun traceContext(trace: TraceEvidence): String {
+        val maximumBytes = if (trace.format == "native_tombstone_protobuf") MAX_NATIVE_TRACE_BYTES else MAX_TEXT_TRACE_BYTES
+        return "trace_format=${trace.format} trace_bytes=${trace.rawBytes.coerceIn(0, maximumBytes)} " +
+            "trace_truncated=${trace.truncated}"
+    }
+
+    internal fun javaThreadContext(thread: Thread, isMain: Boolean): String =
+        "java_context thread=${if (isMain) "main" else "background"} " +
+            "state=${thread.state.name.lowercase()} daemon=${thread.isDaemon} interrupted=${thread.isInterrupted}"
+
+    internal fun boundCrashDetails(value: String, maximum: Int, alreadyTruncated: Boolean = false): String {
+        if (maximum <= 0) return ""
+        if (!alreadyTruncated && value.length <= maximum) return value
+        val body = value.removeSuffix(DETAILS_TRUNCATED_MARKER)
+        return body.take((maximum - DETAILS_TRUNCATED_MARKER.length).coerceAtLeast(0)) +
+            DETAILS_TRUNCATED_MARKER.take(maximum)
     }
 
     private fun currentProcessContext(): String {
@@ -968,18 +1163,41 @@ object AnonymousCrashStore {
         }.getOrDefault(emptyList())
     }
 
-    private fun encodeProcessStateSummary(values: List<CrashBreadcrumb>): ByteArray {
-        val encoded = buildString {
-            append("v1|")
-            values.takeLast(6).forEachIndexed { index, value ->
-                if (index > 0) append(',')
-                append(BREADCRUMB_CODES.getValue(value.code))
-                append('@')
-                append(value.occurredAtMillis)
-            }
-        }.toByteArray(Charsets.US_ASCII)
-        return encoded.take(MAX_PROCESS_STATE_BYTES).toByteArray()
+    internal fun encodeProcessStateSummary(
+        values: List<CrashBreadcrumb>,
+        build: CrashBuildMetadata?,
+    ): ByteArray {
+        val safeBuild = safeCrashBuildMetadata(build?.version, build?.number)
+        // This format stays local to Android's exit record; the network schema
+        // remains v1. Version provenance travels with the exact exiting process,
+        // rather than a mutable preference belonging to whichever app ran last.
+        val header = "v2|${safeBuild?.version ?: "0.0.0"}|${safeBuild?.number ?: 1L}|"
+        val entries = values.asSequence()
+            .filter { it.code in BREADCRUMB_CODES && it.occurredAtMillis > 0L }
+            .toList()
+            .takeLast(6)
+            .map { "${BREADCRUMB_CODES.getValue(it.code)}@${it.occurredAtMillis}" }
+            .toMutableList()
+        // Remove whole oldest entries. Never truncate the version header or
+        // manufacture a partial timestamp at the platform's 128-byte limit.
+        while (header.length + entries.joinToString(",").length > MAX_PROCESS_STATE_BYTES && entries.isNotEmpty()) {
+            entries.removeAt(0)
+        }
+        return (header + entries.joinToString(",")).toByteArray(Charsets.US_ASCII)
     }
+
+    internal fun aniyomiWorkerProcessStateSummary(
+        build: CrashBuildMetadata?,
+        occurredAtMillis: Long,
+    ): ByteArray = encodeProcessStateSummary(
+        values = listOf(
+            CrashBreadcrumb(
+                code = "aniyomi_worker_created",
+                occurredAtMillis = occurredAtMillis.coerceAtLeast(1L),
+            ),
+        ),
+        build = build,
+    )
 
     private fun currentBreadcrumbContext(context: Context, occurredAtMillis: Long): String {
         val preferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -1006,28 +1224,64 @@ object AnonymousCrashStore {
         value: ByteArray?,
         occurredAtMillis: Long,
     ): String {
-        if (value == null || value.isEmpty() || value.size > MAX_PROCESS_STATE_BYTES) return ""
+        val entries = processSummaryEntries(value) ?: return ""
+        return breadcrumbContext(parseProcessSummaryBreadcrumbs(entries), occurredAtMillis)
+    }
+
+    internal fun buildMetadataFromProcessSummary(
+        value: ByteArray?,
+        occurredAtMillis: Long,
+    ): CrashBuildMetadata? {
+        if (value == null || value.isEmpty() || value.size > MAX_PROCESS_STATE_BYTES || occurredAtMillis <= 0L) return null
+        val parts = value.toString(Charsets.US_ASCII).split('|', limit = 4)
+        if (parts.size != 4 || parts[0] != "v2") return null
+        val build = safeCrashBuildMetadata(parts[1], parts[2].toLongOrNull()) ?: return null
+        val entries = parts[3].split(',')
+        if (entries.isEmpty() || entries.size > 6) return null
+        val breadcrumbs = parseProcessSummaryBreadcrumbs(parts[3])
+        // The OS associates this snapshot with its own ApplicationExitInfo.
+        // Also reject a malformed/partial snapshot or one written after this
+        // exit, rather than accidentally using a new launch's build metadata.
+        if (breadcrumbs.size != entries.size || breadcrumbs.any { it.occurredAtMillis !in 1L..occurredAtMillis }) return null
+        return build
+    }
+
+    private fun processSummaryEntries(value: ByteArray?): String? {
+        if (value == null || value.isEmpty() || value.size > MAX_PROCESS_STATE_BYTES) return null
         val encoded = value.toString(Charsets.US_ASCII)
-        if (!encoded.startsWith("v1|")) return ""
+        if (encoded.startsWith("v1|")) return encoded.removePrefix("v1|")
+        val parts = encoded.split('|', limit = 4)
+        return parts.getOrNull(3).takeIf { parts.size == 4 && parts[0] == "v2" }
+    }
+
+    private fun parseProcessSummaryBreadcrumbs(entries: String): List<CrashBreadcrumb> {
         val reverseCodes = BREADCRUMB_CODES.entries.associate { (event, compact) -> compact to event }
-        val values = encoded.removePrefix("v1|")
+        return entries
             .split(',')
             .take(6)
             .mapNotNull { item ->
                 val compact = item.substringBefore('@')
                 val timestamp = item.substringAfter('@', "").toLongOrNull()
                 val event = reverseCodes[compact]
-                if (event == null || timestamp == null) null else CrashBreadcrumb(event, timestamp)
+                if (event == null || timestamp == null || timestamp <= 0L) null else CrashBreadcrumb(event, timestamp)
             }
-        return breadcrumbContext(values, occurredAtMillis)
     }
 
     private val BREADCRUMB_CODES = linkedMapOf(
         "app_process_created" to "pc",
+        "aniyomi_worker_created" to "awc",
         "activity_created" to "ac",
         "activity_resumed" to "ar",
         "activity_paused" to "ap",
         "activity_destroyed" to "ad",
+        "memory_ui_hidden" to "muh",
+        "memory_running_moderate" to "mrm",
+        "memory_running_low" to "mrl",
+        "memory_running_critical" to "mrc",
+        "memory_trim_background" to "mtb",
+        "memory_trim_moderate" to "mtm",
+        "memory_trim_complete" to "mtc",
+        "memory_low_callback" to "mlc",
         "direct_torrent_bridge_start_requested" to "dbs",
         "direct_torrent_bridge_start_failed" to "dbf",
         "direct_torrent_bridge_stop_requested" to "dbx",
@@ -1115,16 +1369,20 @@ object AnonymousCrashStore {
         nowMillis: Long,
     ): List<Map<String, Any?>> = boundLocalCrashSummaryHistory(summaries, nowMillis).summaries
 
-    private fun sanitizeLocalCrashSummary(value: Map<String, Any?>): Map<String, Any?> =
-        linkedMapOf(
+    private fun sanitizeLocalCrashSummary(value: Map<String, Any?>): Map<String, Any?> {
+        val attributed = normalizePersistedBuildAttribution(value)
+        return linkedMapOf(
             "kind" to when (value["kind"]?.toString()) {
                 "java", "native", "anr", "flutter", "platform" -> value["kind"].toString()
                 else -> "native"
             },
             "message" to sanitize(value["message"]?.toString().orEmpty(), 500),
-            "stack" to sanitizeStack(value["stack"]?.toString().orEmpty(), MAX_LOCAL_TRACE_CHARS),
+            "stack" to sanitizeStack(attributed["stack"]?.toString().orEmpty(), MAX_LOCAL_TRACE_CHARS),
             "occurred_at_ms" to ((value["occurred_at_ms"] as? Number)?.toLong() ?: 0L),
+            "app_version" to attributed["app_version"],
+            "build_number" to attributed["build_number"],
         )
+    }
 
     internal fun isReportableReason(reason: Int): Boolean =
         reason == ApplicationExitInfo.REASON_CRASH ||
@@ -1226,13 +1484,17 @@ object AnonymousCrashStore {
     }
 
     internal fun sanitizeStack(value: String, maximum: Int): String {
-        val output = value
-            .lineSequence()
-            .take(50)
-            .map { sanitize(it, 300) }
+        val lines = value.lineSequence().take(51).toList()
+        var truncated = lines.size > 50
+        val output = lines.take(50)
+            .map {
+                val sanitized = sanitize(it, Int.MAX_VALUE)
+                if (sanitized.length > 300) truncated = true
+                sanitized.take(300)
+            }
             .filter { it.isNotEmpty() }
             .joinToString("\n")
-        return if (output.length <= maximum) output else output.substring(0, maximum)
+        return boundCrashDetails(output, maximum, truncated)
     }
 
     private fun redactNetworkAddresses(value: String): String {

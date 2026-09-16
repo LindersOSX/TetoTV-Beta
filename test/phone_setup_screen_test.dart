@@ -184,6 +184,103 @@ void main() {
   });
 
   testWidgets(
+    'retry countdown disables creation, expires without a request, and retains TV focus',
+    (tester) async {
+      tester.view.physicalSize = const Size(1280, 720);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      var now = DateTime.now().toUtc();
+      final fixture = _ScreenFixture(now: () => now);
+      fixture.api.createError = PhoneSetupServiceException(
+        reasonCode: 'rate_limited',
+        message:
+            'Phone setup is temporarily rate-limited. Wait before trying again.',
+        retryAfter: const Duration(seconds: 65),
+      );
+      addTearDown(fixture.dispose);
+      await tester.pumpWidget(fixture.app());
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 10));
+
+      final regenerate = find.byKey(const ValueKey('phone-setup-regenerate'));
+      expect(find.text('Retry available in 01:05'), findsOneWidget);
+      expect(tester.widget<FilledButton>(regenerate).onPressed, isNull);
+      final onDevice = find.widgetWithText(
+        OutlinedButton,
+        'Set up on this device instead',
+      );
+      expect(tester.widget<OutlinedButton>(onDevice).onPressed, isNotNull);
+      final back = tester.widget<IconButton>(
+        find.byKey(const ValueKey('phone-setup-back')),
+      );
+      expect(back.onPressed, isNotNull);
+      now = now.add(const Duration(seconds: 64));
+      await tester.pump(const Duration(seconds: 1));
+      expect(find.text('Retry available in 00:01'), findsOneWidget);
+      expect(tester.widget<FilledButton>(regenerate).onPressed, isNull);
+
+      now = now.add(const Duration(seconds: 1));
+      await tester.pump(const Duration(seconds: 1));
+      expect(
+        find.byKey(const ValueKey('phone-setup-retry-countdown')),
+        findsNothing,
+      );
+      final button = tester.widget<FilledButton>(regenerate);
+      expect(button.onPressed, isNotNull);
+      expect(fixture.api.createCalls, 1);
+      await tester.pump(const Duration(seconds: 3));
+      expect(
+        fixture.api.createCalls,
+        1,
+        reason: 'Expiry must not create a session.',
+      );
+      fixture.api.createError = null;
+      button.focusNode!.requestFocus();
+      await tester.pump();
+      expect(
+        FocusManager.instance.primaryFocus?.debugLabel,
+        'phone-setup.regenerate',
+      );
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(fixture.api.createCalls, 2);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
+  testWidgets(
+    'long cooldown fits a narrow screen and its timer stops when the screen leaves',
+    (tester) async {
+      tester.view.physicalSize = const Size(360, 640);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      var now = DateTime.now().toUtc();
+      final fixture = _ScreenFixture(now: () => now);
+      fixture.api.createError = PhoneSetupServiceException(
+        reasonCode: 'rate_limited',
+        message:
+            'Phone setup is temporarily rate-limited. Wait before trying again.',
+        retryAfter: const Duration(hours: 1),
+      );
+      addTearDown(fixture.dispose);
+      await tester.pumpWidget(fixture.app());
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 10));
+      expect(find.text('Retry available in 60:00'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+      now = now.add(const Duration(hours: 1));
+      await tester.pump(const Duration(seconds: 2));
+      expect(fixture.api.createCalls, 1);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
     'review preview hides account credentials and requires explicit apply',
     (tester) async {
       tester.view.physicalSize = const Size(1280, 720);
@@ -356,10 +453,13 @@ void main() {
 }
 
 class _ScreenFixture {
-  _ScreenFixture({PhoneSetupBundle? bundle, bool submitted = false})
-    : bundle = bundle ?? _emptyBundle(),
-      container = ProviderContainer(),
-      api = _ScreenApi(submitted: submitted) {
+  _ScreenFixture({
+    PhoneSetupBundle? bundle,
+    bool submitted = false,
+    DateTime Function()? now,
+  }) : bundle = bundle ?? _emptyBundle(),
+       container = ProviderContainer(),
+       api = _ScreenApi(submitted: submitted) {
     importer = PhoneSetupBundleImporter(
       settings: container.read(settingsPreferencesProvider.notifier),
       titleLanguage: container.read(titleLanguagePreferenceProvider.notifier),
@@ -379,6 +479,7 @@ class _ScreenFixture {
       _ScreenCrypto(this.bundle),
       importer,
       () async {},
+      now: now,
     );
   }
 
@@ -412,6 +513,7 @@ class _ScreenApi implements PhoneSetupPairingApi {
   int polls = 0;
   int createCalls = 0;
   int cancelCalls = 0;
+  Object? createError;
 
   @override
   Future<void> ensureReady() async {}
@@ -421,6 +523,7 @@ class _ScreenApi implements PhoneSetupPairingApi {
     PhoneSetupKeyMaterial keyMaterial,
   ) async {
     createCalls++;
+    if (createError case final error?) throw error;
     return _session(keyMaterial, fresh: createCalls > 1);
   }
 

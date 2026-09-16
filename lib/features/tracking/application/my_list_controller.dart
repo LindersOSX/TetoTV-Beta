@@ -23,13 +23,16 @@ enum MyListSort { title, score, lastUpdated, startDate }
 final class CatalogTrackingValidationError extends StateError {
   CatalogTrackingValidationError.connectionRequired()
     : super(
-        'Connect AniList, MAL, or SIMKL in Settings before changing a show status.',
+        'Connect an anime tracker in Settings before changing a show status.',
       );
 
   CatalogTrackingValidationError.missingMediaId()
     : super(
         'This title is missing the media ID required by the connected tracker.',
       );
+
+  CatalogTrackingValidationError.titleNotMapped()
+    : super('This title is not mapped on Kitsu.');
 }
 
 extension MyListSortLabel on MyListSort {
@@ -347,6 +350,7 @@ class TrackingStatusController extends StateNotifier<AsyncValue<void>> {
     state = const AsyncLoading();
     final updated = <TrackingProvider>{};
     final missingMediaId = <TrackingProvider>{};
+    final unmapped = <TrackingProvider>{};
     final failures = <TrackingProvider, Object>{};
     var connectedProviders = 0;
 
@@ -369,13 +373,16 @@ class TrackingStatusController extends StateNotifier<AsyncValue<void>> {
             provider,
             token,
           );
-          if (provider == TrackingProvider.simkl) {
+          if (provider == TrackingProvider.simkl ||
+              provider == TrackingProvider.kitsu) {
             final externalRepository = switch (repository) {
               ExternalIdTrackingRepository value => value,
               _ => null,
             };
             if (externalRepository == null) {
-              throw StateError('SIMKL repository cannot resolve catalog IDs.');
+              throw StateError(
+                '${provider.displayName} repository cannot resolve catalog IDs.',
+              );
             }
             final ids = TrackingMediaIds(
               anilistId: anilistId > 0 ? anilistId : null,
@@ -398,6 +405,7 @@ class TrackingStatusController extends StateNotifier<AsyncValue<void>> {
               TrackingProvider.anilist => anilistId > 0 ? anilistId : null,
               TrackingProvider.myAnimeList =>
                 malId != null && malId > 0 ? malId : null,
+              TrackingProvider.kitsu => null,
               TrackingProvider.simkl => null,
             };
             if (mediaId == null) {
@@ -411,6 +419,8 @@ class TrackingStatusController extends StateNotifier<AsyncValue<void>> {
             }
           }
           updated.add(provider);
+        } on TrackingMediaMappingNotFoundException {
+          unmapped.add(provider);
         } catch (error) {
           failures[provider] = error;
         }
@@ -424,6 +434,9 @@ class TrackingStatusController extends StateNotifier<AsyncValue<void>> {
             missingMediaId.length == connectedProviders &&
             failures.isEmpty) {
           throw CatalogTrackingValidationError.missingMediaId();
+        }
+        if (unmapped.isNotEmpty && failures.isEmpty) {
+          throw CatalogTrackingValidationError.titleNotMapped();
         }
         final names = failures.keys
             .map((provider) => provider.displayName)
@@ -443,6 +456,7 @@ class TrackingStatusController extends StateNotifier<AsyncValue<void>> {
       return CatalogTrackingUpdateResult(
         updated: Set.unmodifiable(updated),
         missingMediaId: Set.unmodifiable(missingMediaId),
+        unmapped: Set.unmodifiable(unmapped),
         failures: Map.unmodifiable(failures),
       );
     } catch (error, stackTrace) {
@@ -460,14 +474,17 @@ class CatalogTrackingUpdateResult {
   const CatalogTrackingUpdateResult({
     required this.updated,
     required this.missingMediaId,
+    required this.unmapped,
     required this.failures,
   });
 
   final Set<TrackingProvider> updated;
   final Set<TrackingProvider> missingMediaId;
+  final Set<TrackingProvider> unmapped;
   final Map<TrackingProvider, Object> failures;
 
-  bool get isPartial => missingMediaId.isNotEmpty || failures.isNotEmpty;
+  bool get isPartial =>
+      missingMediaId.isNotEmpty || unmapped.isNotEmpty || failures.isNotEmpty;
 
   String get updatedProviderNames => updated
       .map((provider) => provider.displayName)

@@ -4,7 +4,7 @@ publish_to: 'none'
 # Public and Beta artifacts built from the same source use one monotonically
 # increasing Android versionCode. The project default carries the Beta display
 # version; the Public universal APK overrides the build name to the 1.x line.
-version: 2.0.74+410051
+version: 2.0.75+410052
 
 environment:
   sdk: ^3.12.2
@@ -12,6 +12,9 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+  intl: ^0.20.2
   dio: ^5.11.0
   flutter_riverpod: ^2.6.1
   flutter_secure_storage: ^10.3.1
@@ -43,6 +46,8 @@ dependencies:
     path: third_party/flutter_js
 
 dev_dependencies:
+  # Read-only AST audit prevents new UI literals from missing translations.
+  analyzer: ^10.1.0
   flutter_test:
     sdk: flutter
   integration_test:
@@ -66,8 +71,10 @@ flutter:
     - assets/branding/tetotv_icon.png
     - assets/branding/tetotv_in_app_mark.png
     - assets/fonts/NotoSans-Regular.ttf
+    - assets/fonts/NotoSansDevanagari-OFL.txt
     - assets/fonts/OFL.txt
     - assets/legal/native/GPL-2.0.txt
+    - assets/legal/aniyomi/
     - assets/legal/native/GPL-3.0.txt
     - assets/legal/native/LGPL-2.1.txt
     - assets/legal/native/LGPL-3.0.txt
@@ -116,3 +123,7 @@ flutter:
     - third_party/discord_social_sdk/License-Notices.txt
     - docs/PRIVACY.md
     - docs/THIRD_PARTY_NOTICES.md
+  fonts:
+    - family: TetoDevanagari
+      fonts:
+        - asset: assets/fonts/NotoSansDevanagari.ttf

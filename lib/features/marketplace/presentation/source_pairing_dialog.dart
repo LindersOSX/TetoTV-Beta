@@ -1,3 +1,4 @@
+import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'dart:async';
 
 import 'package:anime_tv/core/theme/app_theme.dart';
@@ -88,12 +89,12 @@ class _SourcePairingDialogState extends ConsumerState<SourcePairingDialog>
                     const SizedBox(width: 12),
                     Expanded(
                       child: Text(
-                        'Add sources with phone',
+                        context.tr("Add sources with phone"),
                         style: Theme.of(context).textTheme.headlineSmall,
                       ),
                     ),
                     IconButton(
-                      tooltip: 'Close',
+                      tooltip: context.tr("Close"),
                       onPressed: saving ? null : () => Navigator.pop(context),
                       icon: const Icon(Icons.close_rounded),
                     ),
@@ -110,34 +111,34 @@ class _SourcePairingDialogState extends ConsumerState<SourcePairingDialog>
                         autofocus: true,
                         onPressed: _controller.retryImport,
                         icon: const Icon(Icons.save_rounded),
-                        label: const Text('RETRY SAVE'),
+                        label: Text(context.tr("RETRY SAVE")),
                       ),
                     _ when state.canRetryAcknowledgement => FilledButton.icon(
                       autofocus: true,
                       onPressed: _controller.retryAcknowledgement,
                       icon: const Icon(Icons.sync_rounded),
-                      label: const Text('RETRY PHONE CONFIRMATION'),
+                      label: Text(context.tr("RETRY PHONE CONFIRMATION")),
                     ),
                     SourcePairingStage.failed ||
                     SourcePairingStage.expired => FilledButton.icon(
                       autofocus: true,
                       onPressed: _controller.start,
                       icon: const Icon(Icons.refresh_rounded),
-                      label: const Text('NEW CODE'),
+                      label: Text(context.tr("NEW CODE")),
                     ),
                     SourcePairingStage.completed => FilledButton(
                       autofocus: true,
                       onPressed: () => Navigator.pop(context),
-                      child: const Text('DONE'),
+                      child: Text(context.tr("DONE")),
                     ),
-                    SourcePairingStage.validating => const TextButton(
+                    SourcePairingStage.validating => TextButton(
                       onPressed: null,
-                      child: Text('SAVING…'),
+                      child: Text(context.tr("SAVING…")),
                     ),
                     _ => TextButton(
                       autofocus: true,
                       onPressed: () => Navigator.pop(context),
-                      child: const Text('CANCEL'),
+                      child: Text(context.tr("CANCEL")),
                     ),
                   },
                 ),
@@ -159,16 +160,20 @@ class _SourcePairingBody extends StatelessWidget {
   Widget build(BuildContext context) => switch (state.stage) {
     SourcePairingStage.starting => _CenteredStatus(
       busy: true,
-      title: 'Creating a private one-time code…',
+      title: context.tr("Creating a private one-time code…"),
       body:
           state.message ??
-          'Keep this screen open while TetoTV creates the secure phone link.',
+          context.tr(
+            "Keep this screen open while TetoTV creates the secure phone link.",
+          ),
     ),
     SourcePairingStage.waiting => _WaitingForSources(session: state.session!),
     SourcePairingStage.validating => _CenteredStatus(
       busy: true,
-      title: 'Sources received',
-      body: state.message ?? 'Validating public HTTPS destinations on this TV…',
+      title: context.tr("Sources received"),
+      body:
+          state.message ??
+          context.tr("Validating public HTTPS destinations on this TV…"),
     ),
     SourcePairingStage.completed => _CompletionStatus(
       state: state,
@@ -179,12 +184,14 @@ class _SourcePairingBody extends StatelessWidget {
       successful: false,
     ),
     SourcePairingStage.expired => _CenteredStatus(
-      title: 'Code expired',
-      body: state.message ?? 'Create a new one-time code and try again.',
+      title: context.tr("Code expired"),
+      body:
+          state.message ??
+          context.tr("Create a new one-time code and try again."),
     ),
-    SourcePairingStage.stopped => const _CenteredStatus(
-      title: 'Pairing stopped',
-      body: 'Close this window and start again when you are ready.',
+    SourcePairingStage.stopped => _CenteredStatus(
+      title: context.tr("Pairing stopped"),
+      body: context.tr("Close this window and start again when you are ready."),
     ),
     SourcePairingStage.idle => const SizedBox.shrink(),
   };
@@ -204,8 +211,8 @@ class _WaitingForSources extends StatelessWidget {
         final qrData = session.verificationUriComplete.toString();
         final qr = CopyableQrInteraction(
           data: qrData,
-          semanticsLabel: 'QR code for source pairing',
-          confirmationMessage: 'Source pairing link copied.',
+          semanticsLabel: context.tr("QR code for source pairing"),
+          confirmationMessage: context.tr("Source pairing link copied."),
           child: Container(
             width: qrSize,
             height: qrSize,
@@ -231,21 +238,25 @@ class _WaitingForSources extends StatelessWidget {
               : CrossAxisAlignment.start,
           children: [
             Text(
-              'Scan the QR code',
+              context.tr("Scan the QR code"),
               style: Theme.of(context).textTheme.headlineMedium,
             ),
             const SizedBox(height: 10),
             Text(
-              'Or open ${session.verificationUri} and enter:',
+              context.tr("Or open {value1} and enter:", {
+                'value1': session.verificationUri,
+              }),
               textAlign: compact ? TextAlign.center : TextAlign.start,
               style: Theme.of(context).textTheme.bodyLarge,
             ),
             const SizedBox(height: 14),
             CopyableCodeInteraction(
               code: session.userCode,
-              semanticsLabel:
-                  'Marketplace source-pairing code ${session.userCode}',
-              confirmationMessage: 'Source-pairing code copied.',
+              semanticsLabel: context.tr(
+                "Marketplace source-pairing code {value1}",
+                {'value1': session.userCode},
+              ),
+              confirmationMessage: context.tr("Source-pairing code copied."),
               child: Text(
                 session.userCode,
                 key: const ValueKey('source-pairing-user-code'),
@@ -259,7 +270,9 @@ class _WaitingForSources extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             Text(
-              'Paste Marketplace repository and Torrent source manifest URLs on your phone. This device validates every destination before saving it.',
+              context.tr(
+                "Paste Marketplace repository and Torrent source manifest URLs on your phone. This device validates every destination before saving it.",
+              ),
               textAlign: TextAlign.start,
               style: TextStyle(color: context.appPalette.mutedText),
             ),
@@ -304,7 +317,7 @@ class _CenteredStatus extends StatelessWidget {
         const SizedBox(height: 18),
         Text(title, style: Theme.of(context).textTheme.headlineSmall),
         const SizedBox(height: 8),
-        Text(body, textAlign: TextAlign.center),
+        Text(context.tr(body), textAlign: TextAlign.center),
       ],
     ),
   );
@@ -315,6 +328,53 @@ class _CompletionStatus extends StatelessWidget {
 
   final SourcePairingState state;
   final bool successful;
+
+  String _message(BuildContext context) {
+    final summary = state.summary;
+    if (summary == null) {
+      return context.tr(state.message ?? 'Try again with a new one-time code.');
+    }
+    final added = <String>[
+      if (summary.repositoriesAdded > 0)
+        context.tr(
+          summary.repositoriesAdded == 1
+              ? '{count} repository'
+              : '{count} repositories',
+          {'count': summary.repositoriesAdded},
+        ),
+      if (summary.manifestsAdded > 0)
+        context.tr(
+          summary.manifestsAdded == 1
+              ? '{count} torrent manifest'
+              : '{count} torrent manifests',
+          {'count': summary.manifestsAdded},
+        ),
+    ];
+    final sources = added.length == 2
+        ? context.tr('{first} and {second}', {
+            'first': added[0],
+            'second': added[1],
+          })
+        : added.firstOrNull ?? '';
+    var message = added.isEmpty
+        ? context.tr('No sources were added.')
+        : context.tr('Added {sources}.', {'sources': sources});
+    if (summary.errors.isNotEmpty) {
+      message = context.tr(
+        summary.errors.length == 1
+            ? '{summary} {count} item was rejected.'
+            : '{summary} {count} items were rejected.',
+        {'summary': message, 'count': summary.errors.length},
+      );
+    }
+    if (state.canRetryAcknowledgement) {
+      message = context.tr(
+        '{summary} Saved locally, but the phone confirmation could not be updated.',
+        {'summary': message},
+      );
+    }
+    return message;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -333,11 +393,13 @@ class _CompletionStatus extends StatelessWidget {
             ),
             const SizedBox(height: 16),
             Text(
-              successful ? 'Sources added' : 'Sources were not added',
+              successful
+                  ? context.tr("Sources added")
+                  : context.tr("Sources were not added"),
               style: Theme.of(context).textTheme.headlineSmall,
             ),
             const SizedBox(height: 8),
-            Text(state.message ?? 'Try again with a new one-time code.'),
+            Text(_message(context)),
             for (final error in errors.take(3)) ...[
               const SizedBox(height: 7),
               Text(

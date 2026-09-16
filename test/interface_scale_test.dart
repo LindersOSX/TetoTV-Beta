@@ -83,6 +83,25 @@ void main() {
     );
   });
 
+  test('automatic mode keeps mobile tablet hardware on its native canvas', () {
+    expect(
+      useTelevisionCanvas(
+        detectedTelevision: false,
+        mode: InterfaceMode.automatic,
+      ),
+      isFalse,
+    );
+
+    final tabletScale = interfaceCanvasScale(
+      logicalWidth: 1280,
+      physicalWidth: 2560,
+      detectedTelevision: false,
+      mode: InterfaceMode.automatic,
+      userScale: 1,
+    );
+    expect(tabletScale, 1);
+  });
+
   test('phone mode bypasses the virtual TV canvas on the same APK', () {
     final tvScale = interfaceCanvasScale(
       logicalWidth: 1920,

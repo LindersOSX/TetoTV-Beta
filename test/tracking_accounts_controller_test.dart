@@ -138,6 +138,61 @@ void main() {
     expect(requests.last.queryParameters['fields'], 'picture,anime_statistics');
   });
 
+  test('verifies Kitsu self profile with JSON:API headers', () async {
+    FlutterSecureStorage.setMockInitialValues({
+      TrackingProvider.kitsu.tokenStorageKey: 'kitsu-access',
+      TrackingProvider.kitsu.refreshTokenStorageKey: 'kitsu-refresh',
+      TrackingProvider.kitsu.expiresAtStorageKey: DateTime.now()
+          .toUtc()
+          .add(const Duration(days: 1))
+          .toIso8601String(),
+    });
+    RequestOptions? captured;
+    final dio = Dio();
+    dio.interceptors.add(
+      InterceptorsWrapper(
+        onRequest: (options, handler) {
+          captured = options;
+          handler.resolve(
+            Response<Map<String, dynamic>>(
+              requestOptions: options,
+              statusCode: 200,
+              data: const {
+                'data': [
+                  {
+                    'type': 'users',
+                    'id': '7',
+                    'attributes': {
+                      'name': 'Kitsu Fan',
+                      'slug': 'kitsu-fan',
+                      'avatar': {'large': 'https://media.kitsu.io/avatar.jpg'},
+                    },
+                  },
+                ],
+              },
+            ),
+          );
+        },
+      ),
+    );
+    final controller = TrackingAccountsController(
+      _FakeRef(),
+      TrackingTokenService(storage),
+      dio: dio,
+    );
+
+    await controller.load();
+
+    final profile = controller.state.profiles[TrackingProvider.kitsu]!;
+    expect(profile.username, 'Kitsu Fan');
+    expect(profile.stableAccountId, '7');
+    expect(profile.avatarUrl, 'https://media.kitsu.io/avatar.jpg');
+    expect(captured?.uri.host, 'kitsu.io');
+    expect(captured?.queryParameters['filter[self]'], 'true');
+    expect(captured?.headers['Accept'], 'application/vnd.api+json');
+    expect(captured?.headers['Authorization'], 'Bearer kitsu-access');
+  });
+
   test('rejects unsafe tracker avatar URLs', () async {
     FlutterSecureStorage.setMockInitialValues({
       TrackingProvider.anilist.tokenStorageKey: 'anilist-access',

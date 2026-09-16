@@ -120,6 +120,93 @@ void main() {
     );
   });
 
+  for (final tablet in <({String name, Size size, String placement})>[
+    (
+      name: 'portrait tablet',
+      size: const Size(800, 1280),
+      placement: 'phonePortraitBottom',
+    ),
+    (
+      name: 'landscape tablet',
+      size: const Size(1280, 800),
+      placement: 'phoneLandscapeRail',
+    ),
+  ]) {
+    testWidgets('${tablet.name} uses the mobile navigation family', (
+      tester,
+    ) async {
+      tester.view.physicalSize = tablet.size;
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final firstContentFocus = FocusNode(debugLabel: 'tablet.content');
+      addTearDown(firstContentFocus.dispose);
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [isTelevisionProvider.overrideWithValue(false)],
+          child: MaterialApp(
+            theme: AppTheme.dark,
+            home: TetoTopLevelShell(
+              preferences: const SettingsPreferences(
+                interfaceMode: InterfaceMode.television,
+                loaded: true,
+              ),
+              activeDestination: TopNavigationDestination.home,
+              firstContentFocusNode: firstContentFocus,
+              builder: (_, layout) => Text(
+                layout.navigationPlacement.name,
+                textDirection: TextDirection.ltr,
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text(tablet.placement), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('phone-bottom-navigation')),
+        tablet.size.width < tablet.size.height ? findsOneWidget : findsNothing,
+      );
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  testWidgets('the same large landscape viewport stays TV on TV hardware', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1280, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final firstContentFocus = FocusNode(debugLabel: 'tv.content');
+    addTearDown(firstContentFocus.dispose);
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [isTelevisionProvider.overrideWithValue(true)],
+        child: MaterialApp(
+          theme: AppTheme.dark,
+          home: TetoTopLevelShell(
+            preferences: const SettingsPreferences(loaded: true),
+            activeDestination: TopNavigationDestination.home,
+            firstContentFocusNode: firstContentFocus,
+            builder: (_, layout) => Text(
+              layout.navigationPlacement.name,
+              textDirection: TextDirection.ltr,
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('televisionRail'), findsOneWidget);
+    expect(find.byKey(const ValueKey('phone-bottom-navigation')), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets(
     'landscape rail and logo live-update from the chrome size provider',
     (tester) async {

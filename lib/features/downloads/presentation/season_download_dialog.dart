@@ -1,3 +1,4 @@
+import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/features/downloads/domain/season_download_plan.dart';
 import 'package:flutter/material.dart';
@@ -19,13 +20,13 @@ Future<bool> confirmDirectSeasonDownload(BuildContext context) async {
         barrierDismissible: false,
         builder: (dialogContext) => AlertDialog(
           key: const ValueKey('season-download-direct-warning'),
-          title: const Text('Download without Debrid?'),
+          title: Text(context.tr("Download without Debrid?")),
           content: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 560),
-            child: const Text(
-              'Direct torrent downloads connect to peers. Your public IP '
-              'address may be visible to them. This choice applies to the '
-              'entire season.',
+            child: Text(
+              context.tr(
+                "Direct torrent downloads connect to peers. Your public IP address may be visible to them. This choice applies to the entire season.",
+              ),
             ),
           ),
           actions: [
@@ -33,12 +34,12 @@ Future<bool> confirmDirectSeasonDownload(BuildContext context) async {
               key: const ValueKey('season-download-direct-cancel'),
               autofocus: true,
               onPressed: () => Navigator.pop(dialogContext, false),
-              child: const Text('Cancel'),
+              child: Text(context.tr("Cancel")),
             ),
             FilledButton(
               key: const ValueKey('season-download-direct-confirm'),
               onPressed: () => Navigator.pop(dialogContext, true),
-              child: const Text('Continue'),
+              child: Text(context.tr("Continue")),
             ),
           ],
         ),
@@ -64,7 +65,7 @@ class _SeasonDownloadDialogState extends State<_SeasonDownloadDialog> {
     final palette = context.appPalette;
     return AlertDialog(
       key: const ValueKey('season-download-dialog'),
-      title: const Text('Download season'),
+      title: Text(context.tr("Download season")),
       content: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 820, maxHeight: 560),
         child: FocusTraversalGroup(
@@ -75,14 +76,14 @@ class _SeasonDownloadDialogState extends State<_SeasonDownloadDialog> {
               children: [
                 Expanded(
                   child: _ChoiceSection(
-                    title: 'Quality',
+                    title: context.tr("Quality"),
                     children: [
                       for (final quality in SeasonDownloadQuality.values)
                         _SelectionTile(
                           key: ValueKey(
                             'season-download-quality-${quality.name}',
                           ),
-                          label: quality.displayName,
+                          label: context.tr(quality.displayName),
                           autofocus: quality == SeasonDownloadQuality.best,
                           selected: _quality == quality,
                           accent: palette.accentBright,
@@ -94,21 +95,23 @@ class _SeasonDownloadDialogState extends State<_SeasonDownloadDialog> {
                 const SizedBox(width: 22),
                 Expanded(
                   child: _ChoiceSection(
-                    title: 'Source',
+                    title: context.tr("Source"),
                     children: [
                       for (final source in SeasonDownloadSourcePolicy.values)
                         _SelectionTile(
                           key: ValueKey(
                             'season-download-source-${source.name}',
                           ),
-                          label: source.displayName,
+                          label: context.tr(source.displayName),
                           description:
                               source ==
                                       SeasonDownloadSourcePolicy
                                           .directTorrent &&
                                   !widget.directTorrentAvailable
-                              ? 'Enable direct torrent streaming in Settings'
-                              : source.description,
+                              ? context.tr(
+                                  "Enable direct torrent streaming in Settings",
+                                )
+                              : context.tr(source.description),
                           selected: _source == source,
                           accent: palette.accentBright,
                           onPressed:
@@ -131,7 +134,7 @@ class _SeasonDownloadDialogState extends State<_SeasonDownloadDialog> {
         TextButton(
           key: const ValueKey('season-download-cancel'),
           onPressed: () => Navigator.pop(context),
-          child: const Text('Cancel'),
+          child: Text(context.tr("Cancel")),
         ),
         FilledButton.icon(
           key: const ValueKey('season-download-start'),
@@ -140,7 +143,7 @@ class _SeasonDownloadDialogState extends State<_SeasonDownloadDialog> {
             SeasonDownloadSelection(quality: _quality, sourcePolicy: _source),
           ),
           icon: const Icon(Icons.download_rounded),
-          label: const Text('Add to Downloads'),
+          label: Text(context.tr("Add to Downloads")),
         ),
       ],
     );

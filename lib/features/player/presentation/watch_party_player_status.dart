@@ -1,3 +1,5 @@
+import 'package:anime_tv/core/localization/app_language.dart';
+import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'package:anime_tv/features/watch_together/application/watch_party_controller.dart';
 import 'package:anime_tv/features/watch_together/domain/watch_party_models.dart';
 import 'package:anime_tv/features/watch_together/domain/watch_party_timeline.dart';
@@ -7,23 +9,31 @@ import 'package:anime_tv/features/watch_together/domain/watch_party_timeline.dar
 String watchPartyPlayerCopy(String value) =>
     value.replaceAll('Watch Together', 'Watch Party');
 
-String? watchPartyPlayerStatus(WatchPartyState state) {
+String? watchPartyPlayerStatus(
+  WatchPartyState state, {
+  TetoLocalizations localizations = const TetoLocalizations(
+    AppLanguage.english,
+  ),
+}) {
   final session = state.session;
   if (session == null) return null;
   final connection = state.connection == WatchPartyConnection.connected
       ? ''
-      : ' • RECONNECTING';
-  if (state.isHost) {
-    return 'PARTY ${session.roomCode} • HOST$connection';
-  }
-  final status = switch (state.timelineCompatibility) {
-    WatchPartyTimelineCompatibility.exact => 'EXACT SOURCE',
-    WatchPartyTimelineCompatibility.compatible => 'SOURCE ALIGNED',
-    WatchPartyTimelineCompatibility.adjusted => 'TIMELINE ADJUSTED',
-    WatchPartyTimelineCompatibility.differentCut => 'DIFFERENT CUT',
-    WatchPartyTimelineCompatibility.unverified => 'VERIFYING',
-  };
-  return 'PARTY ${session.roomCode} • $status$connection';
+      : ' • ${localizations.text('RECONNECTING')}';
+  final status = state.isHost
+      ? 'HOST'
+      : switch (state.timelineCompatibility) {
+          WatchPartyTimelineCompatibility.exact => 'EXACT SOURCE',
+          WatchPartyTimelineCompatibility.compatible => 'SOURCE ALIGNED',
+          WatchPartyTimelineCompatibility.adjusted => 'TIMELINE ADJUSTED',
+          WatchPartyTimelineCompatibility.differentCut => 'DIFFERENT CUT',
+          WatchPartyTimelineCompatibility.unverified => 'VERIFYING',
+        };
+  return localizations.text('PARTY {code} • {status}{connection}', {
+    'code': session.roomCode,
+    'status': localizations.text(status),
+    'connection': connection,
+  });
 }
 
 String watchPartyTimelineDetail(WatchPartyState state) =>

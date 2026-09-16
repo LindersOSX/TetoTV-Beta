@@ -131,10 +131,13 @@ void main() {
         for (final page in storedPages) {
           expect(page.relativePath, isNot(contains('http')));
           expect(page.relativePath, isNot(contains('secret')));
-          expect(page.stableKeyHash, isNull);
+          expect(page.stableKeyHash, matches(RegExp(r'^[0-9a-f]{64}$')));
         }
         final storedJob = fixture.persistence.jobs['chapter-job']!;
-        expect(storedJob.manifestFingerprint, isNull);
+        expect(
+          storedJob.manifestFingerprint,
+          matches(RegExp(r'^[0-9a-f]{64}$')),
+        );
         expect(storedJob.relativeDirectory, isNot(contains('http')));
         expect(storedJob.errorMessage, isNull);
       },
@@ -714,16 +717,749 @@ void main() {
       expect(
         () => MangaReadingOrderPage(
           uri: Uri.parse('https://catalog.example/page.jpg'),
-          headers: const <String, String>{
-            'Origin': 'http://reader.example',
-          },
+          headers: const <String, String>{'Origin': 'http://reader.example'},
         ),
         throwsFormatException,
       );
     });
   });
 
+  group('Durable manga queue', () {
+    test(
+      'persists ordered queued jobs and runs only one chapter at a time',
+      () async {
+        final fixture = await _AcquisitionFixture.create();
+        addTearDown(fixture.dispose);
+        final gate = Completer<List<int>>();
+        final firstUri = Uri.parse('https://pages.example/first.png');
+        final secondUri = Uri.parse('https://pages.example/second.png');
+        fixture.transport.enqueue(
+          firstUri,
+          (_) => MangaAcquisitionHttpResponse(
+            statusCode: HttpStatus.ok,
+            headers: const {HttpHeaders.contentTypeHeader: 'image/png'},
+            body: Stream.fromFuture(gate.future),
+          ),
+        );
+        fixture.transport.enqueue(
+          secondUri,
+          (_) => _response(_pngBytes, contentType: 'image/png'),
+        );
+        final operations = await fixture.service.enqueueAll([
+          _request(
+            jobId: 'first',
+            acquisition: MangaReadingOrderAcquisition([
+              MangaReadingOrderPage(uri: firstUri),
+            ]),
+          ),
+          _request(
+            jobId: 'second',
+            acquisition: MangaReadingOrderAcquisition([
+              MangaReadingOrderPage(uri: secondUri),
+            ]),
+          ),
+        ]);
+        await _waitUntil(() => fixture.transport.requests.length == 1);
+        expect(
+          fixture.persistence.jobs['second']!.status,
+          MangaDownloadJobStatus.queued,
+        );
+        expect(
+          fixture.persistence.jobs['first']!.queuePosition,
+          greaterThan(0),
+        );
+        expect(
+          fixture.persistence.jobs['second']!.queuePosition,
+          greaterThan(fixture.persistence.jobs['first']!.queuePosition),
+        );
+        gate.complete(_pngBytes);
+        await Future.wait(operations.map((operation) => operation.completed));
+        expect(fixture.transport.requests.map((call) => call.uri), [
+          firstUri,
+          secondUri,
+        ]);
+        expect(fixture.keepAlive.maximumActive, 1);
+      },
+    );
+
+    test(
+      'queued cancellation completes without waiting for the running chapter',
+      () async {
+        final fixture = await _AcquisitionFixture.create();
+        addTearDown(fixture.dispose);
+        final gate = Completer<List<int>>();
+        final uri = Uri.parse('https://pages.example/queue.png');
+        fixture.transport.enqueue(
+          uri,
+          (_) => MangaAcquisitionHttpResponse(
+            statusCode: HttpStatus.ok,
+            headers: const {HttpHeaders.contentTypeHeader: 'image/png'},
+            body: Stream.fromFuture(gate.future),
+          ),
+        );
+        final operations = await fixture.service.enqueueAll([
+          _request(
+            jobId: 'first',
+            acquisition: MangaReadingOrderAcquisition([
+              MangaReadingOrderPage(uri: uri),
+            ]),
+          ),
+          _request(
+            jobId: 'second',
+            acquisition: MangaReadingOrderAcquisition([
+              MangaReadingOrderPage(uri: uri),
+            ]),
+          ),
+        ]);
+        final cancelled = expectLater(
+          operations.last.completed,
+          throwsA(
+            isA<MangaAcquisitionException>().having(
+              (e) => e.code,
+              'code',
+              MangaAcquisitionFailureCode.cancelled,
+            ),
+          ),
+        );
+        await fixture.service.cancel('second');
+        await cancelled;
+        expect(
+          fixture.persistence.jobs['second']!.status,
+          MangaDownloadJobStatus.cancelled,
+        );
+        gate.complete(_pngBytes);
+        await operations.first.completed;
+        expect(fixture.transport.requests, hasLength(1));
+      },
+    );
+
+    test(
+      'pause and restart recovery retain verified pages then resolve fresh capability',
+      () async {
+        final fixture = await _AcquisitionFixture.create();
+        addTearDown(fixture.dispose);
+        final first = Uri.parse('https://pages.example/one.png');
+        final second = Uri.parse('https://pages.example/two.png');
+        final request = _request(
+          acquisition: MangaReadingOrderAcquisition([
+            MangaReadingOrderPage(uri: first),
+            MangaReadingOrderPage(uri: second),
+          ]),
+        );
+        fixture.transport.enqueue(
+          first,
+          (_) => _response(_pngBytes, contentType: 'image/png'),
+        );
+        fixture.transport.enqueue(second, _blockedResponse);
+        final operation = fixture.service.start(request);
+        final paused = expectLater(
+          operation.completed,
+          throwsA(
+            isA<MangaAcquisitionException>().having(
+              (e) => e.code,
+              'code',
+              MangaAcquisitionFailureCode.paused,
+            ),
+          ),
+        );
+        await _waitUntil(() => fixture.transport.requests.length == 2);
+        await fixture.service.pause(request.jobId);
+        await paused;
+        expect(fixture.persistence.jobs[request.jobId]!.completedPages, 1);
+        expect(fixture.persistence.pageRows(request.jobId), hasLength(1));
+        // Model the exact durable snapshot left by process death during page two.
+        fixture.persistence.jobs[request.jobId] = _jobStatus(
+          fixture.persistence.jobs[request.jobId]!,
+          MangaDownloadJobStatus.downloading,
+        );
+        final restarted = fixture.restartedService();
+        final recovered = await restarted.recoverStaleJobs();
+        expect(
+          recovered.single.status,
+          MangaDownloadJobStatus.needsReauthorization,
+        );
+        expect(recovered.single.completedPages, 1);
+        expect(fixture.transport.requests, hasLength(2));
+        var resolved = 0;
+        restarted.setRequestResolver((job) async {
+          expect(job.chapterId, request.chapterId);
+          resolved++;
+          return request;
+        });
+        fixture.transport.enqueue(
+          second,
+          (_) => _response(_pngBytes, contentType: 'image/png'),
+        );
+        final resumed = await restarted.resume(request.jobId);
+        final reader = await resumed.completed;
+        expect(reader.pages, hasLength(2));
+        expect(resolved, 1);
+        expect(
+          fixture.transport.requests.where((call) => call.uri == first),
+          hasLength(1),
+        );
+        expect(
+          fixture.persistence.jobs[request.jobId]!.receivedBytes,
+          _pngBytes.length * 2,
+        );
+        expect(await _partFiles(fixture.roots.downloadedPages), isEmpty);
+      },
+    );
+
+    test(
+      'changed capability graph restarts safely instead of reusing old pages',
+      () async {
+        final fixture = await _AcquisitionFixture.create();
+        addTearDown(fixture.dispose);
+        final oldUri = Uri.parse('https://pages.example/one.png?signature=old');
+        final newUri = Uri.parse('https://pages.example/one.png?signature=new');
+        final second = Uri.parse('https://pages.example/two.png');
+        final oldRequest = _request(
+          acquisition: MangaReadingOrderAcquisition([
+            MangaReadingOrderPage(uri: oldUri),
+            MangaReadingOrderPage(uri: second),
+          ]),
+        );
+        fixture.transport.enqueue(
+          oldUri,
+          (_) => _response(_pngBytes, contentType: 'image/png'),
+        );
+        fixture.transport.enqueue(second, _blockedResponse);
+        final firstAttempt = fixture.service.start(oldRequest);
+        final paused = expectLater(
+          firstAttempt.completed,
+          throwsA(isA<MangaAcquisitionException>()),
+        );
+        await _waitUntil(() => fixture.transport.requests.length == 2);
+        await fixture.service.pause(oldRequest.jobId);
+        await paused;
+        fixture.transport.enqueue(
+          newUri,
+          (_) => _response(_pngBytes, contentType: 'image/png'),
+        );
+        fixture.transport.enqueue(
+          second,
+          (_) => _response(_pngBytes, contentType: 'image/png'),
+        );
+        final fresh = _request(
+          acquisition: MangaReadingOrderAcquisition([
+            MangaReadingOrderPage(uri: newUri),
+            MangaReadingOrderPage(uri: second),
+          ]),
+        );
+        fixture.service.setRequestResolver((_) async => fresh);
+        await (await fixture.service.resume(fresh.jobId)).completed;
+        expect(fixture.transport.requests, hasLength(4));
+      },
+    );
+
+    test(
+      'resume rejects a resolver identity mismatch before networking',
+      () async {
+        final fixture = await _AcquisitionFixture.create();
+        addTearDown(fixture.dispose);
+        fixture.persistence.jobs['saved'] = _storedJob(
+          id: 'saved',
+          sourceId: 'test.source',
+          relativeDirectory: 'jobs/saved',
+          now: DateTime.utc(2026, 9, 1),
+        );
+        fixture.service.setRequestResolver(
+          (_) async => _request(
+            jobId: 'other',
+            acquisition: MangaReadingOrderAcquisition([
+              MangaReadingOrderPage(
+                uri: Uri.parse('https://pages.example/other.png'),
+              ),
+            ]),
+          ),
+        );
+        await expectLater(
+          fixture.service.resume('saved'),
+          throwsA(isA<MangaAcquisitionException>()),
+        );
+        expect(fixture.transport.requests, isEmpty);
+        expect(fixture.persistence.jobs.keys, ['saved']);
+      },
+    );
+
+    for (final stage in ['job lookup', 'resolver']) {
+      test(
+        'resume rejects profile switch during $stage before new admission',
+        () async {
+          final fixture = await _AcquisitionFixture.create();
+          addTearDown(fixture.dispose);
+          final gate = Completer<void>();
+          final entered = Completer<void>();
+          var current = 'A';
+          var resolved = 0;
+          fixture.persistence.jobs['saved'] = _storedJob(
+            id: 'saved',
+            sourceId: 'test.source',
+            relativeDirectory: 'jobs/saved',
+            now: DateTime.utc(2026, 9, 1),
+          );
+          if (stage == 'job lookup') {
+            fixture.persistence.beforeJob = () async {
+              entered.complete();
+              await gate.future;
+            };
+          }
+          final controller = MangaAcquisitionController(
+            service: Future.value(fixture.service),
+            captureSession: () {
+              final owner = current;
+              return MangaAcquisitionSession(
+                validate: () {
+                  if (current != owner) throw StateError('profile changed');
+                },
+                resolve: (job) async {
+                  resolved++;
+                  if (stage == 'resolver') {
+                    entered.complete();
+                    await gate.future;
+                  }
+                  return _request(
+                    jobId: job.id,
+                    acquisition: MangaReadingOrderAcquisition([
+                      MangaReadingOrderPage(
+                        uri: Uri.parse('https://pages.example/saved.png'),
+                      ),
+                    ]),
+                  );
+                },
+              );
+            },
+          );
+          addTearDown(controller.dispose);
+          final result = expectLater(
+            controller.resume('saved'),
+            throwsStateError,
+          );
+          await entered.future;
+          current = 'B';
+          gate.complete();
+          await result;
+          expect(resolved, stage == 'resolver' ? 1 : 0);
+          expect(fixture.transport.requests, isEmpty);
+          expect(fixture.service.activeOperation('saved'), isNull);
+        },
+      );
+    }
+
+    test(
+      'new download checks admission after service initialization',
+      () async {
+        final fixture = await _AcquisitionFixture.create();
+        addTearDown(fixture.dispose);
+        final gate = Completer<MangaAcquisitionService>();
+        var current = true;
+        final controller = MangaAcquisitionController(service: gate.future);
+        addTearDown(controller.dispose);
+        final request = _request(
+          jobId: 'new',
+          acquisition: MangaReadingOrderAcquisition([
+            MangaReadingOrderPage(
+              uri: Uri.parse('https://pages.example/new.png'),
+            ),
+          ]),
+        );
+        final result = expectLater(
+          controller.start(
+            request,
+            validateAdmission: () {
+              if (!current) throw StateError('old action');
+            },
+          ),
+          throwsStateError,
+        );
+        current = false;
+        gate.complete(fixture.service);
+        await result;
+        expect(fixture.transport.requests, isEmpty);
+        expect(fixture.service.activeOperation('new'), isNull);
+      },
+    );
+
+    test(
+      'resume pending does not touch paused jobs or start on recovery',
+      () async {
+        final fixture = await _AcquisitionFixture.create();
+        addTearDown(fixture.dispose);
+        fixture.persistence.jobs['paused'] = _jobStatus(
+          _storedJob(
+            id: 'paused',
+            sourceId: 'test.source',
+            relativeDirectory: 'jobs/paused',
+            now: DateTime.utc(2026, 9, 1),
+          ),
+          MangaDownloadJobStatus.paused,
+        );
+        var resolved = 0;
+        fixture.service.setRequestResolver((_) async {
+          resolved++;
+          throw StateError('must not resolve paused job');
+        });
+        await fixture.service.recoverStaleJobs();
+        expect(
+          fixture.persistence.jobs['paused']!.status,
+          MangaDownloadJobStatus.paused,
+        );
+        expect(await fixture.service.resumePending(), isEmpty);
+        expect(resolved, 0);
+      },
+    );
+
+    test(
+      'reopening a completed job detects same-length local corruption',
+      () async {
+        final fixture = await _AcquisitionFixture.create();
+        addTearDown(fixture.dispose);
+        final uri = Uri.parse('https://pages.example/integrity.png');
+        final request = _request(
+          acquisition: MangaReadingOrderAcquisition([
+            MangaReadingOrderPage(uri: uri),
+          ]),
+        );
+        fixture.transport.enqueue(
+          uri,
+          (_) => _response(_pngBytes, contentType: 'image/png'),
+        );
+        await fixture.service.start(request).completed;
+        final page = fixture.persistence.pageRows(request.jobId).single;
+        final file = File(
+          path.join(fixture.roots.downloadedPages.path, page.relativePath),
+        );
+        final damaged = List<int>.of(_pngBytes)..[20] ^= 1;
+        await file.writeAsBytes(damaged);
+        await expectLater(
+          fixture.service.openCompleted(request.jobId),
+          throwsA(
+            isA<MangaAcquisitionException>().having(
+              (e) => e.code,
+              'code',
+              MangaAcquisitionFailureCode.integrityFailure,
+            ),
+          ),
+        );
+        fixture.transport.enqueue(
+          uri,
+          (_) => _response(_pngBytes, contentType: 'image/png'),
+        );
+        await fixture.service.retry(request).completed;
+        expect(fixture.transport.requests, hasLength(2));
+        expect(await fixture.service.openCompleted(request.jobId), isNotNull);
+      },
+    );
+
+    test(
+      'queued pause persists without starting and can be resumed explicitly',
+      () async {
+        final fixture = await _AcquisitionFixture.create();
+        addTearDown(fixture.dispose);
+        final gate = Completer<List<int>>();
+        final uri = Uri.parse('https://pages.example/running.png');
+        final later = Uri.parse('https://pages.example/paused.png');
+        fixture.transport.enqueue(
+          uri,
+          (_) => MangaAcquisitionHttpResponse(
+            statusCode: HttpStatus.ok,
+            headers: const {HttpHeaders.contentTypeHeader: 'image/png'},
+            body: Stream.fromFuture(gate.future),
+          ),
+        );
+        final laterRequest = _request(
+          jobId: 'paused',
+          acquisition: MangaReadingOrderAcquisition([
+            MangaReadingOrderPage(uri: later),
+          ]),
+        );
+        final operations = await fixture.service.enqueueAll([
+          _request(
+            jobId: 'running',
+            acquisition: MangaReadingOrderAcquisition([
+              MangaReadingOrderPage(uri: uri),
+            ]),
+          ),
+          laterRequest,
+        ]);
+        final paused = expectLater(
+          operations.last.completed,
+          throwsA(isA<MangaAcquisitionException>()),
+        );
+        await fixture.service.pause('paused');
+        await paused;
+        expect(
+          fixture.persistence.jobs['paused']!.status,
+          MangaDownloadJobStatus.paused,
+        );
+        expect(
+          fixture.transport.requests.where((call) => call.uri == later),
+          isEmpty,
+        );
+        gate.complete(_pngBytes);
+        await operations.first.completed;
+        fixture.service.setRequestResolver((_) async => laterRequest);
+        fixture.transport.enqueue(
+          later,
+          (_) => _response(_pngBytes, contentType: 'image/png'),
+        );
+        await (await fixture.service.resume('paused')).completed;
+        expect(
+          fixture.persistence.jobs['paused']!.status,
+          MangaDownloadJobStatus.completed,
+        );
+      },
+    );
+
+    test(
+      'disabling Manga pauses running and queued work and releases keep-alive',
+      () async {
+        final fixture = await _AcquisitionFixture.create();
+        addTearDown(fixture.dispose);
+        final runningUri = Uri.parse('https://pages.example/running.png');
+        final queuedUri = Uri.parse('https://pages.example/queued.png');
+        fixture.transport.enqueue(runningUri, _blockedResponse);
+        final operations = await fixture.service.enqueueAll([
+          _request(
+            jobId: 'running',
+            acquisition: MangaReadingOrderAcquisition([
+              MangaReadingOrderPage(uri: runningUri),
+            ]),
+          ),
+          _request(
+            jobId: 'queued',
+            acquisition: MangaReadingOrderAcquisition([
+              MangaReadingOrderPage(uri: queuedUri),
+            ]),
+          ),
+        ]);
+        final completions = operations.map(
+          (operation) => expectLater(
+            operation.completed,
+            throwsA(
+              isA<MangaAcquisitionException>().having(
+                (error) => error.code,
+                'code',
+                MangaAcquisitionFailureCode.paused,
+              ),
+            ),
+          ),
+        );
+        await _waitUntil(
+          () =>
+              fixture.transport.requests.length == 1 &&
+              fixture.keepAlive.acquired == 1,
+        );
+
+        await fixture.service.setFeatureAvailable(false);
+        await Future.wait(completions);
+
+        expect(fixture.service.featureAvailable, isFalse);
+        expect(fixture.transport.requests.map((call) => call.uri), [
+          runningUri,
+        ]);
+        expect(
+          fixture.persistence.jobs.keys,
+          containsAll(['running', 'queued']),
+        );
+        expect(
+          fixture.persistence.jobs['running']!.status,
+          MangaDownloadJobStatus.paused,
+        );
+        expect(
+          fixture.persistence.jobs['queued']!.status,
+          MangaDownloadJobStatus.paused,
+        );
+        expect(fixture.service.activeOperation('running'), isNull);
+        expect(fixture.service.activeOperation('queued'), isNull);
+        expect(fixture.keepAlive.released, 1);
+      },
+    );
+
+    test(
+      'disabled service rejects acquisition and re-enable never auto-resumes',
+      () async {
+        final fixture = await _AcquisitionFixture.create();
+        addTearDown(fixture.dispose);
+        final uri = Uri.parse('https://pages.example/explicit.png');
+        final request = _request(
+          acquisition: MangaReadingOrderAcquisition([
+            MangaReadingOrderPage(uri: uri),
+          ]),
+        );
+        await fixture.service.setFeatureAvailable(false);
+
+        expect(
+          () => fixture.service.setRequestResolver((_) async => request),
+          throwsA(isA<MangaAcquisitionException>()),
+        );
+        expect(
+          () => fixture.service.start(request),
+          throwsA(
+            isA<MangaAcquisitionException>().having(
+              (error) => error.message,
+              'message',
+              contains('disabled'),
+            ),
+          ),
+        );
+        expect(
+          () => fixture.service.retry(request),
+          throwsA(isA<MangaAcquisitionException>()),
+        );
+        await expectLater(
+          fixture.service.enqueueAll([request]),
+          throwsA(isA<MangaAcquisitionException>()),
+        );
+        await expectLater(
+          fixture.service.resume(request.jobId),
+          throwsA(isA<MangaAcquisitionException>()),
+        );
+        await expectLater(
+          fixture.service.resumePending(),
+          throwsA(isA<MangaAcquisitionException>()),
+        );
+        expect(fixture.transport.requests, isEmpty);
+        expect(fixture.persistence.jobs, isEmpty);
+
+        await fixture.service.setFeatureAvailable(true);
+        await Future<void>.delayed(Duration.zero);
+        expect(fixture.transport.requests, isEmpty);
+        fixture.transport.enqueue(
+          uri,
+          (_) => _response(_pngBytes, contentType: 'image/png'),
+        );
+        await fixture.service.start(request).completed;
+        expect(fixture.transport.requests, hasLength(1));
+      },
+    );
+
+    test('caps bulk input before persistence or networking', () async {
+      final fixture = await _AcquisitionFixture.create(maximumQueuedJobs: 2);
+      addTearDown(fixture.dispose);
+      final request = _request(
+        acquisition: MangaReadingOrderAcquisition([
+          MangaReadingOrderPage(
+            uri: Uri.parse('https://pages.example/one.png'),
+          ),
+        ]),
+      );
+      await expectLater(
+        fixture.service.enqueueAll(Iterable.generate(3, (_) => request)),
+        throwsA(isA<MangaAcquisitionException>()),
+      );
+      expect(fixture.persistence.jobs, isEmpty);
+      expect(fixture.transport.requests, isEmpty);
+    });
+
+    test(
+      'storage quota failure is actionable and keeps completed pages',
+      () async {
+        final fixture = await _AcquisitionFixture.create(
+          maximumStoredBytes: _pngBytes.length + 1,
+        );
+        addTearDown(fixture.dispose);
+        final first = Uri.parse('https://pages.example/one.png');
+        final second = Uri.parse('https://pages.example/two.png');
+        fixture.transport.enqueue(
+          first,
+          (_) => _response(_pngBytes, contentType: 'image/png'),
+        );
+        fixture.transport.enqueue(
+          second,
+          (_) => _response(_pngBytes, contentType: 'image/png'),
+        );
+        final request = _request(
+          acquisition: MangaReadingOrderAcquisition([
+            MangaReadingOrderPage(uri: first),
+            MangaReadingOrderPage(uri: second),
+          ]),
+        );
+        await expectLater(
+          fixture.service.start(request).completed,
+          throwsA(
+            isA<MangaAcquisitionException>()
+                .having(
+                  (e) => e.code,
+                  'code',
+                  MangaAcquisitionFailureCode.storageFailure,
+                )
+                .having(
+                  (e) => e.message,
+                  'action',
+                  contains('Delete downloaded chapters'),
+                ),
+          ),
+        );
+        expect(fixture.persistence.pageRows(request.jobId), hasLength(1));
+        expect(fixture.persistence.jobs[request.jobId]!.completedPages, 1);
+      },
+    );
+  });
+
   group('MangaAcquisitionController', () {
+    test(
+      'opt-out clears in-session retry capability until an explicit request',
+      () async {
+        final fixture = await _AcquisitionFixture.create();
+        addTearDown(fixture.dispose);
+        final controller = MangaAcquisitionController(
+          service: Future<MangaAcquisitionService>.value(fixture.service),
+        );
+        addTearDown(controller.dispose);
+        final uri = Uri.parse('https://pages.example/controller-opt-out.png');
+        final request = _request(
+          acquisition: MangaReadingOrderAcquisition([
+            MangaReadingOrderPage(uri: uri),
+          ]),
+        );
+        fixture.transport.enqueue(uri, _blockedResponse);
+        final operation = await controller.start(request);
+        final paused = expectLater(
+          operation.completed,
+          throwsA(
+            isA<MangaAcquisitionException>().having(
+              (error) => error.code,
+              'code',
+              MangaAcquisitionFailureCode.paused,
+            ),
+          ),
+        );
+        await _waitUntil(() => fixture.transport.requests.length == 1);
+
+        await controller.setFeatureAvailable(false);
+        await paused;
+        await expectLater(
+          controller.setRequestResolver((_) async => request),
+          throwsA(isA<MangaAcquisitionException>()),
+        );
+        await expectLater(
+          controller.start(request),
+          throwsA(isA<MangaAcquisitionException>()),
+        );
+        await controller.setFeatureAvailable(true);
+        await expectLater(
+          controller.retryInSession(request.jobId),
+          throwsA(
+            isA<MangaAcquisitionException>().having(
+              (error) => error.message,
+              'message',
+              contains('Reconnect'),
+            ),
+          ),
+        );
+        expect(fixture.transport.requests, hasLength(1));
+
+        fixture.transport.enqueue(
+          uri,
+          (_) => _response(_pngBytes, contentType: 'image/png'),
+        );
+        await (await controller.retry(request)).completed;
+        expect(fixture.transport.requests, hasLength(2));
+      },
+    );
+
     test('observes a transfer and exposes open and delete actions', () async {
       final fixture = await _AcquisitionFixture.create();
       addTearDown(fixture.dispose);
@@ -809,9 +1545,20 @@ class _AcquisitionFixture {
   final _RecordingKeepAlive keepAlive;
   final MangaAcquisitionService service;
 
+  MangaAcquisitionService restartedService() =>
+      MangaAcquisitionService.withDependencies(
+        persistence: persistence,
+        storageRoots: roots,
+        transport: transport,
+        validateTarget: (_) async {},
+        keepAlive: keepAlive,
+      );
+
   static Future<_AcquisitionFixture> create({
     MangaAcquisitionTargetValidator? validateTarget,
     MangaArchiveService archiveService = const MangaArchiveService(),
+    int maximumQueuedJobs = 100,
+    int maximumStoredBytes = 4 * 1024 * 1024 * 1024,
   }) async {
     final root = await Directory.systemTemp.createTemp('tetotv-manga-get-');
     final roots = MangaStorageRoots(
@@ -836,6 +1583,8 @@ class _AcquisitionFixture {
       validateTarget: validateTarget ?? (_) async {},
       keepAlive: keepAlive,
       clock: () => DateTime.utc(2026, 9, 1, 12),
+      maximumQueuedJobs: maximumQueuedJobs,
+      maximumStoredBytes: maximumStoredBytes,
     );
     return _AcquisitionFixture(
       root: root,
@@ -878,12 +1627,16 @@ class _MemoryPersistence implements MangaAcquisitionPersistence {
   final Map<String, Map<int, MangaDownloadPage>> pageData =
       <String, Map<int, MangaDownloadPage>>{};
   final List<MangaDownloadJob> jobHistory = <MangaDownloadJob>[];
+  Future<void> Function()? beforeJob;
 
   @override
   Future<void> clearPages(String jobId) async => pageData.remove(jobId);
 
   @override
-  Future<MangaDownloadJob?> job(String jobId) async => jobs[jobId];
+  Future<MangaDownloadJob?> job(String jobId) async {
+    await beforeJob?.call();
+    return jobs[jobId];
+  }
 
   @override
   Future<List<MangaDownloadJob>> listJobs() async =>
@@ -965,10 +1718,14 @@ class _FakeTransport implements MangaAcquisitionTransport {
 class _RecordingKeepAlive implements OfflineDownloadKeepAlive {
   int acquired = 0;
   int released = 0;
+  int maximumActive = 0;
 
   @override
   Future<OfflineDownloadKeepAliveLease> acquire() async {
     acquired++;
+    if (acquired - released > maximumActive) {
+      maximumActive = acquired - released;
+    }
     return _RecordingLease(() => released++);
   }
 }
@@ -990,8 +1747,9 @@ class _RecordingLease implements OfflineDownloadKeepAliveLease {
 MangaAcquisitionRequest _request({
   required MangaChapterAcquisition acquisition,
   Uri? credentialOrigin,
+  String jobId = 'chapter-job',
 }) => MangaAcquisitionRequest(
-  jobId: 'chapter-job',
+  jobId: jobId,
   sourceId: 'test.source',
   publicationId: 'publication-1',
   chapterId: 'chapter-1',
@@ -1000,6 +1758,56 @@ MangaAcquisitionRequest _request({
   acquisition: acquisition,
   credentialOrigin: credentialOrigin,
 );
+
+MangaDownloadJob _jobStatus(
+  MangaDownloadJob value,
+  MangaDownloadJobStatus status,
+) => MangaDownloadJob(
+  id: value.id,
+  sourceId: value.sourceId,
+  entryId: value.entryId,
+  chapterId: value.chapterId,
+  seriesTitle: value.seriesTitle,
+  chapterLabel: value.chapterLabel,
+  status: status,
+  relativeDirectory: value.relativeDirectory,
+  pageCount: value.pageCount,
+  completedPages: value.completedPages,
+  receivedBytes: value.receivedBytes,
+  manifestFingerprint: value.manifestFingerprint,
+  queuePosition: value.queuePosition,
+  retryCount: value.retryCount,
+  createdAt: value.createdAt,
+  updatedAt: value.updatedAt,
+);
+
+MangaAcquisitionHttpResponse _blockedResponse(_TransportCall call) {
+  final controller = StreamController<List<int>>();
+  call.cancellation.onCancel(() {
+    controller.addError(
+      const MangaAcquisitionException(
+        MangaAcquisitionFailureCode.cancelled,
+        'The manga download was cancelled.',
+      ),
+    );
+    unawaited(controller.close());
+  });
+  return MangaAcquisitionHttpResponse(
+    statusCode: HttpStatus.ok,
+    headers: const {HttpHeaders.contentTypeHeader: 'image/png'},
+    body: controller.stream,
+  );
+}
+
+Future<void> _waitUntil(bool Function() condition) async {
+  final deadline = DateTime.now().add(const Duration(seconds: 5));
+  while (!condition()) {
+    if (DateTime.now().isAfter(deadline)) {
+      throw StateError('Timed out waiting for deterministic download state.');
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 1));
+  }
+}
 
 MangaDownloadJob _storedJob({
   required String id,

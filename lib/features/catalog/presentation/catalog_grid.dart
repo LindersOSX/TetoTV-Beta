@@ -8,6 +8,7 @@ import 'package:anime_tv/core/tv/tv_shelf_focus.dart';
 import 'package:anime_tv/core/widgets/network_artwork.dart';
 import 'package:anime_tv/core/widgets/poster_metadata_overlay.dart';
 import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
+import 'package:anime_tv/features/catalog/presentation/localized_anime_title.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
@@ -575,8 +576,9 @@ class _CatalogGridState extends State<CatalogGrid> {
                       // on every edge instead of letting the red ring cover
                       // the first letter or second-line descenders.
                       padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
-                      child: Text(
+                      child: LocalizedAnimeTitle(
                         anime.displayTitle(widget.titlePreference),
+                        aniListId: anime.id,
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(

@@ -1,3 +1,5 @@
+import 'package:anime_tv/core/localization/teto_localizations.dart';
+import 'package:anime_tv/features/aniyomi/presentation/aniyomi_screen.dart';
 import 'package:anime_tv/features/auth/presentation/anilist_pairing_screen.dart';
 import 'package:anime_tv/features/auth/presentation/all_debrid_pairing_screen.dart';
 import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
@@ -152,6 +154,11 @@ final appRouter = GoRouter(
           const TrackingPairingScreen(provider: TrackingProvider.myAnimeList),
     ),
     GoRoute(
+      path: '/pair/kitsu',
+      builder: (context, state) =>
+          const TrackingPairingScreen(provider: TrackingProvider.kitsu),
+    ),
+    GoRoute(
       path: '/pair/simkl',
       builder: (context, state) => const SimklPairingScreen(),
     ),
@@ -206,21 +213,30 @@ final appRouter = GoRouter(
       builder: (context, state) => const MarketplaceScreen(),
     ),
     GoRoute(
+      path: AniyomiScreen.routePath,
+      builder: (context, state) =>
+          const AniyomiExperimentalGate(child: AniyomiScreen()),
+    ),
+    GoRoute(
       path: '/downloads',
       builder: (context, state) => const DownloadManagerScreen(),
     ),
     GoRoute(
       path: '/manga',
-      builder: (context, state) =>
-          const DeveloperMangaGate(child: MangaScreen()),
+      builder: (context, state) => const MangaFeatureGate(child: MangaScreen()),
     ),
     GoRoute(
       path: MangaReaderScreen.routePath,
-      builder: (context, state) => DeveloperMangaGate(
-        child: state.extra is MangaReaderRequest
-            ? MangaReaderScreen(request: state.extra! as MangaReaderRequest)
-            : const _InvalidRouteScreen(),
-      ),
+      builder: (context, state) {
+        final request = state.extra;
+        if (request is! MangaReaderRequest) {
+          return const _InvalidRouteScreen();
+        }
+        return MangaReaderRouteGate(
+          request: request,
+          child: MangaReaderScreen(request: request),
+        );
+      },
     ),
     GoRoute(
       path: '/library',
@@ -418,7 +434,7 @@ class _InvalidRouteScreen extends StatelessWidget {
                 const Icon(Icons.link_off_rounded, size: 56),
                 const SizedBox(height: 16),
                 Text(
-                  'This link is invalid or incomplete.',
+                  context.tr('This link is invalid or incomplete.'),
                   textAlign: TextAlign.center,
                   style: Theme.of(context).textTheme.headlineSmall,
                 ),
@@ -427,7 +443,7 @@ class _InvalidRouteScreen extends StatelessWidget {
                   autofocus: true,
                   onPressed: () => context.go('/'),
                   icon: const Icon(Icons.home_rounded),
-                  label: const Text('Go home'),
+                  label: const LocalizedText('Go home'),
                 ),
               ],
             ),

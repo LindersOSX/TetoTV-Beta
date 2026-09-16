@@ -228,8 +228,15 @@ void main() {
     );
     expect(
       tester
-          .getSize(find.byKey(const ValueKey('appearance-theme-display-card')))
-          .height,
+              .getSize(
+                find.byKey(const ValueKey('appearance-theme-display-card')),
+              )
+              .height -
+          // The new app-language choice adds one compact row. Existing rows
+          // must still fit their original geometry budget.
+          tester
+              .getSize(find.byKey(const ValueKey('settings-app-language')))
+              .height,
       lessThanOrEqualTo(220),
     );
     expect(

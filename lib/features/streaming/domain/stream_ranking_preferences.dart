@@ -150,20 +150,22 @@ int compareWebStreamCandidates(
   required WebStreamQualityPreference quality,
   required PlaybackAudioPreference preferredAudio,
   String preferredAudioLanguage = 'auto',
+  bool useAudioPreference = true,
 }) {
-  final leftAudio = webStreamAudioPreferenceRank(
-    left,
-    preferredAudio,
-    preferredLanguage: preferredAudioLanguage,
-  );
-  final rightAudio = webStreamAudioPreferenceRank(
-    right,
-    preferredAudio,
-    preferredLanguage: preferredAudioLanguage,
-  );
-  final audio = leftAudio.compareTo(rightAudio);
-  if (audio != 0) return audio;
-
+  if (useAudioPreference) {
+    final leftAudio = webStreamAudioPreferenceRank(
+      left,
+      preferredAudio,
+      preferredLanguage: preferredAudioLanguage,
+    );
+    final rightAudio = webStreamAudioPreferenceRank(
+      right,
+      preferredAudio,
+      preferredLanguage: preferredAudioLanguage,
+    );
+    final audio = leftAudio.compareTo(rightAudio);
+    if (audio != 0) return audio;
+  }
   final preferredQuality = _compareWebQuality(left, right, quality);
   if (preferredQuality != 0) return preferredQuality;
   final provider = left.providerName.toLowerCase().compareTo(
@@ -834,7 +836,7 @@ List<WebStreamResult> rankAutomaticAutoplayWebStreams(
   final fallback = <WebStreamResult>[];
   final seen = <String>{};
   for (final stream in input) {
-    final key = '${stream.providerId}\u0000${stream.uri}';
+    final key = webStreamPlaybackVariantKey(stream);
     if (!seen.add(key)) continue;
     (automaticWebStreamMatchesFilters(
               stream,

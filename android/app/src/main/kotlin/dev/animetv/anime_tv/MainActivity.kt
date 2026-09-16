@@ -52,6 +52,9 @@ import java.util.zip.ZipFile
 import kotlin.math.abs
 
 class MainActivity : FlutterActivity() {
+    @Volatile private var aniyomiDeveloperEnabled = false
+    private var aniyomiHost: dev.animetv.anime_tv.aniyomi.AniyomiNativeHost? = null
+    private var aniyomiChannel: MethodChannel? = null
     private val channelName = "dev.tetotv/android_tv"
     private lateinit var channel: MethodChannel
     private lateinit var mediaSession: MediaSessionCompat
@@ -60,6 +63,12 @@ class MainActivity : FlutterActivity() {
     private var pendingApkPath: String? = null
     private var pendingVoiceSearchResult: MethodChannel.Result? = null
     private var pendingLocalMediaResult: MethodChannel.Result? = null
+    private data class PendingMangaBackup(
+        val result: MethodChannel.Result,
+        val exporting: Boolean,
+        var encryptedBytes: ByteArray? = null,
+    )
+    private var pendingMangaBackup: PendingMangaBackup? = null
     private var pendingTrailerResult: MethodChannel.Result? = null
     private var externalProxyHandoffActive = false
     private var externalProxyHandoffBackgrounded = false
@@ -110,6 +119,7 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        configureAniyomiChannel(flutterEngine)
         media3Bridge?.close()
         media3Bridge = Media3FlutterBridge(this, flutterEngine)
         channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, channelName)
@@ -125,6 +135,25 @@ class MainActivity : FlutterActivity() {
                     "installApk" -> installApk(call.argument<String>("path"), result)
                     "voiceSearch" -> startVoiceSearch(result)
                     "pickLocalVideo" -> pickLocalVideo(result)
+                    "transcodeMangaArtwork" -> {
+                        val encoded = call.argument<ByteArray>("encoded")
+                        if (encoded == null || encoded.isEmpty() || encoded.size > 20 * 1024 * 1024) {
+                            result.success(null)
+                        } else {
+                            runPlatformBlockingOperation(
+                                result = result,
+                                operationName = "Decode manga artwork",
+                                operation = { MangaArtworkTranscoder.transcode(encoded) },
+                            )
+                        }
+                    }
+                    "importMangaBackup" -> startMangaBackupPicker(result, encryptedJson = null)
+                    "exportMangaBackup" -> startMangaBackupPicker(
+                        result,
+                        encryptedJson = call.argument<String>("encryptedJson"),
+                        suggestedName = call.argument<String>("suggestedName"),
+                        exporting = true,
+                    )
                     "playInAppTrailer" -> playInAppTrailer(
                         provider = call.argument<String>("provider"),
                         videoId = call.argument<String>("videoId"),
@@ -395,6 +424,120 @@ class MainActivity : FlutterActivity() {
         } catch (error: Throwable) {
             pendingLocalMediaResult = null
             result.error("LOCAL_MEDIA_PICKER", error.message, null)
+        }
+    }
+
+    /** Only user-selected encrypted JSON documents; no directory grants. */
+    private fun startMangaBackupPicker(
+        result: MethodChannel.Result,
+        encryptedJson: String?,
+        suggestedName: String? = null,
+        exporting: Boolean = false,
+    ) {
+        if (pendingMangaBackup != null) {
+            result.error("MANGA_BACKUP_BUSY", "A manga backup operation is already open.", null)
+            return
+        }
+        val pending = PendingMangaBackup(result, exporting)
+        pendingMangaBackup = pending
+        fun launchPicker() {
+            if (pendingMangaBackup !== pending || isFinishing || isDestroyed) return
+            val picker = Intent(if (exporting) Intent.ACTION_CREATE_DOCUMENT else Intent.ACTION_OPEN_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = "application/json"
+                if (exporting) {
+                    putExtra(Intent.EXTRA_TITLE, suggestedName?.takeIf {
+                        Regex("[A-Za-z0-9_-]{1,75}\\.json").matches(it)
+                    } ?: "TetoTV-Manga-Backup.json")
+                    addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+                } else {
+                    putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("application/json", "text/json", "text/plain", "application/octet-stream"))
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+            }
+            try {
+                startActivityForResult(picker, if (exporting) MANGA_BACKUP_EXPORT_REQUEST_CODE else MANGA_BACKUP_IMPORT_REQUEST_CODE)
+            } catch (_: ActivityNotFoundException) {
+                finishMangaBackup(pending, errorCode = "MANGA_BACKUP_UNAVAILABLE")
+            } catch (_: Exception) {
+                finishMangaBackup(pending, errorCode = "MANGA_BACKUP_PICKER")
+            }
+        }
+        if (!exporting) {
+            launchPicker()
+            return
+        }
+        try {
+            platformBlockingExecutor.execute {
+                val bytes = runCatching {
+                    val text = encryptedJson ?: error("Missing encrypted backup.")
+                    val encoded = MangaBackupDocumentCodec.encoded(text)
+                    // The Dart service validates the complete schema and AEAD;
+                    // native export also refuses obvious plaintext documents.
+                    val envelope = org.json.JSONObject(text)
+                    require(envelope.optString("format") == "tetotv-manga-backup")
+                    require(envelope.optString("cipher") == "AES-256-GCM")
+                    require(envelope.optString("ciphertext").isNotEmpty())
+                    encoded
+                }
+                platformResultHandler.post {
+                    if (pendingMangaBackup !== pending) return@post
+                    bytes.fold(onSuccess = {
+                        pending.encryptedBytes = it
+                        launchPicker()
+                    }, onFailure = { finishMangaBackup(pending, errorCode = "MANGA_BACKUP_INVALID") })
+                }
+            }
+        } catch (_: RejectedExecutionException) {
+            finishMangaBackup(pending, errorCode = "MANGA_BACKUP_BUSY")
+        }
+    }
+
+    private fun finishMangaBackup(pending: PendingMangaBackup, value: Any? = null, errorCode: String? = null) {
+        if (pendingMangaBackup !== pending) return
+        pendingMangaBackup = null
+        pending.encryptedBytes = null
+        if (errorCode == null) pending.result.success(value)
+        else pending.result.error(errorCode, "The manga backup file operation could not be completed.", null)
+    }
+
+    private fun finishMangaBackupPicker(requestCode: Int, resultCode: Int, data: Intent?) {
+        val pending = pendingMangaBackup ?: return
+        val exporting = requestCode == MANGA_BACKUP_EXPORT_REQUEST_CODE
+        if (pending.exporting != exporting) return
+        val uri = data?.data
+        if (resultCode != RESULT_OK || uri == null) {
+            finishMangaBackup(pending, value = if (exporting) false else null)
+            return
+        }
+        if (uri.scheme != ContentResolver.SCHEME_CONTENT || uri.authority.isNullOrBlank()) {
+            finishMangaBackup(pending, errorCode = "MANGA_BACKUP_DOCUMENT")
+            return
+        }
+        val resolver = applicationContext.contentResolver
+        val bytes = pending.encryptedBytes
+        try {
+            platformBlockingExecutor.execute {
+                val outcome = runCatching {
+                    if (exporting) {
+                        require(bytes != null && bytes.size <= MangaBackupDocumentCodec.MAX_BYTES)
+                        resolver.openOutputStream(uri, "wt")?.use { stream ->
+                            stream.write(bytes)
+                            stream.flush()
+                        } ?: error("Document is not writable.")
+                        true
+                    } else {
+                        resolver.openInputStream(uri)?.use(MangaBackupDocumentCodec::readUtf8)
+                            ?: error("Document is not readable.")
+                    }
+                }
+                platformResultHandler.post {
+                    outcome.fold(onSuccess = { finishMangaBackup(pending, value = it) },
+                        onFailure = { finishMangaBackup(pending, errorCode = "MANGA_BACKUP_DOCUMENT") })
+                }
+            }
+        } catch (_: RejectedExecutionException) {
+            finishMangaBackup(pending, errorCode = "MANGA_BACKUP_BUSY")
         }
     }
 
@@ -738,6 +881,10 @@ class MainActivity : FlutterActivity() {
 
     @Deprecated("Deprecated in Java")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        if (requestCode == MANGA_BACKUP_IMPORT_REQUEST_CODE || requestCode == MANGA_BACKUP_EXPORT_REQUEST_CODE) {
+            finishMangaBackupPicker(requestCode, resultCode, data)
+            return
+        }
         if (requestCode == TRAILER_PLAYER_REQUEST_CODE) {
             val pending = pendingTrailerResult
             pendingTrailerResult = null
@@ -1676,10 +1823,98 @@ class MainActivity : FlutterActivity() {
     override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
         media3Bridge?.close()
         media3Bridge = null
+        aniyomiDeveloperEnabled = false
+        aniyomiHost?.close()
+        aniyomiHost = null
+        aniyomiChannel?.setMethodCallHandler(null)
+        aniyomiChannel = null
         super.cleanUpFlutterEngine(flutterEngine)
     }
 
+    private fun configureAniyomiChannel(engine: FlutterEngine) {
+        aniyomiHost?.close()
+        aniyomiDeveloperEnabled = false
+        aniyomiHost = dev.animetv.anime_tv.aniyomi.AniyomiNativeHost(applicationContext) {
+            aniyomiDeveloperEnabled && !isFinishing && !isDestroyed
+        }
+        aniyomiChannel?.setMethodCallHandler(null)
+        aniyomiChannel = MethodChannel(engine.dartExecutor.binaryMessenger, "dev.animetv.anime_tv/aniyomi").also { bridge ->
+            bridge.setMethodCallHandler { call, result ->
+                val host = aniyomiHost
+                try {
+                    if (host == null) {
+                        result.success(mapOf("ok" to false, "error" to "disabled"))
+                    } else if (call.method == "configure") {
+                        aniyomiDeveloperEnabled = call.argument<Boolean>("enabled") == true
+                        if (!aniyomiDeveloperEnabled) {
+                            if (call.argument<Boolean>("revokeApprovals") == true) host.revoke()
+                            else host.disable()
+                        }
+                        result.success(mapOf("ok" to true, "data" to host.status()))
+                    } else if (!aniyomiDeveloperEnabled) {
+                        result.success(mapOf("ok" to false, "error" to "disabled"))
+                    } else {
+                        when (call.method) {
+                            "status" -> result.success(mapOf("ok" to true, "data" to host.status()))
+                            "inspect" -> host.inspectApk(call.argument<String>("path") ?: "", call.argument<String>("kind") ?: "") { value ->
+                                platformResultHandler.post { result.success(value) }
+                            }
+                            "approve" -> {
+                                val inspectionId = call.argument<String>("inspectionId") ?: ""
+                                platformBlockingExecutor.execute {
+                                    val approved = host.approve(inspectionId)
+                                    platformResultHandler.post { result.success(approved) }
+                                }
+                            }
+                            "list" -> result.success(mapOf("ok" to true, "data" to mapOf("extensions" to host.listApproved())))
+                            "request" -> host.request(call.arguments as? Map<*, *> ?: emptyMap<String, Any>()) { value ->
+                                platformResultHandler.post { result.success(value) }
+                            }
+                            "fetchImage" -> host.fetchImage(
+                                call.arguments as? Map<*, *> ?: emptyMap<String, Any>(),
+                            ) { value ->
+                                platformResultHandler.post { result.success(value) }
+                            }
+                            "revoke" -> {
+                                host.revoke(call.argument<String>("extensionId"))
+                                result.success(mapOf("ok" to true, "data" to emptyMap<String, Any>()))
+                            }
+                            "cancel" -> {
+                                val rawRequestId = call.argument<Number>("requestId")
+                                if (rawRequestId == null) {
+                                    // Backwards-compatible legacy cancellation was process-wide.
+                                    host.cancelRequests()
+                                    result.success(mapOf("ok" to true, "data" to emptyMap<String, Any>()))
+                                } else {
+                                    val requestId = rawRequestId.toLong()
+                                    if (!rawRequestId.toDouble().isFinite() ||
+                                        rawRequestId.toDouble() != requestId.toDouble() ||
+                                        requestId !in 1..Int.MAX_VALUE.toLong()
+                                    ) {
+                                        result.success(mapOf("ok" to false, "error" to "invalid_request"))
+                                    } else {
+                                        host.cancelRequest(requestId)
+                                        result.success(mapOf("ok" to true, "data" to emptyMap<String, Any>()))
+                                    }
+                                }
+                            }
+                            else -> result.notImplemented()
+                        }
+                    }
+                } catch (_: Exception) {
+                    // Never return provider exception text, file paths, or credentials.
+                    result.success(mapOf("ok" to false, "error" to "native_failure"))
+                }
+            }
+        }
+    }
+
     override fun onDestroy() {
+        aniyomiDeveloperEnabled = false
+        aniyomiHost?.close()
+        aniyomiHost = null
+        aniyomiChannel?.setMethodCallHandler(null)
+        aniyomiChannel = null
         media3Bridge?.close()
         media3Bridge = null
         AnonymousCrashStore.recordBreadcrumb(this, "activity_destroyed")
@@ -1692,6 +1927,7 @@ class MainActivity : FlutterActivity() {
             null,
         )
         pendingLocalMediaResult = null
+        pendingMangaBackup?.let { finishMangaBackup(it, errorCode = "MANGA_BACKUP_DESTROYED") }
         pendingApkInstallResult?.error(
             "APK_INSTALL_DESTROYED",
             "The Android TV activity closed before the installer opened.",
@@ -1743,6 +1979,8 @@ class MainActivity : FlutterActivity() {
         private const val VOICE_SEARCH_PERMISSION_REQUEST_CODE = 7317
         private const val LOCAL_MEDIA_PICKER_REQUEST_CODE = 7318
         private const val TRAILER_PLAYER_REQUEST_CODE = 7319
+        private const val MANGA_BACKUP_IMPORT_REQUEST_CODE = 7320
+        private const val MANGA_BACKUP_EXPORT_REQUEST_CODE = 7321
         private const val VOICE_SEARCH_TIMEOUT_MS = 20_000L
         private const val DEFAULT_SEEK_INCREMENT_MS = 10_000L
         private const val MIN_SEEK_INCREMENT_MS = 5_000L

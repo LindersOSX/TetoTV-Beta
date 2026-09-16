@@ -1,3 +1,4 @@
+import 'package:anime_tv/core/preferences/title_language_preference.dart';
 import 'package:anime_tv/features/catalog/application/anime_title_logo_provider.dart';
 import 'package:anime_tv/features/catalog/data/anime_title_logo_cache_manager.dart';
 import 'package:anime_tv/features/catalog/domain/anime_title_logo.dart';
@@ -7,7 +8,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-/// A bounded clear-logo title for featured and show-detail experiences.
+/// A bounded, language-matched clear-logo title for show-detail experiences.
 ///
 /// Catalog cards intentionally keep their normal text titles. A text title
 /// also remains visible while artwork loads, when no safe language-matched
@@ -23,6 +24,7 @@ class AnimeTitleLogoView extends ConsumerWidget {
     this.logoContextLabel,
     this.logoContextStyle,
     this.logoContextMaxLines = 2,
+    this.textBuilder,
     super.key,
   });
 
@@ -35,18 +37,21 @@ class AnimeTitleLogoView extends ConsumerWidget {
   final String? logoContextLabel;
   final TextStyle? logoContextStyle;
   final int logoContextMaxLines;
+  final Widget Function(BuildContext context, String title)? textBuilder;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final fallback = _TextTitle(
-      title: fallbackTitle,
-      style: textStyle,
-      maxLines: maxTextLines,
-    );
+    final fallback =
+        textBuilder?.call(context, fallbackTitle) ??
+        _TextTitle(
+          title: fallbackTitle,
+          style: textStyle,
+          maxLines: maxTextLines,
+        );
     final titleStyle = ref.watch(
       settingsPreferencesProvider.select((value) => value.showTitleStyle),
     );
-    if (titleStyle == ShowTitleStyle.text) {
+    if (titleStyle == ShowTitleStyle.text || aniListId <= 0) {
       return ConstrainedBox(
         constraints: BoxConstraints(maxWidth: maxWidth, maxHeight: maxHeight),
         child: fallback,
@@ -61,7 +66,14 @@ class AnimeTitleLogoView extends ConsumerWidget {
           )),
         )
         .valueOrNull;
-    final safeLogo = logo != null && isSafeAnimeTitleLogoUri(logo.url)
+    final expectedLanguage = switch (titleLanguage) {
+      TitleLanguagePreference.english => 'en',
+      TitleLanguagePreference.romaji => 'ja',
+    };
+    final safeLogo =
+        logo != null &&
+            logo.languageCode == expectedLanguage &&
+            isSafeAnimeTitleLogoUri(logo.url)
         ? logo
         : null;
     final contextLabel = logoContextLabel?.trim();

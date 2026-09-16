@@ -702,7 +702,8 @@ Java_dev_animetv_anime_1tv_DiscordRichPresenceBridge_nativeUpdateReadingPresence
     jstring title,
     jstring chapter_label,
     jint page,
-    jint page_count) {
+    jint page_count,
+    jstring artwork_url) {
     Presence presence{
         "reading",
         from_jstring(env, title),
@@ -713,7 +714,7 @@ Java_dev_animetv_anime_1tv_DiscordRichPresenceBridge_nativeUpdateReadingPresence
         false,
         0,
         0,
-        "",
+        from_jstring(env, artwork_url),
     };
     post([presence = std::move(presence)] { publish_presence(presence); });
 }

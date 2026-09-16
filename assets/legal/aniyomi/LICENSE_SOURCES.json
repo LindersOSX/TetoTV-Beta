@@ -1,0 +1,112 @@
+{
+  "schemaVersion": 1,
+  "retrievedOn": "2026-09-09",
+  "scope": "License and notice provenance for the experimental Aniyomi runtime. Artifact checksums are maintained in android/gradle/verification-metadata.xml; copied source provenance is in third_party/aniyomi_compat/PROVENANCE.json. This record does not license user-installed providers or media.",
+  "components": [
+    {
+      "component": "Aniyomi source API v0.18.1.2",
+      "license": "Apache-2.0",
+      "asset": "ANIYOMI_LICENSE.txt",
+      "commit": "39e9a749590b89b432f04b83725aaa12591371b2",
+      "licenseSource": "https://raw.githubusercontent.com/aniyomiorg/aniyomi/39e9a749590b89b432f04b83725aaa12591371b2/LICENSE",
+      "localSource": "third_party/aniyomi_compat/LICENSE-ANIYOMI"
+    },
+    {
+      "component": "Injekt core/API 1.16.1 and Mihon registry patch",
+      "license": "MIT",
+      "asset": "INJEKT_LICENSE.txt",
+      "commit": "91edab2317f605afcee2df94f59a49883fd5cdd0",
+      "licenseSource": "https://raw.githubusercontent.com/mihonapp/injekt/91edab2317f605afcee2df94f59a49883fd5cdd0/LICENSE",
+      "artifactLicenseDeclarations": [
+        "https://repo.maven.apache.org/maven2/uy/kohesive/injekt/injekt-core/1.16.1/injekt-core-1.16.1.pom",
+        "https://repo.maven.apache.org/maven2/uy/kohesive/injekt/injekt-api/1.16.1/injekt-api-1.16.1.pom"
+      ],
+      "localSource": "third_party/aniyomi_compat/LICENSE-INJEKT",
+      "note": "The registry patch retains the original Injekt MIT copyright; the exact-version core/API POMs independently declare MIT. The patch commit is not represented as the Maven 1.16.1 source commit."
+    },
+    {
+      "component": "RxJava 1.3.8",
+      "license": "Apache-2.0",
+      "asset": "RXJAVA_LICENSE.txt",
+      "commit": "7e3879abfb32eeebb38c970195a7f1e354eb1f82",
+      "licenseSource": "https://raw.githubusercontent.com/ReactiveX/RxJava/7e3879abfb32eeebb38c970195a7f1e354eb1f82/LICENSE"
+    },
+    {
+      "component": "Jsoup 1.19.1",
+      "license": "MIT",
+      "asset": "JSOUP_LICENSE.txt",
+      "commit": "5c4c09a5cbf1271ceeac32452cbc77d0795b81f9",
+      "licenseSource": "https://raw.githubusercontent.com/jhy/jsoup/5c4c09a5cbf1271ceeac32452cbc77d0795b81f9/LICENSE"
+    },
+    {
+      "component": "OkHttp 5.4.0",
+      "license": "Apache-2.0",
+      "asset": "OKHTTP_LICENSE.txt",
+      "commit": "61423f472da24e0ccc42b6a2c0863fb27932fea5",
+      "licenseSource": "https://raw.githubusercontent.com/square/okhttp/61423f472da24e0ccc42b6a2c0863fb27932fea5/LICENSE.txt"
+    },
+    {
+      "component": "Okio 3.17.0",
+      "license": "Apache-2.0",
+      "asset": "OKIO_LICENSE.txt",
+      "commit": "80a50234e5edb96041a8168c4754ba9e1ff3625a",
+      "licenseSource": "https://raw.githubusercontent.com/square/okio/80a50234e5edb96041a8168c4754ba9e1ff3625a/LICENSE.txt"
+    },
+    {
+      "component": "Cash App QuickJS Android 0.9.2",
+      "license": "Apache-2.0 wrapper with embedded MIT QuickJS engine",
+      "assets": [
+        "OKHTTP_LICENSE.txt",
+        "assets/addon_runtime/QUICKJS_LICENSE.txt"
+      ],
+      "releaseCommit": "a738129cc4aa99206c00ae49e9c5b15cb58ad880",
+      "licenseSource": "https://raw.githubusercontent.com/cashapp/quickjs-java/a738129cc4aa99206c00ae49e9c5b15cb58ad880/LICENSE",
+      "embeddedEngineSource": "https://github.com/cashapp/quickjs-java/blob/a738129cc4aa99206c00ae49e9c5b15cb58ad880/quickjs/common/native/quickjs/quickjs.c",
+      "localSource": "third_party/app_cash_quickjs/upstream",
+      "sourceManifest": "android/cash-quickjs-android/SOURCE_MANIFEST.sha256",
+      "sourceArchiveSha256": "b54a2153690533afd0181fc1136ce989eb31e3c39bf2e852b2ff1adf4179d56f",
+      "historicalArtifactLicenseDeclaration": "https://repo.maven.apache.org/maven2/app/cash/quickjs/quickjs-android/0.9.2/quickjs-android-0.9.2.pom",
+      "historicalArtifactSha256": {
+        "aar": "b20a0addc8dd091b22f16c730000204030734231678d2b88538be0ac579510e2",
+        "module": "1e75cf283df99054c2b51a872b6ac73f1038789bda748d1e8be683a6b1f48295",
+        "pom": "be658fa8791f3f2be2bd06bd75229f9d5c17014f88a27e0b20ee7abde0e78ab2"
+      },
+      "note": "TetoTV builds the exact pinned release sources locally with 16 KiB ELF alignment while preserving the Java/JNI ABI; the Maven artifact is a reference-only ABI baseline and is not resolved or packaged. Context.h has one documented compile-only <functional> include. The wrapper's Apache-2.0 terms reuse the complete Apache text in OKHTTP_LICENSE.txt; the embedded engine's MIT terms reuse QUICKJS_LICENSE.txt."
+    },
+    {
+      "component": "Kotlin coroutines 1.10.1",
+      "license": "Apache-2.0",
+      "asset": "KOTLINX_COROUTINES_LICENSE.txt",
+      "commit": "ee92d16c4b48345648dcd8bb15f11ab9c3747f67",
+      "licenseSource": "https://raw.githubusercontent.com/Kotlin/kotlinx.coroutines/ee92d16c4b48345648dcd8bb15f11ab9c3747f67/LICENSE.txt",
+      "noticeSource": "https://raw.githubusercontent.com/Kotlin/kotlinx.coroutines/ee92d16c4b48345648dcd8bb15f11ab9c3747f67/license/NOTICE.txt",
+      "assembly": "Unmodified LICENSE followed by the original NOTICE."
+    },
+    {
+      "component": "Kotlin serialization 1.9.0",
+      "license": "Apache-2.0",
+      "asset": "KOTLINX_SERIALIZATION_LICENSE.txt",
+      "commit": "16306f4c97e21e4d134bf1bb95fc20a61927f6b0",
+      "licenseSource": "https://raw.githubusercontent.com/Kotlin/kotlinx.serialization/16306f4c97e21e4d134bf1bb95fc20a61927f6b0/LICENSE.txt",
+      "noticeSource": "https://raw.githubusercontent.com/Kotlin/kotlinx.serialization/16306f4c97e21e4d134bf1bb95fc20a61927f6b0/license/NOTICE.txt",
+      "assembly": "Unmodified LICENSE followed by the original NOTICE."
+    },
+    {
+      "component": "AndroidX Preference/Preference KTX 1.2.1 and Android apksig 9.0.1",
+      "license": "Apache-2.0",
+      "asset": "ANDROIDX_AND_APKSIG_LICENSE.txt",
+      "licenseSource": "https://www.apache.org/licenses/LICENSE-2.0.txt",
+      "artifactLicenseDeclarations": [
+        "https://dl.google.com/dl/android/maven2/androidx/preference/preference/1.2.1/preference-1.2.1.pom",
+        "https://dl.google.com/dl/android/maven2/androidx/preference/preference-ktx/1.2.1/preference-ktx-1.2.1.pom",
+        "https://dl.google.com/dl/android/maven2/com/android/tools/build/apksig/9.0.1/apksig-9.0.1.pom"
+      ],
+      "assembly": "TetoTV component identification and official POM source URLs followed by the complete Apache License 2.0."
+    },
+    {
+      "component": "TetoTV experimental runtime adaptation notice",
+      "asset": "ANIYOMI_RUNTIME_NOTICE.txt",
+      "source": "TetoTV-authored notice; upstream licenses remain in the separately identified assets."
+    }
+  ]
+}

@@ -1,22 +1,35 @@
 # Manga repositories
 
-TetoTV's Manga Preview is hidden unless Developer Mode is enabled. It can read
-user-added OPDS 1.x Atom feeds, OPDS 2.0 JSON feeds, the data-only TetoTV manga
-repository format described below, or user-installed Seanime-format
-`manga-provider` extensions. It does not load Android APK extensions or
-provide a default catalog, Marketplace repository, or provider.
+TetoTV's core Manga reader does not require Developer Mode. Its preference is
+enabled by default, first-run setup asks whether to keep it enabled, and it can be disabled
+in **Settings > Services**. The new-source UI accepts user-added Seanime/Teto
+Marketplace repositories containing compatible
+`manga-provider` extensions. It does not offer a new OPDS/data-catalog setup flow,
+load Android APK extensions, or provide a default catalog, Marketplace repository,
+or provider.
+
+Experimental Aniyomi repository and APK-extension compatibility is separate and
+remains available only while Developer Mode is enabled. Disabling Developer
+Mode revokes Aniyomi discovery and reader paths without deleting saved local
+data or blocking core Manga.
+
+Previously saved OPDS 1.x Atom feeds, OPDS 2.0 JSON feeds and data-only TetoTV
+repository definitions remain usable under **Previously saved catalogs**.
+Existing library entries and completed downloads are not removed by this UI
+change. The OPDS/schema sections below document retained legacy compatibility,
+not a second recommended path for adding new sources.
 
 This document describes technical compatibility. It is not a review of a
 catalog's safety, content, availability, terms, or legality. A viewer should
 add only services and material they are authorized to use.
 
-## Supported source boundary
+## Network and legacy data-catalog boundary
 
 - Every repository, OPDS, redirect, cover, page, and acquisition reference
   must use a credential-free public HTTPS URL. URLs containing embedded
   usernames/passwords, local hostnames, or private/loopback/link-local IP
   destinations are rejected.
-- Repository documents are limited to 2 MiB, 128 declared sources, bounded
+- Declarative repository documents are limited to 2 MiB, 128 declared sources, bounded
   text/list sizes, and a maximum nesting depth. OPDS documents have additional
   entry, link, contributor, and node limits.
 - DTDs and XML entities are rejected in OPDS 1.x documents.
@@ -34,8 +47,8 @@ add only services and material they are authorized to use.
 
 ## In-app repository flow
 
-The Manga **Sources** page keeps extension repositories separate from OPDS
-and declarative data catalogs:
+The Manga **Sources** page directs new additions to extensions and retains
+already-saved OPDS/declarative catalogs in a separate legacy section:
 
 1. **Manga repositories** accepts public HTTPS Seanime/Teto Marketplace JSON
    URLs that the viewer enters. The field always starts blank.
@@ -109,12 +122,13 @@ Android packages with a different executable contract and security model.
 - Chapter acquisitions may follow at most five redirects. If a credential was
   sent, the acquisition must remain on the same origin. TetoTV never persists
   an acquisition URL or request header in its manga download database.
-- Redirect limits describe TetoTV's current Developer Preview behavior, not a
+- Redirect limits describe TetoTV's current manga-reader behavior, not a
   promise that every conforming OPDS server or acquisition will be compatible.
 
-## Declarative repository schema version 1
+## Legacy declarative repository schema version 1
 
-The repository is a UTF-8 JSON document. This complete example uses reserved
+This retained parser accepts a UTF-8 JSON document. The new-source UI does not
+offer this format. This complete compatibility example uses reserved
 `.example` hosts and contains no live catalog or credential:
 
 ```json
@@ -175,7 +189,7 @@ Source fields:
 | `contentRatings` | No | One or more of `safe`, `suggestive`, `adult`, or `unknown`; defaults to `unknown`. |
 | `capabilities` | No | One or more of `browse`, `search`, `download`, `progressSync`, or `pageStreaming`; defaults to `browse`. |
 
-## Authentication declarations
+## Legacy authentication declarations
 
 Unauthenticated source:
 
@@ -206,7 +220,7 @@ An API key also declares a valid, non-reserved request-header name:
 headers cannot be selected as a custom API-key header. Basic and Bearer
 credentials use the standard `Authorization` header internally.
 
-## OPDS behavior
+## Retained OPDS behavior
 
 TetoTV uses OPDS navigation and acquisition relationships supplied by the
 configured server. OPDS 1.x must be a valid Atom feed in the Atom namespace;
@@ -220,14 +234,15 @@ that operation or that every acquisition format can be displayed or saved.
 
 ## Reading and compatible chapter downloads
 
-For layouts, per-manga preferences, zoom, page colors, and reader controls, see
-[Manga reader controls](MANGA_READER.md).
+For library organization, chapter controls, per-manga preferences, optional
+AniList/MAL mapping and encrypted local backup, see
+[Manga library and reader](MANGA_READER.md).
 
-TetoTV can read bounded public HTTPS image resources from an OPDS reading
-order. Compatible downloads can use those image resources or a ZIP/CBZ
-acquisition selected from the publication. Source credentials are loaded from
-protected storage only for the current operation and only for the exact source
-origin.
+Seanime chapter-page discovery supplies bounded HTTPS image resources to the
+reader and image-download queue. Saved legacy OPDS publications can still supply
+a compatible reading order or ZIP/CBZ acquisition. Legacy source credentials are
+loaded from protected storage for the current operation and only for the exact
+source origin.
 
 The archive boundary is intentionally strict:
 
@@ -240,14 +255,35 @@ The archive boundary is intentionally strict:
 - no encrypted entries, symbolic links, special filesystem entries, duplicate
   or traversal paths, mismatched extensions/signatures, or failed CRC checks.
 
-Archive paths are never reused as output paths. Verified pages receive
-generated names in app-private storage, while temporary archives and partial
-files are removed after completion, cancellation, or failure.
+Archive paths are never reused as output paths. Verified pages receive generated
+names in app-private storage. Temporary archive/partial files are cleaned up;
+individually verified completed pages may be retained after a pause, failure or
+interruption so a compatible retry can reuse them. Cancellation/removal cleans
+up the cancelled download's local page data.
 
-An active manga download uses Android's best-effort foreground download lease
-so it can normally continue when TetoTV is minimized. It is not a scheduled or
-server-side job. TetoTV deliberately does not persist the remote page/archive
-URL or request headers, so force-stop or process death ends the transfer and
-the interrupted job requires the viewer to reconnect or reselect the source
-before retrying. Completed verified pages remain readable offline until the
-viewer removes them, resets app data, or uninstalls TetoTV.
+The queue runs transfers sequentially, with a default maximum of 100 queued/active
+jobs and a 4 GiB managed manga-download quota in addition to per-chapter limits.
+The Downloads page exposes pause, resume/retry, cancellation and removal. The
+chapter sheet also offers bounded batches of the next 5 or 10 unread chapters.
+Queue/storage errors ask the viewer to finish queued work or free storage.
+
+An active manga download uses Android's best-effort foreground download lease.
+It may continue while TetoTV is minimized, but force-stop or process death ends the
+transfer. Job state and verified page records are durable; raw page/archive URLs,
+headers and tokens are not. Opening the app recovers interrupted jobs without
+automatically starting fresh source requests. Explicitly resume a job or retry
+pending interrupted work. A paused job stays paused until individually resumed.
+
+The Seanime resume resolver checks the active profile's saved title identity,
+enabled provider and matching chapter IDs, then discovers fresh page capabilities.
+Existing retained pages are reused only when the request fingerprint still
+matches and their hashes/files validate; changed or expired capabilities may
+require downloading pages again. A missing identity or unavailable provider
+requires reconnection/reselection. The current automatic capability resolver is
+Seanime-specific; legacy downloads remain readable, but a legacy interrupted
+transfer can require reopening its original catalog/publication and downloading
+again rather than using that resolver.
+
+This is not a scheduled or server-side transfer service. Completed verified pages
+remain readable offline until removed, app data is cleared, or TetoTV is
+uninstalled. Availability after a provider changes or disappears is not promised.

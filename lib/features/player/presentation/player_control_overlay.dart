@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'package:anime_tv/core/preferences/caption_language.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
@@ -259,15 +260,21 @@ bool skipSegmentReachesPlaybackEnd({
   Duration endGuard = const Duration(seconds: 1),
 }) => duration > Duration.zero && requestedEnd >= duration - endGuard;
 
-/// Serializes native decoder release and permits a failed release to be
-/// retried. Native TV players can throw while a decoder is already failing;
-/// callers must never treat that failure as permission to start another
-/// engine or pop the route while the old surface may still be owned.
+/// Serializes native decoder release. Native TV players can throw while a
+/// decoder is already failing; callers must never treat that failure as
+/// permission to start another engine or pop the route while the old surface
+/// may still be owned. Whether a later attempt is safe is engine-specific.
 class PlayerReleaseCoordinator {
   Future<bool>? _activeRelease;
   bool _released = false;
+  Object? _lastFailure;
+  StackTrace? _lastFailureStackTrace;
+  int _attemptCount = 0;
 
   bool get released => _released;
+  Object? get lastFailure => _lastFailure;
+  StackTrace? get lastFailureStackTrace => _lastFailureStackTrace;
+  int get attemptCount => _attemptCount;
 
   Future<bool> release(Future<void> Function() releaseAction) {
     if (_released) return Future<bool>.value(true);
@@ -279,16 +286,51 @@ class PlayerReleaseCoordinator {
   }
 
   Future<bool> _runRelease(Future<void> Function() releaseAction) async {
+    _attemptCount++;
     try {
       await releaseAction();
       _released = true;
+      _lastFailure = null;
+      _lastFailureStackTrace = null;
       return true;
-    } catch (_) {
+    } catch (error, stackTrace) {
+      _lastFailure = error;
+      _lastFailureStackTrace = stackTrace;
       return false;
     } finally {
       _activeRelease = null;
     }
   }
+}
+
+/// Closed diagnostic code for a failed player teardown. Raw native exception
+/// messages can contain media paths or provider URLs, so lifecycle reporting
+/// must classify the failure without copying those messages.
+String playerReleaseFailureCode(Object? error) {
+  if (error is PlatformException) {
+    final code = error.code.trim().toLowerCase();
+    return const {'media3_release_pending', 'media3_closed'}.contains(code)
+        ? code
+        : 'platform_error';
+  }
+  if (error is TimeoutException) return 'timeout';
+  if (error is StateError) return 'state_error';
+  if (error is AssertionError) return 'assertion_error';
+  return 'unknown_error';
+}
+
+class PlayerReleaseDiagnosticFailure implements Exception {
+  const PlayerReleaseDiagnosticFailure({
+    required this.engine,
+    required this.reasonCode,
+  });
+
+  final String engine;
+  final String reasonCode;
+
+  @override
+  String toString() =>
+      'Player release failed (engine=$engine, reason=$reasonCode).';
 }
 
 /// Detects an intentional double press of D-pad Down without treating a held
@@ -477,7 +519,7 @@ Future<double?> showPlayerPlaybackSpeedPicker({
   );
   return showPlayerTrackPicker<double>(
     context: context,
-    title: 'Playback speed',
+    title: context.tr("Playback speed"),
     icon: Icons.speed_rounded,
     selectedValue: selected,
     options: [
@@ -507,14 +549,14 @@ Future<double?> showPlayerCaptionSizePicker({
 }) {
   return showPlayerTrackPicker<double>(
     context: context,
-    title: 'Choose caption size',
+    title: context.tr("Choose caption size"),
     icon: Icons.text_fields_rounded,
     selectedValue: nearestPlayerCaptionSize(current),
-    options: const [
-      PlayerTrackOption(value: 28, label: 'Small'),
-      PlayerTrackOption(value: 34, label: 'Medium'),
-      PlayerTrackOption(value: 42, label: 'Large'),
-      PlayerTrackOption(value: 50, label: 'Extra large'),
+    options: [
+      PlayerTrackOption(value: 28, label: context.tr("Small")),
+      PlayerTrackOption(value: 34, label: context.tr("Medium")),
+      PlayerTrackOption(value: 42, label: context.tr("Large")),
+      PlayerTrackOption(value: 50, label: context.tr("Extra large")),
     ],
   );
 }
@@ -582,7 +624,7 @@ class PlayerTrackPicker<T> extends StatelessWidget {
                     ),
                     const Spacer(),
                     Text(
-                      'Select with D-pad',
+                      context.tr("Select with D-pad"),
                       style: TextStyle(color: palette.mutedText, fontSize: 11),
                     ),
                   ],
@@ -765,7 +807,7 @@ class _PlayerExitDialogState extends State<PlayerExitDialog> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Exit video?',
+                    context.tr("Exit video?"),
                     style: Theme.of(context).textTheme.headlineSmall?.copyWith(
                       color: palette.playerPrimaryText(),
                       fontWeight: FontWeight.w900,
@@ -773,7 +815,7 @@ class _PlayerExitDialogState extends State<PlayerExitDialog> {
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    'Your current playback position will be saved.',
+                    context.tr("Your current playback position will be saved."),
                     style: TextStyle(
                       color: palette.playerMutedText(
                         defaultColor: const Color(0xFFF0EAEC),
@@ -817,7 +859,7 @@ class _PlayerExitDialogState extends State<PlayerExitDialog> {
                               const SizedBox(width: 8),
                               Flexible(
                                 child: Text(
-                                  'Continue watching',
+                                  context.tr("Continue watching"),
                                   textAlign: TextAlign.center,
                                   style: TextStyle(
                                     color: palette.playerPrimaryText(),
@@ -858,7 +900,7 @@ class _PlayerExitDialogState extends State<PlayerExitDialog> {
                               const SizedBox(width: 8),
                               Flexible(
                                 child: Text(
-                                  'Exit video',
+                                  context.tr("Exit video"),
                                   textAlign: TextAlign.center,
                                   style: TextStyle(
                                     color: palette.playerPrimaryActionText(),

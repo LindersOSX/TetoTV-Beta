@@ -1,11 +1,14 @@
 import 'dart:async';
 
+import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/features/marketplace/application/web_stream_aggregator.dart';
 import 'package:anime_tv/features/marketplace/domain/addon_models.dart';
 import 'package:anime_tv/features/player/presentation/player_presentation_palette.dart';
 import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
+import 'package:anime_tv/features/streaming/domain/external_audio_track.dart';
+import 'package:anime_tv/features/watch_together/domain/watch_party_source_descriptor.dart';
 import 'package:flutter/material.dart';
 
 /// Converts a marketplace result into the same player-safe model used by the
@@ -13,9 +16,10 @@ import 'package:flutter/material.dart';
 /// this boundary; only the bounded URL, headers and optional subtitle survive.
 PlaybackStreamOption playbackOptionForWebStream(WebStreamResult result) {
   final release = ReleaseCandidate(
-    infoHash:
-        'web:${result.providerId}:'
-        '${result.uri.toString().hashCode.toUnsigned(32).toRadixString(16)}',
+    infoHash: watchPartyWebReleaseIdentity(
+      providerId: result.providerId,
+      uri: result.uri,
+    ),
     magnetUri: '',
     releaseName: '${result.providerName} / ${result.title}',
     seeders: 0,
@@ -33,6 +37,16 @@ PlaybackStreamOption playbackOptionForWebStream(WebStreamResult result) {
       headers: result.headers,
       externalSubtitle: result.subtitleUri,
       externalSubtitleLanguage: result.subtitleLanguage,
+      pendingExternalAudioTracks: result.externalAudioTracks
+          .map(
+            (track) => PendingExternalAudioTrack(
+              uri: track.uri,
+              label: track.label,
+              language: track.language,
+              headers: track.headers,
+            ),
+          )
+          .toList(growable: false),
       providerId: result.providerId,
       providerName: '${result.providerName} web stream',
       providerEpisodeIdentity: ProviderEpisodeIdentity.fromFields(
@@ -48,8 +62,7 @@ PlaybackStreamOption playbackOptionForWebStream(WebStreamResult result) {
 /// Stable within a playback session without embedding a provider's signed URL
 /// or query parameters in widget diagnostics.
 String playbackStreamOptionKey(PlaybackStreamOption option) =>
-    '${playbackStreamOptionProviderIdentity(option)}:'
-    '${option.stream.uri.toString().hashCode.toUnsigned(32).toRadixString(16)}';
+    playbackStreamOptionAttemptKey(option);
 
 /// Provider-scoped attempt identity used only in memory during playback.
 ///
@@ -57,18 +70,82 @@ String playbackStreamOptionKey(PlaybackStreamOption option) =>
 /// request headers, subtitles, or server behavior, so the URI alone is not a
 /// safe identity for de-duplication or failover bookkeeping.
 String playbackStreamOptionAttemptKey(PlaybackStreamOption option) =>
-    '${playbackStreamOptionProviderIdentity(option)}\u0000${option.stream.uri}';
+    webPlaybackVariantKey(
+      providerIdentity: playbackStreamOptionProviderIdentity(option),
+      uri: option.stream.uri,
+      audioCapability: _webAudioCapabilityForRelease(option.release),
+      headers: option.stream.headers,
+      subtitleUri: option.stream.externalSubtitle,
+      subtitleLanguage: option.stream.externalSubtitleLanguage,
+      externalAudioTracks: [
+        for (final track in option.stream.pendingExternalAudioTracks)
+          (
+            uri: track.uri,
+            language: track.language,
+            label: track.label,
+            headers: track.headers,
+          ),
+        for (final track in option.stream.externalAudioTracks)
+          (
+            uri: track.uri,
+            language: track.language,
+            label: track.label,
+            headers: const <String, String>{},
+          ),
+      ],
+    );
 
 String playbackStreamReadyAttemptKey(
   StreamReady stream, {
   String? fallbackProviderId,
-}) =>
-    '${_normalizedPlaybackProviderIdentity(stream.providerId, fallbackProviderId, stream.providerName)}\u0000${stream.uri}';
+  ReleaseCandidate? release,
+}) => webPlaybackVariantKey(
+  providerIdentity: _normalizedPlaybackProviderIdentity(
+    stream.providerId,
+    fallbackProviderId,
+    stream.providerName,
+  ),
+  uri: stream.uri,
+  audioCapability: release == null
+      ? WebStreamAudioCapability.unknown
+      : _webAudioCapabilityForRelease(release),
+  headers: stream.headers,
+  subtitleUri: stream.externalSubtitle,
+  subtitleLanguage: stream.externalSubtitleLanguage,
+  externalAudioTracks: [
+    for (final track in stream.pendingExternalAudioTracks)
+      (
+        uri: track.uri,
+        language: track.language,
+        label: track.label,
+        headers: track.headers,
+      ),
+    for (final track in stream.externalAudioTracks)
+      (
+        uri: track.uri,
+        language: track.language,
+        label: track.label,
+        headers: const <String, String>{},
+      ),
+  ],
+);
+
+WebStreamAudioCapability _webAudioCapabilityForRelease(
+  ReleaseCandidate release,
+) => switch (release.audioIntent) {
+  ReleaseAudioIntent.sub => WebStreamAudioCapability.sub,
+  ReleaseAudioIntent.dub => WebStreamAudioCapability.dub,
+  ReleaseAudioIntent.multi => WebStreamAudioCapability.subAndDub,
+  ReleaseAudioIntent.unknown when release.isDubbed =>
+    WebStreamAudioCapability.dub,
+  ReleaseAudioIntent.unknown => WebStreamAudioCapability.unknown,
+};
 
 bool hasUntriedDirectWebStream({
   required StreamReady current,
   required Iterable<PlaybackStreamOption> options,
   String? currentFallbackProviderId,
+  ReleaseCandidate? currentRelease,
   Set<String> failedStreamKeys = const {},
 }) =>
     current.isWebStream &&
@@ -79,6 +156,7 @@ bool hasUntriedDirectWebStream({
               playbackStreamReadyAttemptKey(
                 current,
                 fallbackProviderId: currentFallbackProviderId,
+                release: currentRelease,
               ) &&
           !failedStreamKeys.contains(playbackStreamOptionAttemptKey(option)),
     );
@@ -120,11 +198,10 @@ int comparePlaybackStreamOptions(
       : left.release.releaseName.compareTo(right.release.releaseName);
 }
 
-/// Merges late provider results without allowing one provider's same URI to
-/// grow the picker indefinitely. Existing options win so a preflighted
-/// redirect and its sanitized headers are not replaced by the raw provider
-/// result. A different provider remains independently selectable even when it
-/// returns the same CDN URI.
+/// Merges late provider results by independently playable variant. Existing
+/// options win so a preflighted redirect and its sanitized headers are not
+/// replaced by the raw provider result. Different providers and header/audio/
+/// subtitle variants remain selectable even when they share one CDN URI.
 List<PlaybackStreamOption> mergePlaybackStreamOptions(
   Iterable<PlaybackStreamOption> existing,
   Iterable<PlaybackStreamOption> discovered,
@@ -158,9 +235,11 @@ List<PlaybackStreamOption> mergePlaybackStreamOptions(
 /// through the same failed target instead of advancing to another provider.
 List<PlaybackStreamOption> replaceValidatedPlaybackStreamOption({
   required Iterable<PlaybackStreamOption> options,
-  required Uri requestedUri,
+  required PlaybackStreamOption requested,
   required PlaybackStreamOption validated,
 }) {
+  final requestedKey = playbackStreamOptionAttemptKey(requested);
+  final validatedKey = playbackStreamOptionAttemptKey(validated);
   final validatedProvider = playbackStreamOptionProviderIdentity(validated);
   return mergePlaybackStreamOptions(
     [validated],
@@ -168,8 +247,8 @@ List<PlaybackStreamOption> replaceValidatedPlaybackStreamOption({
       if (playbackStreamOptionProviderIdentity(option) != validatedProvider) {
         return true;
       }
-      return option.stream.uri != requestedUri &&
-          option.stream.uri != validated.stream.uri;
+      final key = playbackStreamOptionAttemptKey(option);
+      return key != requestedKey && key != validatedKey;
     }),
   );
 }
@@ -374,16 +453,28 @@ class _PlayerStreamSourcePickerState extends State<PlayerStreamSourcePicker> {
           : playbackStreamOptionAttemptKey(option) == widget.selectedStreamKey,
     );
     final status = widget.discover == null
-        ? 'Web discovery is disabled'
+        ? context.tr('Web discovery is disabled')
         : _searching
         ? _total > 0
-              ? 'Searching providers: $_completed/$_total'
-              : 'Finding providers...'
-        : '${_options.length} source${_options.length == 1 ? '' : 's'}'
-              '${_failureCount > 0 ? ' | $_failureCount unavailable' : ''}'
-              '${_pausedCount > 0 ? ' | $_pausedCount paused' : ''}'
-              '${_noMatchCount > 0 ? ' | $_noMatchCount no match' : ''}'
-              '${_advisoryCount > 0 ? ' | $_advisoryCount notice' : ''}';
+              ? context.tr('Searching providers: {done}/{total}', {
+                  'done': _completed,
+                  'total': _total,
+                })
+              : context.tr('Finding providers...')
+        : [
+            context.tr(
+              _options.length == 1 ? '{count} source' : '{count} sources',
+              {'count': _options.length},
+            ),
+            if (_failureCount > 0)
+              context.tr('{count} unavailable', {'count': _failureCount}),
+            if (_pausedCount > 0)
+              context.tr('{count} paused', {'count': _pausedCount}),
+            if (_noMatchCount > 0)
+              context.tr('{count} no match', {'count': _noMatchCount}),
+            if (_advisoryCount > 0)
+              context.tr('{count} notice', {'count': _advisoryCount}),
+          ].join(' | ');
     return Dialog(
       key: const ValueKey('player-source-picker'),
       alignment: Alignment.bottomCenter,
@@ -432,7 +523,7 @@ class _PlayerStreamSourcePickerState extends State<PlayerStreamSourcePicker> {
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Text(
-                                  'Sources and quality',
+                                  context.tr("Sources and quality"),
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
                                   style: Theme.of(context).textTheme.titleLarge
@@ -468,7 +559,7 @@ class _PlayerStreamSourcePickerState extends State<PlayerStreamSourcePicker> {
                               borderRadius: BorderRadius.circular(9),
                               onPressed: () => unawaited(_refresh(force: true)),
                               child: Tooltip(
-                                message: 'Refresh sources',
+                                message: context.tr("Refresh sources"),
                                 child: Padding(
                                   padding: EdgeInsets.symmetric(
                                     horizontal: compactHeader ? 9 : 12,
@@ -483,8 +574,8 @@ class _PlayerStreamSourcePickerState extends State<PlayerStreamSourcePicker> {
                                       ),
                                       if (!compactHeader) ...[
                                         const SizedBox(width: 6),
-                                        const Text(
-                                          'Refresh',
+                                        Text(
+                                          context.tr("Refresh"),
                                           style: TextStyle(
                                             fontWeight: FontWeight.w800,
                                           ),
@@ -506,7 +597,7 @@ class _PlayerStreamSourcePickerState extends State<PlayerStreamSourcePicker> {
                             borderRadius: BorderRadius.circular(9),
                             onPressed: () => Navigator.of(context).pop(),
                             child: Tooltip(
-                              message: 'Close',
+                              message: context.tr("Close"),
                               child: Padding(
                                 padding: EdgeInsets.symmetric(
                                   horizontal: compactHeader ? 9 : 12,
@@ -518,8 +609,8 @@ class _PlayerStreamSourcePickerState extends State<PlayerStreamSourcePicker> {
                                     const Icon(Icons.close_rounded, size: 18),
                                     if (!compactHeader) ...[
                                       const SizedBox(width: 6),
-                                      const Text(
-                                        'Close',
+                                      Text(
+                                        context.tr("Close"),
                                         style: TextStyle(
                                           fontWeight: FontWeight.w800,
                                         ),
@@ -537,7 +628,9 @@ class _PlayerStreamSourcePickerState extends State<PlayerStreamSourcePicker> {
                   const SizedBox(height: 12),
                   Flexible(
                     child: _options.isEmpty
-                        ? const Center(child: Text('No playable sources yet'))
+                        ? Center(
+                            child: Text(context.tr("No playable sources yet")),
+                          )
                         : ListView.custom(
                             scrollDirection: Axis.horizontal,
                             childrenDelegate: SliverChildBuilderDelegate(

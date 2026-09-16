@@ -14,7 +14,9 @@ class LocalMediaPickerContractTest {
     fun `picker grants only scoped persistent read access`() {
         val picker = mainActivity
             .substringAfter("private fun pickLocalVideo", "")
-            .substringBefore("private fun localMediaMetadata")
+            // Stop at the next method: the independent manga backup exporter
+            // legitimately requests write access to its user-selected file.
+            .substringBefore("\n    private fun ")
 
         assertTrue(picker.contains("Intent.ACTION_OPEN_DOCUMENT"))
         assertTrue(picker.contains("Intent.CATEGORY_OPENABLE"))

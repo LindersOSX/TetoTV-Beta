@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:anime_tv/core/storage/storage_providers.dart';
 import 'package:anime_tv/core/storage/tetotv_database.dart';
+import 'package:anime_tv/features/manga/application/manga_feature_availability.dart';
 import 'package:anime_tv/features/marketplace/data/addon_store.dart';
 import 'package:anime_tv/features/marketplace/data/marketplace_client.dart';
 import 'package:anime_tv/features/marketplace/data/seanime_javascript_provider.dart';
@@ -92,6 +93,7 @@ final marketplaceControllerProvider =
         ref.watch(addonStoreProvider),
         ref.watch(marketplaceClientProvider),
         scheduleCompatibilityTests: true,
+        isMangaReaderAvailable: () => ref.read(mangaFeatureAvailableProvider),
       );
       Future.microtask(controller.load);
       return controller;
@@ -145,11 +147,13 @@ class MarketplaceController extends StateNotifier<MarketplaceState> {
     this._client, {
     Future<void> Function(Uri uri)? targetValidator,
     ProviderCompatibilityRunner? compatibilityRunner,
+    bool Function()? isMangaReaderAvailable,
     bool scheduleCompatibilityTests = false,
     Duration compatibilityTestInterval = providerCompatibilityTestInterval,
   }) : _targetValidator = targetValidator ?? validatePublicNetworkTarget,
        _compatibilityRunner =
            compatibilityRunner ?? runProviderCompatibilityTest,
+       _isMangaReaderAvailable = isMangaReaderAvailable ?? (() => true),
        _scheduleCompatibilityTests = scheduleCompatibilityTests,
        _compatibilityTestInterval = compatibilityTestInterval,
        super(const MarketplaceState()) {
@@ -167,6 +171,7 @@ class MarketplaceController extends StateNotifier<MarketplaceState> {
   final MarketplaceClient _client;
   final Future<void> Function(Uri uri) _targetValidator;
   final ProviderCompatibilityRunner _compatibilityRunner;
+  final bool Function() _isMangaReaderAvailable;
   final bool _scheduleCompatibilityTests;
   final Duration _compatibilityTestInterval;
   Timer? _compatibilityTestTimer;
@@ -276,11 +281,48 @@ class MarketplaceController extends StateNotifier<MarketplaceState> {
       );
     }
 
+    // Community health tags can change independently of executable provider
+    // releases. Copy only those advisory fields into the installed record so
+    // search scheduling sees the current broken/deprecated status immediately.
+    // The store repeats the exact repository-provenance check and preserves
+    // every executable field. If the owning entry disappears, retain its last
+    // known advisory rather than falling back to a same-ID entry from another
+    // repository.
+    final installedById = <String, InstalledStreamingAddon>{
+      for (final addon in state.installed)
+        marketplaceAddonIdentityKey(addon.manifest.id): addon,
+    };
+    final ownedAdvisories = catalog
+        .where((candidate) {
+          final installed =
+              installedById[marketplaceAddonIdentityKey(candidate.id)];
+          return installed != null &&
+              addonProvenanceMatches(installed, candidate);
+        })
+        .toList(growable: false);
+    var installed = state.installed;
+    if (ownedAdvisories.isNotEmpty) {
+      try {
+        await _store.syncInstalledCatalogAdvisories(ownedAdvisories);
+        final advisoryById = <String, MarketplaceAddon>{
+          for (final advisory in ownedAdvisories)
+            marketplaceAddonIdentityKey(advisory.id): advisory,
+        };
+        installed = [
+          for (final current in state.installed)
+            _applyInstalledCatalogAdvisory(current, advisoryById),
+        ];
+      } catch (error) {
+        errors['local'] = _message(error);
+      }
+    }
+
     // Catalog refresh is read-only for installed executable add-ons. Replacing
     // third-party code always remains an explicit Install/Update action so a
     // compromised repository cannot silently change an enabled provider.
     state = state.copyWith(
       catalog: catalog,
+      installed: installed,
       repositoryErrors: errors,
       loading: false,
     );
@@ -393,6 +435,7 @@ class MarketplaceController extends StateNotifier<MarketplaceState> {
   }
 
   Future<void> install(MarketplaceAddon addon) async {
+    _requireMangaReader(addon);
     if (!addon.isCompatible) {
       throw const FormatException('This provider runtime is not supported.');
     }
@@ -406,6 +449,8 @@ class MarketplaceController extends StateNotifier<MarketplaceState> {
     state = state.copyWith(busyAddonId: addon.id);
     try {
       final downloaded = await _client.downloadAddon(addon);
+      _requireMangaReader(addon);
+      _requireMangaReader(downloaded.manifest);
       if (previous != null &&
           !addonProvenanceMatches(previous, downloaded.manifest)) {
         throw const FormatException(
@@ -421,6 +466,18 @@ class MarketplaceController extends StateNotifier<MarketplaceState> {
         updatedAt: DateTime.now(),
       );
       await _store.install(installed);
+      if ((addon.isMangaProvider || installed.manifest.isMangaProvider) &&
+          !_isMangaReaderAvailable()) {
+        if (previous == null) {
+          await _store.uninstall(installed.manifest.id);
+        } else {
+          // A Manga preference change during an update must restore
+          // the previously installed payload, not turn revocation into data
+          // loss by uninstalling it.
+          await _store.install(previous);
+        }
+        throw StateError('Manga reader is disabled in Settings.');
+      }
       final executableChanged =
           previous != null &&
           (previous.manifest.version != installed.manifest.version ||
@@ -448,8 +505,18 @@ class MarketplaceController extends StateNotifier<MarketplaceState> {
   }
 
   Future<void> setAddonEnabled(String id, bool enabled) async {
-    final storedId = state.installedById(id)?.manifest.id ?? id;
+    final existing = state.installedById(id);
+    if (enabled && existing?.manifest.isMangaProvider == true) {
+      _requireMangaReader(existing!.manifest);
+    }
+    final storedId = existing?.manifest.id ?? id;
     await _store.setEnabled(storedId, enabled);
+    if (enabled &&
+        existing?.manifest.isMangaProvider == true &&
+        !_isMangaReaderAvailable()) {
+      await _store.setEnabled(storedId, false);
+      throw StateError('Manga reader is disabled in Settings.');
+    }
     if (enabled) await _store.clearProviderHealth(storedId);
     state = state.copyWith(
       installed: [
@@ -464,6 +531,12 @@ class MarketplaceController extends StateNotifier<MarketplaceState> {
           : state.providerHealth,
     );
     _rescheduleCompatibilityTests();
+  }
+
+  void _requireMangaReader(MarketplaceAddon addon) {
+    if (addon.isMangaProvider && !_isMangaReaderAvailable()) {
+      throw StateError('Manga reader is disabled in Settings.');
+    }
   }
 
   Future<void> testAddon(InstalledStreamingAddon addon) async {
@@ -806,11 +879,12 @@ List<MarketplaceAddon> selectMarketplaceCatalogCandidates(
     final current = installedById[entry.key];
     MarketplaceAddon? sameOwner;
     if (current != null) {
-      for (final candidate in candidates) {
-        if (addonProvenanceMatches(current, candidate)) {
-          sameOwner = candidate;
-          break;
-        }
+      final sameOwnerCandidates = candidates
+          .where((candidate) => addonProvenanceMatches(current, candidate))
+          .toList(growable: false);
+      if (sameOwnerCandidates.isNotEmpty) {
+        sameOwnerCandidates.sort(_compareCatalogCandidates);
+        sameOwner = sameOwnerCandidates.first;
       }
     }
     if (sameOwner != null) {
@@ -866,10 +940,13 @@ List<MarketplaceAddon> _mergeSharedManifestStatus(
 
 int _compareCatalogCandidates(MarketplaceAddon left, MarketplaceAddon right) {
   int statusRank(MarketplaceAddon addon) {
-    if (addon.isDeprecated) return 4;
-    if (addon.reportedBroken) return 3;
-    if (addon.reportedWorking == false) return 2;
-    if (addon.reportedWorking == null) return 1;
+    if (addon.isDeprecated) return 3;
+    if (addon.reportedBroken) return 2;
+    // `workingTag: false` means the repository has not awarded a working
+    // badge; `brokenTag` is the independent negative signal. Treat an
+    // unbadged entry like omitted metadata instead of allowing an older entry
+    // from another repository to win solely because it omitted the field.
+    if (addon.reportedWorking != true) return 1;
     return 0;
   }
 
@@ -893,6 +970,20 @@ bool addonProvenanceMatches(
 ) =>
     marketplaceAddonIdsMatch(installed.manifest.id, candidate.id) &&
     installed.manifest.repositoryUrl == candidate.repositoryUrl;
+
+InstalledStreamingAddon _applyInstalledCatalogAdvisory(
+  InstalledStreamingAddon installed,
+  Map<String, MarketplaceAddon> advisoriesById,
+) {
+  final advisory =
+      advisoriesById[marketplaceAddonIdentityKey(installed.manifest.id)];
+  if (advisory == null || !addonProvenanceMatches(installed, advisory)) {
+    return installed;
+  }
+  return installed.copyWith(
+    manifest: installed.manifest.withCatalogAdvisoryFrom(advisory),
+  );
+}
 
 bool _installedAddonNeedsRefresh(
   InstalledStreamingAddon installed,

@@ -1,3 +1,4 @@
+import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'dart:async';
 
 import 'package:anime_tv/core/tv/tv_focusable.dart';
@@ -107,7 +108,7 @@ class _DownloadManagerScreenState extends ConsumerState<DownloadManagerScreen> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              'Downloads',
+                              context.tr("Downloads"),
                               style: Theme.of(context).textTheme.headlineMedium
                                   ?.copyWith(fontWeight: FontWeight.w900),
                             ),
@@ -124,7 +125,7 @@ class _DownloadManagerScreenState extends ConsumerState<DownloadManagerScreen> {
                         autofocus: true,
                         focusNode: _refreshFocus,
                         icon: Icons.refresh_rounded,
-                        label: 'Refresh',
+                        label: context.tr("Refresh"),
                         onLeftEdge: () {
                           if (_firstContentFocus.context != null) {
                             _firstContentFocus.requestFocus();
@@ -222,14 +223,16 @@ class _EmptyDownloads extends StatelessWidget {
         ),
         const SizedBox(height: 16),
         Text(
-          'No offline episodes yet',
+          context.tr("No offline episodes yet"),
           style: Theme.of(
             context,
           ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
         ),
         const SizedBox(height: 6),
-        const Text(
-          'Long-press a torrent or web source, or choose Download season on a show.',
+        Text(
+          context.tr(
+            "Long-press a torrent or web source, or choose Download season on a show.",
+          ),
           textAlign: TextAlign.center,
         ),
       ],
@@ -261,8 +264,11 @@ class _SeasonDownloadBanner extends StatelessWidget {
           children: [
             Text(
               state.phase == SeasonDownloadPhase.preparing
-                  ? 'Preparing season download…'
-                  : 'Downloading season • $processed of ${state.total}',
+                  ? context.tr("Preparing season download…")
+                  : context.tr("Downloading season • {value1} of {value2}", {
+                      'value1': processed,
+                      'value2': state.total,
+                    }),
               style: const TextStyle(fontWeight: FontWeight.w900),
             ),
             const SizedBox(height: 8),
@@ -285,7 +291,7 @@ class _SeasonDownloadBanner extends StatelessWidget {
           key: const ValueKey('downloads-season-cancel'),
           focusNode: focusNode,
           icon: Icons.cancel_outlined,
-          label: 'Cancel season',
+          label: context.tr("Cancel season"),
           onLeftEdge: onLeftEdge,
           onPressed: onCancel,
         );
@@ -434,7 +440,10 @@ class _DownloadJobCard extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        '${job.seriesTitle} • Episode ${job.episode}',
+                        context.tr("{value1} • Episode {value2}", {
+                          'value1': job.seriesTitle,
+                          'value2': job.episode,
+                        }),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: Theme.of(context).textTheme.titleMedium
@@ -456,7 +465,7 @@ class _DownloadJobCard extends StatelessWidget {
                 ),
                 const SizedBox(width: 14),
                 Text(
-                  _statusLabel(job.status),
+                  context.tr(_statusLabel(job.status)),
                   style: TextStyle(
                     color: _statusColor(context, job.status),
                     fontWeight: FontWeight.w900,
@@ -475,13 +484,15 @@ class _DownloadJobCard extends StatelessWidget {
               children: [
                 Expanded(
                   child: Text(
-                    _progressLabel(job),
+                    _progressLabel(context, job),
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
                 ),
                 if (job.speedBytesPerSecond > 0)
                   Text(
-                    '${_formatBytes(job.speedBytesPerSecond)}/s',
+                    context.tr("{value1}/s", {
+                      'value1': _formatBytes(job.speedBytesPerSecond),
+                    }),
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
               ],
@@ -515,8 +526,10 @@ Future<void> _openCompletedDownload(
   if (!context.mounted) return;
   if (asset == null) {
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('This downloaded episode is missing or incomplete.'),
+      SnackBar(
+        content: Text(
+          context.tr("This downloaded episode is missing or incomplete."),
+        ),
       ),
     );
     return;
@@ -634,12 +647,16 @@ Color _statusColor(BuildContext context, DownloadJobStatus status) =>
       _ => Theme.of(context).colorScheme.primary,
     };
 
-String _progressLabel(DownloadJob job) {
+String _progressLabel(BuildContext context, DownloadJob job) {
   final received = _formatBytes(job.receivedBytes);
   final expected = job.expectedBytes;
   if (expected == null) return received;
   final percent = ((job.progress ?? 0) * 100).toStringAsFixed(0);
-  return '$received of ${_formatBytes(expected)} • $percent%';
+  return context.tr('{received} of {total} • {percent}%', {
+    'received': received,
+    'total': _formatBytes(expected),
+    'percent': percent,
+  });
 }
 
 String _formatBytes(int bytes) {

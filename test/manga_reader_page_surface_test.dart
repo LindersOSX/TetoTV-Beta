@@ -4,6 +4,34 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  testWidgets('remote zoom is bounded and panning uses the visible viewport', (
+    tester,
+  ) async {
+    final remote = MangaReaderZoomController();
+    addTearDown(remote.dispose);
+    await tester.pumpWidget(
+      _harness(
+        remoteController: remote,
+        remoteViewportSize: const Size(300, 200),
+        remoteFocusFraction: const Offset(.5, .25),
+      ),
+    );
+    remote.zoomBy(2);
+    await tester.pump();
+    expect(_matrix(tester).getMaxScaleOnAxis(), 2);
+    expect(_matrix(tester).entry(1, 3), -150);
+    remote.panBy(const Offset(0, -.1));
+    await tester.pump();
+    expect(_matrix(tester).entry(1, 3), -170);
+    remote.zoomBy(100);
+    await tester.pump();
+    expect(_matrix(tester).getMaxScaleOnAxis(), 4);
+    remote.zoomBy(.001);
+    await tester.pump();
+    expect(_matrix(tester).getMaxScaleOnAxis(), 1);
+    expect(_matrix(tester).entry(1, 3), 0);
+  });
+
   testWidgets('tap zones honor reading direction and inversion', (
     tester,
   ) async {
@@ -418,6 +446,9 @@ void main() {
 }
 
 Widget _harness({
+  MangaReaderZoomController? remoteController,
+  Size? remoteViewportSize,
+  Offset? remoteFocusFraction,
   Key? surfaceKey,
   int resetToken = 0,
   Widget? child,
@@ -428,6 +459,9 @@ Widget _harness({
 }) => MaterialApp(
   home: Scaffold(
     body: MangaReaderPageSurface(
+      remoteController: remoteController,
+      remoteViewportSize: remoteViewportSize,
+      remoteFocusFraction: remoteFocusFraction,
       key: surfaceKey,
       resetToken: resetToken,
       preferences: preferences,

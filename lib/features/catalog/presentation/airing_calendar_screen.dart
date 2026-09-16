@@ -1,3 +1,4 @@
+import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'dart:async';
 
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
@@ -29,7 +30,6 @@ class AiringCalendarScreen extends ConsumerStatefulWidget {
 }
 
 class _AiringCalendarScreenState extends ConsumerState<AiringCalendarScreen> {
-  static const _weekdays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
   static const _cardWidth = 292.0;
   static const _cardSpacing = 12.0;
 
@@ -271,7 +271,7 @@ class _AiringCalendarScreenState extends ConsumerState<AiringCalendarScreen> {
                   ],
                   Expanded(
                     child: Text(
-                      'Airing calendar',
+                      context.tr("Airing calendar"),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: Theme.of(context).textTheme.headlineSmall
@@ -284,7 +284,7 @@ class _AiringCalendarScreenState extends ConsumerState<AiringCalendarScreen> {
                   if (!phoneHeader && !context.isCompactWidth) ...[
                     const SizedBox(width: 12),
                     Text(
-                      'Times use your device timezone',
+                      context.tr("Times use your device timezone"),
                       style: TextStyle(color: context.appPalette.mutedText),
                     ),
                   ],
@@ -305,7 +305,7 @@ class _AiringCalendarScreenState extends ConsumerState<AiringCalendarScreen> {
                     borderRadius: BorderRadius.circular(9),
                     focusScale: 1.02,
                     child: Tooltip(
-                      message: 'Refresh calendar',
+                      message: context.tr("Refresh calendar"),
                       child: Container(
                         padding: const EdgeInsets.symmetric(
                           horizontal: 13,
@@ -328,7 +328,7 @@ class _AiringCalendarScreenState extends ConsumerState<AiringCalendarScreen> {
                             const Icon(Icons.refresh_rounded, size: 18),
                             if (!phoneHeader) ...[
                               const SizedBox(width: 6),
-                              const Text('Refresh'),
+                              Text(context.tr("Refresh")),
                             ],
                           ],
                         ),
@@ -347,8 +347,13 @@ class _AiringCalendarScreenState extends ConsumerState<AiringCalendarScreen> {
                   color: context.appPalette.accentBright,
                 ),
               ),
-              error: (error, _) =>
-                  Center(child: Text('Could not load schedule: $error')),
+              error: (error, _) => Center(
+                child: Text(
+                  context.tr("Could not load schedule: {value1}", {
+                    'value1': error,
+                  }),
+                ),
+              ),
               data: (entries) {
                 if (tracking.isLoading) {
                   return Center(
@@ -360,8 +365,9 @@ class _AiringCalendarScreenState extends ConsumerState<AiringCalendarScreen> {
                 if (tracking.hasError) {
                   return Center(
                     child: Text(
-                      'Your AniList or MAL calendar could not be loaded. '
-                      'Check the tracker connection in Settings, then select Refresh.',
+                      context.tr(
+                        "Your tracker calendar could not be loaded. Check the tracker connection in Settings, then select Refresh.",
+                      ),
                       textAlign: TextAlign.center,
                       style: TextStyle(color: context.appPalette.mutedText),
                     ),
@@ -372,9 +378,9 @@ class _AiringCalendarScreenState extends ConsumerState<AiringCalendarScreen> {
                     child: ConstrainedBox(
                       constraints: const BoxConstraints(maxWidth: 540),
                       child: Text(
-                        'No followed shows are airing this week. Add a show '
-                        'to Watching or Planning on AniList or MAL, then '
-                        'refresh your list.',
+                        context.tr(
+                          "No followed shows are airing this week. Add a show to Watching or Planning on a connected tracker, then refresh your list.",
+                        ),
                         textAlign: TextAlign.center,
                         style: TextStyle(color: context.appPalette.mutedText),
                       ),
@@ -390,7 +396,9 @@ class _AiringCalendarScreenState extends ConsumerState<AiringCalendarScreen> {
                         builder: (context) {
                           final group = groups[row];
                           return Text(
-                            '${_weekdays[group.key.weekday - 1]}  ${group.key.month}/${group.key.day}',
+                            TetoLocalizations.of(
+                              context,
+                            ).weekdayDate(group.key),
                             style: TextStyle(
                               color: context.appPalette.accentBright,
                               fontSize: 14,
@@ -520,7 +528,14 @@ class _AiringCalendarScreenState extends ConsumerState<AiringCalendarScreen> {
                                                       ),
                                                       const SizedBox(height: 6),
                                                       Text(
-                                                        '$time • Episode ${entry.episode}',
+                                                        context.tr(
+                                                          "{value1} • Episode {value2}",
+                                                          {
+                                                            'value1': time,
+                                                            'value2':
+                                                                entry.episode,
+                                                          },
+                                                        ),
                                                         style: TextStyle(
                                                           color: context
                                                               .appPalette
@@ -578,8 +593,12 @@ class _AiringCalendarScreenState extends ConsumerState<AiringCalendarScreen> {
                                                 SnackBar(
                                                   content: Text(
                                                     saved
-                                                        ? 'Reminder set for 10 minutes before airtime.'
-                                                        : 'This airing is too soon for a reminder.',
+                                                        ? context.tr(
+                                                            "Reminder set for 10 minutes before airtime.",
+                                                          )
+                                                        : context.tr(
+                                                            "This airing is too soon for a reminder.",
+                                                          ),
                                                   ),
                                                 ),
                                               );

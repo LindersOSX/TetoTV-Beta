@@ -1,3 +1,6 @@
+import 'package:anime_tv/core/localization/teto_localizations.dart';
+import 'package:anime_tv/features/aniyomi/application/aniyomi_controller.dart';
+import 'package:anime_tv/features/aniyomi/presentation/aniyomi_screen.dart';
 import 'dart:async';
 
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
@@ -5,6 +8,7 @@ import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/widgets/tv_text_input.dart';
+import 'package:anime_tv/features/manga/application/manga_feature_availability.dart';
 import 'package:anime_tv/features/marketplace/application/marketplace_controller.dart';
 import 'package:anime_tv/features/marketplace/domain/addon_models.dart';
 import 'package:anime_tv/features/marketplace/presentation/source_pairing_dialog.dart';
@@ -117,6 +121,7 @@ class _MarketplaceScreenState extends ConsumerState<MarketplaceScreen> {
   List<List<_MarketplaceFocusTarget>> _navigationRows() {
     final marketplace = ref.read(marketplaceControllerProvider);
     final torrentSources = ref.read(userTorrentSourcesControllerProvider);
+    final mangaReaderEnabled = ref.read(mangaFeatureAvailableProvider);
     final rows = <List<_MarketplaceFocusTarget>>[];
 
     final header = [
@@ -125,7 +130,13 @@ class _MarketplaceScreenState extends ConsumerState<MarketplaceScreen> {
     ].map(_focusTarget).nonNulls.toList();
     if (header.isNotEmpty) rows.add(header);
     rows.addAll(
-      _groupByVisualRow([_phoneFocus, _addManifestFocus, _addRepositoryFocus]),
+      _groupByVisualRow([
+        _phoneFocus,
+        _addManifestFocus,
+        _addRepositoryFocus,
+        if (ref.read(aniyomiEnabledProvider))
+          _dynamicFocus('aniyomi', 'Aniyomi experiments'),
+      ]),
     );
 
     for (final url in torrentSources.manifestUrls) {
@@ -153,9 +164,11 @@ class _MarketplaceScreenState extends ConsumerState<MarketplaceScreen> {
     final installedStreamProviders = marketplace.installed
         .where((addon) => addon.manifest.isOnlineStreamProvider)
         .toList(growable: false);
-    final installedMangaProviders = marketplace.installed
-        .where((addon) => addon.manifest.isMangaProvider)
-        .toList(growable: false);
+    final installedMangaProviders = mangaReaderEnabled
+        ? marketplace.installed
+              .where((addon) => addon.manifest.isMangaProvider)
+              .toList(growable: false)
+        : const <InstalledStreamingAddon>[];
     final testAll = _focusTarget(_testAllProvidersFocus);
     if (testAll != null && installedStreamProviders.isNotEmpty) {
       rows.add([testAll]);
@@ -167,6 +180,14 @@ class _MarketplaceScreenState extends ConsumerState<MarketplaceScreen> {
           addon,
         ) {
           final id = addon.manifest.id;
+          if (addon.manifest.isMangaProvider && !mangaReaderEnabled) {
+            return [
+              _dynamicFocus(
+                'installed:$id:uninstall',
+                'Marketplace installed addon Uninstall',
+              ),
+            ];
+          }
           return [
             if (addon.manifest.isOnlineStreamProvider)
               _dynamicFocus(
@@ -195,7 +216,12 @@ class _MarketplaceScreenState extends ConsumerState<MarketplaceScreen> {
       _catalogSortFocus,
     ].map(_focusTarget).nonNulls.toList();
     if (catalogControls.isNotEmpty) rows.add(catalogControls);
-    final visibleCatalog = _visibleCatalog(marketplace.catalog);
+    final eligibleCatalog = mangaReaderEnabled
+        ? marketplace.catalog
+        : marketplace.catalog
+              .where((addon) => !addon.isMangaProvider)
+              .toList(growable: false);
+    final visibleCatalog = _visibleCatalog(eligibleCatalog);
     final visibleStreamCatalog = visibleCatalog
         .where((addon) => addon.isOnlineStreamProvider)
         .toList(growable: false);
@@ -322,33 +348,43 @@ class _MarketplaceScreenState extends ConsumerState<MarketplaceScreen> {
   @override
   Widget build(BuildContext context) {
     final state = ref.watch(marketplaceControllerProvider);
+    final mangaReaderEnabled = ref.watch(mangaFeatureAvailableProvider);
     final controller = ref.read(marketplaceControllerProvider.notifier);
     final torrentSources = ref.watch(userTorrentSourcesControllerProvider);
     final torrentSourceController = ref.read(
       userTorrentSourcesControllerProvider.notifier,
     );
-    final catalogLanguages = marketplaceCatalogLanguages(state.catalog);
+    final eligibleCatalog = mangaReaderEnabled
+        ? state.catalog
+        : state.catalog
+              .where((addon) => !addon.isMangaProvider)
+              .toList(growable: false);
+    final catalogLanguages = marketplaceCatalogLanguages(eligibleCatalog);
     final effectiveCatalogLanguage = catalogLanguages.contains(_catalogLanguage)
         ? _catalogLanguage
         : null;
     final visibleCatalog = filterAndSortMarketplaceCatalog(
-      state.catalog,
+      eligibleCatalog,
       languageCode: effectiveCatalogLanguage,
       sort: _catalogSort,
     );
     final installedStreamProviders = state.installed
         .where((addon) => addon.manifest.isOnlineStreamProvider)
         .toList(growable: false);
-    final installedMangaProviders = state.installed
-        .where((addon) => addon.manifest.isMangaProvider)
-        .toList(growable: false);
+    final installedMangaProviders = mangaReaderEnabled
+        ? state.installed
+              .where((addon) => addon.manifest.isMangaProvider)
+              .toList(growable: false)
+        : const <InstalledStreamingAddon>[];
     final visibleStreamCatalog = visibleCatalog
         .where((addon) => addon.isOnlineStreamProvider)
         .toList(growable: false);
-    final visibleMangaCatalog = visibleCatalog
-        .where((addon) => addon.isMangaProvider)
-        .toList(growable: false);
-    final compatibleCatalog = state.catalog.where(
+    final visibleMangaCatalog = mangaReaderEnabled
+        ? visibleCatalog
+              .where((addon) => addon.isMangaProvider)
+              .toList(growable: false)
+        : const <MarketplaceAddon>[];
+    final compatibleCatalog = eligibleCatalog.where(
       (addon) => addon.isCompatible,
     );
     final visibleCompatibleCatalog = visibleCatalog.where(
@@ -375,7 +411,9 @@ class _MarketplaceScreenState extends ConsumerState<MarketplaceScreen> {
                 children: [
                   _MarketplaceButton(
                     icon: Icons.arrow_back_rounded,
-                    label: context.isCompactWidth ? null : 'Settings',
+                    label: context.isCompactWidth
+                        ? null
+                        : context.tr("Settings"),
                     autofocus: true,
                     focusNode: _backFocus,
                     onPressed: context.pop,
@@ -386,14 +424,16 @@ class _MarketplaceScreenState extends ConsumerState<MarketplaceScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'Sources',
+                          context.tr("Sources"),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: Theme.of(context).textTheme.headlineMedium,
                         ),
                         if (!context.isCompactWidth)
                           Text(
-                            'Add Marketplace repositories and Torrent source manifests you trust.',
+                            context.tr(
+                              "Add Marketplace repositories and Torrent source manifests you trust.",
+                            ),
                             style: Theme.of(context).textTheme.bodyMedium,
                           ),
                       ],
@@ -401,7 +441,9 @@ class _MarketplaceScreenState extends ConsumerState<MarketplaceScreen> {
                   ),
                   _MarketplaceButton(
                     icon: Icons.refresh_rounded,
-                    label: context.isCompactWidth ? null : 'Refresh',
+                    label: context.isCompactWidth
+                        ? null
+                        : context.tr("Refresh"),
                     focusNode: _refreshFocus,
                     onPressed: state.loading
                         ? null
@@ -422,9 +464,10 @@ class _MarketplaceScreenState extends ConsumerState<MarketplaceScreen> {
                           _section(
                             context,
                             icon: Icons.hub_rounded,
-                            title: 'Sources',
-                            subtitle:
-                                'Enter URLs manually or use one QR code to add both source types from your phone.',
+                            title: context.tr("Sources"),
+                            subtitle: context.tr(
+                              "Enter URLs manually or use one QR code to add both source types from your phone.",
+                            ),
                           ),
                           SliverToBoxAdapter(
                             child: Padding(
@@ -435,14 +478,16 @@ class _MarketplaceScreenState extends ConsumerState<MarketplaceScreen> {
                                 children: [
                                   _MarketplaceButton(
                                     icon: Icons.phone_android_rounded,
-                                    label: 'Add sources with phone',
+                                    label: context.tr("Add sources with phone"),
                                     focusNode: _phoneFocus,
                                     onPressed: () =>
                                         showSourcePairingDialog(context),
                                   ),
                                   _MarketplaceButton(
                                     icon: Icons.add_link_rounded,
-                                    label: 'Add Torrent source manifests',
+                                    label: context.tr(
+                                      "Add Torrent source manifests",
+                                    ),
                                     focusNode: _addManifestFocus,
                                     onPressed: () => _addTorrentSource(
                                       context,
@@ -451,11 +496,26 @@ class _MarketplaceScreenState extends ConsumerState<MarketplaceScreen> {
                                   ),
                                   _MarketplaceButton(
                                     icon: Icons.playlist_add_rounded,
-                                    label: 'Add Marketplace repositories',
+                                    label: context.tr(
+                                      "Add Marketplace repositories",
+                                    ),
                                     focusNode: _addRepositoryFocus,
                                     onPressed: () =>
                                         _addRepository(context, controller),
                                   ),
+                                  if (ref.watch(aniyomiEnabledProvider))
+                                    _MarketplaceButton(
+                                      icon: Icons.science_outlined,
+                                      label: context.tr(
+                                        'Aniyomi • Experimental',
+                                      ),
+                                      focusNode: _dynamicFocus(
+                                        'aniyomi',
+                                        'Aniyomi experiments',
+                                      ),
+                                      onPressed: () =>
+                                          context.push(AniyomiScreen.routePath),
+                                    ),
                                 ],
                               ),
                             ),
@@ -463,16 +523,19 @@ class _MarketplaceScreenState extends ConsumerState<MarketplaceScreen> {
                           _section(
                             context,
                             icon: Icons.cloud_download_outlined,
-                            title: 'Torrent source manifests',
-                            subtitle:
-                                'Optional Stremio-compatible manifests you add yourself. TetoTV does not include or recommend a torrent catalog.',
+                            title: context.tr("Torrent source manifests"),
+                            subtitle: context.tr(
+                              "Optional Stremio-compatible manifests you add yourself. TetoTV does not include or recommend a torrent catalog.",
+                            ),
                           ),
                           if (torrentSources.manifestUrls.isEmpty)
                             SliverToBoxAdapter(
                               child: Padding(
                                 padding: const EdgeInsets.only(bottom: 10),
                                 child: Text(
-                                  'No torrent sources added. Debrid searches stay unavailable until you explicitly add one.',
+                                  context.tr(
+                                    "No torrent sources added. Debrid searches stay unavailable until you explicitly add one.",
+                                  ),
                                   style: TextStyle(
                                     color: context.appPalette.mutedText,
                                   ),
@@ -501,9 +564,10 @@ class _MarketplaceScreenState extends ConsumerState<MarketplaceScreen> {
                           _section(
                             context,
                             icon: Icons.hub_outlined,
-                            title: 'Marketplace repositories',
-                            subtitle:
-                                'TetoTV imports compatible Seanime anime-stream and manga providers. Anime providers appear in Web Streams; manga providers appear in Manga. Other plugin types are ignored. Catalogs are cached locally.',
+                            title: context.tr("Marketplace repositories"),
+                            subtitle: context.tr(
+                              "TetoTV imports compatible Seanime anime-stream and manga providers. Anime providers appear in Web Streams; manga providers appear in Manga. Other plugin types are ignored. Catalogs are cached locally.",
+                            ),
                           ),
                           SliverList.builder(
                             itemCount: state.repositories.length,
@@ -540,16 +604,19 @@ class _MarketplaceScreenState extends ConsumerState<MarketplaceScreen> {
                             _section(
                               context,
                               icon: Icons.live_tv_rounded,
-                              title: 'Installed anime stream providers',
-                              subtitle:
-                                  'Enabled providers participate in Web Stream searches. Stream compatibility is checked automatically every 24 hours.',
+                              title: context.tr(
+                                "Installed anime stream providers",
+                              ),
+                              subtitle: context.tr(
+                                "Enabled providers participate in Web Stream searches. Stream compatibility is checked automatically every 24 hours.",
+                              ),
                               trailing: _MarketplaceButton(
                                 icon: state.testingAllProviders
                                     ? Icons.hourglass_top_rounded
                                     : Icons.fact_check_outlined,
                                 label: state.testingAllProviders
-                                    ? 'Testing all…'
-                                    : 'Test all',
+                                    ? context.tr("Testing all…")
+                                    : context.tr("Test all"),
                                 focusNode: _testAllProvidersFocus,
                                 onPressed: state.testingAllProviders
                                     ? null
@@ -617,9 +684,12 @@ class _MarketplaceScreenState extends ConsumerState<MarketplaceScreen> {
                             _section(
                               context,
                               icon: Icons.menu_book_rounded,
-                              title: 'Installed manga providers',
-                              subtitle:
-                                  'Enabled manga sources appear in Manga. Stream compatibility tests do not apply to manga providers.',
+                              title: context.tr("Installed manga providers"),
+                              subtitle: context.tr(
+                                mangaReaderEnabled
+                                    ? "Enabled manga sources appear in Manga. Stream compatibility tests do not apply to manga providers."
+                                    : "Manga reader is disabled. Installed sources are kept and can only be uninstalled here.",
+                              ),
                             ),
                             SliverGrid(
                               gridDelegate:
@@ -639,18 +709,22 @@ class _MarketplaceScreenState extends ConsumerState<MarketplaceScreen> {
                                   health: null,
                                   message: null,
                                   busy: state.busyAddonId == addon.manifest.id,
-                                  toggleFocusNode: _dynamicFocus(
-                                    'installed:${addon.manifest.id}:toggle',
-                                    'Marketplace installed addon Toggle',
-                                  ),
+                                  toggleFocusNode: mangaReaderEnabled
+                                      ? _dynamicFocus(
+                                          'installed:${addon.manifest.id}:toggle',
+                                          'Marketplace installed addon Toggle',
+                                        )
+                                      : null,
                                   uninstallFocusNode: _dynamicFocus(
                                     'installed:${addon.manifest.id}:uninstall',
                                     'Marketplace installed addon Uninstall',
                                   ),
-                                  onToggle: () => controller.setAddonEnabled(
-                                    addon.manifest.id,
-                                    !addon.enabled,
-                                  ),
+                                  onToggle: mangaReaderEnabled
+                                      ? () => controller.setAddonEnabled(
+                                          addon.manifest.id,
+                                          !addon.enabled,
+                                        )
+                                      : null,
                                   onUninstall: () => _confirmUninstall(
                                     context,
                                     addon,
@@ -666,11 +740,23 @@ class _MarketplaceScreenState extends ConsumerState<MarketplaceScreen> {
                           _section(
                             context,
                             icon: Icons.storefront_outlined,
-                            title: 'Available providers',
-                            subtitle:
-                                '${visibleCompatibleCatalog.length} of ${compatibleCatalog.length} compatible providers shown: '
-                                '$compatibleStreamCount anime stream and $compatibleMangaCount manga. '
-                                'JavaScript and TypeScript run in TetoTV\'s restricted provider runtime.',
+                            title: context.tr("Available providers"),
+                            subtitle: context.tr(
+                              mangaReaderEnabled
+                                  ? "{value1} of {value2} compatible providers shown: {value3} anime stream and {value4} manga. JavaScript and TypeScript run in TetoTV's restricted provider runtime."
+                                  : "{value1} of {value2} compatible anime stream providers shown. Manga providers are hidden while the Manga reader is disabled. JavaScript and TypeScript run in TetoTV's restricted provider runtime.",
+                              mangaReaderEnabled
+                                  ? {
+                                      'value1': visibleCompatibleCatalog.length,
+                                      'value2': compatibleCatalog.length,
+                                      'value3': compatibleStreamCount,
+                                      'value4': compatibleMangaCount,
+                                    }
+                                  : {
+                                      'value1': compatibleStreamCount,
+                                      'value2': compatibleCatalog.length,
+                                    },
+                            ),
                           ),
                           SliverToBoxAdapter(
                             child: Padding(
@@ -682,8 +768,13 @@ class _MarketplaceScreenState extends ConsumerState<MarketplaceScreen> {
                                   _MarketplaceButton(
                                     icon: Icons.translate_rounded,
                                     label: effectiveCatalogLanguage == null
-                                        ? 'Language: All'
-                                        : 'Language: ${marketplaceCatalogLanguageLabel(effectiveCatalogLanguage)}',
+                                        ? context.tr("Language: All")
+                                        : context.tr("Language: {value1}", {
+                                            'value1':
+                                                marketplaceCatalogLanguageLabel(
+                                                  effectiveCatalogLanguage,
+                                                ),
+                                          }),
                                     focusNode: _languageFilterFocus,
                                     onPressed: catalogLanguages.isEmpty
                                         ? null
@@ -709,10 +800,10 @@ class _MarketplaceScreenState extends ConsumerState<MarketplaceScreen> {
                                     label:
                                         _catalogSort ==
                                             MarketplaceCatalogSort.name
-                                        ? 'Sort: Name'
-                                        : 'Sort: Language',
+                                        ? context.tr("Sort: Name")
+                                        : context.tr("Sort: Language"),
                                     focusNode: _catalogSortFocus,
-                                    onPressed: state.catalog.isEmpty
+                                    onPressed: eligibleCatalog.isEmpty
                                         ? null
                                         : () async {
                                             final selected =
@@ -732,18 +823,29 @@ class _MarketplaceScreenState extends ConsumerState<MarketplaceScreen> {
                               ),
                             ),
                           ),
-                          if (state.catalog.isEmpty)
+                          if (eligibleCatalog.isEmpty)
                             SliverToBoxAdapter(
                               child: _EmptyCatalog(
                                 errors: state.repositoryErrors,
+                                message: mangaReaderEnabled
+                                    ? null
+                                    : context.tr(
+                                        "No anime stream providers are available. Manga providers stay hidden while the Manga reader is disabled.",
+                                      ),
                               ),
                             )
                           else if (visibleCatalog.isEmpty)
                             SliverToBoxAdapter(
                               child: _EmptyCatalog(
                                 errors: const {},
-                                message:
-                                    'No providers declare ${marketplaceCatalogLanguageLabel(effectiveCatalogLanguage ?? 'unknown')} support.',
+                                message: context.tr(
+                                  "No providers declare {value1} support.",
+                                  {
+                                    'value1': marketplaceCatalogLanguageLabel(
+                                      effectiveCatalogLanguage ?? 'unknown',
+                                    ),
+                                  },
+                                ),
                               ),
                             )
                           else ...[
@@ -751,9 +853,10 @@ class _MarketplaceScreenState extends ConsumerState<MarketplaceScreen> {
                               _providerKindSection(
                                 context,
                                 icon: Icons.live_tv_rounded,
-                                title: 'Anime stream providers',
-                                subtitle:
-                                    'Install these for anime playback results in Web Streams.',
+                                title: context.tr("Anime stream providers"),
+                                subtitle: context.tr(
+                                  "Install these for anime playback results in Web Streams.",
+                                ),
                               ),
                               _catalogGrid(
                                 addons: visibleStreamCatalog,
@@ -768,9 +871,10 @@ class _MarketplaceScreenState extends ConsumerState<MarketplaceScreen> {
                               _providerKindSection(
                                 context,
                                 icon: Icons.menu_book_rounded,
-                                title: 'Manga providers',
-                                subtitle:
-                                    'Install these sources to browse, read, and download titles from Manga.',
+                                title: context.tr("Manga providers"),
+                                subtitle: context.tr(
+                                  "Install these sources to browse, read, and download titles from Manga.",
+                                ),
                               ),
                               _catalogGrid(
                                 addons: visibleMangaCatalog,
@@ -815,7 +919,13 @@ class _MarketplaceScreenState extends ConsumerState<MarketplaceScreen> {
           'Marketplace catalog addon action',
         ),
         onInstall: addon.isCompatible && !busy
-            ? () => _confirmInstall(context, addon, controller)
+            ? () => _confirmInstall(
+                context,
+                addon,
+                controller,
+                isMangaReaderAvailable: () =>
+                    ref.read(mangaFeatureAvailableProvider),
+              )
             : null,
       );
     }, childCount: addons.length),
@@ -918,7 +1028,7 @@ class _RepositoryTile extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'User repository',
+                  context.tr("User repository"),
                   style: const TextStyle(fontWeight: FontWeight.w800),
                 ),
                 Text(
@@ -947,15 +1057,15 @@ class _RepositoryTile extends StatelessWidget {
             label: context.isCompactWidth
                 ? null
                 : repository.enabled
-                ? 'Enabled'
-                : 'Disabled',
+                ? context.tr("Enabled")
+                : context.tr("Disabled"),
             focusNode: toggleFocusNode,
             onPressed: onToggle,
           ),
           const SizedBox(width: 8),
           _MarketplaceButton(
             icon: Icons.delete_outline_rounded,
-            label: context.isCompactWidth ? null : 'Remove',
+            label: context.isCompactWidth ? null : context.tr("Remove"),
             focusNode: removeFocusNode,
             onPressed: onRemove,
           ),
@@ -995,8 +1105,8 @@ class _TorrentSourceTile extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
-                'User torrent source',
+              Text(
+                context.tr("User torrent source"),
                 style: TextStyle(fontWeight: FontWeight.w800),
               ),
               Text(
@@ -1010,7 +1120,7 @@ class _TorrentSourceTile extends StatelessWidget {
         ),
         _MarketplaceButton(
           icon: Icons.delete_outline_rounded,
-          label: context.isCompactWidth ? null : 'Remove',
+          label: context.isCompactWidth ? null : context.tr("Remove"),
           focusNode: removeFocusNode,
           onPressed: onRemove,
         ),
@@ -1026,10 +1136,10 @@ class _InstalledAddonCard extends StatelessWidget {
     required this.message,
     required this.busy,
     this.testFocusNode,
-    required this.toggleFocusNode,
+    this.toggleFocusNode,
     this.resetFocusNode,
     required this.uninstallFocusNode,
-    required this.onToggle,
+    this.onToggle,
     required this.onUninstall,
     this.onTest,
     this.onReset,
@@ -1040,10 +1150,10 @@ class _InstalledAddonCard extends StatelessWidget {
   final String? message;
   final bool busy;
   final FocusNode? testFocusNode;
-  final FocusNode toggleFocusNode;
+  final FocusNode? toggleFocusNode;
   final FocusNode? resetFocusNode;
   final FocusNode uninstallFocusNode;
-  final VoidCallback onToggle;
+  final VoidCallback? onToggle;
   final VoidCallback onUninstall;
   final VoidCallback? onTest;
   final VoidCallback? onReset;
@@ -1051,14 +1161,17 @@ class _InstalledAddonCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isStreamProvider = addon.manifest.isOnlineStreamProvider;
+    final mangaReaderAvailable =
+        !addon.manifest.isMangaProvider || onToggle != null;
     final badge = addon.manifest.isMangaProvider
-        ? addon.enabled
+        ? !mangaReaderAvailable
+              ? 'READER DISABLED'
+              : addon.enabled
               ? 'ENABLED'
               : 'DISABLED'
         : !addon.enabled
         ? 'DISABLED'
-        : health?.lastFailureReason == 'runtime_api' ||
-              health?.lastTestReason == 'runtime_api'
+        : health?.lastTestReason == 'runtime_api'
         ? 'INCOMPATIBLE RUNTIME'
         : health?.lastFailureReason == 'unsafe_target' ||
               health?.lastTestReason == 'unsafe_target'
@@ -1068,14 +1181,18 @@ class _InstalledAddonCard extends StatelessWidget {
         : health?.lastTestReason == 'test_title_unavailable'
         ? 'TEST INCONCLUSIVE'
         : health?.compatibilityScore != null
-        ? 'HEALTH ${health!.compatibilityScore}/100'
+        ? context.tr('HEALTH {score}/100', {
+            'score': health!.compatibilityScore!,
+          })
         : health?.lastSuccessAt != null
         ? 'HEALTHY • NOT TESTED'
         : 'NOT TESTED';
     return _AddonShell(
       addon: addon.manifest,
       kindBadge: addon.manifest.isMangaProvider
-          ? 'MANGA SOURCE • APPEARS IN MANGA'
+          ? mangaReaderAvailable
+                ? 'MANGA SOURCE • APPEARS IN MANGA'
+                : 'MANGA SOURCE • READER DISABLED'
           : 'ANIME STREAM • WEB STREAMS',
       badge: badge,
       footer: Column(
@@ -1088,7 +1205,9 @@ class _InstalledAddonCard extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
                   Text(
-                    'Last tested ${_shortTestDate(health!.lastTestedAt!)}',
+                    context.tr("Last tested {value1}", {
+                      'value1': _shortTestDate(health!.lastTestedAt!),
+                    }),
                     style: TextStyle(
                       color: context.appPalette.mutedText,
                       fontSize: 11,
@@ -1096,7 +1215,7 @@ class _InstalledAddonCard extends StatelessWidget {
                     ),
                   ),
                   Text(
-                    _providerStageSummary(health!),
+                    _providerStageSummary(context, health!),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
@@ -1113,7 +1232,10 @@ class _InstalledAddonCard extends StatelessWidget {
               padding: const EdgeInsets.only(bottom: 7),
               child: Text(
                 message ??
-                    '${health!.consecutiveFailures} failure(s): ${health!.lastError}',
+                    context.tr("{value1} failure(s): {value2}", {
+                      'value1': health!.consecutiveFailures,
+                      'value2': health!.lastError ?? '',
+                    }),
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
                 textAlign: TextAlign.right,
@@ -1132,28 +1254,31 @@ class _InstalledAddonCard extends StatelessWidget {
                   icon: busy
                       ? Icons.hourglass_top_rounded
                       : Icons.health_and_safety,
-                  label: busy ? 'Testing…' : 'Test',
+                  label: busy ? context.tr("Testing…") : context.tr("Test"),
                   focusNode: testFocusNode,
                   onPressed: busy || !addon.enabled ? null : onTest,
                 ),
-              _MarketplaceButton(
-                icon: addon.enabled
-                    ? Icons.pause_rounded
-                    : Icons.play_arrow_rounded,
-                label: addon.enabled ? 'Disable' : 'Enable',
-                focusNode: toggleFocusNode,
-                onPressed: onToggle,
-              ),
+              if (onToggle != null)
+                _MarketplaceButton(
+                  icon: addon.enabled
+                      ? Icons.pause_rounded
+                      : Icons.play_arrow_rounded,
+                  label: addon.enabled
+                      ? context.tr("Disable")
+                      : context.tr("Enable"),
+                  focusNode: toggleFocusNode,
+                  onPressed: onToggle,
+                ),
               if (isStreamProvider && health != null && onReset != null)
                 _MarketplaceButton(
                   icon: Icons.restart_alt_rounded,
-                  label: 'Reset',
+                  label: context.tr("Reset"),
                   focusNode: resetFocusNode,
                   onPressed: onReset,
                 ),
               _MarketplaceButton(
                 icon: Icons.delete_outline_rounded,
-                label: 'Uninstall',
+                label: context.tr("Uninstall"),
                 focusNode: uninstallFocusNode,
                 onPressed: onUninstall,
               ),
@@ -1172,7 +1297,7 @@ String _shortTestDate(DateTime value) {
       '${two(local.hour)}:${two(local.minute)}';
 }
 
-String _providerStageSummary(ProviderHealth health) {
+String _providerStageSummary(BuildContext context, ProviderHealth health) {
   const stages = [
     ('search', 'Search'),
     ('title_matching', 'Title'),
@@ -1195,7 +1320,7 @@ String _providerStageSummary(ProviderHealth health) {
             : index == current
             ? '✕'
             : '—';
-        return '${item.$2} $marker';
+        return '${context.tr(item.$2)} $marker';
       })
       .join(' • ');
 }
@@ -1229,7 +1354,9 @@ class _CatalogAddonCard extends StatelessWidget {
       addon: addon,
       kindBadge: kindBadge,
       badge: unsupported
-          ? '${addon.language.toUpperCase()} / UNSUPPORTED'
+          ? context.tr('{language} / UNSUPPORTED', {
+              'language': addon.language.toUpperCase(),
+            })
           : updateAvailable
           ? 'UPDATE AVAILABLE'
           : installed != null
@@ -1246,14 +1373,14 @@ class _CatalogAddonCard extends StatelessWidget {
             ? Icons.download_rounded
             : Icons.check_rounded,
         label: busy
-            ? 'Installing…'
+            ? context.tr("Installing…")
             : updateAvailable
-            ? 'Update'
+            ? context.tr("Update")
             : installed == null
             ? unsupported
-                  ? 'Incompatible runtime'
-                  : 'Install'
-            : 'Installed',
+                  ? context.tr("Incompatible runtime")
+                  : context.tr("Install")
+            : context.tr("Installed"),
         focusNode: actionFocusNode,
         onPressed: installed != null && !updateAvailable ? null : onInstall,
       ),
@@ -1327,15 +1454,18 @@ class _AddonShell extends StatelessWidget {
             spacing: 6,
             runSpacing: 6,
             children: [
-              _ProviderBadge(label: kindBadge, emphasizesKind: true),
-              _ProviderBadge(label: badge),
+              _ProviderBadge(
+                label: context.tr(kindBadge),
+                emphasizesKind: true,
+              ),
+              _ProviderBadge(label: context.tr(badge)),
             ],
           ),
           const SizedBox(height: 8),
           Expanded(
             child: Text(
               addon.description.isEmpty
-                  ? 'No description provided.'
+                  ? context.tr("No description provided.")
                   : addon.description,
               maxLines: 3,
               overflow: TextOverflow.ellipsis,
@@ -1483,15 +1613,15 @@ Future<_CatalogLanguageSelection?> _chooseCatalogLanguage(
   context: context,
   builder: (dialogContext) => SimpleDialog(
     backgroundColor: dialogContext.appPalette.surface,
-    title: const Text('Filter provider language'),
+    title: Text(context.tr("Filter provider language")),
     children: [
       TextButton(
         autofocus: selected == null,
         onPressed: () =>
             Navigator.pop(dialogContext, const _CatalogLanguageSelection(null)),
-        child: const Align(
+        child: Align(
           alignment: Alignment.centerLeft,
-          child: Text('All languages'),
+          child: Text(context.tr("All languages")),
         ),
       ),
       for (final language in languages)
@@ -1515,24 +1645,24 @@ Future<MarketplaceCatalogSort?> _chooseCatalogSort(
   context: context,
   builder: (dialogContext) => SimpleDialog(
     backgroundColor: dialogContext.appPalette.surface,
-    title: const Text('Sort available providers'),
+    title: Text(context.tr("Sort available providers")),
     children: [
       TextButton(
         autofocus: selected == MarketplaceCatalogSort.name,
         onPressed: () =>
             Navigator.pop(dialogContext, MarketplaceCatalogSort.name),
-        child: const Align(
+        child: Align(
           alignment: Alignment.centerLeft,
-          child: Text('Name (A–Z)'),
+          child: Text(context.tr("Name (A–Z)")),
         ),
       ),
       TextButton(
         autofocus: selected == MarketplaceCatalogSort.language,
         onPressed: () =>
             Navigator.pop(dialogContext, MarketplaceCatalogSort.language),
-        child: const Align(
+        child: Align(
           alignment: Alignment.centerLeft,
-          child: Text('Language, then name'),
+          child: Text(context.tr("Language, then name")),
         ),
       ),
     ],
@@ -1549,23 +1679,25 @@ Future<void> _addRepository(
       context: context,
       builder: (context) => AlertDialog(
         backgroundColor: context.appPalette.surface,
-        title: const Text('Add Marketplace repositories'),
+        title: Text(context.tr("Add Marketplace repositories")),
         content: SizedBox(
           width: 680,
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
-                'Paste or enter up to 32 public HTTPS catalog links. Separate multiple links with spaces or put one on each line.',
+              Text(
+                context.tr(
+                  "Paste or enter up to 32 public HTTPS catalog links. Separate multiple links with spaces or put one on each line.",
+                ),
               ),
               const SizedBox(height: 14),
               TvTextInput(
                 controller: input,
                 autofocus: true,
-                labelText: 'HTTPS catalog links',
+                labelText: context.tr("HTTPS catalog links"),
                 hintText: 'https://example.com/marketplace.json',
-                keyboardTitle: 'Repository links',
+                keyboardTitle: context.tr("Repository links"),
               ),
             ],
           ),
@@ -1574,15 +1706,15 @@ Future<void> _addRepository(
           TextButton.icon(
             onPressed: () => _pasteSourceLinks(input),
             icon: const Icon(Icons.content_paste_rounded),
-            label: const Text('PASTE LINKS'),
+            label: Text(context.tr("PASTE LINKS")),
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('CANCEL'),
+            child: Text(context.tr("CANCEL")),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('ADD ALL'),
+            child: Text(context.tr("ADD ALL")),
           ),
         ],
       ),
@@ -1610,23 +1742,25 @@ Future<void> _addTorrentSource(
       context: context,
       builder: (context) => AlertDialog(
         backgroundColor: context.appPalette.surface,
-        title: const Text('Add torrent source manifests'),
+        title: Text(context.tr("Add torrent source manifests")),
         content: SizedBox(
           width: 680,
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
-                'Paste or enter multiple Torrent source manifests you trust. Separate links with spaces or put one on each line. Only use sources for content you are authorized to access.',
+              Text(
+                context.tr(
+                  "Paste or enter multiple Torrent source manifests you trust. Separate links with spaces or put one on each line. Only use sources for content you are authorized to access.",
+                ),
               ),
               const SizedBox(height: 14),
               TvTextInput(
                 controller: input,
                 autofocus: true,
-                labelText: 'HTTPS manifest links',
+                labelText: context.tr("HTTPS manifest links"),
                 hintText: 'https://example.com/addon/manifest.json',
-                keyboardTitle: 'Torrent manifest links',
+                keyboardTitle: context.tr("Torrent manifest links"),
               ),
             ],
           ),
@@ -1635,15 +1769,15 @@ Future<void> _addTorrentSource(
           TextButton.icon(
             onPressed: () => _pasteSourceLinks(input),
             icon: const Icon(Icons.content_paste_rounded),
-            label: const Text('PASTE LINKS'),
+            label: Text(context.tr("PASTE LINKS")),
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('CANCEL'),
+            child: Text(context.tr("CANCEL")),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('ADD ALL'),
+            child: Text(context.tr("ADD ALL")),
           ),
         ],
       ),
@@ -1674,17 +1808,32 @@ Future<void> _pasteSourceLinks(TextEditingController controller) async {
 Future<void> _confirmInstall(
   BuildContext context,
   MarketplaceAddon addon,
-  MarketplaceController controller,
-) async {
+  MarketplaceController controller, {
+  required bool Function() isMangaReaderAvailable,
+}) async {
+  if (addon.isMangaProvider && !isMangaReaderAvailable()) {
+    _notice(context, context.tr('Manga reader is disabled in Settings.'));
+    return;
+  }
   final accepted = await _confirm(
     context,
-    title: 'Install ${addon.name}?',
+    title: context.tr("Install {value1}?", {'value1': addon.name}),
     body: addon.isMangaProvider
-        ? 'This third-party manga provider can receive your manga searches and selected title/chapter IDs, and its public HTTPS hosts can see ordinary connection data such as your IP address. It cannot access TetoTV tokens, device files, or native Android APIs. Only install providers you trust.'
-        : 'This third-party provider may access public HTTPS websites. It cannot access TetoTV tokens, device files, or native Android APIs. Only install repositories you trust.',
+        ? context.tr(
+            "This third-party manga provider can receive your manga searches and selected title/chapter IDs, and its public HTTPS hosts can see ordinary connection data such as your IP address. It cannot access TetoTV tokens, device files, or native Android APIs. Only install providers you trust.",
+          )
+        : context.tr(
+            "This third-party provider may access public HTTPS websites. It cannot access TetoTV tokens, device files, or native Android APIs. Only install repositories you trust.",
+          ),
     action: 'INSTALL',
   );
   if (!accepted) return;
+  if (addon.isMangaProvider && !isMangaReaderAvailable()) {
+    if (context.mounted) {
+      _notice(context, context.tr('Manga reader is disabled in Settings.'));
+    }
+    return;
+  }
   try {
     await controller.install(addon);
   } catch (error) {
@@ -1699,10 +1848,14 @@ Future<void> _confirmUninstall(
 ) async {
   if (await _confirm(
     context,
-    title: 'Uninstall ${addon.manifest.name}?',
+    title: context.tr("Uninstall {value1}?", {'value1': addon.manifest.name}),
     body: addon.manifest.isMangaProvider
-        ? 'This source will no longer appear in Manga. Saved reading progress and downloaded chapters are not changed.'
-        : 'Its web streams will no longer appear. Playback history and tracking are not changed.',
+        ? context.tr(
+            "This source will no longer appear in Manga. Saved reading progress and downloaded chapters are not changed.",
+          )
+        : context.tr(
+            "Its web streams will no longer appear. Playback history and tracking are not changed.",
+          ),
     action: 'UNINSTALL',
   )) {
     await controller.uninstall(addon.manifest.id);
@@ -1716,9 +1869,10 @@ Future<void> _confirmRepositoryRemoval(
 ) async {
   if (await _confirm(
     context,
-    title: 'Remove repository?',
-    body:
-        'Already installed providers remain installed. Add the repository URL again later if you want its catalog back.',
+    title: context.tr("Remove repository?"),
+    body: context.tr(
+      "Already installed providers remain installed. Add the repository URL again later if you want its catalog back.",
+    ),
     action: 'REMOVE',
   )) {
     await controller.removeRepository(repository);
@@ -1784,7 +1938,7 @@ Future<bool> showMarketplaceConfirmationDialog(
                       focusNode: cancelFocus,
                       autofocus: !autofocusAction,
                       onPressed: () => Navigator.pop(dialogContext, false),
-                      child: const Text('CANCEL'),
+                      child: Text(context.tr("CANCEL")),
                     ),
                     const SizedBox(width: 8),
                     FilledButton(

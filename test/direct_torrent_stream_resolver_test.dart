@@ -6,6 +6,7 @@ import 'package:anime_tv/features/streaming/data/direct_torrent_stream_resolver.
 import 'package:anime_tv/features/streaming/domain/episode_identity_guard.dart';
 import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter/services.dart';
 
 void main() {
   const episode = EpisodeReference(
@@ -64,6 +65,7 @@ void main() {
       anilistMediaId: 4,
       title: 'Example Season 4',
       episode: 25,
+      absoluteSeasonOffset: 63,
     );
     const seasonRelease = ReleaseCandidate(
       infoHash: '1123456789abcdef0123456789abcdef01234567',
@@ -97,8 +99,51 @@ void main() {
             .first;
 
     expect(platform.lastRequestedSeason, 4);
+    expect(platform.lastRequestedAbsoluteEpisode, 88);
+    expect(platform.lastAllowSeasonRelativeBare, isTrue);
     await ready.playbackLease!.close();
     expect(platform.stoppedSessionIds, ['season-session']);
+  });
+
+  test('unnumbered sequel context requires native numbering proof', () async {
+    const sequelEpisode = EpisodeReference(
+      anilistMediaId: 5,
+      title: 'Example: The Final Season',
+      episode: 7,
+    );
+    const sequelRelease = ReleaseCandidate(
+      infoHash: '2123456789abcdef0123456789abcdef01234567',
+      magnetUri: 'magnet:?xt=urn:btih:2123456789abcdef0123456789abcdef01234567',
+      releaseName: 'Example The Final Season batch',
+      seeders: 8,
+      sourceId: 'test',
+      preferredFileIndex: 70,
+    );
+    final platform = _FakePlatform(
+      expectedEpisode: 7,
+      expectedPreferredFileIndex: 70,
+      expectedMagnet: sequelRelease.magnetUri,
+      startCallback: (_) async => DirectTorrentNativeSession(
+        sessionId: 'sequel-session',
+        uri: Uri.parse('http://127.0.0.1:45321/${_repeat('f', 64)}'),
+        size: 1,
+        mimeType: 'video/mp4',
+        selectedBasename: 'Example.S04E07.mkv',
+      ),
+    );
+
+    final ready =
+        await DirectTorrentStreamResolver(
+              const _StaticReleaseSource(sequelRelease),
+              platform: platform,
+            )
+            .resolve(sequelEpisode)
+            .where((resolution) => resolution is StreamReady)
+            .cast<StreamReady>()
+            .first;
+
+    expect(platform.lastRequireNumberingSchemeEvidence, isTrue);
+    await ready.playbackLease!.close();
   });
 
   test(
@@ -171,6 +216,34 @@ void main() {
     expect(source.searchCount, 0);
     expect(platform.startCount, 0);
   });
+
+  test(
+    'native ambiguity becomes a candidate-specific identity error',
+    () async {
+      final platform = _FakePlatform(
+        startCallback: (_) => Future.error(
+          PlatformException(
+            code: 'DIRECT_TORRENT_EPISODE_AMBIGUOUS',
+            message: 'native details are not exposed',
+          ),
+        ),
+      );
+
+      await expectLater(
+        DirectTorrentStreamResolver(
+          const _ReleaseSource(),
+          platform: platform,
+        ).resolve(episode),
+        emitsError(
+          isA<EpisodeIdentityAmbiguousException>().having(
+            (error) => error.reasonCode,
+            'reasonCode',
+            'episode_file_identity_ambiguous',
+          ),
+        ),
+      );
+    },
+  );
 
   test(
     'confirmed selected-file mismatch is blocked and lease closes',
@@ -308,6 +381,10 @@ class _FakePlatform implements DirectTorrentPlatformClient {
   final List<String> stoppedSessionIds = [];
   int startCount = 0;
   int? lastRequestedSeason;
+  int? lastRequestedAbsoluteEpisode;
+  bool? lastRequestedSpecial;
+  bool? lastAllowSeasonRelativeBare;
+  bool? lastRequireNumberingSchemeEvidence;
 
   @override
   Future<DirectTorrentCapability> capability() async => DirectTorrentCapability(
@@ -324,10 +401,18 @@ class _FakePlatform implements DirectTorrentPlatformClient {
     required String magnet,
     required int episode,
     int? season,
+    int? absoluteEpisode,
+    bool requestedSpecial = false,
+    bool allowSeasonRelativeBare = false,
+    bool requireNumberingSchemeEvidence = false,
     int? preferredFileIndex,
   }) {
     startCount++;
     lastRequestedSeason = season;
+    lastRequestedAbsoluteEpisode = absoluteEpisode;
+    lastRequestedSpecial = requestedSpecial;
+    lastAllowSeasonRelativeBare = allowSeasonRelativeBare;
+    lastRequireNumberingSchemeEvidence = requireNumberingSchemeEvidence;
     expect(magnet, expectedMagnet);
     expect(episode, expectedEpisode);
     expect(preferredFileIndex, expectedPreferredFileIndex);

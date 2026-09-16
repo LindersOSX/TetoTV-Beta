@@ -393,7 +393,7 @@ void main() {
       await controller.syncAppUpdate(_updateState(notes: markdown));
 
       final body = controller.state.items.single.body;
-      expect(body, startsWith('Changes Details Faster updates'));
+      expect(body, startsWith('• Details Faster updates'));
       expect(body, isNot(contains('https://')));
       expect(body, isNot(contains('**')));
       expect(body.length, lessThanOrEqualTo(480));

@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:anime_tv/core/diagnostics/explicit_diagnostics_reporter.dart';
+import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as path;
@@ -188,6 +189,330 @@ void main() {
     expect(context['host'], '[REDACTED]');
     expect(context['safe'], {'attempt': 3, 'phase': 'opening'});
   });
+
+  test(
+    'Aniyomi evidence survives persistence and explicit export safely',
+    () async {
+      const package = 'eu.kanade.tachiyomi.animeextension.en.fixture';
+      final database = _DiagnosticExecutor(_DiagnosticDisk());
+      await persistDiagnosticEvent(
+        database,
+        component: 'aniyomi-runtime',
+        message: 'Aniyomi provider attempt',
+        context: const {
+          'event': 'provider_attempt',
+          'extension_package': package,
+          'api_version': '16',
+          'extension_version': '1.4.7',
+          'extension_version_code': 47,
+          'source_language': 'pt-br',
+          'operation': 'videos',
+          'outcome': 'success',
+          'stage': 'stream_extraction',
+          'reason_code': 'playable_streams_found',
+          'runtime': 'experimental_http_subset',
+          'runtime_revision': 'quickjs-2026.09',
+          'anime_api_versions': ['14', '16'],
+          'manga_api_versions': ['1.4', '1.5'],
+          'capabilities': {
+            'currentHosterFlow': true,
+            'lazyVideoResolution': true,
+            'lazyHosterDeferral': true,
+            'opaqueMangaImageFetch': true,
+            'nativeLibraries': false,
+          },
+          'result_limits': {
+            'replyBytes': 4194304,
+            'httpBodyBytes': 4194304,
+            'httpMetadataBytes': 16384,
+            'targetedEpisodeCandidates': 4096,
+            'imageCapabilityCount': 4096,
+            'imageCapabilityTtlSeconds': 7200,
+            'imageBytes': 20 * 1024 * 1024,
+            'imageConcurrentRequests': 3,
+            'videos': 512,
+            'hosters': 64,
+            'lazyHostersPerRequest': 8,
+          },
+          'supports_current_hoster_flow': true,
+          'queued_count': 2,
+          'active_count': 3,
+          'worker_capacity': 4,
+          'queue_wait_ms': 12,
+          'execution_ms': 345,
+          'total_ms': 357,
+          'broker_failure': 'network',
+          'broker_redirect_count': 1,
+          'broker_response_size_bucket': '64to128k',
+          'broker_status_class': '2xx',
+          'native_code': 'extension_execution_failed',
+          'native_stage': 'source_operation',
+          'native_reason_code': 'io',
+          'video_original_count': 262144,
+          'video_returned_count': 5,
+          'video_filtered_count': 1,
+          'video_truncated_count': 262139,
+          'video_discarded_count': 0,
+          'video_original_hoster_count': 6,
+          'video_visited_hoster_count': 5,
+          'video_lazy_hoster_count': 3,
+          'video_attempted_lazy_hoster_count': 2,
+          'video_resolved_lazy_hoster_count': 1,
+          'video_failed_lazy_hoster_count': 1,
+          'video_deferred_hoster_count': 1,
+          'video_discarded_hoster_count': 2,
+          'video_truncated_hoster_count': 1,
+          'video_discarded_track_count': 3,
+          'video_local_hls_bridge_count': 2,
+          'external_audio_track_count': 2,
+          'rejected_external_audio_count': 1,
+          'rejected_invalid_media_url_count': 4,
+          'query': 'PRIVATE_QUERY_CANARY',
+          'url': 'https://private.example/video.m3u8',
+          'headers': {'Cookie': 'PRIVATE_COOKIE_CANARY'},
+          'title': 'PRIVATE_TITLE_CANARY',
+          'sourceId': 'PRIVATE_SOURCE_CANARY',
+          'account_id': 'PRIVATE_ACCOUNT_CANARY',
+          'unknown_field': 'PRIVATE_UNKNOWN_CANARY',
+        },
+        occurredAt: now,
+      );
+
+      final history = await loadDiagnosticEventHistory(database, now: now);
+      final event = (history['diagnosticEvents']! as List).single as Map;
+      final context = event['context']! as Map;
+      expect(context['extension_package'], package);
+      expect(context['api_version'], '16');
+      expect(context['source_language'], 'pt-br');
+      expect(context['runtime_revision'], 'quickjs-2026.09');
+      expect(context['worker_capacity'], 4);
+      expect(context['queued_count'], 2);
+      expect(context['active_count'], 3);
+      expect(context['queue_wait_ms'], 12);
+      expect(context['execution_ms'], 345);
+      expect(context['total_ms'], 357);
+      expect(context['broker_failure'], 'network');
+      expect(context['broker_redirect_count'], 1);
+      expect(context['broker_status_class'], '2xx');
+      expect(context['video_returned_count'], 5);
+      expect(context['external_audio_track_count'], 2);
+      expect(context['rejected_external_audio_count'], 1);
+      expect(context['native_stage'], 'source_operation');
+      expect(context['native_reason_code'], 'io');
+      expect(context['capabilities'], {
+        'current_hoster_flow': true,
+        'lazy_video_resolution': true,
+        'lazy_hoster_deferral': true,
+        'opaque_manga_image_fetch': true,
+        'native_libraries': false,
+      });
+      expect((context['result_limits'] as Map)['reply_bytes'], 4194304);
+      expect((context['result_limits'] as Map)['image_capability_count'], 4096);
+
+      final text = buildRedactedDiagnosticsText(
+        version: const AppVersionInfo(name: '2.0.74', code: 410051),
+        profile: const TvDeviceProfile.unknown(),
+        isTelevision: true,
+        diagnostics: history,
+        generatedAt: now,
+      );
+      final exported = jsonDecode(text) as Map<String, dynamic>;
+      final exportedContext =
+          (((exported['diagnostics'] as Map)['diagnosticEvents'] as List).single
+                  as Map)['context']
+              as Map;
+      expect(exportedContext['extension_package'], package);
+      expect(exportedContext['api_version'], '16');
+      expect(exportedContext['source_language'], 'pt-br');
+      expect(exportedContext['runtime_revision'], 'quickjs-2026.09');
+      expect(exportedContext['anime_api_versions'], ['14', '16']);
+      expect(exportedContext['manga_api_versions'], ['1.4', '1.5']);
+      expect(exportedContext['worker_capacity'], 4);
+      expect(exportedContext['queued_count'], 2);
+      expect(exportedContext['active_count'], 3);
+      expect(exportedContext['queue_wait_ms'], 12);
+      expect(exportedContext['execution_ms'], 345);
+      expect(exportedContext['total_ms'], 357);
+      expect(exportedContext['broker_failure'], 'network');
+      expect(exportedContext['broker_redirect_count'], 1);
+      expect(exportedContext['broker_response_size_bucket'], '64to128k');
+      expect(exportedContext['broker_status_class'], '2xx');
+      expect(exportedContext['native_code'], 'extension_execution_failed');
+      expect(exportedContext['native_stage'], 'source_operation');
+      expect(exportedContext['native_reason_code'], 'io');
+      expect(exportedContext['stage'], 'stream_extraction');
+      expect(exportedContext['outcome'], 'success');
+      expect(exportedContext['video_original_count'], 262144);
+      expect(exportedContext['video_returned_count'], 5);
+      expect(exportedContext['video_filtered_count'], 1);
+      expect(exportedContext['video_truncated_count'], 262139);
+      expect(exportedContext['video_discarded_count'], 0);
+      expect(exportedContext['video_original_hoster_count'], 6);
+      expect(exportedContext['video_resolved_lazy_hoster_count'], 1);
+      expect(exportedContext['video_deferred_hoster_count'], 1);
+      expect(exportedContext['video_discarded_track_count'], 3);
+      expect(exportedContext['video_local_hls_bridge_count'], 2);
+      expect(exportedContext['rejected_invalid_media_url_count'], 4);
+      expect(exportedContext['external_audio_track_count'], 2);
+      expect(exportedContext['rejected_external_audio_count'], 1);
+      expect(exportedContext['capabilities'], {
+        'current_hoster_flow': true,
+        'lazy_video_resolution': true,
+        'lazy_hoster_deferral': true,
+        'opaque_manga_image_fetch': true,
+        'native_libraries': false,
+      });
+      expect((exportedContext['result_limits'] as Map)['reply_bytes'], 4194304);
+      expect(
+        (exportedContext['result_limits'] as Map)['http_body_bytes'],
+        4194304,
+      );
+      expect(
+        (exportedContext['result_limits'] as Map)['http_metadata_bytes'],
+        16384,
+      );
+      expect(
+        (exportedContext['result_limits'] as Map)['image_bytes'],
+        20 * 1024 * 1024,
+      );
+      for (final privateValue in const [
+        'PRIVATE_QUERY_CANARY',
+        'private.example',
+        'PRIVATE_COOKIE_CANARY',
+        'PRIVATE_TITLE_CANARY',
+        'PRIVATE_SOURCE_CANARY',
+        'PRIVATE_ACCOUNT_CANARY',
+        'PRIVATE_UNKNOWN_CANARY',
+      ]) {
+        expect(text, isNot(contains(privateValue)), reason: privateValue);
+      }
+    },
+  );
+
+  test(
+    'caught Aniyomi HTTP failures survive persistence and explicit export',
+    () async {
+      final database = _DiagnosticExecutor(_DiagnosticDisk());
+      final evidence = <String, Object?>{
+        'event': 'provider_attempt',
+        'outcome': 'no_match',
+        for (final prefix in ['search', 'episode', 'video']) ...{
+          '${prefix}_http_request_count': 16,
+          '${prefix}_http_request_limit': 16,
+          '${prefix}_http_failure_count': 64,
+          '${prefix}_http_request_limit_hit': true,
+          '${prefix}_http_last_failure': 'unsupported',
+        },
+      };
+      await persistDiagnosticEvent(
+        database,
+        component: 'aniyomi-runtime',
+        message: 'Aniyomi provider attempt',
+        context: evidence,
+        occurredAt: now,
+      );
+      final history = await loadDiagnosticEventHistory(database, now: now);
+      final text = buildRedactedDiagnosticsText(
+        version: const AppVersionInfo(name: '2.0.74', code: 410051),
+        profile: const TvDeviceProfile.unknown(),
+        isTelevision: true,
+        diagnostics: history,
+        generatedAt: now,
+      );
+      final exported = jsonDecode(text) as Map;
+      final event =
+          ((exported['diagnostics'] as Map)['diagnosticEvents'] as List).single
+              as Map;
+      expect(event['context'], evidence);
+      for (final prefix in ['search', 'episode', 'video']) {
+        final sanitized =
+            sanitizeDiagnosticContext({
+                  '${prefix}_http_request_count': 17,
+                  '${prefix}_http_request_limit': 999999,
+                  '${prefix}_http_failure_count': 65,
+                  '${prefix}_http_request_limit_hit': 'PRIVATE_CANARY',
+                  '${prefix}_http_last_failure':
+                      'https://private.example/token',
+                  '${prefix}_http_other': 'PRIVATE_CANARY',
+                }, component: 'aniyomi-runtime')!
+                as Map;
+        expect(sanitized.keys, everyElement(startsWith('_')));
+        expect(jsonEncode(sanitized), isNot(contains('PRIVATE_CANARY')));
+        expect(jsonEncode(sanitized), isNot(contains('private.example')));
+      }
+      expect(
+        sanitizeDiagnosticContext({
+          'video_http_last_failure': 'none',
+          'video_http_request_limit_hit': false,
+        }, component: 'aniyomi-runtime'),
+        {
+          'video_http_last_failure': 'none',
+          'video_http_request_limit_hit': false,
+        },
+      );
+    },
+  );
+
+  test('Aniyomi-only identity keys cannot escape their closed schema', () {
+    final ordinary =
+        sanitizeDiagnosticContext({
+              'extension_package': 'eu.kanade.private.fixture',
+            })!
+            as Map;
+    final invalidAniyomi =
+        sanitizeDiagnosticContext(const {
+              'extension_package': 'invalid package/private',
+              'query': 'PRIVATE_QUERY_CANARY',
+            }, component: 'aniyomi-runtime')!
+            as Map;
+
+    expect(ordinary, isNot(contains('extension_package')));
+    expect(invalidAniyomi, isNot(contains('extension_package')));
+    expect(jsonEncode(invalidAniyomi), isNot(contains('PRIVATE_QUERY_CANARY')));
+    expect(invalidAniyomi['_redactedFieldCount'], 2);
+
+    final seasonOperation =
+        sanitizeDiagnosticContext(const {
+              'operation': 'seasons',
+              'source_language': 'pt-BR',
+            }, component: 'aniyomi-runtime')!
+            as Map;
+    expect(seasonOperation['operation'], 'seasons');
+    expect(seasonOperation['source_language'], 'pt-br');
+  });
+
+  test(
+    'external audio diagnostics retain only bounded aggregate counts',
+    () async {
+      final database = _DiagnosticExecutor(_DiagnosticDisk());
+      await persistDiagnosticEvent(
+        database,
+        component: 'player-external-audio',
+        message: 'External audio attachment',
+        context: const {
+          'engine': 'mpv',
+          'requested_count': 8,
+          'attached_count': 6,
+          'failed_count': 1,
+          'stale_count': 1,
+          'preflight_rejected_count': 999,
+        },
+        occurredAt: now,
+      );
+
+      final history = await loadDiagnosticEventHistory(database, now: now);
+      final event = (history['diagnosticEvents']! as List).single as Map;
+      final context = event['context']! as Map;
+      expect(context, {
+        'engine': 'mpv',
+        'requested_count': 8,
+        'attached_count': 6,
+        'failed_count': 1,
+        'stale_count': 1,
+        'preflight_rejected_count': 64,
+      });
+    },
+  );
 
   test('skip lookup and activation details remain useful after redaction', () {
     final sanitized =

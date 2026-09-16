@@ -26,6 +26,10 @@ class Media3PlatformPlayer extends PlatformPlayer {
   static final Stream<dynamic> _nativeEvents = const EventChannel(
     'dev.tetotv/media3/events',
   ).receiveBroadcastStream();
+  // EventChannel teardown normally completes immediately. Keep a small,
+  // bounded allowance for platform/plugin cleanup, but never let a broken
+  // cancellation strand the authoritative native decoder release.
+  static const Duration _eventCancellationTimeout = Duration(milliseconds: 500);
   final MethodChannel _channel;
   late final StreamSubscription<dynamic> _events;
   late final Future<int> ready;
@@ -35,10 +39,17 @@ class Media3PlatformPlayer extends PlatformPlayer {
   bool _disposed = false;
   bool _firstFrameSeen = false;
   Future<void>? _disposeFuture;
+  bool _eventsDisposed = false;
+  bool _nativeDisposed = false;
+  bool _dartStateDisposed = false;
+  Map<String, Object?> _releaseDiagnostic = const {};
   Future<void> _commands = Future<void>.value();
   Map<String, Object?> _metrics = const {};
   List<Map<String, Object?>> _chapters = const [];
   final Map<String, String> _externalSubtitleIds = {};
+
+  /// Closed, scalar-only native teardown evidence for local diagnostics.
+  Map<String, Object?> get releaseDiagnostic => _releaseDiagnostic;
 
   Future<int> _create() async {
     final result = await _channel.invokeMapMethod<String, Object?>('create');
@@ -102,6 +113,7 @@ class Media3PlatformPlayer extends PlatformPlayer {
         ? Uri.file(media.uri).toString()
         : media.uri;
     final sidecars = _sidecars(media.extras?['subtitles']);
+    final audioSidecars = _audioSidecars(media.extras?['audioTracks']);
     for (var index = 0; index < sidecars.length; index++) {
       final uri = sidecars[index]['uri'];
       if (uri is String) _externalSubtitleIds[uri] = 'sidecar:${index + 1}';
@@ -114,6 +126,7 @@ class Media3PlatformPlayer extends PlatformPlayer {
       if (media.extras?['mimeType'] is String)
         'mimeType': media.extras!['mimeType'],
       if (sidecars.isNotEmpty) 'subtitles': sidecars,
+      if (audioSidecars.isNotEmpty) 'audioTracks': audioSidecars,
       'play': play,
     });
   }
@@ -249,6 +262,7 @@ class Media3PlatformPlayer extends PlatformPlayer {
     'video-bitrate': 'videoBitrate',
     'audio-bitrate': 'audioBitrate',
     'paused-for-cache': 'pausedForCache',
+    'tetotv-external-audio-fallback': 'externalAudioFallback',
   };
 
   void _onEvent(dynamic event) {
@@ -474,20 +488,143 @@ class Media3PlatformPlayer extends PlatformPlayer {
     return result;
   }
 
+  static List<Map<String, Object?>> _audioSidecars(Object? value) {
+    final result = <Map<String, Object?>>[];
+    final seen = <String>{};
+    for (final row in _maps(value)) {
+      final rawUri = row['uri'];
+      if (rawUri is! String ||
+          rawUri.isEmpty ||
+          rawUri.length > 16384 ||
+          RegExp(r'[\s\x00-\x1f]').hasMatch(rawUri)) {
+        continue;
+      }
+      final uri = Uri.tryParse(rawUri);
+      final rawMime = row['mimeType'];
+      final mime = rawMime is String
+          ? rawMime.toLowerCase().split(';').first.trim()
+          : null;
+      final supportedMime =
+          mime != null &&
+          (mime.startsWith('audio/') ||
+              const {
+                'application/vnd.apple.mpegurl',
+                'application/x-mpegurl',
+                'application/octet-stream',
+              }.contains(mime));
+      if (uri == null ||
+          uri.scheme.toLowerCase() != 'http' ||
+          uri.host != '127.0.0.1' ||
+          !uri.hasPort ||
+          uri.port < 1 ||
+          uri.port > 65535 ||
+          uri.path.isEmpty ||
+          uri.path == '/' ||
+          uri.userInfo.isNotEmpty ||
+          !supportedMime ||
+          !seen.add(rawUri)) {
+        continue;
+      }
+      result.add({
+        'uri': rawUri,
+        if (row['title'] is String) 'title': row['title'],
+        if (row['language'] is String) 'language': row['language'],
+        'mimeType': mime == 'application/x-mpegurl'
+            ? 'application/vnd.apple.mpegurl'
+            : mime,
+      });
+      if (result.length == 8) break;
+    }
+    return result;
+  }
+
   @override
-  // The memoized helper calls super exactly once, including native failures.
+  // Concurrent callers share one attempt. A pending native release can later
+  // recheck its owned playback thread, but never invokes ExoPlayer.release()
+  // twice; Dart state/controllers are still closed exactly once.
   // ignore: must_call_super
-  Future<void> dispose() => _disposeFuture ??= _dispose();
-  Future<void> _dispose() async {
+  Future<void> dispose() {
+    if (_nativeDisposed && _dartStateDisposed) return Future<void>.value();
+    final active = _disposeFuture;
+    if (active != null) return active;
+    late final Future<void> operation;
+    operation = _disposeAttempt().whenComplete(() {
+      if (identical(_disposeFuture, operation)) _disposeFuture = null;
+    });
+    _disposeFuture = operation;
+    return operation;
+  }
+
+  Future<void> _disposeAttempt() async {
     _disposed = true;
     _openId++;
-    await _events.cancel();
     try {
-      final id = await ready;
-      // Disposal is not queued behind a failed or stale media mutation.
-      await _channel.invokeMethod<void>('dispose', {'id': id});
+      if (!_eventsDisposed) {
+        _eventsDisposed = true;
+        try {
+          await _events.cancel().timeout(_eventCancellationTimeout);
+        } catch (_) {
+          // Native ownership is the authoritative teardown boundary. The
+          // disposed/open epoch guards already reject late events, so a failed
+          // or non-completing stream cleanup must never strand decoder release.
+        }
+      }
+      if (!_nativeDisposed) {
+        final id = await ready;
+        // Disposal is not queued behind a failed or stale media mutation.
+        try {
+          final result = await _channel.invokeMapMethod<String, Object?>(
+            'dispose',
+            {'id': id},
+          );
+          _captureReleaseDiagnostic(
+            result,
+            fallbackStatus: 'completed',
+            fallbackReasonCode: 'media3_release_complete',
+          );
+        } on PlatformException catch (error) {
+          _captureReleaseDiagnostic(
+            error.details,
+            fallbackStatus: 'failed',
+            fallbackReasonCode: error.code == 'media3_release_pending'
+                ? 'media3_release_pending'
+                : 'platform_error',
+          );
+          rethrow;
+        }
+        _nativeDisposed = true;
+      }
     } finally {
-      await super.dispose();
+      if (!_dartStateDisposed) {
+        await super.dispose();
+        _dartStateDisposed = true;
+      }
     }
+  }
+
+  void _captureReleaseDiagnostic(
+    Object? raw, {
+    required String fallbackStatus,
+    required String fallbackReasonCode,
+  }) {
+    final values = raw is Map ? raw : const <Object?, Object?>{};
+    const statuses = {'completed', 'completed_after_wait', 'failed'};
+    const reasons = {'media3_release_complete', 'media3_release_pending'};
+    final rawStatus = values['status'];
+    final rawReason = values['reasonCode'];
+    final elapsed = values['waitElapsedMs'];
+    final timeout = values['timeoutMs'];
+    _releaseDiagnostic = Map<String, Object?>.unmodifiable({
+      'stage': 'release_waiting',
+      'status': rawStatus is String && statuses.contains(rawStatus)
+          ? rawStatus
+          : fallbackStatus,
+      'reason_code': rawReason is String && reasons.contains(rawReason)
+          ? rawReason
+          : fallbackReasonCode,
+      if (elapsed is int) 'wait_elapsed_ms': elapsed.clamp(0, 10_000),
+      if (timeout is int) 'timeout_ms': timeout.clamp(0, 10_000),
+      'playback_thread_alive': values['playbackThreadAlive'] == true,
+    });
   }
 }

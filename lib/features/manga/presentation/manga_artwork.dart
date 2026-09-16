@@ -1,3 +1,4 @@
+import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'dart:typed_data';
 
 import 'package:anime_tv/core/theme/app_theme.dart';
@@ -19,6 +20,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 class MangaArtwork extends ConsumerStatefulWidget {
   const MangaArtwork({
     required this.uri,
+    this.resource,
     this.sourceId,
     this.sourceUri,
     this.headers = const <String, String>{},
@@ -26,9 +28,10 @@ class MangaArtwork extends ConsumerStatefulWidget {
     this.icon = Icons.menu_book_rounded,
     this.cacheWidth,
     super.key,
-  });
+  }) : assert(uri == null || resource == null);
 
   final Uri? uri;
+  final MangaFetchablePageResource? resource;
   final String? sourceId;
   final Uri? sourceUri;
 
@@ -60,6 +63,7 @@ class _MangaArtworkState extends ConsumerState<MangaArtwork> {
   void didUpdateWidget(covariant MangaArtwork oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.uri != widget.uri ||
+        oldWidget.resource != widget.resource ||
         oldWidget.sourceId != widget.sourceId ||
         oldWidget.sourceUri != widget.sourceUri ||
         !mapEquals(oldWidget.headers, widget.headers)) {
@@ -68,6 +72,11 @@ class _MangaArtworkState extends ConsumerState<MangaArtwork> {
   }
 
   void _updateRequest() {
+    final resource = widget.resource;
+    if (resource != null) {
+      _bytes = _pageClient.fetch(resource);
+      return;
+    }
     final uri = widget.uri;
     _bytes = uri == null ? null : _load(uri);
   }
@@ -93,7 +102,11 @@ class _MangaArtworkState extends ConsumerState<MangaArtwork> {
       }
     }
     return _pageClient.fetch(
-      MangaRemotePageResource(uri: uri, headers: headers),
+      MangaRemotePageResource(
+        uri: uri,
+        headers: headers,
+        allowPlatformArtworkTranscode: true,
+      ),
     );
   }
 
@@ -145,7 +158,7 @@ class _MangaArtworkSkeleton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Semantics(
-    label: 'Loading manga artwork',
+    label: context.tr("Loading manga artwork"),
     child: SizedBox.expand(
       key: const ValueKey('manga-artwork-loading'),
       child: DecoratedBox(

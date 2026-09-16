@@ -218,7 +218,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('mobile details falls back to the selected Romaji title', (
+  testWidgets('Romaji preference controls the details text fallback', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(360, 800);
@@ -265,6 +265,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(logoRequests, contains(TitleLanguagePreference.romaji));
+    expect(logoRequests, isNot(contains(TitleLanguagePreference.english)));
     expect(find.text('Romaji Details Title'), findsOneWidget);
     expect(find.text('English Details Title'), findsNothing);
     expect(tester.takeException(), isNull);

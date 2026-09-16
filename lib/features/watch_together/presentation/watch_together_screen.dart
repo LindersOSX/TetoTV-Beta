@@ -1,11 +1,14 @@
+import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'dart:async';
 
+import 'package:anime_tv/core/preferences/title_language_preference.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/widgets/network_artwork.dart';
 import 'package:anime_tv/core/widgets/teto_top_level_shell.dart';
 import 'package:anime_tv/core/widgets/tv_text_input.dart';
 import 'package:anime_tv/features/home/presentation/main_navigation_bar.dart';
+import 'package:anime_tv/features/settings/application/display_preferences_controller.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:anime_tv/features/watch_together/application/watch_party_controller.dart';
 import 'package:anime_tv/features/watch_together/application/watch_party_media_follower.dart';
@@ -76,6 +79,7 @@ class _WatchTogetherScreenState extends ConsumerState<WatchTogetherScreen> {
   @override
   Widget build(BuildContext context) {
     final preferences = ref.watch(settingsPreferencesProvider);
+    final titlePreference = ref.watch(titleLanguagePreferenceProvider);
     final party = ref.watch(watchPartyControllerProvider);
     final publicIdentity = ref.watch(watchPartyPublicIdentityProvider);
     ref.read(watchPartyClientProvider).setPublicIdentity(publicIdentity);
@@ -134,13 +138,15 @@ class _WatchTogetherScreenState extends ConsumerState<WatchTogetherScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'Watch Party',
+                          context.tr("Watch Party"),
                           style: Theme.of(context).textTheme.headlineMedium
                               ?.copyWith(fontWeight: FontWeight.w900),
                         ),
                         const SizedBox(height: 6),
                         Text(
-                          'Everyone uses their own TetoTV source or local video. Playback timing, public show identity, and a privacy-preserving source hint are synchronized; stream URLs and credentials stay on each device.',
+                          context.tr(
+                            "Everyone uses their own TetoTV source or local video. Playback timing, public show identity, and a privacy-preserving source hint are synchronized; stream URLs and credentials stay on each device.",
+                          ),
                           style: TextStyle(color: context.appPalette.mutedText),
                         ),
                         const SizedBox(height: 20),
@@ -164,6 +170,7 @@ class _WatchTogetherScreenState extends ConsumerState<WatchTogetherScreen> {
                         else
                           _ActivePartyCard(
                             state: party,
+                            titlePreference: titlePreference,
                             copyFocus: _copyFocus,
                             watchFocus: _watchFocus,
                             leaveFocus: _leaveFocus,
@@ -183,7 +190,7 @@ class _WatchTogetherScreenState extends ConsumerState<WatchTogetherScreen> {
                         if (party.message case final message?) ...[
                           const SizedBox(height: 14),
                           Text(
-                            message,
+                            context.tr(message),
                             key: const ValueKey('watch-together-message'),
                             style: TextStyle(
                               color: context.appPalette.accentBright,
@@ -230,7 +237,7 @@ class _LobbyCard extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          'Start a room or enter a code',
+          context.tr("Start a room or enter a code"),
           style: Theme.of(
             context,
           ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w900),
@@ -246,7 +253,9 @@ class _LobbyCard extends StatelessWidget {
               focusNode: createFocus,
               autofocus: true,
               icon: Icons.groups_rounded,
-              label: state.isBusy ? 'Starting…' : 'Create room',
+              label: state.isBusy
+                  ? context.tr("Starting…")
+                  : context.tr("Create room"),
               onPressed: state.isBusy ? null : onCreate,
               onLeft: onLeftEdge,
             ),
@@ -257,8 +266,8 @@ class _LobbyCard extends StatelessWidget {
                 controller: roomCodeController,
                 focusNode: roomCodeFocus,
                 autofocus: false,
-                labelText: 'Room code',
-                keyboardTitle: 'Enter Watch Party room code',
+                labelText: context.tr("Room code"),
+                keyboardTitle: context.tr("Enter Watch Party room code"),
                 hintText: '23456789',
                 keyboardType: TextInputType.number,
                 numericOnly: true,
@@ -277,14 +286,18 @@ class _LobbyCard extends StatelessWidget {
               key: const ValueKey('watch-together-join'),
               focusNode: joinFocus,
               icon: Icons.login_rounded,
-              label: state.isBusy ? 'Joining…' : 'Join room',
+              label: state.isBusy
+                  ? context.tr("Joining…")
+                  : context.tr("Join room"),
               onPressed: state.isBusy ? null : onJoin,
             ),
           ],
         ),
         const SizedBox(height: 14),
         Text(
-          'Rooms expire automatically. TetoTV never sends stream URLs, server tokens, headers, magnets, or video data to the room service.',
+          context.tr(
+            "Rooms expire automatically. TetoTV never sends stream URLs, server tokens, headers, magnets, or video data to the room service.",
+          ),
           style: TextStyle(color: context.appPalette.mutedText, fontSize: 12),
         ),
       ],
@@ -295,6 +308,7 @@ class _LobbyCard extends StatelessWidget {
 class _ActivePartyCard extends StatelessWidget {
   const _ActivePartyCard({
     required this.state,
+    required this.titlePreference,
     required this.copyFocus,
     required this.watchFocus,
     required this.leaveFocus,
@@ -304,6 +318,7 @@ class _ActivePartyCard extends StatelessWidget {
   });
 
   final WatchPartyState state;
+  final TitleLanguagePreference titlePreference;
   final FocusNode copyFocus;
   final FocusNode watchFocus;
   final FocusNode leaveFocus;
@@ -325,7 +340,7 @@ class _ActivePartyCard extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  state.isHost ? 'HOSTING' : 'JOINED',
+                  state.isHost ? context.tr("HOSTING") : context.tr("JOINED"),
                   style: TextStyle(
                     color: context.appPalette.accentBright,
                     fontWeight: FontWeight.w900,
@@ -342,9 +357,15 @@ class _ActivePartyCard extends StatelessWidget {
                 ),
                 const SizedBox(height: 6),
                 Text(
-                  '${watchPartyAudienceLabel(watchPartyViewerCount(state))} • '
-                  '${snapshot?.readyCount ?? 0} '
-                  '${snapshot?.readyCount == 1 ? 'guest' : 'guests'} ready',
+                  context.tr(
+                    watchPartyViewerCount(state) == 1
+                        ? '{count} person watching • {ready} guests ready'
+                        : '{count} people watching • {ready} guests ready',
+                    {
+                      'count': watchPartyViewerCount(state),
+                      'ready': snapshot?.readyCount ?? 0,
+                    },
+                  ),
                   style: TextStyle(color: context.appPalette.mutedText),
                 ),
                 if (snapshot != null && snapshot.participants.isNotEmpty) ...[
@@ -355,8 +376,11 @@ class _ActivePartyCard extends StatelessWidget {
                   const SizedBox(height: 12),
                   Text(
                     media.isCatalogEpisode
-                        ? '${media.title} • Episode ${media.episode}'
-                        : media.title,
+                        ? context.tr("{value1} • Episode {value2}", {
+                            'value1': media.displayTitle(titlePreference),
+                            'value2': media.episode ?? 0,
+                          })
+                        : media.displayTitle(titlePreference),
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(fontWeight: FontWeight.w800),
@@ -372,7 +396,7 @@ class _ActivePartyCard extends StatelessWidget {
                       focusNode: copyFocus,
                       autofocus: true,
                       icon: Icons.copy_rounded,
-                      label: 'Copy code',
+                      label: context.tr("Copy code"),
                       onLeft: onLeftEdge,
                       onPressed: () async {
                         await Clipboard.setData(
@@ -380,7 +404,9 @@ class _ActivePartyCard extends StatelessWidget {
                         );
                         if (context.mounted) {
                           ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('Room code copied.')),
+                            SnackBar(
+                              content: Text(context.tr("Room code copied.")),
+                            ),
                           );
                         }
                       },
@@ -390,14 +416,16 @@ class _ActivePartyCard extends StatelessWidget {
                         key: const ValueKey('watch-together-watch'),
                         focusNode: watchFocus,
                         icon: Icons.play_arrow_rounded,
-                        label: 'Open this episode',
+                        label: context.tr("Open this episode"),
                         onPressed: onWatch,
                       ),
                     _PartyButton(
                       key: const ValueKey('watch-together-leave'),
                       focusNode: leaveFocus,
                       icon: Icons.logout_rounded,
-                      label: state.isHost ? 'End party' : 'Leave party',
+                      label: state.isHost
+                          ? context.tr("End party")
+                          : context.tr("Leave party"),
                       onPressed: onLeave,
                     ),
                   ],
@@ -419,7 +447,7 @@ class _ParticipantRoster extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Semantics(
     container: true,
-    label: 'People in this room',
+    label: context.tr("People in this room"),
     child: Wrap(
       spacing: 10,
       runSpacing: 10,
@@ -441,8 +469,10 @@ class _ParticipantChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final role = participant.role == WatchPartyRole.host ? 'Host' : 'Guest';
-    final readiness = participant.ready ? 'Ready' : 'Not ready';
+    final role = context.tr(
+      participant.role == WatchPartyRole.host ? 'Host' : 'Guest',
+    );
+    final readiness = context.tr(participant.ready ? 'Ready' : 'Not ready');
     return Semantics(
       label: '${participant.displayName}, $role, $readiness',
       child: DecoratedBox(

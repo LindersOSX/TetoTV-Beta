@@ -1,3 +1,4 @@
+import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
@@ -36,13 +37,15 @@ class FranchiseScreen extends ConsumerWidget {
                 ),
                 const SizedBox(width: 14),
                 Text(
-                  'Recommended watch order',
+                  context.tr("Recommended watch order"),
                   style: Theme.of(context).textTheme.headlineSmall,
                 ),
                 const SizedBox(width: 14),
                 Expanded(
                   child: Text(
-                    'Prequels, sequels, movies, OVAs, specials, and spin-offs',
+                    context.tr(
+                      "Prequels, sequels, movies, OVAs, specials, and spin-offs",
+                    ),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(color: context.appPalette.mutedText),
@@ -58,13 +61,18 @@ class FranchiseScreen extends ConsumerWidget {
                     color: context.appPalette.accentBright,
                   ),
                 ),
-                error: (error, _) =>
-                    Center(child: Text('Could not build franchise: $error')),
+                error: (error, _) => Center(
+                  child: Text(
+                    context.tr("Could not build franchise: {value1}", {
+                      'value1': error,
+                    }),
+                  ),
+                ),
                 data: (entries) {
                   final badgeByMediaId = <int, String>{
                     for (var index = 0; index < entries.length; index++)
                       entries[index].anime.id:
-                          '#${index + 1} · ${entries[index].watchOrderLabel}',
+                          '#${index + 1} · ${context.tr(entries[index].formatLabel)} · ${context.tr(entries[index].relationLabel)}',
                   };
                   return CatalogGrid(
                     items: [for (final entry in entries) entry.anime],

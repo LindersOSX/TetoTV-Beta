@@ -508,6 +508,7 @@ const playbackPerformanceProperties = <String>[
 const media3PlaybackPerformanceProperties = <String>[
   ...playbackPerformanceProperties,
   'tetotv-rendered-frame-count',
+  'tetotv-external-audio-fallback',
 ];
 
 const _mpvStringFields = {
@@ -544,13 +545,15 @@ const _mpvMetricFields = {
   ..._mpvBooleanFields,
 };
 
-const _media3NumberFields = {
-  'tetotv-rendered-frame-count': 'renderedFrames',
+const _media3NumberFields = {'tetotv-rendered-frame-count': 'renderedFrames'};
+const _media3BooleanFields = {
+  'tetotv-external-audio-fallback': 'externalAudioFallback',
 };
 
 Map<String, String> _metricFieldsForEngine(String engine) => {
   ..._mpvMetricFields,
   if (engine == 'media3') ..._media3NumberFields,
+  if (engine == 'media3') ..._media3BooleanFields,
 };
 
 Map<String, Object?> playbackPerformanceMetricsFromMpv(
@@ -577,7 +580,10 @@ Map<String, Object?> playbackPerformanceMetricsFromProperties(
     if (value == null || !value.isFinite) continue;
     result[field.value] = field.value == 'avSyncMs' ? value * 1000 : value;
   }
-  for (final field in _mpvBooleanFields.entries) {
+  for (final field in {
+    ..._mpvBooleanFields,
+    if (engine == 'media3') ..._media3BooleanFields,
+  }.entries) {
     final value = properties[field.key]?.trim().toLowerCase();
     if (value == 'yes' || value == 'true') result[field.value] = true;
     if (value == 'no' || value == 'false') result[field.value] = false;

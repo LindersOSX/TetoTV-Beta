@@ -37,6 +37,11 @@ class PremiumizeStreamResolver implements StreamResolver {
       files,
       episode.episode,
       requestedSeason: catalogSeasonNumber(episode),
+      requestedAbsoluteEpisode: absoluteEpisodeNumber(episode),
+      requestedSpecial: episodeReferenceIsSpecial(episode),
+      containerLabel: release.releaseName,
+      requireNumberingSchemeEvidence:
+          episodeReferenceHasUnresolvedSequelNumbering(episode),
       preferredFileIndex: release.preferredFileIndex,
     );
     final ready = StreamReady(
@@ -57,6 +62,10 @@ PremiumizeFile selectPremiumizeEpisodeFile(
   List<PremiumizeFile> files,
   int episode, {
   int? requestedSeason,
+  int? requestedAbsoluteEpisode,
+  bool requestedSpecial = false,
+  String? containerLabel,
+  bool requireNumberingSchemeEvidence = false,
   int? preferredFileIndex,
 }) {
   final playable = files.where((file) => file.isPlayable).toList();
@@ -69,6 +78,10 @@ PremiumizeFile selectPremiumizeEpisodeFile(
     sizes: files.map((file) => file.size).toList(growable: false),
     requestedEpisode: episode,
     requestedSeason: requestedSeason,
+    requestedAbsoluteEpisode: requestedAbsoluteEpisode,
+    requestedSpecial: requestedSpecial,
+    containerLabel: containerLabel,
+    requireNumberingSchemeEvidence: requireNumberingSchemeEvidence,
     preferredFileIndex: preferredFileIndex,
   );
   return files[selectedIndex];

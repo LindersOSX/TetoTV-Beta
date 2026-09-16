@@ -1,9 +1,11 @@
 import 'dart:async';
 
+import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/tv/tv_shortcuts.dart';
 import 'package:anime_tv/core/widgets/tv_text_input.dart';
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
+import 'package:anime_tv/features/catalog/application/localized_anime_title_provider.dart';
 import 'package:anime_tv/features/catalog/data/anilist_catalog_client.dart';
 import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
 import 'package:anime_tv/features/catalog/presentation/search_screen.dart';
@@ -14,6 +16,7 @@ import 'package:anime_tv/features/tracking/application/tracking_home_provider.da
 import 'package:anime_tv/features/tracking/domain/tracking_repository.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -29,6 +32,47 @@ void main() {
       'input_use_built_in_keyboard': 'true',
     });
   });
+
+  testWidgets(
+    'Spanish UI keeps the selected title and canonical search query',
+    (tester) async {
+      final client = _DeferredCatalogClient();
+      var translatedTitleRequests = 0;
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            catalogClientProvider.overrideWithValue(client),
+            localizedAnimeTitleProvider.overrideWith((_, _) async {
+              translatedTitleRequests++;
+              return 'Título localizado';
+            }),
+          ],
+          child: MaterialApp(
+            locale: const Locale('es'),
+            supportedLocales: TetoLocalizations.supportedLocales,
+            localizationsDelegates: const [
+              TetoLocalizations.delegate,
+              GlobalMaterialLocalizations.delegate,
+              GlobalWidgetsLocalizations.delegate,
+              GlobalCupertinoLocalizations.delegate,
+            ],
+            home: const SearchScreen(initialQuery: 'Canonical query'),
+          ),
+        ),
+      );
+      await tester.pump();
+      final anime = _anime(123, 'Original result title');
+      client.complete('Canonical query', [anime]);
+      await tester.pumpAndSettle();
+      expect(find.text('Original result title'), findsOneWidget);
+      expect(find.text('Título localizado'), findsNothing);
+      expect(translatedTitleRequests, 0);
+      expect(client.requests, ['Canonical query']);
+      expect(anime.title, 'Original result title');
+      expect(anime.id, 123);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets('a stale search cannot replace the latest results', (
     tester,

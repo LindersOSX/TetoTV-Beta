@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/features/marketplace/application/marketplace_controller.dart';
 import 'package:anime_tv/features/marketplace/data/addon_store.dart';
@@ -15,6 +17,7 @@ void main() {
     bool? reportedWorking,
     bool reportedBroken = false,
     bool isDeprecated = false,
+    String type = 'onlinestream-provider',
   }) => MarketplaceAddon(
     id: id,
     name: 'Test provider',
@@ -23,7 +26,7 @@ void main() {
     manifestUri: Uri.parse(manifestUrl),
     repositoryUrl: repositoryUrl,
     language: 'typescript',
-    type: 'onlinestream-provider',
+    type: type,
     locale: 'en',
     version: version,
     userConfigDefaults: defaults,
@@ -155,6 +158,66 @@ void main() {
     expect(selected, hasLength(1));
     expect(selected.single.repositoryUrl, maintained.repositoryUrl);
     expect(selected.single.version, '1.2.0');
+  });
+
+  test('installed repository still selects its best same-owner variant', () {
+    final owner = 'https://owner.example/marketplace.json';
+    final current = installed(
+      addon: manifest(
+        repositoryUrl: owner,
+        manifestUrl: 'https://owner.example/provider/manifest.json',
+        version: '1.0.0',
+      ),
+    );
+    final brokenFirst = manifest(
+      repositoryUrl: owner,
+      manifestUrl: 'https://owner.example/provider/broken.json',
+      version: '99.0.0',
+      reportedBroken: true,
+    );
+    final maintainedUpdate = manifest(
+      repositoryUrl: owner,
+      manifestUrl: 'https://owner.example/provider/maintained.json',
+      version: '1.2.0',
+      reportedWorking: true,
+    );
+    final foreign = manifest(
+      repositoryUrl: 'https://foreign.example/marketplace.json',
+      manifestUrl: 'https://foreign.example/provider/manifest.json',
+      version: '2.0.0',
+      reportedWorking: true,
+    );
+
+    final selected = selectMarketplaceCatalogCandidates(
+      [brokenFirst, foreign, maintainedUpdate],
+      installed: [current],
+    );
+
+    expect(selected, hasLength(1));
+    expect(selected.single.repositoryUrl, owner);
+    expect(selected.single.manifestUri, maintainedUpdate.manifestUri);
+  });
+
+  test('treats an unbadged false working tag like omitted status', () {
+    final explicitlyUnbadged = manifest(
+      repositoryUrl: 'https://z.example/marketplace.json',
+      manifestUrl: 'https://z.example/provider/manifest.json',
+      version: '2.0.0',
+      reportedWorking: false,
+    );
+    final omittedOlder = manifest(
+      repositoryUrl: 'https://a.example/marketplace.json',
+      manifestUrl: 'https://a.example/provider/manifest.json',
+      version: '1.0.0',
+    );
+
+    final selected = selectMarketplaceCatalogCandidates([
+      omittedOlder,
+      explicitlyUnbadged,
+    ]);
+
+    expect(selected.single.repositoryUrl, explicitlyUnbadged.repositoryUrl);
+    expect(selected.single.version, '2.0.0');
   });
 
   test('shares advisory status only for the identical manifest URI', () {
@@ -298,6 +361,45 @@ void main() {
       expect(client.downloadAttempted, isFalse);
     },
   );
+
+  test(
+    'Manga install fails closed before downloading when unavailable',
+    () async {
+      final store = AddonStore(TetoTvDatabase.instance);
+      final client = _DownloadMustNotRunClient(store);
+      final controller = MarketplaceController(
+        store,
+        client,
+        isMangaReaderAvailable: () => false,
+      );
+
+      await expectLater(
+        controller.install(manifest(type: 'manga-provider')),
+        throwsA(isA<StateError>()),
+      );
+      expect(client.downloadAttempted, isFalse);
+    },
+  );
+
+  test('Manga install rechecks a live opt-out after download', () async {
+    var available = true;
+    final store = AddonStore(TetoTvDatabase.instance);
+    final addon = manifest(type: 'manga-provider');
+    final client = _DeferredDownloadClient(store, installed(addon: addon));
+    final controller = MarketplaceController(
+      store,
+      client,
+      isMangaReaderAvailable: () => available,
+    );
+
+    final pending = controller.install(addon);
+    await client.started.future;
+    available = false;
+    client.release.complete();
+
+    await expectLater(pending, throwsA(isA<StateError>()));
+    expect(controller.state.installed, isEmpty);
+  });
 
   test('compatibility checks become due at the 24 hour boundary', () {
     final lastTested = DateTime.utc(2026, 8, 22, 12);
@@ -514,6 +616,23 @@ class _DownloadMustNotRunClient extends MarketplaceClient {
   ) async {
     downloadAttempted = true;
     throw StateError('Untrusted payload was downloaded.');
+  }
+}
+
+class _DeferredDownloadClient extends MarketplaceClient {
+  _DeferredDownloadClient(super.store, this.result);
+
+  final InstalledStreamingAddon result;
+  final started = Completer<void>();
+  final release = Completer<void>();
+
+  @override
+  Future<InstalledStreamingAddon> downloadAddon(
+    MarketplaceAddon summary,
+  ) async {
+    started.complete();
+    await release.future;
+    return result;
   }
 }
 

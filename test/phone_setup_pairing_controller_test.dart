@@ -22,6 +22,7 @@ import 'package:anime_tv/features/settings/domain/phone_setup_pairing.dart';
 import 'package:anime_tv/features/streaming/data/real_debrid_client.dart';
 import 'package:anime_tv/features/streaming/data/real_debrid_models.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -35,6 +36,241 @@ void main() {
   tearDown(() => FlutterSecureStorage.setMockInitialValues({}));
 
   group('PhoneSetupPairingController lifecycle', () {
+    test(
+      'rate-limited startup keeps the reason and defers repeated creation',
+      () async {
+        var now = DateTime.now().toUtc();
+        final events = <Map<String, Object?>>[];
+        final api = _FakeApi()
+          ..createError = PhoneSetupServiceException(
+            reasonCode: 'rate_limited',
+            message:
+                'Phone setup is temporarily rate-limited. Wait before trying again.',
+            httpStatus: 429,
+            retryAfter: const Duration(seconds: 60),
+            rateLimitScope: PhoneSetupRateLimitScope.activePairings,
+          );
+        final importer = _ImporterFixture();
+        final controller = PhoneSetupPairingController(
+          storage,
+          api,
+          _FakeCrypto(_emptyBundle()),
+          importer.importer,
+          () async {},
+          now: () => now,
+          diagnosticRecorder: (event) async => events.add(event),
+        );
+        addTearDown(() {
+          controller.dispose();
+          importer.dispose();
+        });
+
+        await controller.startOrResume();
+        expect(controller.state.stage, PhoneSetupViewStage.failed);
+        expect(controller.state.session, isNull);
+        expect(controller.state.message, contains('rate-limited'));
+        expect(
+          controller.state.retryNotBefore,
+          now.add(const Duration(seconds: 60)),
+        );
+        expect(controller.retrySecondsRemaining, 60);
+        expect(events.last, containsPair('stage', 'session-create'));
+        expect(events.last, containsPair('reason_code', 'rate_limited'));
+        expect(events.last, containsPair('code', 429));
+        expect(events.last, containsPair('phase', 'active_pairings'));
+        await controller.regenerate();
+        await controller.startOrResume();
+        expect(api.createCalls, 1);
+        expect(api.ensureReadyCalls, 1);
+
+        now = now.add(const Duration(milliseconds: 59500));
+        expect(controller.retrySecondsRemaining, 1);
+        await controller.cancel();
+        expect(controller.state.stage, PhoneSetupViewStage.idle);
+        await controller.startOrResume();
+        expect(controller.state.stage, PhoneSetupViewStage.failed);
+        expect(controller.state.retryNotBefore, isNotNull);
+        expect(api.createCalls, 1);
+
+        now = now.add(const Duration(milliseconds: 1500));
+        expect(controller.retrySecondsRemaining, 0);
+        api.createError = null;
+        await controller.regenerate();
+        expect(api.createCalls, 2);
+        expect(controller.state.stage, PhoneSetupViewStage.waiting);
+        expect(controller.state.session, isNotNull);
+      },
+    );
+
+    test(
+      'polling 429 records a safe reason and keeps the session alive',
+      () async {
+        final events = <Map<String, Object?>>[];
+        final api = _FakeApi()
+          ..pollResults.add(
+            const PhoneSetupPollResult(
+              status: PhoneSetupPairingStatus.pending,
+              revision: 0,
+              retryAfter: Duration(seconds: 41),
+            ),
+          );
+        final importer = _ImporterFixture();
+        final controller = PhoneSetupPairingController(
+          storage,
+          api,
+          _FakeCrypto(_emptyBundle()),
+          importer.importer,
+          () async {},
+          diagnosticRecorder: (event) async => events.add(event),
+        );
+        addTearDown(() {
+          controller.dispose();
+          importer.dispose();
+        });
+
+        await controller.startOrResume();
+        await _waitFor(() => api.pollCalls == 1);
+
+        expect(controller.state.stage, PhoneSetupViewStage.waiting);
+        expect(controller.state.session, isNotNull);
+        expect(
+          events,
+          contains(
+            allOf(
+              containsPair('stage', 'poll'),
+              containsPair('reason_code', 'rate_limited'),
+              containsPair('code', 429),
+              containsPair('retry_after_seconds', 41),
+            ),
+          ),
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        expect(api.pollCalls, 1);
+      },
+    );
+
+    test('rate-limited final acknowledgement preserves applied state', () async {
+      final now = DateTime.now().toUtc();
+      final session = _session(expiresAt: now.add(const Duration(hours: 1)));
+      FlutterSecureStorage.setMockInitialValues({
+        phoneSetupSessionStorageKey: jsonEncode({
+          'version': 1,
+          'session': session.toJson(),
+          'applied_revision': 9,
+          'link_discord_requested': false,
+        }),
+      });
+      final events = <Map<String, Object?>>[];
+      final api = _FakeApi()
+        ..acknowledgeError = PhoneSetupServiceException(
+          reasonCode: 'rate_limited',
+          message:
+              'Phone setup is temporarily rate-limited. Wait before trying again.',
+          httpStatus: 429,
+          retryAfter: const Duration(seconds: 52),
+        );
+      final importer = _ImporterFixture();
+      final controller = PhoneSetupPairingController(
+        storage,
+        api,
+        _FakeCrypto(_emptyBundle()),
+        importer.importer,
+        () async {},
+        diagnosticRecorder: (event) async => events.add(event),
+      );
+      addTearDown(() {
+        controller.dispose();
+        importer.dispose();
+      });
+
+      await controller.startOrResume();
+
+      expect(controller.state.stage, PhoneSetupViewStage.waiting);
+      expect(controller.state.message, contains('choices are saved'));
+      expect(await storage.read(key: phoneSetupSessionStorageKey), isNotNull);
+      expect(api.createCalls, 0);
+      expect(api.acknowledgements, [(revision: 9, applied: true)]);
+      expect(
+        events,
+        contains(
+          allOf(
+            containsPair('stage', 'acknowledge'),
+            containsPair('reason_code', 'rate_limited'),
+            containsPair('retry_after_seconds', 52),
+          ),
+        ),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(api.acknowledgements, hasLength(1));
+    });
+
+    test(
+      'crypto failure is identified without leaking exception contents',
+      () async {
+        final events = <Map<String, Object?>>[];
+        final api = _FakeApi();
+        final crypto = _FakeCrypto(_emptyBundle())
+          ..generateError = PlatformException(
+            code: 'secret-device-code',
+            message:
+                'private scalar https://secret.example/?token=secret-token',
+            details: {'key': 'sensitive-key'},
+          );
+        final importer = _ImporterFixture();
+        final controller = PhoneSetupPairingController(
+          storage,
+          api,
+          crypto,
+          importer.importer,
+          () async {},
+          diagnosticRecorder: (event) async => events.add(event),
+        );
+        addTearDown(() {
+          controller.dispose();
+          importer.dispose();
+        });
+        await controller.startOrResume();
+        expect(controller.state.stage, PhoneSetupViewStage.failed);
+        expect(api.createCalls, 0);
+        expect(events.last, containsPair('stage', 'key-generation'));
+        expect(events.last, containsPair('reason_code', 'crypto_unavailable'));
+        final recorded = jsonEncode(events);
+        for (final secret in [
+          'secret-device-code',
+          'private scalar',
+          'secret.example',
+          'secret-token',
+          'sensitive-key',
+        ]) {
+          expect(recorded, isNot(contains(secret)));
+          expect(controller.state.message, isNot(contains(secret)));
+        }
+      },
+    );
+
+    test(
+      'diagnostic recorder failure cannot prevent QR session creation',
+      () async {
+        final importer = _ImporterFixture();
+        final controller = PhoneSetupPairingController(
+          storage,
+          _FakeApi(),
+          _FakeCrypto(_emptyBundle()),
+          importer.importer,
+          () async {},
+          diagnosticRecorder: (_) =>
+              throw StateError('diagnostics unavailable'),
+        );
+        addTearDown(() {
+          controller.dispose();
+          importer.dispose();
+        });
+        await controller.startOrResume();
+        expect(controller.state.stage, PhoneSetupViewStage.waiting);
+        expect(controller.state.session, isNotNull);
+      },
+    );
+
     test(
       'creates, securely persists, polls, and exposes review before apply',
       () async {
@@ -285,6 +521,27 @@ void main() {
         InterfaceMode.automatic,
       );
     });
+
+    test(
+      'phone setup without a player choice keeps Media3 SurfaceView defaults',
+      () async {
+        final importer = _ImporterFixture();
+        addTearDown(importer.dispose);
+        final settings = importer.container.read(
+          settingsPreferencesProvider.notifier,
+        );
+        await settings.load();
+
+        final result = await importer.importer.apply(_emptyBundle());
+
+        expect(result.applied, isTrue);
+        final preferences = importer.container.read(
+          settingsPreferencesProvider,
+        );
+        expect(preferences.preferredPlayer, PreferredPlayer.media3);
+        expect(preferences.media3SurfaceViewEnabled, isTrue);
+      },
+    );
 
     test(
       'late Discord failure restores the previously linked Real-Debrid session',
@@ -744,6 +1001,8 @@ class _FakeApi implements PhoneSetupPairingApi {
   int cancelCalls = 0;
   int ackFailuresRemaining = 0;
   bool cancelShouldFail = false;
+  Object? createError;
+  Object? acknowledgeError;
   Completer<void>? cancelGate;
 
   @override
@@ -754,6 +1013,7 @@ class _FakeApi implements PhoneSetupPairingApi {
     PhoneSetupKeyMaterial keyMaterial,
   ) async {
     createCalls++;
+    if (createError case final error?) throw error;
     final session = _session(
       keyMaterial: keyMaterial,
       pairingId: createCalls == 1
@@ -781,6 +1041,7 @@ class _FakeApi implements PhoneSetupPairingApi {
     required bool applied,
   }) async {
     acknowledgements.add((revision: revision, applied: applied));
+    if (acknowledgeError case final error?) throw error;
     if (ackFailuresRemaining > 0) {
       ackFailuresRemaining--;
       throw StateError('temporary failure');
@@ -814,10 +1075,12 @@ class _FakeCrypto implements PhoneSetupCryptography {
   final PhoneSetupBundle bundle;
   int generateCalls = 0;
   int decryptCalls = 0;
+  Object? generateError;
 
   @override
   Future<PhoneSetupKeyMaterial> generateKeyMaterial() async {
     generateCalls++;
+    if (generateError case final error?) throw error;
     return _keyMaterial();
   }
 

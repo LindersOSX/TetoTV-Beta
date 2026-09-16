@@ -13,6 +13,13 @@ enum TrackingProvider {
     refreshTokenStorageKey: 'myanimelist_refresh_token',
     expiresAtStorageKey: 'myanimelist_token_expires_at',
   ),
+  kitsu(
+    slug: 'kitsu',
+    displayName: 'Kitsu',
+    tokenStorageKey: 'kitsu_access_token',
+    refreshTokenStorageKey: 'kitsu_refresh_token',
+    expiresAtStorageKey: 'kitsu_token_expires_at',
+  ),
   simkl(
     slug: 'simkl',
     displayName: 'SIMKL',

@@ -75,6 +75,10 @@ void main() {
         capability: DirectPeerDownloadCapability(
           magnet: _magnet,
           episode: 4,
+          season: 3,
+          absoluteEpisode: 28,
+          allowSeasonRelativeBare: true,
+          requireNumberingSchemeEvidence: true,
           preferredFileIndex: 2,
         ),
         partialFile: partial,
@@ -90,6 +94,10 @@ void main() {
       expect(progress.last.speedBytesPerSecond, 0);
       expect(progress.any((event) => event.speedBytesPerSecond > 0), isTrue);
       expect(platform.startedEpisode, 4);
+      expect(platform.startedSeason, 3);
+      expect(platform.startedAbsoluteEpisode, 28);
+      expect(platform.startedAllowSeasonRelativeBare, isTrue);
+      expect(platform.startedRequireNumberingSchemeEvidence, isTrue);
       expect(platform.startedFileIndex, 2);
       expect(platform.startedMagnet, _magnet);
       expect(platform.stoppedSessionIds, [server.session.sessionId]);
@@ -188,6 +196,45 @@ void main() {
       expect(platform.stoppedSessionIds, [server.session.sessionId]);
     });
 
+    test('surfaces an ambiguous native episode match clearly', () async {
+      final platform = _FakePlatform(
+        startOverride:
+            ({
+              required requestId,
+              required magnet,
+              required episode,
+              required season,
+              required absoluteEpisode,
+              required requestedSpecial,
+              required allowSeasonRelativeBare,
+              required requireNumberingSchemeEvidence,
+              preferredFileIndex,
+            }) => Future.error(
+              PlatformException(code: 'DIRECT_TORRENT_EPISODE_AMBIGUOUS'),
+            ),
+      );
+      final worker = AndroidDirectPeerDownloadWorker(platform: platform);
+
+      await expectLater(
+        worker.download(
+          job: _job(),
+          capability: DirectPeerDownloadCapability(magnet: _magnet, episode: 7),
+          partialFile: File('${temporaryDirectory.path}/episode.part'),
+          cancellation: DownloadCancellationToken(),
+          onProgress: (_) {},
+        ),
+        throwsA(
+          isA<DownloadTransferException>()
+              .having(
+                (error) => error.code,
+                'code',
+                'episode_file_identity_ambiguous',
+              )
+              .having((error) => error.retryable, 'retryable', isFalse),
+        ),
+      );
+    });
+
     test('cancels a pending native start distinctly', () async {
       final started = Completer<void>();
       final nativeStart = Completer<DirectTorrentNativeSession>();
@@ -197,6 +244,11 @@ void main() {
               required requestId,
               required magnet,
               required episode,
+              required season,
+              required absoluteEpisode,
+              required requestedSpecial,
+              required allowSeasonRelativeBare,
+              required requireNumberingSchemeEvidence,
               preferredFileIndex,
             }) {
               started.complete();
@@ -304,6 +356,11 @@ typedef _StartOverride =
       required String requestId,
       required String magnet,
       required int episode,
+      required int? season,
+      required int? absoluteEpisode,
+      required bool requestedSpecial,
+      required bool allowSeasonRelativeBare,
+      required bool requireNumberingSchemeEvidence,
       int? preferredFileIndex,
     });
 
@@ -318,6 +375,11 @@ class _FakePlatform implements DirectPeerNativePlatform {
   int startCalls = 0;
   String? startedMagnet;
   int? startedEpisode;
+  int? startedSeason;
+  int? startedAbsoluteEpisode;
+  bool? startedRequestedSpecial;
+  bool? startedAllowSeasonRelativeBare;
+  bool? startedRequireNumberingSchemeEvidence;
   int? startedFileIndex;
   final List<String> cancelledRequestIds = [];
   final List<String> stoppedSessionIds = [];
@@ -342,11 +404,21 @@ class _FakePlatform implements DirectPeerNativePlatform {
     required String requestId,
     required String magnet,
     required int episode,
+    int? season,
+    int? absoluteEpisode,
+    bool requestedSpecial = false,
+    bool allowSeasonRelativeBare = false,
+    bool requireNumberingSchemeEvidence = false,
     int? preferredFileIndex,
   }) {
     startCalls += 1;
     startedMagnet = magnet;
     startedEpisode = episode;
+    startedSeason = season;
+    startedAbsoluteEpisode = absoluteEpisode;
+    startedRequestedSpecial = requestedSpecial;
+    startedAllowSeasonRelativeBare = allowSeasonRelativeBare;
+    startedRequireNumberingSchemeEvidence = requireNumberingSchemeEvidence;
     startedFileIndex = preferredFileIndex;
     final override = startOverride;
     if (override != null) {
@@ -354,6 +426,11 @@ class _FakePlatform implements DirectPeerNativePlatform {
         requestId: requestId,
         magnet: magnet,
         episode: episode,
+        season: season,
+        absoluteEpisode: absoluteEpisode,
+        requestedSpecial: requestedSpecial,
+        allowSeasonRelativeBare: allowSeasonRelativeBare,
+        requireNumberingSchemeEvidence: requireNumberingSchemeEvidence,
         preferredFileIndex: preferredFileIndex,
       );
     }

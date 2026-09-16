@@ -98,6 +98,17 @@ void main() {
     expect(selected.name, 'Episode 01.mkv');
   });
 
+  test('file selection rejects an opaque preferred file', () {
+    expect(
+      () => selectPremiumizeEpisodeFile(
+        [_file('feature-a.mkv', 100), _file('feature-b.mkv', 200)],
+        1,
+        preferredFileIndex: 1,
+      ),
+      throwsA(isA<EpisodeIdentityAmbiguousException>()),
+    );
+  });
+
   test('file selection keeps repeated episode numbers in the right season', () {
     final selected = selectPremiumizeEpisodeFile(
       [_file('Show S01E01.mkv', 200), _file('Show S02E01.mkv', 100)],

@@ -2,6 +2,7 @@ import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/widgets/copyable_code_interaction.dart';
 import 'package:anime_tv/features/auth/data/real_debrid_oauth_client.dart';
 import 'package:anime_tv/features/auth/presentation/real_debrid_pairing_screen.dart';
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -116,6 +117,100 @@ void main() {
     expect(client.starts, 2);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('polling 429 keeps approval pending until Retry-After', (
+    tester,
+  ) async {
+    final client = _FakeRealDebridOAuthClient(
+      session: _session(interval: const Duration(milliseconds: 1)),
+      pollErrors: const [
+        RealDebridOAuthException(
+          stage: RealDebridOAuthStage.poll,
+          reasonCode: 'rate_limited',
+          message:
+              'Real-Debrid asked TetoTV to slow down. Pairing will continue automatically.',
+          httpStatus: 429,
+          retryAfter: Duration(seconds: 12),
+        ),
+      ],
+    );
+    await _pumpScreen(tester, client: client);
+
+    await tester.pump(const Duration(milliseconds: 1));
+    await tester.pump();
+    expect(client.polls, 1);
+    expect(find.text('ABCD1234EFGHI'), findsOneWidget);
+    expect(find.text('Could not connect'), findsNothing);
+
+    await tester.pump(const Duration(seconds: 11));
+    expect(client.polls, 1);
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump();
+    expect(client.polls, 2);
+    expect(find.textContaining('DioException'), findsNothing);
+    expect(find.textContaining('429'), findsNothing);
+  });
+
+  testWidgets('approved device exchange 429 is safe and never auto-replayed', (
+    tester,
+  ) async {
+    final client = _FakeRealDebridOAuthClient(
+      session: _session(interval: const Duration(milliseconds: 1)),
+      credentials: const RealDebridOAuthCredentials(
+        clientId: 'private-client-id',
+        clientSecret: 'private-client-secret',
+      ),
+      exchangeError: const RealDebridOAuthException(
+        stage: RealDebridOAuthStage.exchange,
+        reasonCode: 'rate_limited',
+        message:
+            'Real-Debrid approved the device, but the final connection was rate-limited. Wait before connecting again.',
+        httpStatus: 429,
+        retryAfter: Duration(seconds: 30),
+      ),
+    );
+    await _pumpScreen(tester, client: client);
+
+    await tester.pump(const Duration(milliseconds: 1));
+    await tester.pump();
+    expect(find.text('Could not connect'), findsOneWidget);
+    expect(find.textContaining('approved the device'), findsOneWidget);
+    expect(find.textContaining('DioException'), findsNothing);
+    expect(find.textContaining('private-client-secret'), findsNothing);
+    expect(client.exchanges, 1);
+
+    await tester.pump(const Duration(minutes: 1));
+    expect(client.exchanges, 1, reason: 'token exchange needs user recovery');
+  });
+
+  testWidgets('unexpected Dio details never reach the Real-Debrid error UI', (
+    tester,
+  ) async {
+    final options = RequestOptions(
+      path: 'https://real-debrid.test/private-device-path',
+    );
+    final client = _FakeRealDebridOAuthClient(
+      startError: DioException(
+        requestOptions: options,
+        type: DioExceptionType.badResponse,
+        response: Response<Map<String, dynamic>>(
+          requestOptions: options,
+          statusCode: 429,
+          data: const {'error': 'private-provider-body'},
+        ),
+      ),
+    );
+    await _pumpScreen(tester, client: client);
+
+    expect(find.text('Could not connect'), findsOneWidget);
+    expect(
+      find.text('Real-Debrid authorization could not be completed. Try again.'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('DioException'), findsNothing);
+    expect(find.textContaining('private-provider-body'), findsNothing);
+    expect(find.textContaining('private-device-path'), findsNothing);
+  });
 }
 
 Future<void> _pumpScreen(
@@ -151,12 +246,22 @@ RealDebridDeviceSession _session({
 );
 
 class _FakeRealDebridOAuthClient extends RealDebridOAuthClient {
-  _FakeRealDebridOAuthClient({this.session, this.startError});
+  _FakeRealDebridOAuthClient({
+    this.session,
+    this.startError,
+    this.credentials,
+    this.exchangeError,
+    List<Object> pollErrors = const [],
+  }) : pollErrors = List<Object>.of(pollErrors);
 
   final RealDebridDeviceSession? session;
   final Object? startError;
+  final RealDebridOAuthCredentials? credentials;
+  final Object? exchangeError;
+  final List<Object> pollErrors;
   int starts = 0;
   int polls = 0;
+  int exchanges = 0;
 
   @override
   Future<RealDebridDeviceSession> startDeviceAuthorization() async {
@@ -170,6 +275,17 @@ class _FakeRealDebridOAuthClient extends RealDebridOAuthClient {
     RealDebridDeviceSession session,
   ) async {
     polls++;
-    return null;
+    if (pollErrors.isNotEmpty) throw pollErrors.removeAt(0);
+    return credentials;
+  }
+
+  @override
+  Future<RealDebridTokenSet> exchangeDeviceCode({
+    required RealDebridDeviceSession session,
+    required RealDebridOAuthCredentials credentials,
+  }) async {
+    exchanges++;
+    if (exchangeError case final error?) throw error;
+    throw StateError('Unexpected token exchange in this test.');
   }
 }

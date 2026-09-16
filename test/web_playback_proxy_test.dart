@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:anime_tv/features/marketplace/data/web_playback_proxy.dart';
 import 'package:anime_tv/features/marketplace/data/web_stream_validator.dart';
+import 'package:anime_tv/features/marketplace/domain/addon_models.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -52,6 +53,9 @@ void main() {
           'Cookie': 'session=secret',
           'Referer': 'https://provider.example/',
           'Origin': 'https://provider.example',
+          'Sec-Fetch-Dest': 'empty',
+          'Sec-Fetch-Mode': 'cors',
+          'Sec-Fetch-Site': 'same-site',
         },
       );
       await response.close();
@@ -62,6 +66,9 @@ void main() {
       expect(requests.last.headers, isNot(contains('Cookie')));
       expect(requests.last.headers['Referer'], 'https://provider.example/');
       expect(requests.last.headers['Origin'], 'https://provider.example');
+      expect(requests.last.headers['Sec-Fetch-Dest'], 'empty');
+      expect(requests.last.headers['Sec-Fetch-Mode'], 'cors');
+      expect(requests.last.headers['Sec-Fetch-Site'], 'same-site');
     });
   });
 
@@ -75,6 +82,12 @@ void main() {
       expect(limits.maximumPendingSessionRequests, 16);
       expect(limits.requestAdmissionTimeout, const Duration(seconds: 10));
       expect(limits.maximumProgressiveBytes, 32 * 1024 * 1024 * 1024);
+      expect(limits.maximumAudioSidecars, 8);
+      expect(limits.audioSidecarProbeTimeout, const Duration(seconds: 2));
+      expect(
+        limits.preparationCommitReserve,
+        const Duration(milliseconds: 250),
+      );
       expect(limits.maximumManifestBytes, 1024 * 1024);
       expect(limits.maximumManifestReferences, 8 * 1024);
       expect(limits.maximumTotalSessionRequests, 16 * 1024);
@@ -916,6 +929,153 @@ void main() {
         expect(unavailable.subtitleUri, isNull);
         expect(unavailable.subtitleRejected, isTrue);
         await unavailable.session?.close();
+      },
+    );
+
+    test(
+      'proxies supported external audio with bounded metadata and headers',
+      () async {
+        final stream = Uri.parse('https://video.example/episode.mp4');
+        final goodAudio = Uri.parse('https://audio.example/dub.aac');
+        final badAudio = Uri.parse('https://audio.example/login.html');
+        final requests = <WebProxyUpstreamRequest>[];
+        final proxy = WebPlaybackProxy(
+          upstream: _fakeUpstream((request) async {
+            requests.add(request);
+            if (request.uri == stream) {
+              return _response(
+                request,
+                contentType: 'video/mp4',
+                bytes: [1, 2, 3],
+              );
+            }
+            if (request.uri == goodAudio) {
+              return _response(
+                request,
+                contentType: 'audio/aac',
+                bytes: [4, 5, 6],
+              );
+            }
+            expect(request.uri, badAudio);
+            return _response(
+              request,
+              contentType: 'text/html',
+              bytes: utf8.encode('<!doctype html>login'),
+            );
+          }),
+        );
+        addTearDown(proxy.close);
+
+        final validated = await WebStreamValidator(proxy: proxy).validate(
+          stream,
+          const {},
+          audioTracks: [
+            WebExternalAudioTrack(
+              uri: goodAudio,
+              label: 'English Dub',
+              language: 'eng',
+              headers: const {
+                'Referer': 'https://provider.example/',
+                'Host': 'attacker.example',
+                'Content-Length': '999',
+              },
+            ),
+            WebExternalAudioTrack(uri: badAudio, language: 'jpn'),
+          ],
+        );
+
+        expect(validated.audioTracks, hasLength(1));
+        final audio = validated.audioTracks.single;
+        expect(audio.label, 'English Dub');
+        expect(audio.language, 'eng');
+        expect(audio.contentType, 'audio/aac');
+        expect(proxy.isOwnedPlaybackProxyUri(audio.uri), isTrue);
+        expect(validated.rejectedAudioTrackCount, 1);
+        expect((await _localRequest(audio.uri)).body, [4, 5, 6]);
+        final audioRequests = requests
+            .where((request) => request.uri == goodAudio)
+            .toList();
+        expect(audioRequests, isNotEmpty);
+        for (final request in audioRequests) {
+          expect(request.headers['Referer'], 'https://provider.example/');
+          expect(request.headers, isNot(contains('Host')));
+          expect(request.headers, isNot(contains('Content-Length')));
+        }
+        await validated.session?.close();
+      },
+    );
+
+    test(
+      'infers a safe MIME for extension-classified audio before Media3',
+      () async {
+        final stream = Uri.parse('https://video.example/episode.mp4');
+        final audio = Uri.parse('https://audio.example/dub.m4a');
+        final proxy = WebPlaybackProxy(
+          upstream: _fakeUpstream((request) async {
+            if (request.uri == stream) {
+              return _response(request, contentType: 'video/mp4', bytes: [1]);
+            }
+            expect(request.uri, audio);
+            return _response(
+              request,
+              contentType: 'application/x-unknown',
+              bytes: [2],
+            );
+          }),
+        );
+        addTearDown(proxy.close);
+
+        final validated = await WebStreamValidator(proxy: proxy).validate(
+          stream,
+          const {},
+          audioTracks: [WebExternalAudioTrack(uri: audio)],
+        );
+
+        expect(validated.audioTracks, hasLength(1));
+        expect(validated.audioTracks.single.contentType, 'audio/mp4');
+        await validated.session?.close();
+      },
+    );
+
+    test(
+      'a stalled optional audio probe cannot consume the primary deadline',
+      () async {
+        final stream = Uri.parse('https://video.example/episode.mp4');
+        final audio = Uri.parse('https://audio.example/stalled.aac');
+        final pending = Completer<WebProxyUpstreamResponse>();
+        WebProxyUpstreamRequest? pendingRequest;
+        final proxy = WebPlaybackProxy(
+          limits: const WebPlaybackProxyLimits(
+            preparationTimeout: Duration(milliseconds: 250),
+            audioSidecarProbeTimeout: Duration(milliseconds: 10),
+            preparationCommitReserve: Duration(milliseconds: 20),
+          ),
+          upstream: _fakeUpstream((request) {
+            if (request.uri == stream) {
+              return Future.value(
+                _response(request, contentType: 'video/mp4', bytes: [1]),
+              );
+            }
+            expect(request.uri, audio);
+            pendingRequest = request;
+            return pending.future;
+          }),
+        );
+        addTearDown(proxy.close);
+
+        final session = await proxy.prepare(
+          uri: stream,
+          audioTracks: [WebExternalAudioTrack(uri: audio)],
+        );
+
+        expect(session.rejectedAudioTrackCount, 1);
+        expect(session.audioTracks, isEmpty);
+        expect(proxy.isOwnedPlaybackProxyUri(session.playbackUri), isTrue);
+        await session.close();
+        pending.complete(
+          _response(pendingRequest!, contentType: 'audio/aac', bytes: [2]),
+        );
+        await Future<void>.delayed(Duration.zero);
       },
     );
   });

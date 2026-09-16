@@ -13,6 +13,7 @@ void main() {
       FlutterSecureStorage.setMockInitialValues({
         TrackingProvider.anilist.tokenStorageKey: 'anilist-token',
         TrackingProvider.myAnimeList.tokenStorageKey: 'mal-token',
+        ..._validKitsuCredentials(),
         TrackingProvider.simkl.tokenStorageKey: 'simkl-token',
       });
       final repositories = <TrackingProvider, _RecordingRepository>{};
@@ -40,6 +41,11 @@ void main() {
       expect(repositories[TrackingProvider.myAnimeList]!.statusUpdates, [
         (mediaId: 202, status: TrackingListStatus.planToWatch),
       ]);
+      final kitsuUpdate =
+          repositories[TrackingProvider.kitsu]!.externalStatusUpdates.single;
+      expect(kitsuUpdate.ids.anilistId, 101);
+      expect(kitsuUpdate.ids.malId, 202);
+      expect(kitsuUpdate.status, TrackingListStatus.planToWatch);
       final simklUpdate =
           repositories[TrackingProvider.simkl]!.externalStatusUpdates.single;
       expect(simklUpdate.ids.anilistId, 101);
@@ -71,7 +77,7 @@ void main() {
         isA<CatalogTrackingValidationError>().having(
           (error) => error.message,
           'message',
-          contains('Connect AniList, MAL, or SIMKL'),
+          contains('Connect an anime tracker'),
         ),
       ),
     );
@@ -79,6 +85,80 @@ void main() {
 
     expect(reportedErrors, isEmpty);
     expect(container.read(trackingStatusControllerProvider).hasError, isFalse);
+  });
+
+  test('Kitsu mapping miss is reported without reconnect advice', () async {
+    FlutterSecureStorage.setMockInitialValues({..._validKitsuCredentials()});
+    final container = ProviderContainer(
+      overrides: [
+        trackingRepositoryFactoryProvider.overrideWithValue(
+          (_, _) => _RecordingRepository(
+            externalFailure: const TrackingMediaMappingNotFoundException(),
+          ),
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    await expectLater(
+      container
+          .read(trackingStatusControllerProvider.notifier)
+          .updateCatalogStatus(
+            anilistId: 101,
+            malId: 202,
+            status: TrackingListStatus.planToWatch,
+          ),
+      throwsA(
+        isA<CatalogTrackingValidationError>()
+            .having(
+              (error) => error.message,
+              'message',
+              'This title is not mapped on Kitsu.',
+            )
+            .having(
+              (error) => error.message.toString(),
+              'message',
+              isNot(contains('Reconnect')),
+            ),
+      ),
+    );
+    expect(container.read(trackingStatusControllerProvider).hasError, isFalse);
+  });
+
+  test('partial catalog result identifies an unmapped Kitsu title', () async {
+    FlutterSecureStorage.setMockInitialValues({
+      TrackingProvider.anilist.tokenStorageKey: 'anilist-token',
+      ..._validKitsuCredentials(),
+    });
+    final repositories = <TrackingProvider, _RecordingRepository>{};
+    final container = ProviderContainer(
+      overrides: [
+        trackingRepositoryFactoryProvider.overrideWithValue((provider, _) {
+          return repositories.putIfAbsent(
+            provider,
+            () => _RecordingRepository(
+              externalFailure: provider == TrackingProvider.kitsu
+                  ? const TrackingMediaMappingNotFoundException()
+                  : null,
+            ),
+          );
+        }),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    final result = await container
+        .read(trackingStatusControllerProvider.notifier)
+        .updateCatalogStatus(
+          anilistId: 101,
+          malId: 202,
+          status: TrackingListStatus.planToWatch,
+        );
+
+    expect(result.updated, {TrackingProvider.anilist});
+    expect(result.unmapped, {TrackingProvider.kitsu});
+    expect(result.failures, isEmpty);
+    expect(result.isPartial, isTrue);
   });
 
   test('missing provider media ID stays a handled validation state', () async {
@@ -122,6 +202,7 @@ void main() {
       FlutterSecureStorage.setMockInitialValues({
         TrackingProvider.anilist.tokenStorageKey: 'anilist-token',
         TrackingProvider.myAnimeList.tokenStorageKey: 'mal-token',
+        ..._validKitsuCredentials(),
         TrackingProvider.simkl.tokenStorageKey: 'simkl-token',
       });
       final repositories = <TrackingProvider, _RecordingRepository>{};
@@ -141,6 +222,10 @@ void main() {
       expect(result.updated, TrackingProvider.values.toSet());
       expect(repositories[TrackingProvider.anilist]!.removals, [303]);
       expect(repositories[TrackingProvider.myAnimeList]!.removals, [404]);
+      final kitsuRemoval =
+          repositories[TrackingProvider.kitsu]!.externalRemovals.single;
+      expect(kitsuRemoval.anilistId, 303);
+      expect(kitsuRemoval.malId, 404);
       final simklRemoval =
           repositories[TrackingProvider.simkl]!.externalRemovals.single;
       expect(simklRemoval.anilistId, 303);
@@ -149,8 +234,20 @@ void main() {
   );
 }
 
+Map<String, String> _validKitsuCredentials() => {
+  TrackingProvider.kitsu.tokenStorageKey: 'kitsu-token',
+  TrackingProvider.kitsu.refreshTokenStorageKey: 'kitsu-refresh',
+  TrackingProvider.kitsu.expiresAtStorageKey: DateTime.now()
+      .toUtc()
+      .add(const Duration(days: 30))
+      .toIso8601String(),
+};
+
 class _RecordingRepository
     implements TrackingRepository, ExternalIdTrackingRepository {
+  _RecordingRepository({this.externalFailure});
+
+  final Object? externalFailure;
   final statusUpdates = <({int mediaId, TrackingListStatus status})>[];
   final removals = <int>[];
   final externalStatusUpdates =
@@ -196,11 +293,13 @@ class _RecordingRepository
     required TrackingMediaIds ids,
     required TrackingListStatus status,
   }) async {
+    if (externalFailure case final failure?) throw failure;
     externalStatusUpdates.add((ids: ids, status: status));
   }
 
   @override
   Future<void> removeFromListByIds(TrackingMediaIds ids) async {
+    if (externalFailure case final failure?) throw failure;
     externalRemovals.add(ids);
   }
 }

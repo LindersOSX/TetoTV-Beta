@@ -1,3 +1,4 @@
+import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/widgets/tv_text_input.dart';
@@ -52,12 +53,12 @@ class _PremiumizePairingScreenState
                 _ActionButton(
                   autofocus: true,
                   icon: Icons.arrow_back_rounded,
-                  label: 'Back',
+                  label: context.tr("Back"),
                   onPressed: context.pop,
                 ),
                 const SizedBox(width: 18),
                 Text(
-                  'Connect Premiumize',
+                  context.tr("Connect Premiumize"),
                   style: Theme.of(context).textTheme.headlineSmall,
                 ),
               ],
@@ -86,70 +87,77 @@ class _PremiumizePairingScreenState
       ),
       const SizedBox(height: 18),
       Text(
-        'Premiumize connected',
+        context.tr("Premiumize connected"),
         style: Theme.of(context).textTheme.displaySmall,
       ),
       const SizedBox(height: 10),
-      const Text('Your API key is encrypted in the Android Keystore.'),
+      Text(context.tr("Your API key is encrypted in the Android Keystore.")),
       const SizedBox(height: 24),
       _ActionButton(
         autofocus: true,
         icon: Icons.check_rounded,
-        label: 'Done',
+        label: context.tr("Done"),
         onPressed: context.pop,
       ),
     ],
   );
 
-  Widget _form(BuildContext context, PremiumizeSettingsState state) =>
-      Container(
-        constraints: const BoxConstraints(maxWidth: 720),
-        padding: const EdgeInsets.all(28),
-        decoration: BoxDecoration(
-          color: context.appPalette.surface,
-          borderRadius: BorderRadius.circular(24),
-          border: Border.all(color: Colors.white.withValues(alpha: .08)),
+  Widget _form(
+    BuildContext context,
+    PremiumizeSettingsState state,
+  ) => Container(
+    constraints: const BoxConstraints(maxWidth: 720),
+    padding: const EdgeInsets.all(28),
+    decoration: BoxDecoration(
+      color: context.appPalette.surface,
+      borderRadius: BorderRadius.circular(24),
+      border: Border.all(color: Colors.white.withValues(alpha: .08)),
+    ),
+    child: Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          context.tr("Use your Premiumize API key"),
+          style: Theme.of(context).textTheme.headlineSmall,
         ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Use your Premiumize API key',
-              style: Theme.of(context).textTheme.headlineSmall,
-            ),
-            const SizedBox(height: 10),
-            Text(
-              'Open premiumize.me/account on your phone, copy the API key, '
-              'then enter or paste it below. The key is sent only as a secure '
-              'Bearer header for validation.',
-              style: TextStyle(color: context.appPalette.mutedText),
-            ),
-            const SizedBox(height: 22),
-            TvTextInput(
-              controller: _tokenController,
-              focusNode: _tokenFocus,
-              labelText: 'Premiumize API key',
-              hintText: state.hasSavedToken
-                  ? 'Enter a replacement key'
-                  : 'Enter API key',
-              keyboardTitle: 'Enter Premiumize API key',
-              obscureText: true,
-              onSubmitted: (_) => _connect(),
-            ),
-            if (state.errorMessage case final message?) ...[
-              const SizedBox(height: 12),
-              Text(message, style: const TextStyle(color: Color(0xFFFF929B))),
-            ],
-            const SizedBox(height: 18),
-            _ActionButton(
-              icon: Icons.lock_rounded,
-              label: state.isLoading ? 'Validating…' : 'Connect securely',
-              onPressed: state.isLoading ? () {} : _connect,
-            ),
-          ],
+        const SizedBox(height: 10),
+        Text(
+          context.tr(
+            "Open premiumize.me/account on your phone, copy the API key, then enter or paste it below. The key is sent only as a secure Bearer header for validation.",
+          ),
+          style: TextStyle(color: context.appPalette.mutedText),
         ),
-      );
+        const SizedBox(height: 22),
+        TvTextInput(
+          controller: _tokenController,
+          focusNode: _tokenFocus,
+          labelText: context.tr("Premiumize API key"),
+          hintText: state.hasSavedToken
+              ? context.tr("Enter a replacement key")
+              : context.tr("Enter API key"),
+          keyboardTitle: context.tr("Enter Premiumize API key"),
+          obscureText: true,
+          onSubmitted: (_) => _connect(),
+        ),
+        if (state.errorMessage case final message?) ...[
+          const SizedBox(height: 12),
+          Text(
+            context.tr(message),
+            style: const TextStyle(color: Color(0xFFFF929B)),
+          ),
+        ],
+        const SizedBox(height: 18),
+        _ActionButton(
+          icon: Icons.lock_rounded,
+          label: state.isLoading
+              ? context.tr("Validating…")
+              : context.tr("Connect securely"),
+          onPressed: state.isLoading ? () {} : _connect,
+        ),
+      ],
+    ),
+  );
 }
 
 class _ActionButton extends StatelessWidget {

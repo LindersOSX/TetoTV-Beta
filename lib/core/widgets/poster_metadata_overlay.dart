@@ -1,3 +1,4 @@
+import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:flutter/material.dart';
 
@@ -44,7 +45,7 @@ class PosterAiringStatusBadge extends StatelessWidget {
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
         child: Text(
-          label,
+          context.tr(label),
           maxLines: 1,
           style: const TextStyle(
             color: Colors.white,

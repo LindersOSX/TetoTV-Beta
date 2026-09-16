@@ -1,9 +1,120 @@
 package dev.animetv.anime_tv.player
 
+import java.io.File
 import org.junit.Assert.*
 import org.junit.Test
 
 class Media3BridgePolicyTest {
+    @Test
+    fun `release poll requires the owned playback thread to terminate`() {
+        assertEquals(
+            Media3ReleasePollAction.WAIT,
+            media3ReleasePollAction(playbackThreadAlive = true, elapsedMs = 0),
+        )
+        assertEquals(
+            Media3ReleasePollAction.WAIT,
+            media3ReleasePollAction(
+                playbackThreadAlive = true,
+                elapsedMs = Media3BridgePolicy.RELEASE_COMPLETION_GRACE_MS - 1,
+            ),
+        )
+        assertEquals(
+            Media3ReleasePollAction.TIMED_OUT,
+            media3ReleasePollAction(
+                playbackThreadAlive = true,
+                elapsedMs = Media3BridgePolicy.RELEASE_COMPLETION_GRACE_MS,
+            ),
+        )
+        assertEquals(
+            Media3ReleasePollAction.COMPLETE,
+            media3ReleasePollAction(
+                playbackThreadAlive = false,
+                elapsedMs = Media3BridgePolicy.RELEASE_COMPLETION_GRACE_MS,
+            ),
+        )
+    }
+
+    @Test
+    fun `process registry clears only playback threads proven dead`() {
+        val alive = mutableMapOf("first" to true, "second" to true)
+        val registry = Media3PlaybackThreadRegistry<String> { alive[it] == true }
+        registry.track("first")
+        registry.track("second")
+        assertFalse(registry.allReleased())
+        alive["first"] = false
+        assertFalse(registry.allReleased())
+        alive["second"] = false
+        assertTrue(registry.allReleased())
+    }
+
+    @Test
+    fun `release timeout and asynchronous proof stay within four seconds`() {
+        assertEquals(1_000L, Media3BridgePolicy.RELEASE_TIMEOUT_MS)
+        assertEquals(3_000L, Media3BridgePolicy.RELEASE_COMPLETION_GRACE_MS)
+        assertEquals(4_000L, Media3BridgePolicy.RELEASE_TOTAL_TIMEOUT_MS)
+        assertEquals(50L, Media3BridgePolicy.RELEASE_POLL_INTERVAL_MS)
+    }
+
+    @Test
+    fun `timed out releases get bounded automatic reaping and a create-time sweep`() {
+        assertEquals(30_000L, Media3BridgePolicy.RELEASE_AUTOMATIC_REAP_WINDOW_MS)
+        assertEquals(250L, Media3BridgePolicy.RELEASE_AUTOMATIC_REAP_INTERVAL_MS)
+        assertEquals(
+            Media3ReleaseReapAction.REAP,
+            media3ReleaseReapAction(playbackThreadAlive = false, elapsedMs = 0),
+        )
+        assertEquals(
+            Media3ReleaseReapAction.WAIT,
+            media3ReleaseReapAction(
+                playbackThreadAlive = true,
+                elapsedMs = Media3BridgePolicy.RELEASE_AUTOMATIC_REAP_WINDOW_MS - 1,
+            ),
+        )
+        assertEquals(
+            Media3ReleaseReapAction.STOP,
+            media3ReleaseReapAction(
+                playbackThreadAlive = true,
+                elapsedMs = Media3BridgePolicy.RELEASE_AUTOMATIC_REAP_WINDOW_MS,
+            ),
+        )
+
+        val source = media3BridgeSource()
+        val create = source.substringAfter("if (call.method == \"create\")", "")
+            .substringBefore("return", "")
+        val sweepIndex = create.indexOf("reapCompletedSessions()")
+        val registryIndex = create.indexOf("Media3ProcessReleaseSafety.allReleased()")
+        val limitIndex = create.indexOf("sessions.size < Media3BridgePolicy.MAX_PLAYERS")
+        assertTrue(sweepIndex >= 0)
+        assertTrue(registryIndex > sweepIndex)
+        assertTrue(limitIndex > registryIndex)
+        val timedOut = source.substringAfter("Media3ReleasePollAction.TIMED_OUT ->", "")
+            .substringBefore("private fun scheduleAutomaticReleaseReap", "")
+        assertTrue(timedOut.contains("scheduleAutomaticReleaseReap(id, session)"))
+        assertTrue(source.contains("session.releaseCanBeReaped"))
+    }
+
+    @Test
+    fun `bridge keeps the default per-player playback looper ownership invariant`() {
+        val source = media3BridgeSource()
+        assertTrue(source.contains("old.playbackLooper.thread"))
+        assertTrue(source.contains("default per-player owned"))
+        assertFalse(source.contains(".setPlaybackLooperProvider("))
+        assertFalse(source.contains(".setPlaybackLooper("))
+        assertEquals(1, Regex("old\\.release\\(\\)").findAll(source).count())
+    }
+
+    @Test
+    fun `bridge close completes pending Flutter release replies before clearing callbacks`() {
+        val close = media3BridgeSource()
+            .substringAfter("fun close()", "")
+            .substringBefore("\n    }\n}", "")
+        val replyIndex = close.indexOf("interruptedReleases.forEach")
+        val clearCallbacksIndex = close.indexOf("handler.removeCallbacksAndMessages(null)")
+        assertTrue(replyIndex >= 0)
+        assertTrue(clearCallbacksIndex > replyIndex)
+        assertTrue(close.contains("media3_closed"))
+    }
+
     @Test fun mergedSidecarIdsPreserveBatchIdentityButNeverAliasEmbeddedTracks() {
         val ids = listOf("sidecar:1", "sidecar:2", "sidecar:5")
         assertEquals("sidecar:1", Media3BridgePolicy.sidecarTrackId("1:sidecar:1", ids))
@@ -11,6 +122,22 @@ class Media3BridgePolicyTest {
         // A failed addition can leave a gap in public IDs; child index is the
         // accepted list position, not the numeric suffix of the public ID.
         assertEquals("sidecar:5", Media3BridgePolicy.sidecarTrackId("3:sidecar:5", ids))
+        assertEquals(
+            "sidecar:1",
+            Media3BridgePolicy.sidecarTrackId(
+                "0:1:sidecar:1",
+                ids,
+                primaryWrappedForExternalAudio = true,
+            ),
+        )
+        assertNull(
+            Media3BridgePolicy.sidecarTrackId(
+                "1:sidecar:1",
+                ids,
+                primaryWrappedForExternalAudio = true,
+            ),
+        )
+        assertNull(Media3BridgePolicy.sidecarTrackId("0:1:sidecar:1", ids))
         for (raw in listOf(null, "sidecar:1", "0:sidecar:1", "1:sidecar:2", "2:sidecar:1", "0:1:sidecar:1", "01:sidecar:1", "1:sidecar:1:extra", "1:https://private.example")) {
             assertNull(Media3BridgePolicy.sidecarTrackId(raw, ids))
         }
@@ -115,10 +242,100 @@ class Media3BridgePolicyTest {
         assertNull(Media3BridgePolicy.safeDecoderName("https://private.example"))
     }
 
+    @Test fun externalAudioAcceptsOnlyOwnedLoopbackResourcesAndBoundedMimes() {
+        assertTrue(Media3BridgePolicy.ownedLoopbackAudioUri("http://127.0.0.1:49152/session/audio"))
+        for (raw in listOf(
+            "https://media.example/audio.aac",
+            "http://localhost:49152/audio",
+            "http://127.0.0.1/audio",
+            "http://127.0.0.1:49152/",
+            "http://user@127.0.0.1:49152/audio",
+        )) {
+            assertFalse(Media3BridgePolicy.ownedLoopbackAudioUri(raw))
+        }
+        assertEquals("audio/aac", Media3BridgePolicy.externalAudioMime("audio/aac; charset=binary"))
+        assertEquals("application/vnd.apple.mpegurl", Media3BridgePolicy.externalAudioMime("application/vnd.apple.mpegurl"))
+        assertNull(Media3BridgePolicy.externalAudioMime("video/mp4"))
+        assertNull(Media3BridgePolicy.externalAudioMime("text/html"))
+    }
+
+    @Test fun mergedAudioChildIdentityIsBoundedAndDeterministic() {
+        assertEquals(0, Media3BridgePolicy.mergedChildIndex("0:primary"))
+        assertEquals(3, Media3BridgePolicy.mergedChildIndex("3:audio-group"))
+        assertNull(Media3BridgePolicy.mergedChildIndex("audio-group"))
+        assertNull(Media3BridgePolicy.mergedChildIndex("123:oversized-index"))
+        assertNull(Media3BridgePolicy.mergedChildIndex("1".repeat(257)))
+    }
+
+    @Test fun externalAudioFailureGetsOnePrimaryOnlySalvageAttempt() {
+        assertTrue(Media3BridgePolicy.shouldRetryPrimaryWithoutExternalAudio(1, false))
+        assertTrue(
+            Media3BridgePolicy.shouldRetryPrimaryWithoutExternalAudio(
+                Media3BridgePolicy.MAX_AUDIO_SIDECARS,
+                false,
+            ),
+        )
+        assertFalse(Media3BridgePolicy.shouldRetryPrimaryWithoutExternalAudio(0, false))
+        assertFalse(Media3BridgePolicy.shouldRetryPrimaryWithoutExternalAudio(1, true))
+        assertFalse(
+            Media3BridgePolicy.shouldRetryPrimaryWithoutExternalAudio(
+                Media3BridgePolicy.MAX_AUDIO_SIDECARS + 1,
+                false,
+            ),
+        )
+
+        val source = media3BridgeSource()
+        assertTrue(source.contains("val fallback = open.copy(audioTracks = emptyList())"))
+        assertTrue(source.contains("externalAudioFallbackApplied = true"))
+        assertTrue(source.contains("FilteringMediaSource("))
+        assertTrue(source.contains("C.TRACK_TYPE_AUDIO"))
+        assertTrue(source.contains("MergingMediaSource(\n                true,\n                true,"))
+    }
+
+    @Test fun runtimeSubtitleRebuildPreservesExternalAudioMerge() {
+        val source = media3BridgeSource()
+        val createPlayer = source.substringAfter("private fun createPlayer(", "")
+            .substringBefore("private fun buildMediaSource(", "")
+        val addSubtitle = source.substringAfter("fun addSubtitle(", "")
+            .substringBefore("private fun parseSidecar(", "")
+        val sourceBuilder = source.substringAfter("private fun buildMediaSource(", "")
+            .substringBefore("private fun mediaItem(", "")
+
+        assertTrue(
+            createPlayer.contains(
+                "native.setMediaSource(buildMediaSource(open, mediaSourceFactory), startMs)",
+            ),
+        )
+        assertTrue(
+            addSubtitle.contains(
+                "buildMediaSource(updated, sourceFactory)",
+            ),
+        )
+        assertFalse(addSubtitle.contains("setMediaItem(mediaItem(updated)"))
+        assertTrue(sourceBuilder.contains("FilteringMediaSource("))
+        assertTrue(sourceBuilder.contains("MergingMediaSource("))
+    }
+
     @Test fun codecLabelsAreClosedAndUnknownRemainsAbsent() {
         assertEquals("hevc", Media3BridgePolicy.codec("video/hevc"))
         assertEquals("aac", Media3BridgePolicy.codec("audio/mp4a-latm"))
         assertNull(Media3BridgePolicy.codec("private/movie.title"))
         assertNull(Media3BridgePolicy.codec(null))
+    }
+
+    private fun media3BridgeSource(): String {
+        val workingDirectory = System.getProperty("user.dir") ?: "."
+        return generateSequence(File(workingDirectory)) { it.parentFile }
+            .take(7)
+            .flatMap { directory ->
+                sequenceOf(
+                    File(directory, "src/main/kotlin/dev/animetv/anime_tv/player/Media3FlutterBridge.kt"),
+                    File(directory, "app/src/main/kotlin/dev/animetv/anime_tv/player/Media3FlutterBridge.kt"),
+                    File(directory, "android/app/src/main/kotlin/dev/animetv/anime_tv/player/Media3FlutterBridge.kt"),
+                )
+            }
+            .firstOrNull(File::isFile)
+            ?.readText()
+            ?: error("Missing Media3FlutterBridge.kt")
     }
 }

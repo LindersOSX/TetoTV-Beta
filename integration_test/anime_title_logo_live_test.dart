@@ -1,5 +1,6 @@
 import 'package:anime_tv/features/catalog/data/anime_title_logo_cache_manager.dart';
 import 'package:anime_tv/features/catalog/data/anime_title_logo_client.dart';
+import 'package:anime_tv/features/catalog/domain/anime_title_logo.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 
@@ -7,15 +8,20 @@ void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
   testWidgets(
-    'AniZip metadata and approved artwork transport resolve a clear logo',
+    'live lookup returns only verified English artwork or text fallback',
     (_) async {
       final logo = await AnimeTitleLogoClient(
         cacheStore: _NoOpTitleLogoCacheStore(),
-      ).lookup(339);
+      ).lookup(154587);
 
+      // Artwork providers can change their default image independently. The
+      // untagged legacy response must therefore be ignored in favor of the
+      // language-aware endpoint's explicitly English logo, which is then
+      // downloaded through the dedicated safe artwork transport.
       expect(logo, isNotNull);
-      expect(logo!.tvdbId, 78814);
-      expect(logo.url.host, 'artworks.thetvdb.com');
+      expect(logo!.languageCode, 'en');
+      expect(logo.source, AnimeTitleLogoSource.aniZipTmdb);
+      expect(logo.url.host, 'image.tmdb.org');
 
       final file = await animeTitleLogoCacheManager.getSingleFile(
         logo.url.toString(),

@@ -4,8 +4,10 @@ import 'dart:math';
 
 import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/features/auth/application/pairing_controller.dart';
+import 'package:anime_tv/features/manga/application/manga_feature_availability.dart';
 import 'package:anime_tv/features/manga/application/manga_hub_controller.dart';
 import 'package:anime_tv/features/manga/data/manga_store.dart';
+import 'package:anime_tv/features/manga/data/manga_acquisition_service.dart';
 import 'package:anime_tv/features/manga/data/manga_uri_policy.dart';
 import 'package:anime_tv/features/manga/domain/manga_extension_models.dart';
 import 'package:anime_tv/features/manga/domain/manga_reader_models.dart';
@@ -20,6 +22,36 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 const int maximumMangaExtensionSearchResults = 480;
 const int maximumConcurrentMangaExtensionProviders = 3;
+const int maximumMangaLibraryUpdateBatch = 100;
+
+typedef MangaLibraryUpdateSummary = ({
+  int checked,
+  int failed,
+  int newChapters,
+  int remaining,
+});
+
+/// Numeric chapter order when unambiguous; otherwise preserve source order so
+/// prologues, extras and scanlator variants are not silently renumbered.
+List<MangaExtensionChapter> orderedMangaChapters(
+  Iterable<MangaExtensionChapter> chapters,
+) {
+  final result = chapters.toList(growable: false);
+  if (result.every((item) => item.chapterNumber != null) &&
+      result.map((item) => item.chapterNumber).toSet().length ==
+          result.length) {
+    result.sort((a, b) => a.chapterNumber!.compareTo(b.chapterNumber!));
+  } else {
+    result.sort((a, b) => a.index.compareTo(b.index));
+  }
+  return result;
+}
+
+String mangaExtensionDownloadJobId(
+  String sourceId,
+  String entryId,
+  String chapterId,
+) => 'manga.${_digest('$sourceId\n$entryId\n$chapterId').substring(0, 48)}';
 
 final mangaExtensionIdentityStoreProvider =
     Provider<MangaExtensionIdentityStore>(
@@ -30,17 +62,31 @@ final mangaExtensionIdentityStoreProvider =
 
 final mangaExtensionControllerProvider =
     StateNotifierProvider<MangaExtensionController, MangaExtensionState>((ref) {
+      final owner = ref.watch(mangaOwnerKeyProvider.future);
+      final featureAvailable = ref.read(mangaFeatureAvailableProvider);
       final controller = MangaExtensionController(
         addonStore: ref.watch(addonStoreProvider),
         mangaStore: ref.watch(mangaStoreProvider),
         identityStore: ref.watch(mangaExtensionIdentityStoreProvider),
-        ownerKey: () => ref.read(mangaOwnerKeyProvider.future),
+        ownerKey: () => owner,
+        updateCursorStorage: ref.watch(secureStorageProvider),
+        featureAvailable: featureAvailable,
       );
-      controller.syncInstalled(
-        ref.read(marketplaceControllerProvider).installed,
-      );
+      if (featureAvailable) {
+        controller.syncInstalled(
+          ref.read(marketplaceControllerProvider).installed,
+        );
+      }
       ref.listen<MarketplaceState>(marketplaceControllerProvider, (_, next) {
         controller.syncInstalled(next.installed);
+      });
+      ref.listen<bool>(mangaFeatureAvailableProvider, (_, available) {
+        controller.setFeatureAvailable(available);
+        if (available) {
+          controller.syncInstalled(
+            ref.read(marketplaceControllerProvider).installed,
+          );
+        }
       });
       return controller;
     });
@@ -176,39 +222,99 @@ class MangaExtensionController extends StateNotifier<MangaExtensionState> {
     required MangaStore mangaStore,
     required MangaExtensionIdentityStore identityStore,
     required Future<String> Function() ownerKey,
-  }) : this._(addonStore, mangaStore, identityStore, ownerKey);
+    FlutterSecureStorage? updateCursorStorage,
+    bool featureAvailable = true,
+  }) : this._(
+         addonStore,
+         mangaStore,
+         identityStore,
+         ownerKey,
+         updateCursorStorage ?? const FlutterSecureStorage(),
+         featureAvailable,
+       );
 
   MangaExtensionController._(
     this._addonStore,
     this._mangaStore,
     this._identityStore,
     this._ownerKey,
+    this._updateCursorStorage,
+    this._featureAvailable,
   ) : super(MangaExtensionState());
 
   final AddonStore _addonStore;
   final MangaStore _mangaStore;
   final MangaExtensionIdentityStore _identityStore;
   final Future<String> Function() _ownerKey;
+  final FlutterSecureStorage _updateCursorStorage;
+  Future<MangaLibraryUpdateSummary>? _libraryUpdateInFlight;
+  WebProviderCancellation? _libraryUpdateCancellation;
   WebProviderCancellation? _searchCancellation;
+  final Set<WebProviderCancellation> _activeRemoteCancellations = {};
   int _generation = 0;
+  int _featureGeneration = 0;
+  bool _featureAvailable;
+
+  /// Revokes every in-memory/provider capability while retaining the durable
+  /// library, progress, downloads, repository configuration and preferences.
+  void setFeatureAvailable(bool available) {
+    if (!mounted || _featureAvailable == available) return;
+    _featureAvailable = available;
+    _featureGeneration++;
+    _generation++;
+    _searchCancellation?.cancel();
+    _libraryUpdateCancellation?.cancel();
+    for (final cancellation in _activeRemoteCancellations.toList()) {
+      cancellation.cancel();
+    }
+    _searchCancellation = null;
+    _libraryUpdateCancellation = null;
+    _libraryUpdateInFlight = null;
+    if (!available) state = MangaExtensionState();
+  }
+
+  int _beginFeatureOperation() {
+    _requireFeature();
+    return _featureGeneration;
+  }
+
+  void _requireFeature([int? featureGeneration]) {
+    if (!mounted ||
+        !_featureAvailable ||
+        (featureGeneration != null &&
+            featureGeneration != _featureGeneration)) {
+      throw StateError('Manga reader is disabled in Settings.');
+    }
+  }
+
+  bool _isCurrentFeature(int featureGeneration) =>
+      mounted && _featureAvailable && featureGeneration == _featureGeneration;
+
+  bool _isCurrentSearch(
+    int generation,
+    int featureGeneration,
+    WebProviderCancellation cancellation,
+  ) =>
+      _isCurrentFeature(featureGeneration) &&
+      generation == _generation &&
+      !cancellation.isCancelled;
 
   void syncInstalled(Iterable<InstalledStreamingAddon> installed) {
+    if (!_featureAvailable) return;
     final providers =
         installed
             .where((addon) => addon.manifest.isMangaProvider)
             .toList(growable: false)
-          ..sort(
-            (left, right) {
-              final byName = left.manifest.name.toLowerCase().compareTo(
-                right.manifest.name.toLowerCase(),
-              );
-              return byName != 0
-                  ? byName
-                  : marketplaceAddonIdentityKey(left.manifest.id).compareTo(
-                      marketplaceAddonIdentityKey(right.manifest.id),
-                    );
-            },
-          );
+          ..sort((left, right) {
+            final byName = left.manifest.name.toLowerCase().compareTo(
+              right.manifest.name.toLowerCase(),
+            );
+            return byName != 0
+                ? byName
+                : marketplaceAddonIdentityKey(
+                    left.manifest.id,
+                  ).compareTo(marketplaceAddonIdentityKey(right.manifest.id));
+          });
     final inventoryChanged = !_sameMangaProviderInventory(
       state.providers,
       providers,
@@ -237,6 +343,7 @@ class MangaExtensionController extends StateNotifier<MangaExtensionState> {
   }
 
   void selectProvider(String? providerId) {
+    if (!_featureAvailable) return;
     final normalized = providerId?.trim();
     if (normalized != null &&
         !state.providers.any(
@@ -261,6 +368,8 @@ class MangaExtensionController extends StateNotifier<MangaExtensionState> {
   }
 
   Future<bool> search(String value) async {
+    if (!_featureAvailable) return false;
+    final featureGeneration = _beginFeatureOperation();
     final query = value.trim();
     _searchCancellation?.cancel();
     _searchCancellation = null;
@@ -303,7 +412,9 @@ class MangaExtensionController extends StateNotifier<MangaExtensionState> {
       // must not escape from the UI's intentionally unawaited search action.
       health = const <String, ProviderHealth>{};
     }
-    if (generation != _generation || cancellation.isCancelled) return false;
+    if (!_isCurrentSearch(generation, featureGeneration, cancellation)) {
+      return false;
+    }
     providers = _orderMangaProviders(providers, health);
     state = state.copyWith(
       query: query,
@@ -316,7 +427,8 @@ class MangaExtensionController extends StateNotifier<MangaExtensionState> {
     final seen = <String>{};
 
     Future<void> worker() async {
-      while (!cancellation.isCancelled && next < providers.length) {
+      while (_isCurrentSearch(generation, featureGeneration, cancellation) &&
+          next < providers.length) {
         final addon = providers[next++];
         final provider = SeanimeJavascriptMangaProvider(addon);
         try {
@@ -324,9 +436,13 @@ class MangaExtensionController extends StateNotifier<MangaExtensionState> {
             query,
             cancellation: cancellation,
           );
-          if (cancellation.isCancelled || generation != _generation) return;
+          if (!_isCurrentSearch(generation, featureGeneration, cancellation)) {
+            return;
+          }
           await _recordHealthyResponse(_mangaHealthId(addon.manifest.id));
-          if (cancellation.isCancelled || generation != _generation) return;
+          if (!_isCurrentSearch(generation, featureGeneration, cancellation)) {
+            return;
+          }
           final merged = List<MangaExtensionTitle>.of(state.results);
           for (final item in results) {
             if (merged.length >= maximumMangaExtensionSearchResults) break;
@@ -337,9 +453,13 @@ class MangaExtensionController extends StateNotifier<MangaExtensionState> {
         } on WebProviderSearchCancelled {
           return;
         } catch (_) {
-          if (cancellation.isCancelled || generation != _generation) return;
+          if (!_isCurrentSearch(generation, featureGeneration, cancellation)) {
+            return;
+          }
           await _recordFailure(addon, stage: 'search');
-          if (cancellation.isCancelled || generation != _generation) return;
+          if (!_isCurrentSearch(generation, featureGeneration, cancellation)) {
+            return;
+          }
           state = state.copyWith(
             failures: <String, String>{
               ...state.failures,
@@ -358,7 +478,9 @@ class MangaExtensionController extends StateNotifier<MangaExtensionState> {
     await Future.wait(<Future<void>>[
       for (var index = 0; index < workers; index++) worker(),
     ]);
-    if (generation != _generation || cancellation.isCancelled) return false;
+    if (!_isCurrentSearch(generation, featureGeneration, cancellation)) {
+      return false;
+    }
     if (identical(_searchCancellation, cancellation)) {
       _searchCancellation = null;
     }
@@ -373,36 +495,100 @@ class MangaExtensionController extends StateNotifier<MangaExtensionState> {
   }
 
   Future<List<MangaExtensionChapter>> chapters(
-    MangaExtensionTitle title,
-  ) async {
+    MangaExtensionTitle title, {
+    String? expectedOwnerKey,
+    WebProviderCancellation? cancellation,
+  }) async {
+    final featureGeneration = _beginFeatureOperation();
+    final operationCancellation = cancellation ?? WebProviderCancellation();
+    _activeRemoteCancellations.add(operationCancellation);
+    final owner = expectedOwnerKey ?? await _ownerKey();
+    await _requireUpdateOwner(owner, featureGeneration: featureGeneration);
+    operationCancellation.throwIfCancelled();
     final addon = _enabledProvider(title.providerId);
     if (addon == null) {
+      _activeRemoteCancellations.remove(operationCancellation);
       throw StateError('That manga source is not installed or enabled.');
     }
     try {
-      final chapters = await SeanimeJavascriptMangaProvider(
-        addon,
-      ).findChapters(title.id);
+      final chapters = orderedMangaChapters(
+        await SeanimeJavascriptMangaProvider(
+          addon,
+        ).findChapters(title.id, cancellation: operationCancellation),
+      );
+      operationCancellation.throwIfCancelled();
+      await _requireUpdateOwner(owner, featureGeneration: featureGeneration);
+      final sourceId = mangaExtensionSourceId(title.providerId);
+      final entryId = mangaExtensionEntryId(title.providerId, title.id);
+      if (await _mangaStore.libraryEntry(
+            ownerKey: owner,
+            sourceId: sourceId,
+            entryId: entryId,
+          ) !=
+          null) {
+        operationCancellation.throwIfCancelled();
+        await _requireUpdateOwner(owner, featureGeneration: featureGeneration);
+        await _mangaStore.replaceChapterSnapshot(
+          ownerKey: owner,
+          sourceId: sourceId,
+          entryId: entryId,
+          checkedAt: DateTime.now().toUtc(),
+          chapters: [
+            for (var i = 0; i < chapters.length; i++)
+              MangaChapterSnapshot(
+                chapterId: mangaExtensionChapterId(
+                  title.providerId,
+                  title.id,
+                  chapters[i].id,
+                ),
+                title: chapters[i].title,
+                ordinal: i,
+                chapterNumber: chapters[i].chapterNumber,
+                publishedAt: chapters[i].updatedAt,
+              ),
+          ],
+        );
+        await _requireUpdateOwner(owner, featureGeneration: featureGeneration);
+      }
       await _recordHealthyResponse(_mangaHealthId(addon.manifest.id));
+      await _requireUpdateOwner(owner, featureGeneration: featureGeneration);
       return chapters;
-    } catch (_) {
+    } on WebProviderSearchCancelled {
+      _requireFeature(featureGeneration);
+      rethrow;
+    } catch (error) {
+      _requireFeature(featureGeneration);
       await _recordFailure(addon, stage: 'chapter_lookup');
+      _requireFeature(featureGeneration);
+      if (error is StateError &&
+          error.message == 'Manga reader is disabled in Settings.') {
+        rethrow;
+      }
       throw StateError('That manga source could not load its chapters.');
+    } finally {
+      _activeRemoteCancellations.remove(operationCancellation);
     }
   }
 
   Future<MangaReaderRequest> buildReaderRequest(
     MangaExtensionTitle title,
-    MangaExtensionChapter chapter,
-  ) async {
+    MangaExtensionChapter chapter, {
+    List<MangaExtensionChapter>? chapterList,
+  }) async {
+    final featureGeneration = _beginFeatureOperation();
+    final cancellation = WebProviderCancellation();
+    _activeRemoteCancellations.add(cancellation);
     final addon = _enabledProvider(title.providerId);
     if (addon == null) {
+      _activeRemoteCancellations.remove(cancellation);
       throw StateError('That manga source is not installed or enabled.');
     }
     try {
       final pages = await SeanimeJavascriptMangaProvider(
         addon,
-      ).findChapterPages(chapter.id);
+      ).findChapterPages(chapter.id, cancellation: cancellation);
+      cancellation.throwIfCancelled();
+      _requireFeature(featureGeneration);
       if (pages.isEmpty) {
         throw StateError('This chapter did not return any readable pages.');
       }
@@ -414,11 +600,14 @@ class MangaExtensionController extends StateNotifier<MangaExtensionState> {
         chapter.id,
       );
       final owner = await _ownerKey();
-      final progress = await _mangaStore.progress(
+      _requireFeature(featureGeneration);
+      final progress = await _mangaStore.chapterProgress(
         ownerKey: owner,
         sourceId: sourceId,
         entryId: entryId,
+        chapterId: chapterKey,
       );
+      _requireFeature(featureGeneration);
       final initialPage =
           progress != null &&
               progress.chapterId == chapterKey &&
@@ -427,14 +616,42 @@ class MangaExtensionController extends StateNotifier<MangaExtensionState> {
           ? progress.pageIndex
           : 0;
       await _recordSuccess(_mangaHealthId(addon.manifest.id));
+      _requireFeature(featureGeneration);
+      final ordered = chapterList == null
+          ? null
+          : orderedMangaChapters(chapterList);
+      final chapterIndex =
+          ordered?.indexWhere((item) => item.id == chapter.id) ?? -1;
       return MangaReaderRequest(
+        ownerKey: owner,
         sourceId: sourceId,
         publicationId: entryId,
         chapterId: chapterKey,
         seriesTitle: title.title,
+        coverUri: _persistableExtensionCover(title),
         chapterTitle: chapter.title,
         chapterNumber: chapter.chapterNumber,
         initialPageIndex: initialPage,
+        initialPageOffset: progress?.pageIndex == initialPage
+            ? progress!.pageOffset
+            : 0,
+        resolvePreviousChapter: ordered != null && chapterIndex > 0
+            ? () => buildReaderRequest(
+                title,
+                ordered[chapterIndex - 1],
+                chapterList: ordered,
+              )
+            : null,
+        resolveNextChapter:
+            ordered != null &&
+                chapterIndex >= 0 &&
+                chapterIndex + 1 < ordered.length
+            ? () => buildReaderRequest(
+                title,
+                ordered[chapterIndex + 1],
+                chapterList: ordered,
+              )
+            : null,
         pages: <MangaReaderPage>[
           for (var index = 0; index < pages.length; index++)
             MangaReaderPage(
@@ -447,25 +664,37 @@ class MangaExtensionController extends StateNotifier<MangaExtensionState> {
             ),
         ],
       );
+    } on WebProviderSearchCancelled {
+      _requireFeature(featureGeneration);
+      rethrow;
     } catch (error) {
+      _requireFeature(featureGeneration);
       await _recordFailure(addon, stage: 'page_resolution');
+      _requireFeature(featureGeneration);
       if (error is StateError) rethrow;
       throw StateError('That manga source could not load this chapter.');
+    } finally {
+      _activeRemoteCancellations.remove(cancellation);
     }
   }
 
   Future<bool> isInLibrary(MangaExtensionTitle title) async {
+    final featureGeneration = _beginFeatureOperation();
     final owner = await _ownerKey();
-    return await _mangaStore.libraryEntry(
-          ownerKey: owner,
-          sourceId: mangaExtensionSourceId(title.providerId),
-          entryId: mangaExtensionEntryId(title.providerId, title.id),
-        ) !=
-        null;
+    _requireFeature(featureGeneration);
+    final entry = await _mangaStore.libraryEntry(
+      ownerKey: owner,
+      sourceId: mangaExtensionSourceId(title.providerId),
+      entryId: mangaExtensionEntryId(title.providerId, title.id),
+    );
+    _requireFeature(featureGeneration);
+    return entry != null;
   }
 
   Future<bool> toggleLibrary(MangaExtensionTitle title) async {
+    final featureGeneration = _beginFeatureOperation();
     final owner = await _ownerKey();
+    _requireFeature(featureGeneration);
     final sourceId = mangaExtensionSourceId(title.providerId);
     final entryId = mangaExtensionEntryId(title.providerId, title.id);
     final existing = await _mangaStore.libraryEntry(
@@ -473,18 +702,26 @@ class MangaExtensionController extends StateNotifier<MangaExtensionState> {
       sourceId: sourceId,
       entryId: entryId,
     );
+    _requireFeature(featureGeneration);
     if (existing != null) {
       await _mangaStore.deleteLibraryEntry(
         ownerKey: owner,
         sourceId: sourceId,
         entryId: entryId,
       );
-      await _identityStore.delete(
-        ownerKey: owner,
-        sourceId: sourceId,
-        entryId: entryId,
-      );
-      return false;
+      try {
+        _requireFeature(featureGeneration);
+        await _identityStore.delete(
+          ownerKey: owner,
+          sourceId: sourceId,
+          entryId: entryId,
+        );
+        _requireFeature(featureGeneration);
+        return false;
+      } catch (_) {
+        await _mangaStore.upsertLibraryEntry(existing);
+        rethrow;
+      }
     }
     await _identityStore.write(
       ownerKey: owner,
@@ -493,6 +730,7 @@ class MangaExtensionController extends StateNotifier<MangaExtensionState> {
       mangaId: title.id,
     );
     try {
+      _requireFeature(featureGeneration);
       await _mangaStore.upsertLibraryEntry(
         MangaLibraryEntry(
           ownerKey: owner,
@@ -512,7 +750,13 @@ class MangaExtensionController extends StateNotifier<MangaExtensionState> {
           updatedAt: DateTime.now().toUtc(),
         ),
       );
+      _requireFeature(featureGeneration);
     } catch (_) {
+      await _mangaStore.deleteLibraryEntry(
+        ownerKey: owner,
+        sourceId: sourceId,
+        entryId: entryId,
+      );
       await _identityStore.delete(
         ownerKey: owner,
         sourceId: sourceId,
@@ -526,6 +770,319 @@ class MangaExtensionController extends StateNotifier<MangaExtensionState> {
   bool isExtensionLibraryEntry(MangaLibraryEntry entry) =>
       entry.metadata['kind'] == 'seanime-manga-extension';
 
+  /// Removing a saved title never requires a working or installed source.
+  Future<void> removeLibraryEntry(MangaLibraryEntry entry) async {
+    final featureGeneration = _beginFeatureOperation();
+    final owner = await _ownerKey();
+    _requireFeature(featureGeneration);
+    if (entry.ownerKey != owner) {
+      throw StateError('This manga belongs to another profile.');
+    }
+    final mangaId = await _identityStore.read(
+      ownerKey: owner,
+      sourceId: entry.sourceId,
+      entryId: entry.entryId,
+    );
+    _requireFeature(featureGeneration);
+    await _mangaStore.deleteLibraryEntry(
+      ownerKey: owner,
+      sourceId: entry.sourceId,
+      entryId: entry.entryId,
+    );
+    try {
+      _requireFeature(featureGeneration);
+      await _identityStore.delete(
+        ownerKey: owner,
+        sourceId: entry.sourceId,
+        entryId: entry.entryId,
+      );
+      _requireFeature(featureGeneration);
+    } catch (_) {
+      await _mangaStore.upsertLibraryEntry(entry);
+      if (mangaId != null) {
+        await _identityStore.write(
+          ownerKey: owner,
+          sourceId: entry.sourceId,
+          entryId: entry.entryId,
+          mangaId: mangaId,
+        );
+      }
+      rethrow;
+    }
+  }
+
+  Future<List<MangaReadingProgress>> chapterHistory(
+    MangaExtensionTitle title,
+  ) async {
+    final featureGeneration = _beginFeatureOperation();
+    final owner = await _ownerKey();
+    _requireFeature(featureGeneration);
+    final history = await _mangaStore.chapterProgressForEntry(
+      ownerKey: owner,
+      sourceId: mangaExtensionSourceId(title.providerId),
+      entryId: mangaExtensionEntryId(title.providerId, title.id),
+    );
+    _requireFeature(featureGeneration);
+    return history;
+  }
+
+  Future<MangaReadingProgress?> lastRead(MangaExtensionTitle title) async {
+    final featureGeneration = _beginFeatureOperation();
+    final owner = await _ownerKey();
+    _requireFeature(featureGeneration);
+    final progress = await _mangaStore.progress(
+      ownerKey: owner,
+      sourceId: mangaExtensionSourceId(title.providerId),
+      entryId: mangaExtensionEntryId(title.providerId, title.id),
+    );
+    _requireFeature(featureGeneration);
+    return progress;
+  }
+
+  Future<void> markRead(
+    MangaExtensionTitle title,
+    MangaExtensionChapter chapter, {
+    required bool completed,
+  }) async {
+    final featureGeneration = _beginFeatureOperation();
+    final owner = await _ownerKey();
+    _requireFeature(featureGeneration);
+    await _mangaStore.setChapterRead(
+      ownerKey: owner,
+      sourceId: mangaExtensionSourceId(title.providerId),
+      entryId: mangaExtensionEntryId(title.providerId, title.id),
+      chapterId: mangaExtensionChapterId(
+        title.providerId,
+        title.id,
+        chapter.id,
+      ),
+      chapterNumber: chapter.chapterNumber,
+      completed: completed,
+    );
+    _requireFeature(featureGeneration);
+  }
+
+  Future<void> bookmark(
+    MangaExtensionTitle title,
+    MangaExtensionChapter chapter, {
+    required bool bookmarked,
+  }) async {
+    final featureGeneration = _beginFeatureOperation();
+    final owner = await _ownerKey();
+    _requireFeature(featureGeneration);
+    await _mangaStore.setChapterBookmark(
+      ownerKey: owner,
+      sourceId: mangaExtensionSourceId(title.providerId),
+      entryId: mangaExtensionEntryId(title.providerId, title.id),
+      chapterId: mangaExtensionChapterId(
+        title.providerId,
+        title.id,
+        chapter.id,
+      ),
+      chapterNumber: chapter.chapterNumber,
+      bookmarked: bookmarked,
+    );
+    _requireFeature(featureGeneration);
+  }
+
+  /// Explicit bounded continuation, never background fanout. A durable cursor
+  /// advances even when a source fails, so unavailable head entries cannot
+  /// starve later titles. The next pass includes additions before the cursor.
+  Future<MangaLibraryUpdateSummary> checkLibraryUpdates() {
+    final active = _libraryUpdateInFlight;
+    if (active != null) return active;
+    final future = _checkLibraryUpdateBatch();
+    _libraryUpdateInFlight = future;
+    unawaited(
+      future.then<void>(
+        (_) {
+          if (identical(_libraryUpdateInFlight, future)) {
+            _libraryUpdateInFlight = null;
+          }
+        },
+        onError: (Object _, StackTrace _) {
+          if (identical(_libraryUpdateInFlight, future)) {
+            _libraryUpdateInFlight = null;
+          }
+        },
+      ),
+    );
+    return future;
+  }
+
+  Future<MangaLibraryUpdateSummary> _checkLibraryUpdateBatch() async {
+    final owner = await _ownerKey();
+    await _requireUpdateOwner(owner);
+    final storageKey = 'manga_extension_updates_cursor_v1_${_digest(owner)}';
+    String? afterSource;
+    String? afterEntry;
+    final stored = await _updateCursorStorage.read(key: storageKey);
+    if (stored != null) {
+      try {
+        if (stored.length > 1024) throw const FormatException();
+        final parsed = jsonDecode(stored);
+        if (parsed is! Map ||
+            parsed['source'] is! String ||
+            parsed['entry'] is! String ||
+            !RegExp(
+              r'^extension\.[a-f0-9]{40}$',
+            ).hasMatch(parsed['source'] as String) ||
+            !RegExp(
+              r'^publication\.[a-f0-9]{40}$',
+            ).hasMatch(parsed['entry'] as String)) {
+          throw const FormatException();
+        }
+        afterSource = parsed['source'] as String;
+        afterEntry = parsed['entry'] as String;
+      } catch (_) {
+        // Malformed local cursor is not a network capability. Start a new pass.
+      }
+    }
+    await _requireUpdateOwner(owner);
+    var page = await _mangaStore.extensionLibraryUpdatePage(
+      owner,
+      afterSourceId: afterSource,
+      afterEntryId: afterEntry,
+      limit: maximumMangaLibraryUpdateBatch,
+    );
+    if (page.entries.isEmpty && afterSource != null) {
+      page = await _mangaStore.extensionLibraryUpdatePage(
+        owner,
+        limit: maximumMangaLibraryUpdateBatch,
+      );
+    }
+    var checked = 0;
+    var failed = 0;
+    var newChapters = 0;
+    var attempted = 0;
+    final cancellation = WebProviderCancellation();
+    _libraryUpdateCancellation = cancellation;
+    try {
+      for (final entry in page.entries) {
+        await _requireUpdateOwner(owner);
+        cancellation.throwIfCancelled();
+        // Save only stable local IDs before dispatch; no titles, URLs or tokens.
+        await _updateCursorStorage.write(
+          key: storageKey,
+          value: jsonEncode({'source': entry.sourceId, 'entry': entry.entryId}),
+        );
+        await _requireUpdateOwner(owner);
+        attempted++;
+        try {
+          if (!isExtensionLibraryEntry(entry)) throw const FormatException();
+          final title = await openLibraryEntry(entry);
+          if (title == null) throw const FormatException();
+          await _requireUpdateOwner(owner);
+          // The provider isolate already has a total runtime deadline. Pass its
+          // cancellation through instead of timing out and leaving work running.
+          await chapters(
+            title,
+            expectedOwnerKey: owner,
+            cancellation: cancellation,
+          );
+          await _requireUpdateOwner(owner);
+          final refreshed = await _mangaStore.libraryEntry(
+            ownerKey: owner,
+            sourceId: entry.sourceId,
+            entryId: entry.entryId,
+          );
+          newChapters += refreshed?.newChapterCount ?? 0;
+          checked++;
+        } catch (_) {
+          await _requireUpdateOwner(owner);
+          cancellation.throwIfCancelled();
+          failed++;
+        }
+      }
+      await _requireUpdateOwner(owner);
+      final remaining = max(0, page.remaining - attempted);
+      if (remaining == 0) await _updateCursorStorage.delete(key: storageKey);
+      return (
+        checked: checked,
+        failed: failed,
+        newChapters: newChapters,
+        remaining: remaining,
+      );
+    } finally {
+      if (identical(_libraryUpdateCancellation, cancellation)) {
+        _libraryUpdateCancellation = null;
+      }
+    }
+  }
+
+  Future<void> _requireUpdateOwner(
+    String owner, {
+    int? featureGeneration,
+  }) async {
+    _requireFeature(featureGeneration);
+    if (await _ownerKey() != owner) {
+      throw StateError('Profile changed. Close and reopen this manga.');
+    }
+    _requireFeature(featureGeneration);
+  }
+
+  Future<MangaAcquisitionRequest> buildDownloadRequest(
+    MangaExtensionTitle title,
+    MangaExtensionChapter chapter,
+  ) async {
+    // Save the protected title identity so a user-requested retry after restart
+    // can obtain fresh capabilities. No page URL or headers go into SQLite.
+    if (!await isInLibrary(title)) await toggleLibrary(title);
+    final reader = await buildReaderRequest(title, chapter);
+    return MangaAcquisitionRequest(
+      jobId: mangaExtensionDownloadJobId(
+        reader.sourceId,
+        reader.publicationId,
+        reader.chapterId,
+      ),
+      sourceId: reader.sourceId,
+      publicationId: reader.publicationId,
+      chapterId: reader.chapterId,
+      seriesTitle: reader.seriesTitle,
+      chapterTitle: reader.chapterTitle,
+      chapterNumber: reader.chapterNumber,
+      initialPageIndex: reader.initialPageIndex,
+      acquisition: MangaReadingOrderAcquisition([
+        for (final page in reader.pages)
+          MangaReadingOrderPage(
+            uri: (page.resource as MangaRemotePageResource).uri,
+            headers: (page.resource as MangaRemotePageResource).headers,
+            pixelWidth: page.pixelWidth,
+            pixelHeight: page.pixelHeight,
+            isCover: page.isCover,
+          ),
+      ]),
+    );
+  }
+
+  Future<MangaAcquisitionRequest> resolveDownload(MangaDownloadJob job) async {
+    final owner = await _ownerKey();
+    final entry = await _mangaStore.libraryEntry(
+      ownerKey: owner,
+      sourceId: job.sourceId,
+      entryId: job.entryId,
+    );
+    if (entry == null) {
+      throw StateError(
+        'Open this download from the profile that saved the manga.',
+      );
+    }
+    final title = await openLibraryEntry(entry);
+    if (title == null) {
+      throw StateError(
+        'Reopen this chapter from its original source to download it.',
+      );
+    }
+    final available = await chapters(title);
+    for (final chapter in available) {
+      if (mangaExtensionChapterId(title.providerId, title.id, chapter.id) ==
+          job.chapterId) {
+        return buildDownloadRequest(title, chapter);
+      }
+    }
+    throw StateError('This chapter is no longer available from its source.');
+  }
+
   Future<MangaExtensionTitle?> openLibraryEntry(MangaLibraryEntry entry) async {
     if (!isExtensionLibraryEntry(entry)) return null;
     final providerId = entry.metadata['providerId'];
@@ -533,6 +1090,9 @@ class MangaExtensionController extends StateNotifier<MangaExtensionState> {
       throw StateError('Enable this manga extension to open the title.');
     }
     final owner = await _ownerKey();
+    if (entry.ownerKey != owner) {
+      throw StateError('This manga belongs to another profile.');
+    }
     final mangaId = await _identityStore.read(
       ownerKey: owner,
       sourceId: entry.sourceId,
@@ -604,6 +1164,7 @@ class MangaExtensionController extends StateNotifier<MangaExtensionState> {
 
   @override
   void dispose() {
+    _libraryUpdateCancellation?.cancel();
     _searchCancellation?.cancel();
     _searchCancellation = null;
     _generation++;

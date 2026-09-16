@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:anime_tv/core/preferences/caption_language.dart';
+import 'package:crypto/crypto.dart';
 
 /// Stable identity used for add-on ownership, persistence, and updates.
 ///
@@ -271,6 +272,34 @@ class MarketplaceAddon {
     lastWorkingVersion: lastWorkingVersion ?? this.lastWorkingVersion,
   );
 
+  /// Replaces only the non-executable health advisory attached to this
+  /// manifest with the latest values reported by its catalog entry.
+  ///
+  /// Callers must establish repository provenance before using this method.
+  /// Every executable and identity-bearing field deliberately comes from the
+  /// installed manifest, including its resource URIs and configuration.
+  MarketplaceAddon withCatalogAdvisoryFrom(MarketplaceAddon advisory) =>
+      MarketplaceAddon(
+        id: id,
+        name: name,
+        description: description,
+        author: author,
+        manifestUri: manifestUri,
+        repositoryUrl: repositoryUrl,
+        language: language,
+        type: type,
+        locale: locale,
+        version: version,
+        iconUri: iconUri,
+        payloadUri: payloadUri,
+        inlinePayload: inlinePayload,
+        userConfigDefaults: userConfigDefaults,
+        reportedWorking: advisory.reportedWorking,
+        reportedBroken: advisory.reportedBroken,
+        isDeprecated: advisory.isDeprecated,
+        lastWorkingVersion: advisory.lastWorkingVersion,
+      );
+
   Map<String, Object?> toJson() => {
     'id': id,
     'name': name,
@@ -486,8 +515,11 @@ class InstalledStreamingAddon {
   final DateTime installedAt;
   final DateTime updatedAt;
 
-  InstalledStreamingAddon copyWith({bool? enabled}) => InstalledStreamingAddon(
-    manifest: manifest,
+  InstalledStreamingAddon copyWith({
+    MarketplaceAddon? manifest,
+    bool? enabled,
+  }) => InstalledStreamingAddon(
+    manifest: manifest ?? this.manifest,
     payload: payload,
     enabled: enabled ?? this.enabled,
     installedAt: installedAt,
@@ -814,6 +846,7 @@ class WebStreamResult {
     this.headers = const {},
     this.subtitleUri,
     this.subtitleLanguage,
+    this.externalAudioTracks = const [],
     this.isDubbed = false,
     this.audioCapability,
     this.audioLanguages = const [],
@@ -830,6 +863,7 @@ class WebStreamResult {
   final Map<String, String> headers;
   final Uri? subtitleUri;
   final String? subtitleLanguage;
+  final List<WebExternalAudioTrack> externalAudioTracks;
 
   /// Legacy provider hint retained for extension compatibility.
   ///
@@ -858,22 +892,28 @@ class WebStreamResult {
       effectiveAudioCapability != WebStreamAudioCapability.unknown;
 
   WebStreamResult withAudioCapability(WebStreamAudioCapability capability) =>
-      WebStreamResult(
-        providerId: providerId,
-        providerName: providerName,
-        title: title,
-        uri: uri,
-        quality: quality,
-        headers: headers,
-        subtitleUri: subtitleUri,
-        subtitleLanguage: subtitleLanguage,
-        isDubbed: capability.supportsDub,
-        audioCapability: capability,
-        audioLanguages: audioLanguages,
-        matchedEpisodeNumber: matchedEpisodeNumber,
-        matchedSeasonNumber: matchedSeasonNumber,
-        matchedSeriesTitle: matchedSeriesTitle,
-      );
+      withAudioMetadata(capability: capability, languages: audioLanguages);
+
+  WebStreamResult withAudioMetadata({
+    required WebStreamAudioCapability capability,
+    required Iterable<String> languages,
+  }) => WebStreamResult(
+    providerId: providerId,
+    providerName: providerName,
+    title: title,
+    uri: uri,
+    quality: quality,
+    headers: headers,
+    subtitleUri: subtitleUri,
+    subtitleLanguage: subtitleLanguage,
+    externalAudioTracks: externalAudioTracks,
+    isDubbed: capability.supportsDub,
+    audioCapability: capability,
+    audioLanguages: List<String>.unmodifiable(languages.take(24)),
+    matchedEpisodeNumber: matchedEpisodeNumber,
+    matchedSeasonNumber: matchedSeasonNumber,
+    matchedSeriesTitle: matchedSeriesTitle,
+  );
 }
 
 String webStreamProviderIdentity(WebStreamResult stream) {
@@ -881,6 +921,118 @@ String webStreamProviderIdentity(WebStreamResult stream) {
   if (id.isNotEmpty) return id;
   final name = stream.providerName.trim().toLowerCase();
   return name.isEmpty ? 'unknown' : name;
+}
+
+/// Opaque identity for one independently playable Web-stream variant.
+///
+/// A provider can intentionally reuse one media URI for separate Sub/Dub
+/// feeds, signed-header contexts, or caption tracks. URI-only de-duplication
+/// therefore drops valid fallbacks. The digest keeps those variants distinct
+/// without putting signed URLs or header values into widget keys, diagnostic
+/// labels, or other downstream bookkeeping.
+String webStreamPlaybackVariantKey(WebStreamResult stream) =>
+    webPlaybackVariantKey(
+      providerIdentity: webStreamProviderIdentity(stream),
+      uri: stream.uri,
+      audioCapability: stream.effectiveAudioCapability,
+      headers: stream.headers,
+      subtitleUri: stream.subtitleUri,
+      subtitleLanguage: stream.subtitleLanguage,
+      externalAudioTracks: stream.externalAudioTracks.map(
+        (track) => (
+          uri: track.uri,
+          language: track.language,
+          label: track.label,
+          headers: track.headers,
+        ),
+      ),
+    );
+
+/// A bounded public-HTTPS external audio rendition returned by a Web provider.
+///
+/// Adapters must validate DNS before constructing these values. Player code
+/// never receives this URI or its headers directly; [WebStreamValidator]
+/// replaces both with an app-owned loopback resource first.
+final class WebExternalAudioTrack {
+  const WebExternalAudioTrack({
+    required this.uri,
+    this.label,
+    this.language,
+    this.headers = const {},
+  });
+
+  final Uri uri;
+  final String? label;
+  final String? language;
+  final Map<String, String> headers;
+}
+
+/// Lower-level form used after a [WebStreamResult] has crossed into the player
+/// model. Callers must pass the same normalized audio capability represented by
+/// that player option.
+String webPlaybackVariantKey({
+  required String providerIdentity,
+  required Uri uri,
+  required WebStreamAudioCapability audioCapability,
+  Map<String, String> headers = const {},
+  Uri? subtitleUri,
+  String? subtitleLanguage,
+  Iterable<
+        ({
+          Uri uri,
+          String? language,
+          String? label,
+          Map<String, String> headers,
+        })
+      >
+      externalAudioTracks =
+      const [],
+}) {
+  final headerEntries =
+      headers.entries
+          .map((entry) => <String>[entry.key.trim().toLowerCase(), entry.value])
+          .toList(growable: false)
+        ..sort((left, right) {
+          final name = left[0].compareTo(right[0]);
+          return name != 0 ? name : left[1].compareTo(right[1]);
+        });
+  final material = jsonEncode(<String, Object?>{
+    'version': 2,
+    'provider': providerIdentity.trim().toLowerCase(),
+    'uri': uri.toString(),
+    'audio': audioCapability.name,
+    'headers': headerEntries,
+    'subtitleUri': subtitleUri?.toString() ?? '',
+    'subtitleLanguage': canonicalCaptionLanguageCode(
+      subtitleLanguage,
+      fallback: subtitleLanguage?.trim().toLowerCase() ?? '',
+    ),
+    'externalAudio': [
+      for (final track in externalAudioTracks.take(8))
+        {
+          'uri': track.uri.toString(),
+          'language': canonicalCaptionLanguageCode(
+            track.language,
+            fallback: track.language?.trim().toLowerCase() ?? '',
+          ),
+          'label': track.label?.trim() ?? '',
+          'headers':
+              track.headers.entries
+                  .map(
+                    (entry) => <String>[
+                      entry.key.trim().toLowerCase(),
+                      entry.value,
+                    ],
+                  )
+                  .toList(growable: false)
+                ..sort((left, right) {
+                  final name = left[0].compareTo(right[0]);
+                  return name != 0 ? name : left[1].compareTo(right[1]);
+                }),
+        },
+    ],
+  });
+  return sha256.convert(utf8.encode(material)).toString();
 }
 
 enum WebProviderFailureStatus { noMatch, advisory, unavailable, paused, failed }

@@ -48,9 +48,11 @@ class _FakeStorage extends Fake implements FlutterSecureStorage {
 // Fake tracking repository that records update calls.
 // ---------------------------------------------------------------------------
 
-class _FakeRepo implements TrackingRepository {
+class _FakeRepo implements TrackingRepository, ExternalIdTrackingRepository {
   final List<({int mediaId, int episodes})> updates = [];
+  final List<({TrackingMediaIds ids, int episodes})> externalUpdates = [];
   bool shouldFail = false;
+  Object? externalFailure;
   Duration updateDelay = Duration.zero;
 
   @override
@@ -75,6 +77,28 @@ class _FakeRepo implements TrackingRepository {
   @override
   Future<void> updateStatus({
     required int mediaId,
+    required TrackingListStatus status,
+  }) async {}
+
+  @override
+  Future<int?> currentProgressByIds(TrackingMediaIds ids) async => 0;
+
+  @override
+  Future<void> removeFromListByIds(TrackingMediaIds ids) async {}
+
+  @override
+  Future<void> updateProgressByIds({
+    required TrackingMediaIds ids,
+    required int completedEpisodes,
+  }) async {
+    if (externalFailure case final failure?) throw failure;
+    if (shouldFail) throw Exception('network error');
+    externalUpdates.add((ids: ids, episodes: completedEpisodes));
+  }
+
+  @override
+  Future<void> updateStatusByIds({
+    required TrackingMediaIds ids,
     required TrackingListStatus status,
   }) async {}
 }
@@ -129,6 +153,7 @@ class _TestSyncService extends TrackingSyncService {
     return switch (provider) {
       TrackingProvider.anilist => anilistRepo,
       TrackingProvider.myAnimeList => malRepo,
+      TrackingProvider.kitsu => anilistRepo,
       TrackingProvider.simkl => anilistRepo,
     };
   }
@@ -203,7 +228,7 @@ void main() {
           expect(outbox, hasLength(1));
           expect(outbox.single['media_id'], 101);
           expect(outbox.single['completed_episodes'], 5);
-          return provider == TrackingProvider.simkl ? null : 'token';
+          return provider == TrackingProvider.anilist ? 'token' : null;
         },
         anilistRepo: anilistRepo,
         malRepo: malRepo,
@@ -213,7 +238,7 @@ void main() {
         await service.syncEpisode(completedEpisodes: 5, anilistMediaId: 101),
         isTrue,
       );
-      expect(tokenLookups, 2);
+      expect(tokenLookups, 3);
       expect(_readOutbox(storage), isEmpty);
     });
 
@@ -231,6 +256,24 @@ void main() {
       expect(malRepo.updates, hasLength(1));
       expect(malRepo.updates.first.mediaId, 202);
       expect(malRepo.updates.first.episodes, 5);
+    });
+
+    test('maps episode progress to a verified Kitsu account', () async {
+      final synced = await buildService(
+        tokens: const {
+          TrackingProvider.anilist: 'al-token',
+          TrackingProvider.myAnimeList: 'mal-token',
+          TrackingProvider.kitsu: 'kitsu-token',
+        },
+        verifiedProfileLookup: (provider, token) async =>
+            provider == TrackingProvider.kitsu ? 'kitsu-profile' : null,
+      ).syncEpisode(completedEpisodes: 6, anilistMediaId: 101, malMediaId: 202);
+
+      expect(synced, isTrue);
+      expect(anilistRepo.externalUpdates, hasLength(1));
+      expect(anilistRepo.externalUpdates.single.ids.anilistId, 101);
+      expect(anilistRepo.externalUpdates.single.ids.malId, 202);
+      expect(anilistRepo.externalUpdates.single.episodes, 6);
     });
 
     test('skips tracker when its token is absent', () async {
@@ -597,6 +640,68 @@ void main() {
       await service.flush();
       expect(_readOutbox(storage), isEmpty);
       expect(anilistRepo.updates, [(mediaId: 101, episodes: 4)]);
+      service.dispose();
+    });
+
+    test('permanent Kitsu mapping miss is removed without retry', () async {
+      _writeOutbox(storage, [
+        {
+          'provider': 'kitsu',
+          'profile_id': 'kitsu-profile',
+          'media_id': 101,
+          'anilist_media_id': 101,
+          'completed_episodes': 4,
+        },
+      ]);
+      anilistRepo.externalFailure =
+          const TrackingMediaMappingNotFoundException();
+      final timers = <_FakeTimer>[];
+      final service = buildService(
+        tokens: const {TrackingProvider.kitsu: 'kitsu-token'},
+        verifiedProfileLookup: (provider, token) async => 'kitsu-profile',
+        retryDelays: const [Duration(seconds: 5)],
+        timerFactory: (delay, callback) {
+          final timer = _FakeTimer(delay, callback);
+          timers.add(timer);
+          return timer;
+        },
+      );
+
+      await service.flush();
+
+      expect(_readOutbox(storage), isEmpty);
+      expect(anilistRepo.externalUpdates, isEmpty);
+      expect(timers, isEmpty);
+      service.dispose();
+    });
+
+    test('transient Kitsu mapping request failure remains retryable', () async {
+      _writeOutbox(storage, [
+        {
+          'provider': 'kitsu',
+          'profile_id': 'kitsu-profile',
+          'media_id': 101,
+          'anilist_media_id': 101,
+          'completed_episodes': 4,
+        },
+      ]);
+      anilistRepo.externalFailure = Exception('temporary network failure');
+      final timers = <_FakeTimer>[];
+      final service = buildService(
+        tokens: const {TrackingProvider.kitsu: 'kitsu-token'},
+        verifiedProfileLookup: (provider, token) async => 'kitsu-profile',
+        retryDelays: const [Duration(seconds: 5)],
+        timerFactory: (delay, callback) {
+          final timer = _FakeTimer(delay, callback);
+          timers.add(timer);
+          return timer;
+        },
+      );
+
+      await service.flush();
+
+      expect(_readOutbox(storage), hasLength(1));
+      expect(timers.single.delay, const Duration(seconds: 5));
       service.dispose();
     });
   });

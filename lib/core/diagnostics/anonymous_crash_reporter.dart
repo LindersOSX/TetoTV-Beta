@@ -1,6 +1,8 @@
 import 'dart:async';
 
 import 'package:anime_tv/core/config/app_config.dart';
+import 'package:anime_tv/core/diagnostics/diagnostic_stack.dart';
+import 'package:anime_tv/core/diagnostics/ui_diagnostic_context.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/features/catalog/domain/catalog_availability_exception.dart';
@@ -157,11 +159,17 @@ class AndroidAnonymousCrashPlatform implements AnonymousCrashPlatform {
 }
 
 class AnonymousCrashReporter {
-  AnonymousCrashReporter(this._client, this._platform);
+  AnonymousCrashReporter(
+    this._client,
+    this._platform, {
+    UiDiagnosticContext? uiDiagnostics,
+  }) : _uiDiagnostics = uiDiagnostics ?? UiDiagnosticContext.instance;
 
   final AnonymousCrashReportClient _client;
   final AnonymousCrashPlatform _platform;
+  final UiDiagnosticContext _uiDiagnostics;
   bool _enabled = false;
+  bool _enabledStateInitialized = false;
   bool _disposed = false;
   Future<void> _tail = Future<void>.value();
   String? _lastSignature;
@@ -170,7 +178,8 @@ class AnonymousCrashReporter {
   final List<DateTime> _handledReportTimes = [];
 
   void setEnabled(bool value) {
-    if (_disposed || value == _enabled) return;
+    if (_disposed || (_enabledStateInitialized && value == _enabled)) return;
+    _enabledStateInitialized = true;
     _enabled = value;
     _enqueue(() async {
       try {
@@ -190,13 +199,17 @@ class AnonymousCrashReporter {
     required String kind,
     required Object error,
     StackTrace? stack,
+    String? frameworkLibrary,
   }) {
     if (_disposed ||
         !_enabled ||
         _isExpectedArtworkNetworkFailure(error, stack)) {
       return Future<void>.value();
     }
-    final message = redactDiagnosticValue(error.toString(), maximum: 500);
+    final message = _redactAnonymousDiagnosticValue(
+      stripDiagnosticControls(error.toString()),
+      maximum: 500,
+    );
     final safeStack = _redactStack(stack?.toString() ?? '', maximum: 4000);
     final signature =
         '$kind|$message|${safeStack.split('\n').firstOrNull ?? ''}';
@@ -208,6 +221,14 @@ class AnonymousCrashReporter {
     }
     _lastSignature = signature;
     _lastSignatureAt = now;
+    // Freeze before the first await: navigation and settings may change while
+    // an older report is delivered or native device capabilities are queried.
+    // The compact closed-schema context uses the existing v1 stack field.
+    final capturedStack = _redactStack(
+      '${diagnosticErrorCategory(error, frameworkLibrary: frameworkLibrary)}\n'
+      '${_uiDiagnostics.crashSummary()}\n$safeStack',
+      maximum: 4000,
+    );
     return _enqueue(() async {
       try {
         if (!_enabled || !await _flushPending()) return;
@@ -215,7 +236,7 @@ class AnonymousCrashReporter {
           reportId: 'dart-${now.microsecondsSinceEpoch}',
           kind: kind,
           message: message,
-          stack: safeStack,
+          stack: capturedStack,
           occurredAt: now,
         );
         if (!_enabled) return;
@@ -245,7 +266,10 @@ class AnonymousCrashReporter {
     }
     final now = DateTime.now();
     _pruneHandledReports(now);
-    final safeError = redactDiagnosticValue(error.toString(), maximum: 360);
+    final safeError = _redactAnonymousDiagnosticValue(
+      error.toString(),
+      maximum: 360,
+    );
     final firstFrame = _redactStack(
       stack?.toString() ?? '',
       maximum: 300,
@@ -309,6 +333,8 @@ class AnonymousCrashReporter {
     int? androidSdk,
     String? abi,
     String? deviceClass,
+    String? appVersion,
+    int? buildNumber,
   }) async {
     final values = await Future.wait<Object>([
       _platform.appVersion().catchError((_) => const AppVersionInfo.unknown()),
@@ -323,11 +349,14 @@ class AnonymousCrashReporter {
     return AnonymousCrashReport(
       reportId: reportId,
       kind: _safeKind(kind),
-      message: redactDiagnosticValue(message, maximum: 500),
+      message: _redactAnonymousDiagnosticValue(
+        stripDiagnosticControls(message),
+        maximum: 500,
+      ),
       stack: _redactStack(stack, maximum: 4000),
       occurredAt: occurredAt,
-      appVersion: _safeVersion(version.name),
-      buildNumber: version.code.clamp(1, 999999999),
+      appVersion: _safeVersion(appVersion ?? version.name),
+      buildNumber: (buildNumber ?? version.code).clamp(1, 999999999),
       androidSdk: (androidSdk ?? profile.sdk).clamp(24, 99),
       abi: _safeAbi(abi ?? profile.abis.firstOrNull ?? 'unknown'),
       deviceClass: switch (deviceClass) {
@@ -362,6 +391,12 @@ class AnonymousCrashReporter {
       androidSdk: (value['android_sdk'] as num?)?.toInt(),
       abi: value['abi'] as String?,
       deviceClass: value['device_class'] as String?,
+      // A queued crash belongs to the build that produced it, not whichever
+      // newer app version happens to deliver it after the next launch.
+      // Pre-fix reports may lack this information entirely. A protocol-safe
+      // unknown sentinel is more honest than attributing them to this build.
+      appVersion: value['app_version'] as String? ?? '0.0.0',
+      buildNumber: (value['build_number'] as num?)?.toInt() ?? 1,
     );
   }
 
@@ -453,6 +488,7 @@ bool _isExpectedArtworkNetworkFailure(Object error, StackTrace? stack) {
   final message = error.toString().toLowerCase();
   final isResolutionFailure =
       message.contains('failed host lookup') ||
+      message.contains('software caused connection abort') ||
       message.contains('connection closed before full header') ||
       message.contains('connection reset by peer');
   if (!isResolutionFailure) return false;
@@ -474,6 +510,7 @@ bool _isExpectedArtworkNetworkFailure(Object error, StackTrace? stack) {
     // fallback. Keep those expected CDN resets out of the crash channel.
     'artworks.thetvdb.com',
     'assets.fanart.tv',
+    'image.tmdb.org',
   ].any(message.contains);
   return imagePipeline || artworkHost;
 }
@@ -564,20 +601,45 @@ String _safeAbi(String value) {
 
 String _safeVersion(String value) {
   final normalized = value.trim();
-  return RegExp(r'^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$').hasMatch(normalized)
+  return normalized.length <= 40 &&
+          RegExp(r'^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$').hasMatch(normalized)
       ? normalized
       : '0.0.0';
 }
 
 String _redactStack(String value, {required int maximum}) {
-  final lines = value
-      .split(RegExp(r'[\r\n]+'))
-      .take(50)
-      .map((line) => redactDiagnosticValue(line, maximum: 300))
-      .where((line) => line.isNotEmpty);
-  final output = lines.join('\n');
-  return output.length <= maximum ? output : output.substring(0, maximum);
+  return redactDiagnosticStack(
+    _redactAnonymousPackageIdentities(value),
+    maximum: maximum,
+  );
 }
+
+/// Extension packages are useful in an explicit, user-reviewed support export,
+/// but are provider identities and therefore do not belong in the automatic
+/// anonymous crash channel. Keyed package values cover third-party namespaces;
+/// the canonical Aniyomi/Tachiyomi namespace is also removed when an exception
+/// embeds it without a field label.
+String _redactAnonymousDiagnosticValue(String value, {required int maximum}) =>
+    redactDiagnosticValue(
+      _redactAnonymousPackageIdentities(value),
+      maximum: maximum,
+    );
+
+String _redactAnonymousPackageIdentities(String value) => value
+    .replaceAll(
+      RegExp(
+        r'''(?<![A-Za-z0-9_])["']?(?:extension[_ -]?package|package[_ -]?name|package)["']?\s*[:=]\s*["']?[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)+''',
+        caseSensitive: false,
+      ),
+      '[EXTENSION PACKAGE]',
+    )
+    .replaceAll(
+      RegExp(
+        r'\beu\.kanade\.tachiyomi\.(?:anime)?extension(?:\.[A-Za-z0-9_]+)+\b',
+        caseSensitive: false,
+      ),
+      '[EXTENSION PACKAGE]',
+    );
 
 final anonymousCrashReportClientProvider = Provider<AnonymousCrashReportClient>(
   (ref) => BrokerAnonymousCrashReportClient(),
@@ -593,11 +655,13 @@ Future<void> recordAnonymousCrash({
   required String kind,
   required Object error,
   StackTrace? stack,
+  String? frameworkLibrary,
 }) =>
     _activeAnonymousCrashReporter?.record(
       kind: kind,
       error: error,
       stack: stack,
+      frameworkLibrary: frameworkLibrary,
     ) ??
     Future<void>.value();
 

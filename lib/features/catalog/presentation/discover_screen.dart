@@ -1,3 +1,4 @@
+import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'dart:async';
 
 import 'package:anime_tv/core/diagnostics/anonymous_crash_reporter.dart';
@@ -184,7 +185,7 @@ class _DiscoverScreenState extends ConsumerState<DiscoverScreen> {
   Widget build(BuildContext context) {
     final titlePreference = ref.watch(titleLanguagePreferenceProvider);
     final preferences = ref.watch(settingsPreferencesProvider);
-    final summary = _filterSummary(_filters);
+    final summary = _filterSummary(context, _filters);
     return TetoTopLevelShell(
       preferences: preferences,
       activeDestination: TopNavigationDestination.discover,
@@ -219,7 +220,7 @@ class _DiscoverScreenState extends ConsumerState<DiscoverScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'Discover',
+                        context.tr("Discover"),
                         style: Theme.of(context).textTheme.headlineSmall
                             ?.copyWith(
                               fontSize: layout.usesTvRail ? 30 : null,
@@ -337,7 +338,7 @@ class _DiscoverEmptyState extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: [
         Text(
-          'No anime matched these filters.',
+          context.tr("No anime matched these filters."),
           style: TextStyle(color: context.appPalette.mutedText),
         ),
         const SizedBox(height: 14),
@@ -412,7 +413,10 @@ class _EmptyStateAction extends StatelessWidget {
       children: [
         Icon(icon, size: 19),
         const SizedBox(width: 7),
-        Text(label, style: const TextStyle(fontWeight: FontWeight.w800)),
+        LocalizedText(
+          label,
+          style: const TextStyle(fontWeight: FontWeight.w800),
+        ),
       ],
     ),
   );
@@ -714,7 +718,7 @@ class _DiscoverFiltersDialogState extends State<_DiscoverFiltersDialog> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                'Find your next anime',
+                                context.tr("Find your next anime"),
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: Theme.of(
@@ -723,7 +727,9 @@ class _DiscoverFiltersDialogState extends State<_DiscoverFiltersDialog> {
                               ),
                               const SizedBox(height: 2),
                               Text(
-                                'Choose only the filters you care about.',
+                                context.tr(
+                                  "Choose only the filters you care about.",
+                                ),
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: TextStyle(
@@ -776,9 +782,9 @@ class _DiscoverFiltersDialogState extends State<_DiscoverFiltersDialog> {
                                 TvTextInput(
                                   focusNode: _titleFocus,
                                   controller: _titleController,
-                                  labelText: 'Title',
-                                  hintText: 'Search by title',
-                                  keyboardTitle: 'Discover title',
+                                  labelText: context.tr("Title"),
+                                  hintText: context.tr("Search by title"),
+                                  keyboardTitle: context.tr("Discover title"),
                                   autofocus: true,
                                 ),
                               ),
@@ -943,17 +949,31 @@ class _DiscoverFiltersDialogState extends State<_DiscoverFiltersDialog> {
                                   label: 'Minimum score',
                                   value: _minimumScore == null
                                       ? 'All scores'
-                                      : '${_minimumScore! / 10}/10 or higher',
+                                      : context.tr('{score}/10 or higher', {
+                                          'score': _minimumScore! / 10,
+                                        }),
                                   onPressed: () async {
                                     final value = await _choose(
                                       context,
                                       title: 'Minimum score',
                                       current: _minimumScore?.toString(),
-                                      options: const {
-                                        '90': '9/10 or higher',
-                                        '80': '8/10 or higher',
-                                        '70': '7/10 or higher',
-                                        '60': '6/10 or higher',
+                                      options: {
+                                        '90': context.tr(
+                                          '{score}/10 or higher',
+                                          {'score': 9},
+                                        ),
+                                        '80': context.tr(
+                                          '{score}/10 or higher',
+                                          {'score': 8},
+                                        ),
+                                        '70': context.tr(
+                                          '{score}/10 or higher',
+                                          {'score': 7},
+                                        ),
+                                        '60': context.tr(
+                                          '{score}/10 or higher',
+                                          {'score': 6},
+                                        ),
                                       },
                                     );
                                     if (mounted) {
@@ -1006,7 +1026,9 @@ class _DiscoverFiltersDialogState extends State<_DiscoverFiltersDialog> {
                                             mainAxisSize: MainAxisSize.min,
                                             children: [
                                               Text(
-                                                'Include adult titles',
+                                                context.tr(
+                                                  "Include adult titles",
+                                                ),
                                                 maxLines: 1,
                                                 overflow: TextOverflow.ellipsis,
                                                 style: TextStyle(
@@ -1014,7 +1036,7 @@ class _DiscoverFiltersDialogState extends State<_DiscoverFiltersDialog> {
                                                 ),
                                               ),
                                               Text(
-                                                'Off by default',
+                                                context.tr("Off by default"),
                                                 style: TextStyle(
                                                   color: context
                                                       .appPalette
@@ -1049,7 +1071,7 @@ class _DiscoverFiltersDialogState extends State<_DiscoverFiltersDialog> {
                             focusNode: _resetFocus,
                             onPressed: _clear,
                             icon: const Icon(Icons.restart_alt_rounded),
-                            label: const Text('Reset'),
+                            label: Text(context.tr("Reset")),
                           ),
                         ),
                         const SizedBox(width: 12),
@@ -1059,7 +1081,7 @@ class _DiscoverFiltersDialogState extends State<_DiscoverFiltersDialog> {
                             focusNode: _applyFocus,
                             onPressed: () => Navigator.of(context).pop(_value),
                             icon: const Icon(Icons.search_rounded),
-                            label: const Text('Show results'),
+                            label: Text(context.tr("Show results")),
                           ),
                         ),
                       ],
@@ -1084,7 +1106,7 @@ class _FilterSectionTitle extends StatelessWidget {
   Widget build(BuildContext context) => Padding(
     padding: const EdgeInsets.only(top: 4, bottom: 2),
     child: Text(
-      label.toUpperCase(),
+      context.tr(label).toUpperCase(),
       style: TextStyle(
         color: context.appPalette.accentBright,
         fontSize: 11,
@@ -1132,7 +1154,7 @@ class _FilterField extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  label,
+                  context.tr(label),
                   style: TextStyle(
                     color: context.appPalette.mutedText,
                     fontSize: 10,
@@ -1140,7 +1162,7 @@ class _FilterField extends StatelessWidget {
                   ),
                 ),
                 Text(
-                  value,
+                  context.tr(value),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(fontWeight: FontWeight.w800),
@@ -1199,14 +1221,14 @@ Future<String?> _choose(
                       children: [
                         Expanded(
                           child: Text(
-                            title,
+                            context.tr(title),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: Theme.of(context).textTheme.titleLarge,
                           ),
                         ),
                         IconButton(
-                          tooltip: 'Close',
+                          tooltip: context.tr('Close'),
                           onPressed: () => Navigator.of(context).pop(),
                           icon: const Icon(Icons.close_rounded),
                         ),
@@ -1272,7 +1294,7 @@ class _ChoiceTile extends StatelessWidget {
           children: [
             Expanded(
               child: Text(
-                label,
+                context.tr(label),
                 style: const TextStyle(fontWeight: FontWeight.w800),
               ),
             ),
@@ -1312,7 +1334,10 @@ class _HeaderButton extends StatelessWidget {
           Icon(icon, size: 20),
           if (label != null) ...[
             const SizedBox(width: 7),
-            Text(label!, style: const TextStyle(fontWeight: FontWeight.w800)),
+            LocalizedText(
+              label!,
+              style: const TextStyle(fontWeight: FontWeight.w800),
+            ),
           ],
         ],
       ),
@@ -1337,7 +1362,7 @@ class _DiscoverError extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: [
         Text(
-          _friendlyDiscoverError(message),
+          context.tr(_friendlyDiscoverError(message)),
           textAlign: TextAlign.center,
           style: TextStyle(color: context.appPalette.mutedText),
         ),
@@ -1350,13 +1375,13 @@ class _DiscoverError extends StatelessWidget {
             OutlinedButton.icon(
               onPressed: onReset,
               icon: const Icon(Icons.filter_alt_off_rounded),
-              label: const Text('Reset filters'),
+              label: Text(context.tr("Reset filters")),
             ),
             FilledButton.icon(
               autofocus: true,
               onPressed: onRetry,
               icon: const Icon(Icons.refresh_rounded),
-              label: const Text('Retry'),
+              label: Text(context.tr("Retry")),
             ),
           ],
         ),
@@ -1392,13 +1417,13 @@ bool _hasFilters(CatalogFilters filters) =>
     filters.includeAdult ||
     filters.sort != 'POPULARITY_DESC';
 
-String _filterSummary(CatalogFilters filters) {
+String _filterSummary(BuildContext context, CatalogFilters filters) {
   final values = <String>[
     if (filters.search != null) '“${filters.search}”',
-    _sortLabels[filters.sort] ?? _pretty(filters.sort),
-    if (filters.genre != null) filters.genre!,
-    if (filters.format != null) _pretty(filters.format!),
-    if (filters.status != null) _statusLabels[filters.status]!,
+    context.tr(_sortLabels[filters.sort] ?? _pretty(filters.sort)),
+    if (filters.genre != null) context.tr(filters.genre!),
+    if (filters.format != null) context.tr(_pretty(filters.format!)),
+    if (filters.status != null) context.tr(_statusLabels[filters.status]!),
   ];
   return values.join(' • ');
 }

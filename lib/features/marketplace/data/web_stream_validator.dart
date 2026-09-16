@@ -2,6 +2,8 @@
 
 import 'package:anime_tv/features/marketplace/data/seanime_javascript_provider.dart';
 import 'package:anime_tv/features/marketplace/data/web_playback_proxy.dart';
+import 'package:anime_tv/features/marketplace/domain/addon_models.dart';
+import 'package:anime_tv/features/streaming/domain/external_audio_track.dart';
 
 class ValidatedWebStream {
   const ValidatedWebStream({
@@ -11,6 +13,8 @@ class ValidatedWebStream {
     this.subtitleUri,
     this.subtitleContentType,
     this.subtitleRejected = false,
+    this.audioTracks = const [],
+    this.rejectedAudioTrackCount = 0,
     this.session,
   });
 
@@ -20,6 +24,8 @@ class ValidatedWebStream {
   final Uri? subtitleUri;
   final String? subtitleContentType;
   final bool subtitleRejected;
+  final List<ExternalAudioTrack> audioTracks;
+  final int rejectedAudioTrackCount;
   final WebPlaybackSession? session;
 }
 
@@ -28,6 +34,7 @@ typedef WebStreamPreflight =
       Uri uri,
       Map<String, String> headers, {
       Uri? subtitleUri,
+      List<WebExternalAudioTrack>? audioTracks,
     });
 
 /// Prepares an engine-safe, app-owned loopback playback session.
@@ -44,6 +51,7 @@ class WebStreamValidator {
     Uri uri,
     Map<String, String> headers, {
     Uri? subtitleUri,
+    List<WebExternalAudioTrack>? audioTracks,
   }) async {
     final proxy = _proxy ?? WebPlaybackProxy.instance;
     final retained = proxy.retainSessionForUri(uri);
@@ -53,6 +61,9 @@ class WebStreamValidator {
           uri: uri,
           headers: sanitizeWebStreamHeaders(headers),
           subtitleUri: subtitleUri,
+          audioTracks: (audioTracks ?? const [])
+              .take(8)
+              .toList(growable: false),
         );
     return ValidatedWebStream(
       uri: session.playbackUri,
@@ -61,6 +72,17 @@ class WebStreamValidator {
       subtitleUri: session.subtitleUri,
       subtitleContentType: session.subtitleContentType,
       subtitleRejected: session.subtitleRejected,
+      audioTracks: List.unmodifiable(
+        session.audioTracks.map(
+          (track) => ExternalAudioTrack(
+            uri: track.playbackUri,
+            label: track.label,
+            language: track.language,
+            contentType: track.contentType,
+          ),
+        ),
+      ),
+      rejectedAudioTrackCount: session.rejectedAudioTrackCount,
       session: session,
     );
   }

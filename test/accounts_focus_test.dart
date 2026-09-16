@@ -96,6 +96,7 @@ void main() {
     for (final expected in const [
       'accounts.settings-section.theme-display',
       'accounts.customization.first',
+      'accounts.app-language',
       'accounts.title-language',
       'accounts.show-title-style',
       'accounts.settings-section.home-screen',
@@ -1512,7 +1513,7 @@ void main() {
     ('phone', const Size(390, 844)),
   ]) {
     testWidgets(
-      'Media and Watch Party stay available outside Developer Mode on ${layout.$1}',
+      'Media, Watch Party and Manga settings stay available outside Developer Mode on ${layout.$1}',
       (tester) async {
         FlutterSecureStorage.setMockInitialValues({});
         tester.view.physicalSize = layout.$2;
@@ -1524,6 +1525,9 @@ void main() {
           const ProviderScope(child: MaterialApp(home: AccountsScreen())),
         );
         await tester.pumpAndSettle();
+        final container = ProviderScope.containerOf(
+          tester.element(find.byType(AccountsScreen)),
+        );
         await tester.tap(find.text('Services'));
         await tester.pumpAndSettle();
         for (
@@ -1549,6 +1553,39 @@ void main() {
         expect(
           find.byKey(const ValueKey('settings-watch-party-toggle')),
           findsOneWidget,
+        );
+        expect(find.text('Manga reader'), findsOneWidget);
+        expect(
+          find.byKey(const ValueKey('settings-manga-reader-toggle')),
+          findsOneWidget,
+          reason:
+              'The core Manga preference is available without Developer Mode.',
+        );
+        expect(
+          container.read(settingsPreferencesProvider).mangaReaderEnabled,
+          isTrue,
+          reason: 'Manga is enabled by default.',
+        );
+        expect(
+          container.read(appUpdateControllerProvider).developerMode,
+          isFalse,
+        );
+        final mangaToggle = find.byKey(
+          const ValueKey('settings-manga-reader-toggle'),
+        );
+        await tester.ensureVisible(mangaToggle);
+        await tester.pumpAndSettle();
+        await tester.tap(mangaToggle);
+        await tester.pumpAndSettle();
+        expect(
+          container.read(settingsPreferencesProvider).mangaReaderEnabled,
+          isFalse,
+        );
+        await tester.tap(mangaToggle);
+        await tester.pumpAndSettle();
+        expect(
+          container.read(settingsPreferencesProvider).mangaReaderEnabled,
+          isTrue,
         );
         expect(
           find.byKey(const ValueKey('settings-offline-downloads-toggle')),
@@ -1747,6 +1784,7 @@ void main() {
     );
     for (final label in const [
       'Theme Studio',
+      'App language',
       'Title language',
       'Show title style',
       'Navigation size',
@@ -1762,6 +1800,7 @@ void main() {
     for (final expected in const [
       'accounts.settings-section.theme-display',
       'accounts.customization.first',
+      'accounts.app-language',
       'accounts.title-language',
       'accounts.show-title-style',
       'accounts.settings-section.home-screen',
@@ -3114,13 +3153,19 @@ void main() {
     await tester.pumpAndSettle();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
+      'accounts.streaming.manga-reader',
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
       'accounts.streaming.offline-downloads',
     );
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
     await tester.pumpAndSettle();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.streaming.watch-together',
+      'accounts.streaming.manga-reader',
     );
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pumpAndSettle();
@@ -3177,7 +3222,7 @@ void main() {
       container
           .read(settingsPreferencesProvider)
           .anonymousCrashReportingEnabled,
-      isFalse,
+      isTrue,
     );
     final scaffold = find.byType(Scaffold).first;
     expect(tester.getTopLeft(scaffold), Offset.zero);
@@ -3211,7 +3256,7 @@ void main() {
       container
           .read(settingsPreferencesProvider)
           .anonymousCrashReportingEnabled,
-      isTrue,
+      isFalse,
     );
 
     expect(tester.takeException(), isNull);
@@ -3321,6 +3366,7 @@ void main() {
         TopNavigationDestination.discover,
         TopNavigationDestination.calendar,
         TopNavigationDestination.watchTogether,
+        TopNavigationDestination.manga,
         TopNavigationDestination.downloads,
         TopNavigationDestination.settings,
       ]);

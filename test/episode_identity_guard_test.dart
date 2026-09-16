@@ -1,4 +1,5 @@
 import 'package:anime_tv/features/streaming/domain/episode_identity_guard.dart';
+import 'package:anime_tv/features/streaming/domain/debrid_service.dart';
 import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -53,6 +54,27 @@ void main() {
       );
     });
 
+    test('detects sequel titles whose numbering scheme is unresolved', () {
+      expect(
+        episodeReferenceHasUnresolvedSequelNumbering(
+          _episode(title: 'Show: The Final Season', episode: 1),
+        ),
+        isTrue,
+      );
+      expect(
+        episodeReferenceHasUnresolvedSequelNumbering(
+          _episode(title: 'Show Part 2', episode: 1),
+        ),
+        isTrue,
+      );
+      expect(
+        episodeReferenceHasUnresolvedSequelNumbering(
+          _episode(title: 'Show', episode: 1),
+        ),
+        isFalse,
+      );
+    });
+
     test(
       'later-season bare numbers remain ambiguous without a season marker',
       () {
@@ -77,9 +99,69 @@ void main() {
       },
     );
 
+    test(
+      'matches an authoritative absolute number without guessing offsets',
+      () {
+        expect(
+          _label(
+            'My Hero Academia - 88.mkv',
+            episode: 25,
+            season: 4,
+            absoluteEpisode: 88,
+          ),
+          isA<EpisodeIdentityAssessment>()
+              .having(
+                (assessment) => assessment.verdict,
+                'verdict',
+                EpisodeIdentityVerdict.match,
+              )
+              .having(
+                (assessment) => assessment.reasonCode,
+                'reasonCode',
+                'absolute_episode_number_match',
+              ),
+        );
+        expect(
+          _label('My Hero Academia - 25.mkv', episode: 25, season: 4),
+          isA<EpisodeIdentityAssessment>().having(
+            (assessment) => assessment.verdict,
+            'verdict',
+            EpisodeIdentityVerdict.unknown,
+          ),
+        );
+      },
+    );
+
+    test('separates specials from regular numbered episodes', () {
+      expect(
+        _label('Show Special 01.mkv', episode: 1).reasonCode,
+        'special_episode_mismatch',
+      );
+      expect(
+        _label(
+          'Show Special 01.mkv',
+          episode: 1,
+          season: 0,
+          special: true,
+        ).verdict,
+        EpisodeIdentityVerdict.match,
+      );
+      expect(
+        _label('Show S00E01.mkv', episode: 1).verdict,
+        EpisodeIdentityVerdict.mismatch,
+      );
+    });
+
     test('recognizes anime episode suffixes followed by release tags', () {
       expect(
         _label('Show - 08 [1080p].mkv', episode: 8).verdict,
+        EpisodeIdentityVerdict.match,
+      );
+      expect(
+        _label(
+          '[Group] Show - 08 Dual Audio 1080p x265.mkv',
+          episode: 8,
+        ).verdict,
         EpisodeIdentityVerdict.match,
       );
       expect(
@@ -91,6 +173,9 @@ void main() {
     test('does not infer technical numbers as episodes', () {
       for (final label in <String>[
         'Show 1080p 10-bit x265',
+        'Show - 10-bit x265',
+        'Show - 5.1 audio',
+        'Show - 60 fps',
         'Show - 720.mkv',
         'Show [2026] [1080p]',
         'Show [5.1] audio',
@@ -194,16 +279,23 @@ void main() {
       expect(index, 0);
     });
 
-    test('ambiguous metadata fails open and retains the preferred index', () {
-      final index = selectEpisodeFileIndex(
-        labels: const ['feature-a.mkv', 'feature-b.mkv'],
-        playable: const [true, true],
-        sizes: const [900, 1000],
-        requestedEpisode: 1,
-        preferredFileIndex: 0,
+    test('ambiguous metadata rejects even a preferred index', () {
+      expect(
+        () => selectEpisodeFileIndex(
+          labels: const ['feature-a.mkv', 'feature-b.mkv'],
+          playable: const [true, true],
+          sizes: const [900, 1000],
+          requestedEpisode: 1,
+          preferredFileIndex: 0,
+        ),
+        throwsA(
+          isA<EpisodeIdentityAmbiguousException>().having(
+            (error) => error.reasonCode,
+            'reasonCode',
+            'episode_file_identity_ambiguous',
+          ),
+        ),
       );
-
-      expect(index, 0);
     });
 
     test('episodic packs do not select unknown extras after a mismatch', () {
@@ -219,16 +311,17 @@ void main() {
       );
     });
 
-    test('fully ambiguous multi-file packs continue to fail open', () {
-      final index = selectEpisodeFileIndex(
-        labels: const ['feature-a.mkv', 'feature-b.mkv', 'bonus.mkv'],
-        playable: const [true, true, true],
-        sizes: const [900, 1000, 800],
-        requestedEpisode: 1,
-        preferredFileIndex: 2,
+    test('fully ambiguous multi-file packs fail closed', () {
+      expect(
+        () => selectEpisodeFileIndex(
+          labels: const ['feature-a.mkv', 'feature-b.mkv', 'bonus.mkv'],
+          playable: const [true, true, true],
+          sizes: const [900, 1000, 800],
+          requestedEpisode: 1,
+          preferredFileIndex: 2,
+        ),
+        throwsA(isA<EpisodeIdentityAmbiguousException>()),
       );
-
-      expect(index, 2);
     });
 
     test('retains a preferred index when it also confirms the episode', () {
@@ -256,21 +349,139 @@ void main() {
       expect(index, 1);
     });
 
-    test('later-season absolute packs retain the provider-selected file', () {
+    test(
+      'authoritative absolute numbering overrides a wrong provider index',
+      () {
+        final index = selectEpisodeFileIndex(
+          labels: const [
+            'My Hero Academia - 87.mkv',
+            'My Hero Academia - 88.mkv',
+            'My Hero Academia - 25.mkv',
+          ],
+          playable: const [true, true, true],
+          sizes: const [900, 1000, 1100],
+          requestedEpisode: 25,
+          requestedSeason: 4,
+          requestedAbsoluteEpisode: 88,
+          preferredFileIndex: 2,
+        );
+
+        expect(index, 1);
+      },
+    );
+
+    test(
+      'later-season bare numbering fails when no offset or scope is known',
+      () {
+        expect(
+          () => selectEpisodeFileIndex(
+            labels: const [
+              'My Hero Academia - 87.mkv',
+              'My Hero Academia - 88.mkv',
+              'My Hero Academia - 25.mkv',
+            ],
+            playable: const [true, true, true],
+            sizes: const [900, 1000, 1100],
+            requestedEpisode: 25,
+            requestedSeason: 4,
+            preferredFileIndex: 1,
+          ),
+          throwsA(isA<EpisodeIdentityAmbiguousException>()),
+        );
+      },
+    );
+
+    test('unnumbered sequel titles require an explicit numbering scheme', () {
+      expect(
+        () => selectEpisodeFileIndex(
+          labels: const [
+            'Show Final Season - 01.mkv',
+            'Show Final Season - 60.mkv',
+          ],
+          playable: const [true, true],
+          sizes: const [1000, 900],
+          requestedEpisode: 1,
+          requireNumberingSchemeEvidence: true,
+          preferredFileIndex: 1,
+        ),
+        throwsA(isA<EpisodeIdentityAmbiguousException>()),
+      );
+      expect(
+        selectEpisodeFileIndex(
+          labels: const ['Show Final Season S04E01.mkv'],
+          playable: const [true],
+          sizes: const [1000],
+          requestedEpisode: 1,
+          requireNumberingSchemeEvidence: true,
+        ),
+        0,
+      );
+    });
+
+    test('an explicit season-pack label permits season-relative files', () {
       final index = selectEpisodeFileIndex(
-        labels: const [
-          'My Hero Academia - 87.mkv',
-          'My Hero Academia - 88.mkv',
-          'My Hero Academia - 25.mkv',
-        ],
-        playable: const [true, true, true],
-        sizes: const [900, 1000, 1100],
+        labels: const ['Show - 24.mkv', 'Show - 25.mkv'],
+        playable: const [true, true],
+        sizes: const [900, 1000],
         requestedEpisode: 25,
         requestedSeason: 4,
-        preferredFileIndex: 1,
+        requestedAbsoluteEpisode: 88,
+        containerLabel: 'Show Season 4 batch',
       );
 
       expect(index, 1);
+    });
+
+    test('a season folder scopes a plain numeric anime filename', () {
+      final index = selectEpisodeFileIndex(
+        labels: const ['Show/Season 3/06.mkv', 'Show/Season 3/07.mkv'],
+        playable: const [true, true],
+        sizes: const [900, 1000],
+        requestedEpisode: 7,
+        requestedSeason: 3,
+      );
+
+      expect(index, 1);
+    });
+
+    test('rejects a video range because it starts at another episode', () {
+      expect(
+        () => selectEpisodeFileIndex(
+          labels: const ['Show S01E01-E12.mkv'],
+          playable: const [true],
+          sizes: const [5000],
+          requestedEpisode: 7,
+          requestedSeason: 1,
+        ),
+        throwsA(
+          isA<EpisodeIdentityAmbiguousException>().having(
+            (error) => error.reasonCode,
+            'reasonCode',
+            'episode_range_ambiguous',
+          ),
+        ),
+      );
+    });
+
+    test('rejects conflicting absolute and season-relative exact files', () {
+      expect(
+        () => selectEpisodeFileIndex(
+          labels: const ['Show - 25.mkv', 'Show - 88.mkv'],
+          playable: const [true, true],
+          sizes: const [1000, 900],
+          requestedEpisode: 25,
+          requestedSeason: 4,
+          requestedAbsoluteEpisode: 88,
+          containerLabel: 'Show Season 4',
+        ),
+        throwsA(
+          isA<EpisodeIdentityAmbiguousException>().having(
+            (error) => error.reasonCode,
+            'reasonCode',
+            'episode_numbering_scheme_ambiguous',
+          ),
+        ),
+      );
     });
 
     test('refuses a batch containing only confirmed wrong episodes', () {
@@ -345,6 +556,35 @@ void main() {
       expect(assessment.verdict, EpisodeIdentityVerdict.match);
     });
 
+    test(
+      'route guard permits opaque CDN names after source file selection',
+      () {
+        final stream = StreamReady(
+          uri: Uri.parse('https://example.invalid/play'),
+          displayName: 'video.mkv',
+          debridService: DebridService.realDebrid,
+        );
+        final episode = _episode(title: 'Show', episode: 2);
+
+        expect(
+          () => verifyPlaybackEpisodeIdentity(
+            episode: episode,
+            stream: stream,
+            release: _release('Show Episode 2'),
+          ),
+          returnsNormally,
+        );
+        expect(
+          playbackEpisodeIdentityIsCompatible(
+            episode: episode,
+            stream: stream,
+            release: _release('Show Episode 2'),
+          ),
+          isTrue,
+        );
+      },
+    );
+
     test('exception and diagnostics remain filename and URL free', () {
       final error = EpisodeIdentityMismatchException(
         reasonCode: 'episode_number_mismatch',
@@ -361,10 +601,14 @@ EpisodeIdentityAssessment _label(
   String label, {
   required int episode,
   int? season,
+  int? absoluteEpisode,
+  bool special = false,
 }) => assessEpisodeIdentityLabel(
   label: label,
   requestedEpisode: episode,
   requestedSeason: season,
+  requestedAbsoluteEpisode: absoluteEpisode,
+  requestedSpecial: special,
 );
 
 EpisodeReference _episode({

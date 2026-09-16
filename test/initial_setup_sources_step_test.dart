@@ -52,7 +52,8 @@ void main() {
       tester.element(find.byType(InitialSetupScreen)),
     );
     final preferences = container.read(settingsPreferencesProvider);
-    expect(preferences.preferredPlayer, PreferredPlayer.mpv);
+    expect(preferences.preferredPlayer, PreferredPlayer.media3);
+    expect(preferences.media3SurfaceViewEnabled, isTrue);
     expect(preferences.preferredAudio, PlaybackAudioPreference.sub);
     expect(
       container.read(titleLanguagePreferenceProvider),
@@ -87,6 +88,43 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets('setup asks about Manga with the reader enabled by default', (
+    tester,
+  ) async {
+    await _pumpSetup(tester, const Size(1280, 720));
+    await tester.tap(find.text('Continue'));
+    await tester.pumpAndSettle();
+
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(InitialSetupScreen)),
+    );
+    expect(find.text('Manga reader'), findsOneWidget);
+    expect(find.text('Manga Preview requires Developer Mode.'), findsNothing);
+    expect(find.text('You can change this later in Settings.'), findsOneWidget);
+    expect(container.read(appUpdateControllerProvider).developerMode, isFalse);
+    expect(find.text('Enable'), findsOneWidget);
+    expect(find.text('Disable'), findsOneWidget);
+    expect(
+      container.read(settingsPreferencesProvider).mangaReaderEnabled,
+      isTrue,
+    );
+
+    await tester.tap(find.text('Disable'));
+    await tester.pumpAndSettle();
+    expect(
+      container.read(settingsPreferencesProvider).mangaReaderEnabled,
+      isFalse,
+    );
+
+    await tester.tap(find.text('Enable'));
+    await tester.pumpAndSettle();
+    expect(
+      container.read(settingsPreferencesProvider).mangaReaderEnabled,
+      isTrue,
+    );
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets('TV setup fits playback and live layout preview at 960x540', (
     tester,
@@ -255,7 +293,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('setup asks before enabling crash reports or Discord', (
+  testWidgets('setup clearly discloses default-on crash reports and Discord', (
     tester,
   ) async {
     final discord = await _pumpSetup(tester, const Size(1280, 720));
@@ -277,7 +315,7 @@ void main() {
       container
           .read(settingsPreferencesProvider)
           .anonymousCrashReportingEnabled,
-      isFalse,
+      isTrue,
     );
 
     await tester.tap(find.text('Link Discord (optional)'));
@@ -294,13 +332,17 @@ void main() {
     expect(find.text('One last choice'), findsOneWidget);
     expect(find.text('Do not send'), findsOneWidget);
     expect(find.text('Allow error reports'), findsOneWidget);
-    await tester.tap(find.text('Allow error reports'));
+    expect(
+      find.textContaining('start enabled on new installs'),
+      findsOneWidget,
+    );
+    await tester.tap(find.text('Do not send'));
     await tester.pumpAndSettle();
     expect(
       container
           .read(settingsPreferencesProvider)
           .anonymousCrashReportingEnabled,
-      isTrue,
+      isFalse,
     );
   });
 

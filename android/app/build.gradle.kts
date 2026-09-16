@@ -151,6 +151,8 @@ android {
         targetSdk = 36
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        // First-party fixture harness only; not included in production APK contents.
+        testInstrumentationRunner = "dev.animetv.anime_tv.aniyomi.AniyomiIsolationInstrumentation"
 
         externalNativeBuild {
             cmake {
@@ -305,6 +307,8 @@ tasks.named("preBuild").configure {
 }
 
 dependencies {
+    implementation(project(":aniyomi-compat"))
+    implementation("com.android.tools.build:apksig:9.0.1")
     implementation(files(discordSocialSdkAar))
     implementation("androidx.browser:browser:1.8.0")
     // Version 2.1.0-38 remains the last API-24-compatible libtorrent4j line,

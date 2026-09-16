@@ -1,3 +1,4 @@
+import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'dart:async';
 
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
@@ -111,13 +112,13 @@ class _DiscordDevicePairingScreenState
                     autofocus: true,
                     focusNode: _backFocus,
                     icon: Icons.arrow_back_rounded,
-                    label: 'Back',
+                    label: context.tr("Back"),
                     onPressed: _close,
                   ),
                   const SizedBox(width: 16),
                   Expanded(
                     child: Text(
-                      'Connect Discord',
+                      context.tr("Connect Discord"),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: Theme.of(context).textTheme.headlineSmall,
@@ -125,7 +126,7 @@ class _DiscordDevicePairingScreenState
                   ),
                   if (!context.isCompactWidth)
                     Text(
-                      'Approve securely on your phone or computer',
+                      context.tr("Approve securely on your phone or computer"),
                       style: TextStyle(color: context.appPalette.mutedText),
                     ),
                 ],
@@ -183,13 +184,15 @@ class _MinimumAgeConfirmationCard extends StatelessWidget {
           ),
           const SizedBox(height: 18),
           Text(
-            'Discord age requirement',
+            context.tr("Discord age requirement"),
             textAlign: TextAlign.center,
             style: Theme.of(context).textTheme.headlineSmall,
           ),
           const SizedBox(height: 12),
           Text(
-            'I confirm I meet Discord\'s minimum age of at least 13, or the older minimum required where I live.',
+            context.tr(
+              "I confirm I meet Discord's minimum age of at least 13, or the older minimum required where I live.",
+            ),
             textAlign: TextAlign.center,
             style: TextStyle(color: context.appPalette.mutedText),
           ),
@@ -198,7 +201,7 @@ class _MinimumAgeConfirmationCard extends StatelessWidget {
             key: const ValueKey('discord-age-confirm'),
             focusNode: actionFocusNode,
             icon: Icons.check_rounded,
-            label: 'I meet the requirement',
+            label: context.tr("I meet the requirement"),
             onPressed: onConfirm,
           ),
         ],
@@ -226,54 +229,61 @@ class _DiscordPairingContent extends StatelessWidget {
       DiscordDevicePairingStage.waiting => _WaitingForDiscord(
         session: state.session!,
       ),
-      DiscordDevicePairingStage.linking => const _PairingStatus(
+      DiscordDevicePairingStage.linking => _PairingStatus(
         busy: true,
-        title: 'Discord approved',
-        body: 'Saving the secure link on this device\u2026',
+        title: context.tr("Discord approved"),
+        body: context.tr("Saving the secure link on this device…"),
       ),
       DiscordDevicePairingStage.completed => _PairingStatus(
         icon: Icons.check_circle_rounded,
         color: const Color(0xFF67D49B),
-        title: 'Discord linked',
-        body:
-            'Discord is linked and Rich Presence is enabled. If it is still connecting, use Retry in Settings.',
+        title: context.tr("Discord linked"),
+        body: context.tr(
+          "Discord is linked and Rich Presence is enabled. If it is still connecting, use Retry in Settings.",
+        ),
         actionIcon: Icons.check_rounded,
-        actionLabel: 'Done',
+        actionLabel: context.tr("Done"),
         onAction: onDone,
         actionFocusNode: actionFocusNode,
       ),
       DiscordDevicePairingStage.expired => _PairingStatus(
         icon: Icons.timer_off_rounded,
-        title: 'Code expired',
-        body: state.message ?? 'Create a new one-time code and try again.',
-        actionLabel: 'New code',
+        title: context.tr("Code expired"),
+        body:
+            state.message ??
+            context.tr("Create a new one-time code and try again."),
+        actionLabel: context.tr("New code"),
         onAction: onRestart,
         actionFocusNode: actionFocusNode,
       ),
       DiscordDevicePairingStage.failed => _PairingStatus(
         icon: Icons.error_outline_rounded,
         color: const Color(0xFFFF929B),
-        title: 'Could not connect Discord',
+        title: context.tr("Could not connect Discord"),
         body:
             state.message ??
-            'Check the internet connection, then create a new code.',
-        actionLabel: 'Try again',
+            context.tr(
+              "Check the internet connection, then create a new code.",
+            ),
+        actionLabel: context.tr("Try again"),
         onAction: onRestart,
         actionFocusNode: actionFocusNode,
       ),
       DiscordDevicePairingStage.stopped => _PairingStatus(
         icon: Icons.link_off_rounded,
-        title: 'Pairing stopped',
-        body: 'Return to Settings when you are ready to connect Discord.',
-        actionLabel: 'Try again',
+        title: context.tr("Pairing stopped"),
+        body: context.tr(
+          "Return to Settings when you are ready to connect Discord.",
+        ),
+        actionLabel: context.tr("Try again"),
         onAction: onRestart,
         actionFocusNode: actionFocusNode,
       ),
       DiscordDevicePairingStage.idle ||
-      DiscordDevicePairingStage.starting => const _PairingStatus(
+      DiscordDevicePairingStage.starting => _PairingStatus(
         busy: true,
-        title: 'Creating a one-time code',
-        body: 'Connecting securely to Discord\u2026',
+        title: context.tr("Creating a one-time code"),
+        body: context.tr("Connecting securely to Discord…"),
       ),
     };
   }
@@ -303,8 +313,12 @@ class _WaitingForDiscord extends StatelessWidget {
           final qrData = session.verificationUriComplete.toString();
           final qr = CopyableQrInteraction(
             data: qrData,
-            semanticsLabel: 'QR code to authorize TetoTV with Discord',
-            confirmationMessage: 'Discord authorization link copied.',
+            semanticsLabel: context.tr(
+              "QR code to authorize TetoTV with Discord",
+            ),
+            confirmationMessage: context.tr(
+              "Discord authorization link copied.",
+            ),
             child: Container(
               key: const ValueKey('discord-pairing-qr'),
               width: qrSize,
@@ -316,7 +330,7 @@ class _WaitingForDiscord extends StatelessWidget {
               ),
               child: QrImageView(
                 data: qrData,
-                semanticsLabel: 'Discord device authorization link',
+                semanticsLabel: context.tr("Discord device authorization link"),
                 backgroundColor: Colors.white,
                 errorCorrectionLevel: QrErrorCorrectLevel.Q,
                 padding: EdgeInsets.zero,
@@ -334,22 +348,26 @@ class _WaitingForDiscord extends StatelessWidget {
               const _WaitingPill(),
               const SizedBox(height: 16),
               Text(
-                'Scan with your phone',
+                context.tr("Scan with your phone"),
                 textAlign: compact ? TextAlign.center : TextAlign.start,
                 style: Theme.of(context).textTheme.displaySmall,
               ),
               const SizedBox(height: 10),
               Text(
-                'Or open ${session.verificationUri} and enter:',
+                context.tr("Or open {value1} and enter:", {
+                  'value1': session.verificationUri,
+                }),
                 textAlign: compact ? TextAlign.center : TextAlign.start,
                 style: Theme.of(context).textTheme.bodyLarge,
               ),
               const SizedBox(height: 14),
               CopyableCodeInteraction(
                 code: session.userCode,
-                semanticsLabel:
-                    'Discord one-time pairing code ${session.userCode}',
-                confirmationMessage: 'Discord pairing code copied.',
+                semanticsLabel: context.tr(
+                  "Discord one-time pairing code {value1}",
+                  {'value1': session.userCode},
+                ),
+                confirmationMessage: context.tr("Discord pairing code copied."),
                 child: Text(
                   session.userCode,
                   key: const ValueKey('discord-pairing-code'),
@@ -364,15 +382,18 @@ class _WaitingForDiscord extends StatelessWidget {
               ),
               const SizedBox(height: 12),
               Text(
-                'TetoTV updates automatically after you approve the request. '
-                'Your Discord password is never entered on this device.',
+                context.tr(
+                  "TetoTV updates automatically after you approve the request. Your Discord password is never entered on this device.",
+                ),
                 textAlign: TextAlign.start,
                 style: TextStyle(color: context.appPalette.mutedText),
               ),
               const SizedBox(height: 7),
               Text(
-                'This one-time code expires in about $expiresInMinutes '
-                '${expiresInMinutes == 1 ? 'minute' : 'minutes'}.',
+                context.tr(
+                  'This one-time code expires in about {minutes} minutes.',
+                  {'minutes': expiresInMinutes},
+                ),
                 textAlign: compact ? TextAlign.center : TextAlign.start,
                 style: TextStyle(
                   color: context.appPalette.mutedText,
@@ -421,7 +442,7 @@ class _WaitingPill extends StatelessWidget {
         ),
         const SizedBox(width: 7),
         Text(
-          'WAITING FOR APPROVAL',
+          context.tr("WAITING FOR APPROVAL"),
           style: TextStyle(
             color: context.appPalette.secondaryAccent,
             fontSize: 11,
@@ -477,7 +498,7 @@ class _PairingStatus extends StatelessWidget {
               style: Theme.of(context).textTheme.displaySmall,
             ),
             const SizedBox(height: 10),
-            Text(body, textAlign: TextAlign.center),
+            Text(context.tr(body), textAlign: TextAlign.center),
             if (actionLabel != null && onAction != null) ...[
               const SizedBox(height: 24),
               _PairingAction(

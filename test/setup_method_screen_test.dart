@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/features/settings/application/setup_progress_controller.dart';
+import 'package:anime_tv/features/settings/presentation/language_selection_screen.dart';
 import 'package:anime_tv/features/settings/presentation/phone_setup_screen.dart';
 import 'package:anime_tv/features/settings/presentation/setup_method_screen.dart';
 import 'package:flutter/material.dart';
@@ -17,6 +18,176 @@ void main() {
 
   setUp(() => FlutterSecureStorage.setMockInitialValues({}));
   tearDown(() => FlutterSecureStorage.setMockInitialValues({}));
+
+  for (final size in [const Size(360, 480), const Size(800, 320)]) {
+    testWidgets('short-screen D-pad reveals each focused target at $size', (
+      tester,
+    ) async {
+      tester.view.physicalSize = size;
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final landscape = size.width > size.height;
+      final router = _testRouter();
+      addTearDown(router.dispose);
+      await tester.pumpWidget(
+        _TestApp(router: router, progress: _ImmediateSetupProgressController()),
+      );
+      await tester.pumpAndSettle();
+
+      void expectVisible(String key, String focus) {
+        final target = find.byKey(ValueKey(key));
+        // IconButton adds unpainted touch padding around the focused Material.
+        // Verify the complete visible control, while keeping cards' full bounds.
+        final visibleTarget = key == 'setup-method-back'
+            ? find.descendant(of: target, matching: find.byType(Material)).first
+            : target;
+        final rect = tester.getRect(visibleTarget);
+        expect(FocusManager.instance.primaryFocus?.debugLabel, focus);
+        expect(
+          rect.top,
+          greaterThanOrEqualTo(-1),
+          reason: '$key must not be above the viewport',
+        );
+        expect(
+          rect.bottom,
+          lessThanOrEqualTo(size.height + 1),
+          reason: '$key must not be below the viewport',
+        );
+        expect(target.hitTestable(), findsOneWidget);
+      }
+
+      await tester.sendKeyEvent(
+        landscape
+            ? LogicalKeyboardKey.arrowRight
+            : LogicalKeyboardKey.arrowDown,
+      );
+      await tester.pumpAndSettle();
+      expectVisible('setup-method-phone', 'setup-method.phone');
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+      await tester.pumpAndSettle();
+      if (!landscape) {
+        expectVisible('setup-method-tv', 'setup-method.tv');
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+        await tester.pumpAndSettle();
+      }
+      expectVisible('setup-method-back', 'setup-method.back');
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pumpAndSettle();
+      if (!landscape) {
+        expectVisible('setup-method-tv', 'setup-method.tv');
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+        await tester.pumpAndSettle();
+      }
+      expectVisible('setup-method-phone', 'setup-method.phone');
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('phone-setup-back')));
+      await tester.pumpAndSettle();
+      expectVisible('setup-method-phone', 'setup-method.phone');
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  for (final size in [const Size(960, 540), const Size(360, 800)]) {
+    testWidgets('top-left Back focus graph and phone return work at $size', (
+      tester,
+    ) async {
+      tester.view.physicalSize = size;
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final landscape = size.width > size.height;
+      final router = _testRouter();
+      addTearDown(router.dispose);
+      await tester.pumpWidget(
+        _TestApp(router: router, progress: _ImmediateSetupProgressController()),
+      );
+      await tester.pumpAndSettle();
+
+      final back = find.byKey(const ValueKey('setup-method-back'));
+      final button = tester.widget<IconButton>(back);
+      expect(button.tooltip, 'Back');
+      expect(button.focusNode?.debugLabel, 'setup-method.back');
+      expect(button.onPressed, isNotNull);
+      final backRect = tester.getRect(back);
+      final titleRect = tester.getRect(
+        find.text('How would you like to set up TetoTV?'),
+      );
+      expect(backRect.bottom, lessThan(titleRect.top));
+      expect(backRect.center.dx, lessThan(size.width / 2));
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+      await tester.pump();
+      expect(
+        FocusManager.instance.primaryFocus?.debugLabel,
+        'setup-method.back',
+      );
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+      await tester.pump();
+      expect(
+        FocusManager.instance.primaryFocus?.debugLabel,
+        'setup-method.back',
+      );
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pump();
+      expect(FocusManager.instance.primaryFocus?.debugLabel, 'setup-method.tv');
+      await tester.sendKeyEvent(
+        landscape
+            ? LogicalKeyboardKey.arrowRight
+            : LogicalKeyboardKey.arrowDown,
+      );
+      await tester.pump();
+      expect(
+        FocusManager.instance.primaryFocus?.debugLabel,
+        'setup-method.phone',
+      );
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+      await tester.pump();
+      if (!landscape) {
+        expect(
+          FocusManager.instance.primaryFocus?.debugLabel,
+          'setup-method.tv',
+        );
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+        await tester.pump();
+      }
+      expect(
+        FocusManager.instance.primaryFocus?.debugLabel,
+        'setup-method.back',
+      );
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pump();
+      expect(
+        FocusManager.instance.primaryFocus?.debugLabel,
+        landscape ? 'setup-method.phone' : 'setup-method.tv',
+      );
+      if (!landscape) {
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+        await tester.pump();
+      }
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+      expect(
+        router.routeInformationProvider.value.uri.path,
+        PhoneSetupScreen.routePath,
+      );
+      await tester.tap(find.byKey(const ValueKey('phone-setup-back')));
+      await tester.pumpAndSettle();
+      expect(
+        FocusManager.instance.primaryFocus?.debugLabel,
+        'setup-method.phone',
+      );
+      await tester.ensureVisible(back);
+      await tester.tap(back);
+      await tester.pumpAndSettle();
+      expect(find.byType(LanguageSelectionScreen), findsOneWidget);
+      expect(find.byKey(const ValueKey('setup-method-screen')), findsNothing);
+      expect(tester.takeException(), isNull);
+    });
+  }
 
   testWidgets(
     'waits for setup start, then uses an explicit landscape D-pad graph',

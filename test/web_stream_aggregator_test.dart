@@ -482,6 +482,7 @@ void main() {
     expect(forward.streams.map((stream) => stream.providerId), [
       'a-provider',
       'b-provider',
+      'a-provider',
     ]);
     expect(
       reversed.streams.map((stream) => stream.providerId),
@@ -491,7 +492,7 @@ void main() {
   });
 
   test(
-    'same provider URI merges Sub and Dub into one English-capable source',
+    'same provider URI keeps header-specific Sub and Dub sources separate',
     () {
       final uri = Uri.parse('https://cdn.example.com/multi-audio.m3u8');
       final sub = WebStreamResult(
@@ -520,17 +521,78 @@ void main() {
       ]);
 
       for (final result in [forward, reversed]) {
-        expect(result.streams, hasLength(1));
-        expect(result.streams.single.supportsSubAudio, isTrue);
-        expect(result.streams.single.supportsDubAudio, isTrue);
+        expect(result.streams, hasLength(2));
         expect(
-          result.streams.single.effectiveAudioCapability.pickerLabel,
-          'SUB / DUB',
+          result.streams
+              .map((stream) => stream.effectiveAudioCapability)
+              .toSet(),
+          {WebStreamAudioCapability.sub, WebStreamAudioCapability.dub},
         );
-        expect(result.streams.single.headers, isNotEmpty);
+        expect(
+          result.streams.where((stream) => stream.headers.isNotEmpty),
+          hasLength(1),
+        );
       }
     },
   );
+
+  test('playback variant keys are stable, opaque, and header-aware', () {
+    final uri = Uri.parse('https://cdn.example.com/master.m3u8?token=secret');
+    WebStreamResult stream(Map<String, String> headers) => WebStreamResult(
+      providerId: 'Provider',
+      providerName: 'Provider',
+      title: '1080p',
+      uri: uri,
+      headers: headers,
+      audioCapability: WebStreamAudioCapability.sub,
+    );
+
+    final first = webStreamPlaybackVariantKey(
+      stream(const {'Referer': 'https://example.com/', 'X-Key': 'sensitive'}),
+    );
+    final reordered = webStreamPlaybackVariantKey(
+      stream(const {'x-key': 'sensitive', 'referer': 'https://example.com/'}),
+    );
+    final changed = webStreamPlaybackVariantKey(
+      stream(const {'Referer': 'https://other.example/'}),
+    );
+
+    expect(first, reordered);
+    expect(first, isNot(changed));
+    expect(first, isNot(contains('secret')));
+    expect(first, isNot(contains('sensitive')));
+    expect(first, hasLength(64));
+  });
+
+  test('explicit dual-audio duplicates merge and union language metadata', () {
+    final uri = Uri.parse('https://cdn.example.com/multi-audio.m3u8');
+    final first = WebStreamResult(
+      providerId: 'provider',
+      providerName: 'Provider',
+      title: 'Auto',
+      uri: uri,
+      audioCapability: WebStreamAudioCapability.subAndDub,
+      audioLanguages: const ['jpn'],
+    );
+    final second = WebStreamResult(
+      providerId: 'provider',
+      providerName: 'Provider',
+      title: '1080p',
+      uri: uri,
+      quality: '1080p',
+      audioCapability: WebStreamAudioCapability.subAndDub,
+      audioLanguages: const ['eng'],
+    );
+
+    final result = mergeWebProviderOutcomes([
+      (streams: [first], failure: null),
+      (streams: [second], failure: null),
+    ]);
+
+    expect(result.streams, hasLength(1));
+    expect(result.streams.single.audioLanguages, containsAll(['jpn', 'eng']));
+    expect(result.streams.single.quality, '1080p');
+  });
 
   test('emits a working provider before a slower provider completes', () async {
     final slow = Completer<List<WebStreamResult>>();
@@ -680,6 +742,34 @@ void main() {
       expect(workingStarted, isTrue);
       expect(result.streams.single.providerId, 'working');
       expect(result.failures.single.providerId, 'stalled');
+    },
+  );
+
+  test(
+    'global background budget overrides a selected provider deadline',
+    () async {
+      final cancelled = Completer<void>();
+      final provider = _CancellableProvider(
+        'selected',
+        'Selected',
+        onStarted: () {},
+        onCancelled: cancelled.complete,
+      );
+
+      final result = await aggregateWebStreamingProviders(
+        [provider],
+        const EpisodeReference(anilistMediaId: 1, title: 'Test', episode: 1),
+        deadline: const Duration(milliseconds: 5),
+        providerDeadlineSelector: (candidate) => identical(candidate, provider)
+            ? const Duration(minutes: 1)
+            : const Duration(milliseconds: 5),
+        backgroundBudget: const Duration(milliseconds: 20),
+      );
+
+      await cancelled.future.timeout(const Duration(seconds: 1));
+      expect(result.streams, isEmpty);
+      expect(result.failures.single.reason, 'session_deadline');
+      expect(result.failures.single.stage, 'scheduler');
     },
   );
 
@@ -834,6 +924,8 @@ void main() {
     expect(queuedStarted, isTrue);
     expect(result.failures.first.providerId, 'slow-cleanup');
     expect(result.failures.first.message, contains('Timed out'));
+    expect(result.failures.first.stage, 'runtime');
+    expect(result.failures.first.reason, 'timeout');
   });
 
   test(
@@ -928,6 +1020,7 @@ void main() {
       final activeCancelled = Completer<void>();
       var queuedStarts = 0;
       var recordedFailures = 0;
+      final recordedOutcomes = <String, WebProviderExecutionOutcome>{};
 
       final finalProgress = await aggregateWebStreamingProvidersIncrementally(
         [
@@ -947,6 +1040,9 @@ void main() {
         backgroundBudget: const Duration(milliseconds: 20),
         maxConcurrentProviders: 1,
         onFailure: (_, _, _) => recordedFailures++,
+        onOutcome: (provider, outcome) {
+          recordedOutcomes[provider.id] = outcome;
+        },
       ).last;
 
       await activeStarted.future.timeout(const Duration(seconds: 1));
@@ -957,6 +1053,18 @@ void main() {
         0,
         reason: 'the scheduler deadline is not provider-health failure',
       );
+      expect(recordedOutcomes.keys, containsAll(<String>{'active', 'queued'}));
+      expect(
+        recordedOutcomes.values.map((outcome) => outcome.reason),
+        everyElement('session_deadline'),
+      );
+      expect(
+        recordedOutcomes.values.map((outcome) => outcome.stage),
+        everyElement('scheduler'),
+      );
+      expect(recordedOutcomes['active']!.elapsed, greaterThan(Duration.zero));
+      expect(recordedOutcomes['queued']!.elapsed, Duration.zero);
+      expect(recordedOutcomes['queued']!.queuedFor, greaterThan(Duration.zero));
       expect(finalProgress.isComplete, isTrue);
       expect(finalProgress.isForegroundComplete, isTrue);
       expect(finalProgress.activeProviders, 0);
@@ -1067,6 +1175,33 @@ void main() {
     ]);
   });
 
+  test('priority is case-insensitive and keeps last-good after one miss', () {
+    final addons = [_installedAddon('unknown'), _installedAddon('Last-Good')];
+    final ordered = orderInstalledProvidersByHealth(addons, {
+      'last-good': ProviderHealth(
+        providerId: 'last-good',
+        consecutiveFailures: 1,
+        lastSuccessAt: DateTime.utc(2026, 9, 1),
+      ),
+    });
+
+    expect(ordered.first.manifest.id, 'Last-Good');
+  });
+
+  test('reported broken and deprecated providers run after normal peers', () {
+    final ordered = orderInstalledProvidersByHealth([
+      _installedAddon('broken', reportedBroken: true),
+      _installedAddon('deprecated', isDeprecated: true),
+      _installedAddon('normal'),
+    ], const {});
+
+    expect(ordered.map((addon) => addon.manifest.id), [
+      'normal',
+      'deprecated',
+      'broken',
+    ]);
+  });
+
   test('installed provider availability distinguishes advisory and paused', () {
     final broken = installedWebProviderAvailabilityFailure(
       _installedAddon('reported-broken', reportedBroken: true),
@@ -1105,26 +1240,53 @@ void main() {
     );
   });
 
-  test('runtime API incompatibility is not mislabeled as a timed pause', () {
-    for (final (reason, message) in [
-      ('runtime_api', 'Incompatible'),
-      ('unsafe_target', 'safety checks'),
-    ]) {
-      final failure = installedWebProviderAvailabilityFailure(
-        _installedAddon('$reason-provider'),
-        ProviderHealth(
-          providerId: '$reason-provider',
-          consecutiveFailures: 10,
-          lastFailureStage: 'search',
-          lastFailureReason: reason,
-        ),
-      );
+  test('only a compatibility test permanently marks runtime API failure', () {
+    final discoveryFailure = installedWebProviderAvailabilityFailure(
+      _installedAddon('runtime-discovery-provider'),
+      const ProviderHealth(
+        providerId: 'runtime-discovery-provider',
+        consecutiveFailures: 1,
+        lastFailureStage: 'search',
+        lastFailureReason: 'runtime_api',
+      ),
+    );
+    expect(
+      discoveryFailure,
+      isNull,
+      reason: 'one ordinary runtime failure must not hide a provider',
+    );
 
-      expect(failure?.status, WebProviderFailureStatus.unavailable);
-      expect(failure?.reason, reason);
-      expect(failure?.message, contains(message));
-      expect(webProviderAvailabilityAllowsBackgroundSearch(failure!), isFalse);
-    }
+    final testedFailure = installedWebProviderAvailabilityFailure(
+      _installedAddon('runtime-tested-provider'),
+      const ProviderHealth(
+        providerId: 'runtime-tested-provider',
+        consecutiveFailures: 1,
+        lastFailureStage: 'search',
+        lastFailureReason: 'runtime_api',
+        lastTestStage: 'search',
+        lastTestReason: 'runtime_api',
+      ),
+    );
+    expect(testedFailure?.status, WebProviderFailureStatus.unavailable);
+    expect(testedFailure?.reason, 'runtime_api');
+    expect(testedFailure?.message, contains('Incompatible'));
+    expect(
+      webProviderAvailabilityAllowsBackgroundSearch(testedFailure!),
+      isFalse,
+    );
+
+    final unsafeFailure = installedWebProviderAvailabilityFailure(
+      _installedAddon('unsafe-provider'),
+      const ProviderHealth(
+        providerId: 'unsafe-provider',
+        consecutiveFailures: 1,
+        lastFailureStage: 'stream_extraction',
+        lastFailureReason: 'unsafe_target',
+      ),
+    );
+    expect(unsafeFailure?.status, WebProviderFailureStatus.unavailable);
+    expect(unsafeFailure?.reason, 'unsafe_target');
+    expect(unsafeFailure?.message, contains('safety checks'));
   });
 
   test('real provider failures sort ahead of neutral no-match notices', () {
@@ -1764,6 +1926,7 @@ class _CleanupAwareSupersedingAggregator extends WebStreamAggregator {
 InstalledStreamingAddon _installedAddon(
   String id, {
   bool reportedBroken = false,
+  bool isDeprecated = false,
   String? version,
   String repositoryUrl = 'https://example.com/marketplace.json',
   String? payloadUrl,
@@ -1776,6 +1939,7 @@ InstalledStreamingAddon _installedAddon(
     'type': 'onlinestream-provider',
     'language': 'javascript',
     if (reportedBroken) 'brokenTag': true,
+    if (isDeprecated) 'deprecatedTag': true,
     'version': version ?? '',
   }, repositoryUrl: repositoryUrl)!;
   return InstalledStreamingAddon(

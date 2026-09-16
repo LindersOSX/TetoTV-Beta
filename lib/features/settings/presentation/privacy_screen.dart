@@ -1,3 +1,4 @@
+import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
@@ -83,7 +84,7 @@ class _PrivacyScreenState extends State<PrivacyScreen> {
                             color: palette.primaryText,
                           ),
                           const SizedBox(width: 8),
-                          Text(
+                          LocalizedText(
                             'Back',
                             style: TextStyle(
                               color: palette.primaryText,
@@ -96,7 +97,7 @@ class _PrivacyScreenState extends State<PrivacyScreen> {
                   ),
                   const SizedBox(width: 16),
                   Expanded(
-                    child: Text(
+                    child: LocalizedText(
                       'Privacy & data',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
@@ -123,7 +124,7 @@ class _PrivacyScreenState extends State<PrivacyScreen> {
                     }
                     if (snapshot.hasError) {
                       return Center(
-                        child: Text(
+                        child: LocalizedText(
                           'The privacy disclosure could not be loaded.',
                           style: TextStyle(color: palette.mutedText),
                         ),

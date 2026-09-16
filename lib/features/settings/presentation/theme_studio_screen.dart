@@ -1,3 +1,4 @@
+import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/features/settings/application/theme_studio_controller.dart';
@@ -241,7 +242,7 @@ class _ThemeStudioScreenState extends ConsumerState<ThemeStudioScreen> {
     final messenger = ScaffoldMessenger.maybeOf(context);
     messenger
       ?..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(message)));
+      ..showSnackBar(SnackBar(content: LocalizedText(message)));
   }
 
   @override
@@ -295,14 +296,14 @@ class _ThemeStudioScreenState extends ConsumerState<ThemeStudioScreen> {
                                       onKeyEvent: _handleBackKey,
                                     ),
                                     const SizedBox(height: 24),
-                                    Text(
+                                    LocalizedText(
                                       'Make TetoTV yours',
                                       style: Theme.of(
                                         context,
                                       ).textTheme.displaySmall,
                                     ),
                                     const SizedBox(height: 8),
-                                    Text(
+                                    LocalizedText(
                                       'Change the app canvas, panels, focus color '
                                       'and text. Your saved theme is shared by '
                                       'phone and TV layouts.',
@@ -384,7 +385,7 @@ class _ThemeStudioScreenState extends ConsumerState<ThemeStudioScreen> {
                                                 : const Icon(
                                                     Icons.check_rounded,
                                                   ),
-                                            label: Text(
+                                            label: LocalizedText(
                                               _saving
                                                   ? 'Applying…'
                                                   : 'Apply theme',
@@ -401,7 +402,9 @@ class _ThemeStudioScreenState extends ConsumerState<ThemeStudioScreen> {
                                             focusNode: _resetFocusNode,
                                             onPressed: _reset,
                                             icon: const Icon(Icons.restart_alt),
-                                            label: const Text('Reset defaults'),
+                                            label: const LocalizedText(
+                                              'Reset defaults',
+                                            ),
                                           ),
                                         ),
                                       ],
@@ -460,7 +463,7 @@ class _Header extends StatelessWidget {
         ),
         const SizedBox(width: 14),
         Expanded(
-          child: Text(
+          child: LocalizedText(
             'Theme Studio',
             style: Theme.of(context).textTheme.titleLarge,
           ),
@@ -497,7 +500,10 @@ class _ColorRolesPanel extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('App colors', style: Theme.of(context).textTheme.titleMedium),
+          LocalizedText(
+            'App colors',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
           const SizedBox(height: 12),
           for (final role in AppThemeColorRole.values) ...[
             _ColorRoleTile(
@@ -568,7 +574,7 @@ class _ColorRoleTile extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
+                  LocalizedText(
                     role.displayName,
                     style: TextStyle(
                       color: palette.primaryText,
@@ -576,7 +582,7 @@ class _ColorRoleTile extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 2),
-                  Text(
+                  LocalizedText(
                     role.description,
                     style: TextStyle(color: palette.mutedText, fontSize: 12),
                   ),
@@ -647,7 +653,7 @@ class _ThemePreview extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
+                      LocalizedText(
                         'Featured show',
                         style: TextStyle(
                           color: palette.primaryText,
@@ -655,7 +661,7 @@ class _ThemePreview extends StatelessWidget {
                           fontWeight: FontWeight.w800,
                         ),
                       ),
-                      Text(
+                      LocalizedText(
                         'Continue watching · Episode 7',
                         style: TextStyle(
                           color: palette.mutedText,
@@ -697,7 +703,7 @@ class _ThemePreview extends StatelessWidget {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          Text(
+                          LocalizedText(
                             'Your library',
                             style: TextStyle(
                               color: palette.primaryText,
@@ -705,7 +711,7 @@ class _ThemePreview extends StatelessWidget {
                             ),
                           ),
                           const SizedBox(height: 6),
-                          Text(
+                          LocalizedText(
                             'Panels, labels and focus states update here.',
                             style: TextStyle(
                               color: palette.mutedText,
@@ -748,7 +754,7 @@ class _ThemePreview extends StatelessWidget {
                       color: palette.accent,
                       borderRadius: BorderRadius.circular(11),
                     ),
-                    child: Text(
+                    child: LocalizedText(
                       'Play',
                       style: TextStyle(
                         color: contrastForeground(palette.accent),
@@ -767,7 +773,7 @@ class _ThemePreview extends StatelessWidget {
                       borderRadius: BorderRadius.circular(11),
                       border: Border.all(color: palette.focusRing, width: 2),
                     ),
-                    child: Text(
+                    child: LocalizedText(
                       'Focused',
                       style: TextStyle(
                         color: palette.primaryText,
@@ -822,14 +828,14 @@ class _ContrastGuardCard extends StatelessWidget {
               key: const ValueKey('theme-contrast-guard'),
               focusNode: focusNode,
               contentPadding: EdgeInsets.zero,
-              title: Text(
+              title: LocalizedText(
                 'Protect readable contrast',
                 style: TextStyle(
                   color: palette.primaryText,
                   fontWeight: FontWeight.w700,
                 ),
               ),
-              subtitle: Text(
+              subtitle: LocalizedText(
                 'Prevents a theme from hiding text or TV focus rings.',
                 style: TextStyle(color: palette.mutedText),
               ),
@@ -851,7 +857,7 @@ class _ContrastGuardCard extends StatelessWidget {
                       ),
                       const SizedBox(width: 8),
                       Expanded(
-                        child: Text(
+                        child: LocalizedText(
                           issue,
                           style: TextStyle(
                             color: palette.primaryText,
@@ -863,7 +869,7 @@ class _ContrastGuardCard extends StatelessWidget {
                   ),
                 ),
               if (!enabled)
-                Text(
+                LocalizedText(
                   'Low-contrast theme allowed because the safeguard is off.',
                   style: TextStyle(color: palette.mutedText, fontSize: 12),
                 ),
@@ -1076,12 +1082,12 @@ class _ColorEditorDialogState extends State<_ColorEditorDialog> {
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
+                      LocalizedText(
                         widget.role.displayName,
                         style: Theme.of(context).textTheme.headlineSmall,
                       ),
                       const SizedBox(height: 6),
-                      Text(
+                      LocalizedText(
                         'Choose a built-in color with the D-pad. Exact hex '
                         'entry is available as an optional advanced choice.',
                         style: Theme.of(context).textTheme.bodyMedium,
@@ -1108,7 +1114,7 @@ class _ColorEditorDialogState extends State<_ColorEditorDialog> {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text(
+                                LocalizedText(
                                   'Selected color',
                                   style: TextStyle(
                                     color: palette.mutedText,
@@ -1134,7 +1140,7 @@ class _ColorEditorDialogState extends State<_ColorEditorDialog> {
                         ],
                       ),
                       const SizedBox(height: 18),
-                      Text(
+                      LocalizedText(
                         'Built-in colors',
                         style: Theme.of(context).textTheme.titleMedium,
                       ),
@@ -1160,7 +1166,7 @@ class _ColorEditorDialogState extends State<_ColorEditorDialog> {
                                   ? Icons.expand_less_rounded
                                   : Icons.tag_rounded,
                             ),
-                            label: Text(
+                            label: LocalizedText(
                               _showHexEntry
                                   ? 'Hide exact hex'
                                   : 'Enter exact hex',
@@ -1210,7 +1216,7 @@ class _ColorEditorDialogState extends State<_ColorEditorDialog> {
                             child: OutlinedButton(
                               focusNode: _cancelFocusNode,
                               onPressed: _close,
-                              child: const Text('Cancel'),
+                              child: const LocalizedText('Cancel'),
                             ),
                           ),
                           Focus(
@@ -1233,7 +1239,7 @@ class _ColorEditorDialogState extends State<_ColorEditorDialog> {
                                   _close(_color);
                                 }
                               },
-                              child: const Text('Use color'),
+                              child: const LocalizedText('Use color'),
                             ),
                           ),
                         ],

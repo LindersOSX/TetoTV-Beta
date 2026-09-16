@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
+import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/features/auth/application/pairing_controller.dart';
 import 'package:anime_tv/features/auth/application/tracking_token_service.dart';
 import 'package:anime_tv/features/auth/data/simkl_broker_capability_client.dart';
@@ -20,6 +22,13 @@ final trackingAccountsControllerProvider =
       final controller = TrackingAccountsController(
         ref,
         ref.watch(trackingTokenServiceProvider),
+        diagnosticRecorder: (details) =>
+            TetoTvDatabase.instance.recordDiagnosticEvent(
+              category: 'tracking-account',
+              severity: 'warning',
+              message: 'Tracker account refresh deferred or failed',
+              details: details,
+            ),
       );
       Future.microtask(controller.load);
       return controller;
@@ -55,6 +64,7 @@ class TrackingAccountProfile {
     this.episodesWatched,
     this.minutesWatched,
     this.meanScore,
+    this.stableAccountId,
     this.slotId,
   });
 
@@ -65,6 +75,7 @@ class TrackingAccountProfile {
   final int? episodesWatched;
   final int? minutesWatched;
   final double? meanScore;
+  final String? stableAccountId;
   final String? slotId;
 
   TrackingAccountProfile copyWith({String? slotId}) => TrackingAccountProfile(
@@ -75,9 +86,13 @@ class TrackingAccountProfile {
     episodesWatched: episodesWatched,
     minutesWatched: minutesWatched,
     meanScore: meanScore,
+    stableAccountId: stableAccountId,
     slotId: slotId ?? this.slotId,
   );
 }
+
+typedef TrackingAccountDiagnosticRecorder =
+    Future<void> Function(Map<String, Object?> details);
 
 final class TrackingAccountImportSnapshot {
   const TrackingAccountImportSnapshot._(this.credentials, this.state);
@@ -87,20 +102,26 @@ final class TrackingAccountImportSnapshot {
 }
 
 class TrackingAccountsController extends StateNotifier<TrackingAccountsState> {
-  TrackingAccountsController(this._ref, this._tokenService, {Dio? dio})
-    : _dio =
-          dio ??
-          Dio(
-            BaseOptions(
-              connectTimeout: const Duration(seconds: 12),
-              receiveTimeout: const Duration(seconds: 20),
-            ),
-          ),
-      super(const TrackingAccountsState());
+  TrackingAccountsController(
+    this._ref,
+    this._tokenService, {
+    Dio? dio,
+    this.diagnosticRecorder,
+  }) : _dio =
+           dio ??
+           Dio(
+             BaseOptions(
+               connectTimeout: const Duration(seconds: 12),
+               receiveTimeout: const Duration(seconds: 20),
+             ),
+           ),
+       super(const TrackingAccountsState());
 
   final Ref _ref;
   final TrackingTokenService _tokenService;
   final Dio _dio;
+  final TrackingAccountDiagnosticRecorder? diagnosticRecorder;
+  final Map<TrackingProvider, Timer> _retryTimers = {};
   int _loadGeneration = 0;
 
   Future<void> load() async {
@@ -125,6 +146,7 @@ class TrackingAccountsController extends StateNotifier<TrackingAccountsState> {
         final saved = await _tokenService.rememberCurrentProfile(
           provider,
           profile.username,
+          stableAccountId: profile.stableAccountId,
         );
         if (saved != null) {
           activeProfileIds[provider] = saved.id;
@@ -133,7 +155,22 @@ class TrackingAccountsController extends StateNotifier<TrackingAccountsState> {
         profiles[provider] = profile;
         usernames[provider] = profile.username;
       } catch (error) {
-        errors[provider] = error.toString();
+        final failure = _safeTrackingAccountFailure(provider, error);
+        errors[provider] = failure.message;
+        final previousProfile = state.profiles[provider];
+        final previousUsername = state.usernames[provider];
+        final previousActiveProfile = state.activeProfileIds[provider];
+        if (previousProfile != null && previousUsername != null) {
+          profiles[provider] = previousProfile;
+          usernames[provider] = previousUsername;
+          if (previousActiveProfile != null) {
+            activeProfileIds[provider] = previousActiveProfile;
+          }
+        }
+        _recordFailure(provider, failure);
+        if (failure.reasonCode == 'rate_limited') {
+          _scheduleRetry(provider, failure.retryAfter);
+        }
       }
     }
     if (!mounted || generation != _loadGeneration) return;
@@ -294,8 +331,90 @@ class TrackingAccountsController extends StateNotifier<TrackingAccountsState> {
     return switch (provider) {
       TrackingProvider.anilist => _anilistProfile(token),
       TrackingProvider.myAnimeList => _malProfile(token),
+      TrackingProvider.kitsu => _kitsuProfile(token),
       TrackingProvider.simkl => _simklProfile(token),
     };
+  }
+
+  void _scheduleRetry(TrackingProvider provider, Duration? requestedDelay) {
+    _retryTimers.remove(provider)?.cancel();
+    final delay = requestedDelay ?? const Duration(seconds: 60);
+    _retryTimers[provider] = Timer(delay, () {
+      _retryTimers.remove(provider);
+      if (mounted) unawaited(load());
+    });
+  }
+
+  void _recordFailure(
+    TrackingProvider provider,
+    _TrackingAccountFailure failure,
+  ) {
+    final recorder = diagnosticRecorder;
+    if (recorder == null) return;
+    unawaited(
+      Future<void>.sync(
+        () => recorder({
+          'provider': provider.slug,
+          'stage': 'profile_refresh',
+          'reason_code': failure.reasonCode,
+          'code': ?failure.httpStatus,
+          if (failure.retryAfter case final retryAfter?)
+            'retry_after_seconds': retryAfter.inSeconds.clamp(1, 3600),
+        }),
+      ).catchError((_) {}),
+    );
+  }
+
+  @override
+  void dispose() {
+    for (final timer in _retryTimers.values) {
+      timer.cancel();
+    }
+    _retryTimers.clear();
+    super.dispose();
+  }
+
+  Future<TrackingAccountProfile> _kitsuProfile(String token) async {
+    final response = await _dio.get<Map<String, dynamic>>(
+      'https://kitsu.io/api/edge/users',
+      queryParameters: const {'filter[self]': 'true', 'page[limit]': 1},
+      options: Options(
+        followRedirects: false,
+        maxRedirects: 0,
+        validateStatus: (status) => status == 200,
+        headers: {
+          'Accept': 'application/vnd.api+json',
+          'Content-Type': 'application/vnd.api+json',
+          'Authorization': 'Bearer $token',
+        },
+      ),
+    );
+    final resources = response.data?['data'];
+    final user = resources is List && resources.isNotEmpty
+        ? resources.first
+        : null;
+    final attributes = user is Map
+        ? user['attributes'] as Map<String, dynamic>?
+        : null;
+    final stableAccountId = user is Map
+        ? _safeStableAccountId(user['id'])
+        : null;
+    if (stableAccountId == null) {
+      throw StateError('Kitsu account could not be verified.');
+    }
+    final username =
+        _nonEmptyString(attributes?['name']) ??
+        _nonEmptyString(attributes?['slug']) ??
+        (throw StateError('Kitsu account could not be verified.'));
+    final avatar = attributes?['avatar'] as Map<String, dynamic>?;
+    return TrackingAccountProfile(
+      provider: TrackingProvider.kitsu,
+      username: username,
+      stableAccountId: stableAccountId,
+      avatarUrl: _safePublicAvatarUrl(
+        avatar?['large'] ?? avatar?['medium'] ?? avatar?['small'],
+      ),
+    );
   }
 
   Future<TrackingAccountProfile> _simklProfile(String token) async {
@@ -417,10 +536,96 @@ class TrackingAccountsController extends StateNotifier<TrackingAccountsState> {
   }
 }
 
+class _TrackingAccountFailure {
+  const _TrackingAccountFailure({
+    required this.reasonCode,
+    required this.message,
+    this.httpStatus,
+    this.retryAfter,
+  });
+
+  final String reasonCode;
+  final String message;
+  final int? httpStatus;
+  final Duration? retryAfter;
+}
+
+_TrackingAccountFailure _safeTrackingAccountFailure(
+  TrackingProvider provider,
+  Object error,
+) {
+  if (error is StateError &&
+      error.message.contains('session expired and cannot be refreshed')) {
+    return _TrackingAccountFailure(
+      reasonCode: 'authorization_expired',
+      message:
+          'The ${provider.displayName} session expired and cannot be refreshed. Reconnect ${provider.displayName} in Settings.',
+    );
+  }
+  if (error is DioException) {
+    final status = error.response?.statusCode;
+    if (status == 429) {
+      return _TrackingAccountFailure(
+        reasonCode: 'rate_limited',
+        message:
+            '${provider.displayName} remains linked, but its profile check is temporarily rate-limited. TetoTV will retry automatically.',
+        httpStatus: status,
+        retryAfter: _trackingRetryDelay(error.response?.headers),
+      );
+    }
+    if (status == 401 || status == 403) {
+      return _TrackingAccountFailure(
+        reasonCode: 'authorization_expired',
+        message:
+            '${provider.displayName} needs to be reconnected before profile syncing can continue.',
+        httpStatus: status,
+      );
+    }
+    final text = '${error.error ?? error.message ?? ''}'.toLowerCase();
+    final dnsFailure =
+        text.contains('failed host lookup') ||
+        text.contains('no address associated with hostname') ||
+        text.contains('temporary failure in name resolution');
+    return _TrackingAccountFailure(
+      reasonCode: dnsFailure ? 'dns_lookup_failed' : 'network_failure',
+      message:
+          '${provider.displayName} remains linked, but its profile could not be checked while the network is unavailable.',
+      httpStatus: status,
+    );
+  }
+  return _TrackingAccountFailure(
+    reasonCode: 'profile_unavailable',
+    message:
+        '${provider.displayName} remains linked, but its profile could not be verified right now.',
+  );
+}
+
+Duration _trackingRetryDelay(Headers? headers) {
+  final value = headers?.value('retry-after')?.trim();
+  var seconds = value == null ? null : int.tryParse(value);
+  if (seconds == null && value != null && value.length <= 80) {
+    try {
+      seconds = HttpDate.parse(
+        value,
+      ).difference(DateTime.now().toUtc()).inSeconds;
+    } catch (_) {
+      // Never display or diagnose an untrusted header value.
+    }
+  }
+  return Duration(seconds: (seconds ?? 60).clamp(1, 3600));
+}
+
 String? _nonEmptyString(Object? value) {
   if (value is! String) return null;
   final normalized = value.trim();
   return normalized.isEmpty ? null : normalized;
+}
+
+String? _safeStableAccountId(Object? value) {
+  final id = _nonEmptyString(value);
+  if (id == null || id.length > 128) return null;
+  if (id.runes.any((rune) => rune < 0x20 || rune == 0x7F)) return null;
+  return id;
 }
 
 int? _nonNegativeInt(Object? value) {

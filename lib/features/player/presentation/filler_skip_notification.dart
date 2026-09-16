@@ -1,3 +1,4 @@
+import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'package:anime_tv/features/player/application/filler_episode_navigation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -24,7 +25,10 @@ void showFillerDataUnavailableNotice(
     SnackBar(
       duration: const Duration(seconds: 5),
       content: Text(
-        'Filler data is unavailable. Playing Episode $episode normally.',
+        context.tr(
+          "Filler data is unavailable. Playing Episode {value1} normally.",
+          {'value1': episode},
+        ),
       ),
     ),
   );
@@ -38,8 +42,16 @@ Future<void> showFillerSkipNotification(
   final skipped = fillerEpisodeListLabel(decision.skippedEpisodes);
   final nextEpisode = decision.episode;
   final message = nextEpisode != null
-      ? 'Skipped filler $skipped. Playing Episode $nextEpisode.'
-      : '$skipped ${decision.skippedEpisodes.length == 1 ? 'is' : 'are'} marked as filler. There are no later non-filler episodes available.';
+      ? context.tr('Skipped filler {episodes}. Playing Episode {next}.', {
+          'episodes': skipped,
+          'next': nextEpisode,
+        })
+      : context.tr(
+          decision.skippedEpisodes.length == 1
+              ? '{episodes} is marked as filler. There are no later non-filler episodes available.'
+              : '{episodes} are marked as filler. There are no later non-filler episodes available.',
+          {'episodes': skipped},
+        );
   ScaffoldMessenger.of(context).showSnackBar(
     SnackBar(duration: const Duration(seconds: 5), content: Text(message)),
   );

@@ -1,5 +1,7 @@
 import 'package:anime_tv/core/preferences/playback_audio_preference.dart';
+import 'package:anime_tv/core/preferences/title_language_preference.dart';
 import 'package:anime_tv/features/streaming/domain/debrid_service.dart';
+import 'package:anime_tv/features/streaming/domain/external_audio_track.dart';
 
 class EpisodeReference {
   const EpisodeReference({
@@ -15,6 +17,7 @@ class EpisodeReference {
     this.status,
     this.format,
     this.episodeCount,
+    this.absoluteSeasonOffset,
     this.isAdult = false,
     this.coverImageUrl,
     this.startFromBeginning = false,
@@ -34,10 +37,31 @@ class EpisodeReference {
   final String? status;
   final String? format;
   final int? episodeCount;
+
+  /// Optional Seanime absolute-episode offset: the number of episodes before
+  /// this catalog entry, when an authoritative episode mapping supplies it.
+  ///
+  /// It must not be inferred from a title or PREQUEL count. Torrent selectors
+  /// may use it to verify an absolute-numbered filename, while provider
+  /// results still have to match the catalog title and requested episode.
+  final int? absoluteSeasonOffset;
   final bool isAdult;
   final String? coverImageUrl;
   final bool startFromBeginning;
   final bool autoPlay;
+
+  /// Selects display metadata without changing the canonical title used by
+  /// provider searches, matching, cache keys, and episode identity checks.
+  String displayTitle(TitleLanguagePreference preference) =>
+      preferredAnimeTitle(
+        preference: preference,
+        fallback: title,
+        english: titleEnglish,
+        romaji: titleRomaji,
+      );
+
+  String playbackDisplayTitle(TitleLanguagePreference preference) =>
+      '${displayTitle(preference)} • Episode $episode';
 
   /// Trusted public catalog crosswalks known by the caller.
   ///
@@ -176,6 +200,9 @@ class StreamReady extends StreamResolution {
     this.headers = const {},
     this.externalSubtitle,
     this.externalSubtitleLanguage,
+    this.externalAudioTracks = const [],
+    this.pendingExternalAudioTracks = const [],
+    this.rejectedExternalAudioTrackCount = 0,
     this.mediaContentType,
     this.subtitleContentType,
     this.externalSubtitleRejected = false,
@@ -193,6 +220,9 @@ class StreamReady extends StreamResolution {
   final Map<String, String> headers;
   final Uri? externalSubtitle;
   final String? externalSubtitleLanguage;
+  final List<ExternalAudioTrack> externalAudioTracks;
+  final List<PendingExternalAudioTrack> pendingExternalAudioTracks;
+  final int rejectedExternalAudioTrackCount;
   final String? mediaContentType;
   final String? subtitleContentType;
   final bool externalSubtitleRejected;

@@ -1,3 +1,4 @@
+import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'dart:async';
 
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
@@ -66,7 +67,7 @@ class _PhoneSetupScreenState extends ConsumerState<PhoneSetupScreen> {
     }
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
-        content: Text('No browser could open the secure setup page.'),
+        content: LocalizedText('No browser could open the secure setup page.'),
         duration: Duration(seconds: 5),
       ),
     );
@@ -184,14 +185,14 @@ class _Header extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
+              LocalizedText(
                 'Set up with phone',
                 style: Theme.of(context).textTheme.headlineMedium?.copyWith(
                   fontWeight: FontWeight.w900,
                 ),
               ),
               const SizedBox(height: 3),
-              Text(
+              LocalizedText(
                 'One secure setup for accounts, Discord, sources, debrid, and preferences',
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
@@ -223,7 +224,7 @@ class _ConnectionCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text(
+          LocalizedText(
             'CONNECT YOUR PHONE',
             style: TextStyle(
               color: palette.accentBright,
@@ -298,7 +299,7 @@ class _ConnectionCard extends StatelessWidget {
               onPressed: () =>
                   unawaited(onOpenSetupPage(session.verificationUriComplete)),
               icon: const Icon(Icons.open_in_new_rounded),
-              label: const Text('Open secure setup page'),
+              label: const LocalizedText('Open secure setup page'),
             ),
             const SizedBox(height: 14),
             Container(
@@ -309,7 +310,7 @@ class _ConnectionCard extends StatelessWidget {
               ),
               child: Column(
                 children: [
-                  const Text(
+                  const LocalizedText(
                     'MATCH THIS ON BOTH SCREENS',
                     style: TextStyle(
                       fontSize: 10,
@@ -337,7 +338,7 @@ class _ConnectionCard extends StatelessWidget {
   }
 }
 
-class _StatusCard extends ConsumerWidget {
+class _StatusCard extends ConsumerStatefulWidget {
   const _StatusCard({
     required this.state,
     required this.onUseDeviceSetup,
@@ -349,7 +350,58 @@ class _StatusCard extends ConsumerWidget {
   final FocusNode regenerateFocusNode;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_StatusCard> createState() => _StatusCardState();
+}
+
+class _StatusCardState extends ConsumerState<_StatusCard> {
+  Timer? _retryTimer;
+  int _retrySeconds = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _syncRetryTimer();
+  }
+
+  @override
+  void didUpdateWidget(covariant _StatusCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.state.retryNotBefore != widget.state.retryNotBefore) {
+      _syncRetryTimer();
+    }
+  }
+
+  void _syncRetryTimer() {
+    _retryTimer?.cancel();
+    _retrySeconds = widget.state.retryNotBefore == null
+        ? 0
+        : ref
+              .read(phoneSetupPairingControllerProvider.notifier)
+              .retrySecondsRemaining;
+    if (_retrySeconds == 0) return;
+    // Repainting is limited to this mounted card. Expiry merely re-enables the
+    // explicit action; it must never create or regenerate a pairing.
+    _retryTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      final remaining = ref
+          .read(phoneSetupPairingControllerProvider.notifier)
+          .retrySecondsRemaining;
+      if (remaining != _retrySeconds) {
+        setState(() => _retrySeconds = remaining);
+      }
+      if (remaining == 0) timer.cancel();
+    });
+  }
+
+  @override
+  void dispose() {
+    _retryTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final state = widget.state;
+    final retryBlocked = _retrySeconds > 0;
     final palette = context.appPalette;
     final controller = ref.read(phoneSetupPairingControllerProvider.notifier);
     final discord = ref.watch(discordPresenceControllerProvider);
@@ -369,7 +421,7 @@ class _StatusCard extends ConsumerWidget {
               ),
               const SizedBox(width: 12),
               Expanded(
-                child: Text(
+                child: LocalizedText(
                   _stageTitle(state.stage),
                   style: Theme.of(
                     context,
@@ -388,10 +440,22 @@ class _StatusCard extends ConsumerWidget {
             ],
           ),
           const SizedBox(height: 10),
-          Text(
+          LocalizedText(
             state.message ?? 'Preparing secure phone setup…',
             style: TextStyle(color: palette.mutedText, height: 1.4),
           ),
+          if (retryBlocked) ...[
+            const SizedBox(height: 8),
+            Text(
+              context.tr('Retry available in {time}', {
+                'time':
+                    '${(_retrySeconds ~/ 60).toString().padLeft(2, '0')}:'
+                    '${(_retrySeconds % 60).toString().padLeft(2, '0')}',
+              }),
+              key: const ValueKey('phone-setup-retry-countdown'),
+              style: TextStyle(color: palette.accentBright),
+            ),
+          ],
           const SizedBox(height: 20),
           if (state.stage == PhoneSetupViewStage.review && state.bundle != null)
             _BundlePreview(bundle: state.bundle!)
@@ -404,14 +468,14 @@ class _StatusCard extends ConsumerWidget {
             OutlinedButton.icon(
               onPressed: state.isBusy ? null : controller.rejectReviewedSetup,
               icon: const Icon(Icons.edit_rounded),
-              label: const Text('Edit on phone'),
+              label: const LocalizedText('Edit on phone'),
             ),
             const SizedBox(height: 12),
             FilledButton.icon(
               key: const ValueKey('phone-setup-apply'),
               onPressed: state.isBusy ? null : controller.applyReviewedSetup,
               icon: const Icon(Icons.verified_user_rounded),
-              label: const Text('Apply setup'),
+              label: const LocalizedText('Apply setup'),
             ),
           ] else if (state.stage == PhoneSetupViewStage.completed) ...[
             if (shouldConnectDiscord) ...[
@@ -420,14 +484,14 @@ class _StatusCard extends ConsumerWidget {
                 autofocus: true,
                 onPressed: () => context.push('/pair/discord'),
                 icon: const Icon(Icons.forum_rounded),
-                label: const Text('Connect Discord'),
+                label: const LocalizedText('Connect Discord'),
               ),
               const SizedBox(height: 12),
               OutlinedButton.icon(
                 key: const ValueKey('phone-setup-finish'),
                 onPressed: () => context.go('/'),
                 icon: const Icon(Icons.home_rounded),
-                label: const Text('Start TetoTV'),
+                label: const LocalizedText('Start TetoTV'),
               ),
             ] else
               FilledButton.icon(
@@ -435,41 +499,45 @@ class _StatusCard extends ConsumerWidget {
                 autofocus: true,
                 onPressed: () => context.go('/'),
                 icon: const Icon(Icons.home_rounded),
-                label: const Text('Start TetoTV'),
+                label: const LocalizedText('Start TetoTV'),
               ),
           ] else if (state.canRetry) ...[
             FilledButton.icon(
               key: const ValueKey('phone-setup-regenerate'),
-              focusNode: regenerateFocusNode,
-              onPressed: state.isBusy ? null : controller.regenerate,
+              focusNode: widget.regenerateFocusNode,
+              onPressed: state.isBusy || retryBlocked
+                  ? null
+                  : controller.regenerate,
               icon: const Icon(Icons.refresh_rounded),
-              label: const Text('Regenerate code'),
+              label: const LocalizedText('Regenerate code'),
             ),
             const SizedBox(height: 12),
             OutlinedButton.icon(
-              onPressed: onUseDeviceSetup,
+              onPressed: widget.onUseDeviceSetup,
               icon: const Icon(Icons.tv_rounded),
-              label: const Text('Set up on this device instead'),
+              label: const LocalizedText('Set up on this device instead'),
             ),
           ] else ...[
             OutlinedButton.icon(
               onPressed: state.isBusy ? null : controller.pollNow,
               icon: const Icon(Icons.refresh_rounded),
-              label: const Text('Check now'),
+              label: const LocalizedText('Check now'),
             ),
             const SizedBox(height: 12),
             OutlinedButton.icon(
               key: const ValueKey('phone-setup-regenerate'),
-              focusNode: regenerateFocusNode,
-              onPressed: state.isBusy ? null : controller.regenerate,
+              focusNode: widget.regenerateFocusNode,
+              onPressed: state.isBusy || retryBlocked
+                  ? null
+                  : controller.regenerate,
               icon: const Icon(Icons.autorenew_rounded),
-              label: const Text('Regenerate code'),
+              label: const LocalizedText('Regenerate code'),
             ),
             const SizedBox(height: 12),
             TextButton.icon(
-              onPressed: state.isBusy ? null : onUseDeviceSetup,
+              onPressed: state.isBusy ? null : widget.onUseDeviceSetup,
               icon: const Icon(Icons.tv_rounded),
-              label: const Text('Use on-device setup instead'),
+              label: const LocalizedText('Use on-device setup instead'),
             ),
           ],
         ],
@@ -495,7 +563,9 @@ class _BundlePreview extends StatelessWidget {
       (
         Icons.tune_rounded,
         'Preferences',
-        '${bundle.preferences.choiceCount} selected',
+        context.tr('{count} selected', {
+          'count': bundle.preferences.choiceCount,
+        }),
       ),
       (
         Icons.extension_rounded,
@@ -527,7 +597,7 @@ class _BundlePreview extends StatelessWidget {
           const SizedBox(height: 9),
         ],
         const SizedBox(height: 4),
-        Text(
+        LocalizedText(
           'Account credentials are end-to-end encrypted and intentionally hidden from this preview. Linked services use their official authorization pages; passwords are never included.',
           style: TextStyle(
             color: context.appPalette.mutedText,
@@ -564,9 +634,12 @@ class _PreviewRow extends StatelessWidget {
         children: [
           Icon(icon, size: 21, color: palette.accentBright),
           const SizedBox(width: 11),
-          Expanded(child: Text(label)),
+          Expanded(child: LocalizedText(label)),
           const SizedBox(width: 10),
-          Text(value, style: const TextStyle(fontWeight: FontWeight.w800)),
+          LocalizedText(
+            value,
+            style: const TextStyle(fontWeight: FontWeight.w800),
+          ),
         ],
       ),
     );
@@ -598,8 +671,11 @@ class _CompletionSummary extends StatelessWidget {
         if ((result?.repositoriesAdded ?? 0) + (result?.manifestsAdded ?? 0) >
             0)
           _DoneLine(
-            label:
-                '${(result?.repositoriesAdded ?? 0) + (result?.manifestsAdded ?? 0)} sources added',
+            label: context.tr('{count} sources added', {
+              'count':
+                  (result?.repositoriesAdded ?? 0) +
+                  (result?.manifestsAdded ?? 0),
+            }),
           ),
       ],
     );
@@ -622,7 +698,7 @@ class _DoneLine extends StatelessWidget {
           size: 21,
         ),
         const SizedBox(width: 10),
-        Text(label),
+        LocalizedText(label),
       ],
     ),
   );
@@ -663,7 +739,7 @@ class _Step extends StatelessWidget {
               shape: BoxShape.circle,
               border: Border.all(color: palette.accent.withValues(alpha: .5)),
             ),
-            child: Text(
+            child: LocalizedText(
               number,
               style: TextStyle(
                 color: palette.accentBright,
@@ -672,7 +748,7 @@ class _Step extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 12),
-          Expanded(child: Text(text)),
+          Expanded(child: LocalizedText(text)),
         ],
       ),
     );
@@ -698,7 +774,7 @@ class _SecurityNotice extends StatelessWidget {
           Icon(Icons.lock_rounded, color: palette.accentBright),
           const SizedBox(width: 12),
           Expanded(
-            child: Text(
+            child: LocalizedText(
               'Protected with end-to-end encryption. You sign in only on each service\'s official page; TetoTV never asks for passwords. The setup companion holds the resulting credentials only temporarily, then your browser encrypts them for this device. Credentials never appear in the QR code, URL, browser draft storage, logs, or diagnostics. After your phone connects, the page can be minimized and reopened without losing the setup draft.',
               style: TextStyle(color: palette.mutedText, height: 1.4),
             ),

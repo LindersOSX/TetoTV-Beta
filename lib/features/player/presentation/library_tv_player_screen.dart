@@ -1,3 +1,4 @@
+import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'dart:async';
 import 'dart:convert';
 
@@ -218,8 +219,8 @@ class _LibraryPlaybackPreparationError extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Text(
-            'Private media could not be prepared safely.',
+          Text(
+            context.tr("Private media could not be prepared safely."),
             textAlign: TextAlign.center,
             style: TextStyle(color: Colors.white),
           ),
@@ -227,7 +228,7 @@ class _LibraryPlaybackPreparationError extends StatelessWidget {
           FilledButton(
             autofocus: true,
             onPressed: onBack,
-            child: const Text('Go back'),
+            child: Text(context.tr("Go back")),
           ),
         ],
       ),

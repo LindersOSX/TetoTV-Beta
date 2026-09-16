@@ -1,6 +1,8 @@
 import 'dart:async';
 
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
+import 'package:anime_tv/core/localization/teto_localizations.dart';
+import 'package:anime_tv/core/preferences/title_language_preference.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/widgets/network_artwork.dart';
@@ -16,6 +18,8 @@ import 'package:anime_tv/features/catalog/domain/episode_airing_availability.dar
 import 'package:anime_tv/features/catalog/domain/filler_episode_lookup.dart';
 import 'package:anime_tv/features/catalog/presentation/anime_title_logo_view.dart';
 import 'package:anime_tv/features/catalog/presentation/episode_browser_dialog.dart';
+import 'package:anime_tv/features/catalog/presentation/localized_anime_description.dart';
+import 'package:anime_tv/features/catalog/presentation/localized_episode_airing.dart';
 import 'package:anime_tv/features/downloads/application/season_download_controller.dart';
 import 'package:anime_tv/features/downloads/domain/season_download_plan.dart';
 import 'package:anime_tv/features/downloads/presentation/season_download_dialog.dart';
@@ -235,7 +239,7 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
           knownEpisodes,
         );
     final releaseCheckAt = DateTime.now();
-    final statusText = _animeDetailsStatusText(anime, releaseCheckAt);
+    final statusText = _animeDetailsStatusText(context, anime, releaseCheckAt);
     final selectedAvailability = episodeAiringAvailability(
       anime: anime,
       episode: selectedEpisode,
@@ -258,9 +262,11 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
               ? () {
                   ref.read(seasonDownloadControllerProvider.notifier).cancel();
                   ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
+                    SnackBar(
                       content: Text(
-                        'Stopped preparing the remaining season downloads.',
+                        context.tr(
+                          "Stopped preparing the remaining season downloads.",
+                        ),
                       ),
                     ),
                   );
@@ -279,6 +285,7 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
       resumeAvailability: resumeAvailability,
       autofocusPrimary: autofocusPrimary,
       selectedEpisode: selectedEpisode,
+      titlePreference: titlePreference,
       resumeEpisode: targetEpisode,
       totalEpisodes: knownEpisodes,
       hasProgress: progress > 0 || localResume,
@@ -545,7 +552,9 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
                                       if (statusText case final status?) ...[
                                         const SizedBox(height: 9),
                                         Text(
-                                          'Status: $status',
+                                          context.tr("Status: {value1}", {
+                                            'value1': status,
+                                          }),
                                           style: TextStyle(
                                             color: context.appPalette.mutedText,
                                             fontSize: 11,
@@ -563,9 +572,11 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
                             const SizedBox(height: 12),
                             _MediaFactsRow(anime: anime),
                             const SizedBox(height: 16),
-                            Text(
-                              anime.description.isEmpty
-                                  ? 'No synopsis is available.'
+                            LocalizedAnimeDescription(
+                              aniListId: anime.id,
+                              language: settings.interfaceLanguage.code,
+                              fallbackDescription: anime.description.isEmpty
+                                  ? context.tr("No synopsis is available.")
                                   : anime.description,
                               style: Theme.of(context).textTheme.bodyMedium,
                             ),
@@ -745,9 +756,14 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
                                   SizedBox(height: wide ? 18 : 10),
                                   _MediaFactsRow(anime: anime),
                                   SizedBox(height: wide ? 24 : 12),
-                                  Text(
-                                    anime.description.isEmpty
-                                        ? 'No synopsis is available.'
+                                  LocalizedAnimeDescription(
+                                    aniListId: anime.id,
+                                    language: settings.interfaceLanguage.code,
+                                    fallbackDescription:
+                                        anime.description.isEmpty
+                                        ? context.tr(
+                                            "No synopsis is available.",
+                                          )
                                         : anime.description,
                                     maxLines: wide ? 8 : (spacious ? 7 : 5),
                                     overflow: TextOverflow.ellipsis,
@@ -761,7 +777,9 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
                                   if (statusText case final status?) ...[
                                     SizedBox(height: wide ? 20 : 10),
                                     Text(
-                                      'Status: $status',
+                                      context.tr("Status: {value1}", {
+                                        'value1': status,
+                                      }),
                                       style: TextStyle(
                                         color: context.appPalette.accentBright,
                                         fontSize: wide ? 17 : 13,
@@ -870,7 +888,7 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
     final router = GoRouter.maybeOf(context);
     if (router == null) return null;
     return SnackBarAction(
-      label: 'Downloads',
+      label: context.tr("Downloads"),
       onPressed: () => router.push('/downloads'),
     );
   }
@@ -895,8 +913,10 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
     } catch (_) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Skip filler preference could not be saved.'),
+          SnackBar(
+            content: Text(
+              context.tr("Skip filler preference could not be saved."),
+            ),
           ),
         );
       }
@@ -1355,8 +1375,14 @@ class _EpisodeCounterBadge extends StatelessWidget {
       ),
       child: Text(
         compact
-            ? 'EP $selectedEpisode / $totalEpisodes'
-            : 'EPISODE $selectedEpisode OF $totalEpisodes',
+            ? context.tr("EP {value1} / {value2}", {
+                'value1': selectedEpisode,
+                'value2': totalEpisodes,
+              })
+            : context.tr("EPISODE {value1} OF {value2}", {
+                'value1': selectedEpisode,
+                'value2': totalEpisodes,
+              }),
         style: TextStyle(
           color: context.appPalette.primaryText,
           fontSize: large ? 15 : (compact ? 10 : 12),
@@ -1432,7 +1458,7 @@ class _MediaFact extends StatelessWidget {
         ),
         SizedBox(width: large ? 8 : 5),
         Text(
-          label,
+          context.tr(label),
           style: TextStyle(
             color: context.appPalette.primaryText,
             fontSize: large ? 17 : 13,
@@ -1680,7 +1706,7 @@ class _InformationButton extends StatelessWidget {
                   Expanded(
                     child: Center(
                       child: Text(
-                        label,
+                        context.tr(label),
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         textAlign: TextAlign.center,
@@ -1700,7 +1726,7 @@ class _InformationButton extends StatelessWidget {
                   const SizedBox(width: 5),
                   Expanded(
                     child: Text(
-                      label,
+                      context.tr(label),
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
@@ -1723,6 +1749,7 @@ class _EpisodeActions extends StatelessWidget {
     required this.resumeAvailability,
     required this.autofocusPrimary,
     required this.selectedEpisode,
+    required this.titlePreference,
     required this.resumeEpisode,
     required this.totalEpisodes,
     required this.isTelevision,
@@ -1756,6 +1783,7 @@ class _EpisodeActions extends StatelessWidget {
   final EpisodeAiringAvailability resumeAvailability;
   final bool autofocusPrimary;
   final int selectedEpisode;
+  final TitleLanguagePreference titlePreference;
   final int resumeEpisode;
   final int totalEpisodes;
   final bool isTelevision;
@@ -1805,7 +1833,10 @@ class _EpisodeActions extends StatelessWidget {
               _EpisodeActionButton(
                 key: const ValueKey('episode-action-resume'),
                 label: !resumeAvailability.isAvailable
-                    ? _unavailableEpisodeActionLabel(resumeAvailability)
+                    ? _unavailableEpisodeActionLabel(
+                        context,
+                        resumeAvailability,
+                      )
                     : resumePosition == null
                     ? (hasProgress ? 'Resume' : 'Start watching')
                     : 'Resume at ${_formatDuration(resumePosition!)}',
@@ -1887,6 +1918,7 @@ class _EpisodeActions extends StatelessWidget {
               focusNode: watchPartyFocusNode,
               onPressed: onWatchPartyPressed,
               fallbackEpisode: selectedEpisode,
+              titlePreference: titlePreference,
               large: large,
             ),
           ],
@@ -1894,7 +1926,7 @@ class _EpisodeActions extends StatelessWidget {
           Align(
             alignment: Alignment.centerLeft,
             child: Text(
-              'EPISODE',
+              context.tr("EPISODE"),
               style: TextStyle(
                 color: context.appPalette.mutedText,
                 fontSize: large ? 13 : 10,
@@ -1972,8 +2004,8 @@ class _EpisodeBrowserPrompt extends StatelessWidget {
   Widget build(BuildContext context) {
     final palette = context.appPalette;
     final label = isTelevision
-        ? 'Press ↓ to browse all episodes'
-        : 'Swipe up or tap to browse all episodes';
+        ? context.tr('Press ↓ to browse all episodes')
+        : context.tr('Swipe up or tap to browse all episodes');
     return Semantics(
       label: label,
       button: true,
@@ -2040,13 +2072,19 @@ class _EpisodeAiringNotice extends StatelessWidget {
     final isSeries =
         availability.kind == EpisodeAiringAvailabilityKind.seriesUnaired;
     final title = isSeries
-        ? 'This series has not aired yet.'
-        : 'Episode ${availability.episode} has not aired yet.';
+        ? context.tr('This series has not aired yet.')
+        : context.tr('Episode {episode} has not aired yet.', {
+            'episode': availability.episode ?? 1,
+          });
     final expectedAt = availability.expectedAt;
     final dateLabel = expectedAt == null
         ? null
-        : '${isSeries ? 'Expected premiere date' : 'Expected air date'}: '
-              '${episodeAiringDateLabel(expectedAt)}';
+        : context.tr(
+            isSeries
+                ? 'Expected premiere date: {date}'
+                : 'Expected air date: {date}',
+            {'date': TetoLocalizations.of(context).date(expectedAt)},
+          );
     return Semantics(
       liveRegion: true,
       label: dateLabel == null ? title : '$title $dateLabel',
@@ -2108,15 +2146,23 @@ class _EpisodeAiringNotice extends StatelessWidget {
   }
 }
 
-String _unavailableEpisodeActionLabel(EpisodeAiringAvailability availability) =>
-    switch (availability.kind) {
-      EpisodeAiringAvailabilityKind.seriesUnaired => 'Not aired yet',
-      EpisodeAiringAvailabilityKind.episodeUnaired =>
-        'Episode ${availability.episode} has not aired yet',
-      EpisodeAiringAvailabilityKind.available => 'Start watching',
-    };
+String _unavailableEpisodeActionLabel(
+  BuildContext context,
+  EpisodeAiringAvailability availability,
+) => switch (availability.kind) {
+  EpisodeAiringAvailabilityKind.seriesUnaired => context.tr('Not aired yet'),
+  EpisodeAiringAvailabilityKind.episodeUnaired => context.tr(
+    'Episode {episode} has not aired yet',
+    {'episode': availability.episode ?? 1},
+  ),
+  EpisodeAiringAvailabilityKind.available => context.tr('Start watching'),
+};
 
-String? _animeDetailsStatusText(AnimeSummary anime, DateTime now) {
+String? _animeDetailsStatusText(
+  BuildContext context,
+  AnimeSummary anime,
+  DateTime now,
+) {
   final rawStatus = anime.status?.trim();
   if (rawStatus == null || rawStatus.isEmpty) return null;
   final status = rawStatus
@@ -2126,10 +2172,10 @@ String? _animeDetailsStatusText(AnimeSummary anime, DateTime now) {
       .where((part) => part.isNotEmpty)
       .map((part) => '${part[0].toUpperCase()}${part.substring(1)}')
       .join(' ');
-  final countdown = nextEpisodeAiringCountdownLabel(anime: anime, now: now);
+  final countdown = localizedNextEpisodeCountdown(context, anime, now: now);
   final nextAiringAt = anime.nextAiringAt;
-  if (countdown == null || nextAiringAt == null) return status;
-  return '$status · $countdown · ${episodeAiringDateLabel(nextAiringAt)}';
+  if (countdown == null || nextAiringAt == null) return context.tr(status);
+  return '${context.tr(status)} · $countdown · ${TetoLocalizations.of(context).date(nextAiringAt)}';
 }
 
 class _EpisodeWatchPartyAction extends StatelessWidget {
@@ -2140,6 +2186,7 @@ class _EpisodeWatchPartyAction extends StatelessWidget {
     required this.focusNode,
     required this.onPressed,
     required this.fallbackEpisode,
+    required this.titlePreference,
     required this.large,
   });
 
@@ -2148,6 +2195,7 @@ class _EpisodeWatchPartyAction extends StatelessWidget {
   final FocusNode focusNode;
   final VoidCallback? onPressed;
   final int fallbackEpisode;
+  final TitleLanguagePreference titlePreference;
   final bool large;
 
   @override
@@ -2232,8 +2280,13 @@ class _EpisodeWatchPartyAction extends StatelessWidget {
                       ),
                       Text(
                         media == null
-                            ? 'Episode $episode'
-                            : '${media.title} • Episode $episode',
+                            ? context.tr("Episode {value1}", {
+                                'value1': episode,
+                              })
+                            : context.tr("{value1} • Episode {value2}", {
+                                'value1': media.displayTitle(titlePreference),
+                                'value2': episode,
+                              }),
                         key: const ValueKey('episode-watch-party-media'),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
@@ -2272,7 +2325,7 @@ class _EpisodeWatchPartyAction extends StatelessWidget {
                         alignment: Alignment.center,
                         color: context.appPalette.selectableSurface,
                         child: Text(
-                          'Leave Party',
+                          context.tr("Leave Party"),
                           maxLines: 1,
                           style: TextStyle(
                             fontSize: large ? 12 : 9,
@@ -2286,7 +2339,9 @@ class _EpisodeWatchPartyAction extends StatelessWidget {
               ] else
                 Expanded(
                   child: Text(
-                    starting ? 'Starting…' : 'Start Watch Party',
+                    starting
+                        ? context.tr("Starting…")
+                        : context.tr("Start Watch Party"),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
@@ -2359,7 +2414,9 @@ class _EpisodeWatchPartyAvatars extends StatelessWidget {
         final visible = participants.take(profileCount).toList(growable: false);
         return Semantics(
           container: true,
-          label: '${participants.length} people in this Watch Party room',
+          label: context.tr("{value1} people in this Watch Party room", {
+            'value1': participants.length,
+          }),
           child: Row(
             key: const ValueKey('episode-watch-party-avatars'),
             mainAxisSize: MainAxisSize.min,
@@ -2510,7 +2567,7 @@ class _EpisodeToggleButton extends StatelessWidget {
           SizedBox(width: large ? 16 : 8),
           Expanded(
             child: Text(
-              'Skip filler',
+              context.tr("Skip filler"),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
@@ -2521,7 +2578,7 @@ class _EpisodeToggleButton extends StatelessWidget {
             ),
           ),
           Text(
-            value ? 'ON' : 'OFF',
+            value ? context.tr("ON") : context.tr("OFF"),
             style: TextStyle(
               color: value
                   ? context.appPalette.accentBright
@@ -2545,7 +2602,7 @@ class _EpisodeToggleButton extends StatelessWidget {
       button: true,
       enabled: enabled,
       toggled: value,
-      label: 'Skip filler',
+      label: context.tr("Skip filler"),
       child: enabled
           ? TvFocusable(
               focusNode: focusNode,
@@ -2605,7 +2662,7 @@ class _EpisodeActionButton extends StatelessWidget {
           SizedBox(width: large ? 16 : 8),
           Expanded(
             child: Text(
-              label,
+              context.tr(label),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
@@ -2700,7 +2757,10 @@ class _EpisodeSelectionButton extends StatelessWidget {
         children: [
           Flexible(
             child: Text(
-              '$selectedEpisode of $totalEpisodes',
+              context.tr("{value1} of {value2}", {
+                'value1': selectedEpisode,
+                'value2': totalEpisodes,
+              }),
               textAlign: TextAlign.center,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
@@ -2723,15 +2783,20 @@ class _EpisodeSelectionButton extends StatelessWidget {
     );
     if (!enabled) {
       return Semantics(
-        label: 'Episode $selectedEpisode of $totalEpisodes',
+        label: context.tr("Episode {value1} of {value2}", {
+          'value1': selectedEpisode,
+          'value2': totalEpisodes,
+        }),
         button: true,
         enabled: false,
         child: content,
       );
     }
     return Semantics(
-      label:
-          'Episode $selectedEpisode of $totalEpisodes. Choose episode number',
+      label: context.tr("Episode {value1} of {value2}. Choose episode number", {
+        'value1': selectedEpisode,
+        'value2': totalEpisodes,
+      }),
       button: true,
       enabled: true,
       onTap: onPressed,
@@ -2831,7 +2896,7 @@ class _DetailsBack extends StatelessWidget {
         focusNode: focusNode,
         onPressed: onPressed,
         borderRadius: BorderRadius.circular(10),
-        child: const ColoredBox(
+        child: ColoredBox(
           color: Color(0xCC111111),
           child: Padding(
             padding: EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -2840,7 +2905,7 @@ class _DetailsBack extends StatelessWidget {
               children: [
                 Icon(Icons.arrow_back_rounded, size: 20),
                 SizedBox(width: 8),
-                Text('Back'),
+                Text(context.tr("Back")),
               ],
             ),
           ),
@@ -2881,7 +2946,7 @@ class _DetailsError extends StatelessWidget {
                   ),
                   const SizedBox(height: 16),
                   Text(
-                    'Could not load anime',
+                    context.tr("Could not load anime"),
                     style: Theme.of(context).textTheme.headlineSmall,
                   ),
                   const SizedBox(height: 8),
@@ -2897,7 +2962,7 @@ class _DetailsError extends StatelessWidget {
                           vertical: 11,
                         ),
                         child: Text(
-                          'Retry',
+                          context.tr("Retry"),
                           style: TextStyle(
                             color: context.appPalette.background,
                             fontWeight: FontWeight.w800,

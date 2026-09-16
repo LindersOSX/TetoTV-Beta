@@ -162,8 +162,44 @@ if ($abiDifference.Count -ne 0) {
 Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $expectedNativeEntries = @($nativeManifest.apkNativeLibraries)
-if ($expectedNativeEntries.Count -ne 18) {
-    throw "The Android native BOM must contain exactly 18 ABI-specific entries."
+$expectedNativeLibraryNames = @(
+    "libapp.so",
+    "libdartjni.so",
+    "libdiscord_partner_sdk.so",
+    "libfastdev_quickjs_runtime.so",
+    "libflutter.so",
+    "libmediakitandroidhelper.so",
+    "libmpv.so",
+    "libquickjs.so",
+    "libtetotv_discord.so",
+    "libtorrent4j.so"
+)
+$expectedNativePaths = @(
+    foreach ($abi in $expectedAbis) {
+        foreach ($libraryName in $expectedNativeLibraryNames) {
+            "lib/$abi/$libraryName"
+        }
+    }
+)
+$manifestNativeNames = @($expectedNativeEntries | ForEach-Object path)
+$manifestNativePathSet = [Collections.Generic.HashSet[string]]::new(
+    [StringComparer]::Ordinal
+)
+$hasDuplicateManifestPath = $false
+foreach ($manifestNativeName in $manifestNativeNames) {
+    if (-not $manifestNativePathSet.Add([string]$manifestNativeName)) {
+        $hasDuplicateManifestPath = $true
+    }
+}
+if (
+    $expectedNativeEntries.Count -ne $expectedNativePaths.Count -or
+    $hasDuplicateManifestPath -or
+    @(Compare-Object $expectedNativePaths $manifestNativeNames).Count -ne 0
+) {
+    throw (
+        "The Android native BOM must contain the exact ARM32/ARM64 " +
+        "$($expectedNativeLibraryNames.Count)-library allowlist."
+    )
 }
 $archive = [IO.Compression.ZipFile]::OpenRead($resolvedApk)
 try {

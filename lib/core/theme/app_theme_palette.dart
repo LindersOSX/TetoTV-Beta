@@ -73,8 +73,7 @@ class AppThemePalette extends ThemeExtension<AppThemePalette> {
     }
 
     final brightAccent = _mix(normalizedAccent, Colors.white, .16);
-    final focus = _mix(normalizedAccent, Colors.white, .27);
-    final foreground = contrastForeground(normalizedAccent);
+    final focus = _accentFocusTone(normalizedAccent);
     return AppThemePalette._(
       background: normalizedBackground,
       surface: normalizedSurface,
@@ -87,7 +86,13 @@ class AppThemePalette extends ThemeExtension<AppThemePalette> {
       accentBright: brightAccent,
       focusRing: focus,
       focusGlow: focus.withValues(alpha: .60),
-      focusInnerKeyline: foreground.withValues(alpha: .90),
+      // This is an edge separator, not text on an accent-filled button. Using
+      // contrastForeground here made dark accents acquire two white outlines.
+      focusInnerKeyline: _mix(
+        normalizedAccent,
+        Colors.black,
+        .75,
+      ).withValues(alpha: .90),
       secondaryAccent: _mix(normalizedAccent, Colors.white, .35),
     );
   }
@@ -293,6 +298,26 @@ Color contrastForeground(Color background) =>
     : Colors.black;
 
 Color _opaque(Color value) => value.withValues(alpha: 1);
+
+/// Keep the same visibility as the previous focus shade without washing a
+/// saturated accent toward white. Adjust only lightness, preserving its hue
+/// and saturation. Readability checks still apply to the resulting palette.
+Color _accentFocusTone(Color accent) {
+  final minimumLuminance = _mix(accent, Colors.white, .27).computeLuminance();
+  final tone = HSLColor.fromColor(accent);
+  var lower = tone.lightness;
+  var upper = 1.0;
+  for (var step = 0; step < 16; step++) {
+    final midpoint = (lower + upper) / 2;
+    if (tone.withLightness(midpoint).toColor().computeLuminance() <
+        minimumLuminance) {
+      lower = midpoint;
+    } else {
+      upper = midpoint;
+    }
+  }
+  return tone.withLightness(upper).toColor();
+}
 
 Color _mix(Color first, Color second, double amount) => Color.from(
   alpha: 1,

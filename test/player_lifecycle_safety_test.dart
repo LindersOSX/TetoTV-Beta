@@ -33,10 +33,10 @@ void main() {
     expectInOrder(handoff, [
       'await _persistPlayback(position, force: true)',
       'await _progressSubscription?.cancel()',
-      '_handoffRelease.release(() async',
       'await _player.stop()',
       'await _detachAndroidVideoOutputBeforeRelease()',
       'await _player.dispose()',
+      '_handoffRelease.release(releasePlayer)',
       'await AndroidTvBridge.instance.clearMediaSession()',
     ]);
   });
@@ -150,6 +150,29 @@ void main() {
       'await _detachAndroidVideoOutputBeforeRelease()',
       'await _player.dispose()',
     ]);
+    expect(handoff, isNot(contains('_media3ReleaseRetryDelay')));
+    expect(handoff, isNot(contains('media3_command_failed')));
+    expect(handoff, contains("category: 'player-release'"));
+    expect(handoff, contains("reasonCode == 'media3_release_pending'"));
+    expect(handoff, contains("'playback_thread_alive':"));
+    expect(handoff, contains("status: 'completed_after_wait'"));
+    expect(handoff, contains('recordAnonymousHandledError('));
+    expect(handoff, contains('Future.wait<void>(['));
+    expect(handoff, contains(']).timeout(_playerSubscriptionCancelTimeout)'));
+    for (final subscription in const [
+      '_progressSubscription',
+      '_durationSubscription',
+      '_tracksSubscription',
+      '_errorSubscription',
+      '_completedSubscription',
+      '_videoParamsSubscription',
+      '_playingSubscription',
+      '_bufferingSubscription',
+      '_mediaActionSubscription',
+      '_sourceDiscoverySubscription',
+    ]) {
+      expect(handoff, contains('await $subscription?.cancel()'));
+    }
     expect(
       RegExp(
         r'_waitForPlayerMutations\(\)\.timeout\(\s*'
@@ -179,15 +202,46 @@ void main() {
     ]);
   });
 
+  test(
+    'unexpected route dispose reports release failure without Riverpod reads',
+    () {
+      final unexpectedRelease = method(
+        'Future<void> _releaseAfterUnexpectedRouteDispose()',
+        '@override\n  void dispose()',
+      );
+      expectInOrder(unexpectedRelease, [
+        'final released = await _handoffRelease.release(() async',
+        'await _waitForPlayerMutations().timeout(_playerMutationReleaseTimeout)',
+        'await _detachAndroidVideoOutputBeforeRelease()',
+        'await _player.dispose()',
+        'if (!released)',
+        "_recordPlayerReleaseDiagnostic(status: 'failed')",
+      ]);
+      expect(
+        unexpectedRelease,
+        contains(
+          "_recordPlayerReleaseDiagnostic(status: 'completed_after_wait')",
+        ),
+      );
+      expect(unexpectedRelease, isNot(contains('ref.read')));
+
+      final dispose = source.substring(source.lastIndexOf('void dispose()'));
+      expectInOrder(dispose, [
+        '_watchPartyRouteHandoff.unbind(_watchPartyRouteHandoffOwner)',
+        '_watchPartyPlayback.unbindEngine(_watchPartyHandle)',
+        '_progressSubscription?.cancel()',
+        'unawaited(_releaseAfterUnexpectedRouteDispose())',
+      ]);
+    },
+  );
+
   test('MPV dispose unbinds party routing and cancels stream listeners', () {
     final dispose = source.substring(source.lastIndexOf('void dispose()'));
     expectInOrder(dispose, [
       '_watchPartyRouteHandoff.unbind(_watchPartyRouteHandoffOwner)',
       '_watchPartyPlayback.unbindEngine(_watchPartyHandle)',
       '_progressSubscription?.cancel()',
-      '_handoffRelease.release(() async',
-      'await _detachAndroidVideoOutputBeforeRelease()',
-      'await _player.dispose()',
+      'unawaited(_releaseAfterUnexpectedRouteDispose())',
     ]);
   });
 
@@ -209,11 +263,23 @@ void main() {
       'Future<void> _saveSeriesPreferences()',
       'Future<void> _saveDecoderPreference()',
     );
-    final mpvDispose = source.substring(source.lastIndexOf('void dispose()'));
+    final mpvDisposeStart = source.lastIndexOf('void dispose()');
+    final mpvDisposeEnd = source.indexOf(
+      'Widget build(BuildContext context)',
+      mpvDisposeStart,
+    );
+    // Only teardown is forbidden from reading providers. The following build
+    // method may read live Watch Party state to render translated HUD badges.
+    final mpvDispose = source.substring(mpvDisposeStart, mpvDisposeEnd);
+    final unexpectedRelease = method(
+      'Future<void> _releaseAfterUnexpectedRouteDispose()',
+      '@override\n  void dispose()',
+    );
 
     expect(routerDispose, isNot(contains('ref.read')));
     expect(savePreferences, isNot(contains('ref.read')));
     expect(mpvDispose, isNot(contains('ref.read')));
+    expect(unexpectedRelease, isNot(contains('ref.read')));
     expect(routerDispose, contains('_watchPartyController.detachPlayback'));
     expect(savePreferences, contains('_database.saveSeriesPreferences'));
   });
@@ -404,7 +470,12 @@ void main() {
     expect(load, contains('AniSkipLookupSource.staleCache'));
     expect(load, contains("'found_stale_cache'"));
     expect(load, contains('_skipLoadRetryGate.defer(retryDelay)'));
-    expect(load, contains("'Intro/outro timing is temporarily unavailable'"));
+    expect(
+      load,
+      contains('_tr("Intro/outro timing is temporarily unavailable")'),
+    );
+    expect(load, contains('!_skipTimingUnavailableNoticeShown'));
+    expect(load, contains('_skipTimingUnavailableNoticeShown = true'));
 
     final sourceReset = method(
       'void _resetSkipSegmentsForSourceChange()',

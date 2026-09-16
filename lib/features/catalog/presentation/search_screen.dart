@@ -1,3 +1,4 @@
+import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'dart:async';
 
 import 'package:anime_tv/core/diagnostics/anonymous_crash_reporter.dart';
@@ -18,6 +19,7 @@ import 'package:anime_tv/features/catalog/presentation/catalog_grid.dart';
 import 'package:anime_tv/features/settings/application/display_preferences_controller.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:anime_tv/features/tracking/presentation/catalog_tracking_action.dart';
+import 'package:anime_tv/features/catalog/presentation/localized_anime_title.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -287,9 +289,9 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                     final input = TvTextInput(
                       focusNode: _searchFocusNode,
                       controller: _queryController,
-                      labelText: 'Search',
-                      hintText: 'Title, synonym, or Japanese name',
-                      keyboardTitle: 'Search anime',
+                      labelText: context.tr("Search"),
+                      hintText: context.tr("Title, synonym, or Japanese name"),
+                      keyboardTitle: context.tr("Search anime"),
                       autofocus: true,
                       onChanged: _queueSearch,
                       onSubmitted: _submitSearch,
@@ -335,7 +337,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                               ],
                               Expanded(
                                 child: Text(
-                                  'Search anime',
+                                  context.tr("Search anime"),
                                   style: Theme.of(context).textTheme.titleLarge,
                                 ),
                               ),
@@ -351,7 +353,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                       children: [
                         if (back != null) ...[back, const SizedBox(width: 18)],
                         Text(
-                          'Search anime',
+                          context.tr("Search anime"),
                           style: Theme.of(context).textTheme.titleLarge
                               ?.copyWith(
                                 fontSize: layout.usesTvRail ? 30 : null,
@@ -369,8 +371,10 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                 SizedBox(height: context.isCompactWidth ? 20 : 34),
                 Text(
                   !_hasSearched
-                      ? 'Start typing to search anime'
-                      : 'Results for “${_queryController.text.trim()}”',
+                      ? context.tr("Start typing to search anime")
+                      : context.tr("Results for “{value1}”", {
+                          'value1': _queryController.text.trim(),
+                        }),
                   style: Theme.of(context).textTheme.headlineSmall,
                 ),
                 const SizedBox(height: 18),
@@ -526,8 +530,9 @@ class _SearchCard extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
+                      LocalizedAnimeTitle(
                         anime.displayTitle(titlePreference),
+                        aniListId: anime.id,
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
@@ -540,7 +545,7 @@ class _SearchCard extends StatelessWidget {
                       if (anime.episodes case final episodes?) ...[
                         const SizedBox(height: 4),
                         Text(
-                          '$episodes episodes',
+                          context.tr("{value1} episodes", {'value1': episodes}),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
@@ -580,9 +585,9 @@ class _SearchMessage extends StatelessWidget {
         children: [
           Icon(icon, size: 60, color: context.appPalette.mutedText),
           const SizedBox(height: 14),
-          Text(title, style: Theme.of(context).textTheme.titleLarge),
+          LocalizedText(title, style: Theme.of(context).textTheme.titleLarge),
           const SizedBox(height: 6),
-          Text(body, style: Theme.of(context).textTheme.bodyMedium),
+          LocalizedText(body, style: Theme.of(context).textTheme.bodyMedium),
         ],
       ),
     );

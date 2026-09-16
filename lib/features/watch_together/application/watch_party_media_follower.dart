@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:anime_tv/core/preferences/playback_audio_preference.dart';
+import 'package:anime_tv/features/settings/application/display_preferences_controller.dart';
 import 'package:anime_tv/features/streaming/application/next_episode_preparation_controller.dart';
 import 'package:anime_tv/features/watch_together/application/watch_party_controller.dart';
 import 'package:anime_tv/features/watch_together/domain/watch_party_models.dart';
@@ -549,6 +550,7 @@ class _WatchPartyMediaFollowScopeState
             preparedNextEpisodePlayerLocation(
               prepared,
               watchPartyTargetSourceKey: latest.sourceKey,
+              titleLanguage: ref.read(titleLanguagePreferenceProvider),
             ),
             extra: prepared.launch,
           );

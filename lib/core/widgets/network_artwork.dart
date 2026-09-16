@@ -1,3 +1,4 @@
+import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'dart:io';
 
 import 'package:anime_tv/core/theme/app_theme.dart';
@@ -77,7 +78,7 @@ class ArtworkSkeleton extends StatelessWidget {
   Widget build(BuildContext context) {
     final palette = context.appPalette;
     return Semantics(
-      label: 'Loading artwork',
+      label: context.tr("Loading artwork"),
       child: SizedBox.expand(
         child: DecoratedBox(
           decoration: BoxDecoration(

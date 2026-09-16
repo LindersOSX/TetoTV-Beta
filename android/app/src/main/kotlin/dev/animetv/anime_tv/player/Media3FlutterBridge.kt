@@ -37,6 +37,9 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.source.FilteringMediaSource
+import androidx.media3.exoplayer.source.MediaSource
+import androidx.media3.exoplayer.source.MergingMediaSource
 import androidx.media3.extractor.metadata.Chapter
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.CaptionStyleCompat
@@ -66,6 +69,8 @@ class Media3FlutterBridge(context: Context, engine: FlutterEngine) :
     private var sink: EventChannel.EventSink? = null
     private var closed = false
     private var foreground = true
+    private val pendingReleaseReplies = linkedSetOf<PendingMedia3ReleaseReply>()
+    private val automaticReleaseReaps = linkedSetOf<Long>()
 
     init {
         // Media3's default exception logging can include a DataSpec URL. Our
@@ -108,6 +113,13 @@ class Media3FlutterBridge(context: Context, engine: FlutterEngine) :
         }
         try {
             if (call.method == "create") {
+                // A release can finish after its bounded Flutter reply. Sweep
+                // proven-dead disposed sessions before applying ownership and
+                // count limits so they cannot become permanent zombie slots.
+                reapCompletedSessions()
+                if (!Media3ProcessReleaseSafety.allReleased()) {
+                    throw Media3ReleasePendingException()
+                }
                 check(sessions.size < Media3BridgePolicy.MAX_PLAYERS)
                 val id = nextId++
                 sessions[id] = Media3Session(context, id, handler, foreground) { event ->
@@ -130,7 +142,20 @@ class Media3FlutterBridge(context: Context, engine: FlutterEngine) :
                 "pause" -> session.pause()
                 "seek" -> session.seek(requireNotNull(Media3BridgePolicy.integer(call.argument<Any?>("positionMs"))))
                 "stop" -> session.stop()
-                "dispose" -> { sessions.remove(id); session.dispose() }
+                "dispose" -> {
+                    val callStartedMs = SystemClock.elapsedRealtime()
+                    session.dispose()
+                    val reply = PendingMedia3ReleaseReply(result)
+                    pendingReleaseReplies += reply
+                    awaitReleaseCompletion(
+                        id = id,
+                        session = session,
+                        reply = reply,
+                        callStartedMs = callStartedMs,
+                        pollStartedMs = SystemClock.elapsedRealtime(),
+                    )
+                    return
+                }
                 "setRate" -> session.setRate(requireNotNull(Media3BridgePolicy.number(call.argument<Any?>("rate"), 0.25, 4.0)).toFloat())
                 "setVolume" -> session.setVolume(requireNotNull(Media3BridgePolicy.number(call.argument<Any?>("volume"), 0.0, 1.0)).toFloat())
                 "setAudioTrack" -> session.setTrack(call.argument<String>("trackId").orEmpty(), C.TRACK_TYPE_AUDIO)
@@ -160,6 +185,8 @@ class Media3FlutterBridge(context: Context, engine: FlutterEngine) :
                 else -> { result.notImplemented(); return }
             }
             result.success(null)
+        } catch (_: Media3ReleasePendingException) {
+            result.error("media3_release_pending", "Media3 is still releasing the playback session.", null)
         } catch (_: UnsupportedOperationException) {
             result.error("media3_unsupported", "The selected format or decoder is unavailable in Media3 on this device.", null)
         } catch (_: IllegalArgumentException) {
@@ -175,15 +202,167 @@ class Media3FlutterBridge(context: Context, engine: FlutterEngine) :
         sessions.values.forEach { it.setForeground(value) }
     }
 
+    private fun awaitReleaseCompletion(
+        id: Long,
+        session: Media3Session,
+        reply: PendingMedia3ReleaseReply,
+        callStartedMs: Long,
+        pollStartedMs: Long,
+    ) {
+        val now = SystemClock.elapsedRealtime()
+        val pollElapsedMs = (now - pollStartedMs).coerceAtLeast(0L)
+        val totalElapsedMs = (now - callStartedMs)
+            .coerceIn(0L, Media3BridgePolicy.RELEASE_TOTAL_TIMEOUT_MS)
+        when (
+            media3ReleasePollAction(
+                playbackThreadAlive = session.playbackThreadAlive,
+                elapsedMs = pollElapsedMs,
+            )
+        ) {
+            Media3ReleasePollAction.COMPLETE -> {
+                if (sessions[id] === session) sessions.remove(id)
+                automaticReleaseReaps.remove(id)
+                pendingReleaseReplies.remove(reply)
+                reply.success(
+                    mapOf(
+                        "stage" to "release_waiting",
+                        "status" to if (session.releaseRequiredWait) {
+                            "completed_after_wait"
+                        } else {
+                            "completed"
+                        },
+                        "reasonCode" to "media3_release_complete",
+                        "waitElapsedMs" to totalElapsedMs,
+                        "timeoutMs" to Media3BridgePolicy.RELEASE_TOTAL_TIMEOUT_MS,
+                        "playbackThreadAlive" to false,
+                    ),
+                )
+            }
+            Media3ReleasePollAction.WAIT -> handler.postDelayed(
+                {
+                    awaitReleaseCompletion(
+                        id = id,
+                        session = session,
+                        reply = reply,
+                        callStartedMs = callStartedMs,
+                        pollStartedMs = pollStartedMs,
+                    )
+                },
+                Media3BridgePolicy.RELEASE_POLL_INTERVAL_MS,
+            )
+            Media3ReleasePollAction.TIMED_OUT -> {
+                pendingReleaseReplies.remove(reply)
+                reply.error(
+                    "media3_release_pending",
+                    "Media3 is still releasing the playback session.",
+                    mapOf(
+                        "stage" to "release_waiting",
+                        "status" to "failed",
+                        "reasonCode" to "media3_release_pending",
+                        "waitElapsedMs" to totalElapsedMs,
+                        "timeoutMs" to Media3BridgePolicy.RELEASE_TOTAL_TIMEOUT_MS,
+                        "playbackThreadAlive" to true,
+                    ),
+                )
+                scheduleAutomaticReleaseReap(id, session)
+            }
+        }
+    }
+
+    private fun scheduleAutomaticReleaseReap(id: Long, session: Media3Session) {
+        if (!automaticReleaseReaps.add(id)) return
+        pollAutomaticReleaseReap(
+            id = id,
+            session = session,
+            startedMs = SystemClock.elapsedRealtime(),
+        )
+    }
+
+    private fun pollAutomaticReleaseReap(
+        id: Long,
+        session: Media3Session,
+        startedMs: Long,
+    ) {
+        if (closed || sessions[id] !== session) {
+            automaticReleaseReaps.remove(id)
+            return
+        }
+        val elapsedMs = (SystemClock.elapsedRealtime() - startedMs).coerceAtLeast(0L)
+        when (
+            media3ReleaseReapAction(
+                playbackThreadAlive = session.playbackThreadAlive,
+                elapsedMs = elapsedMs,
+            )
+        ) {
+            Media3ReleaseReapAction.REAP -> {
+                if (sessions[id] === session) sessions.remove(id)
+                automaticReleaseReaps.remove(id)
+            }
+            Media3ReleaseReapAction.WAIT -> handler.postDelayed(
+                {
+                    pollAutomaticReleaseReap(
+                        id = id,
+                        session = session,
+                        startedMs = startedMs,
+                    )
+                },
+                Media3BridgePolicy.RELEASE_AUTOMATIC_REAP_INTERVAL_MS,
+            )
+            Media3ReleaseReapAction.STOP -> {
+                // The process-wide owned-thread registry still blocks a new
+                // decoder. The next create performs a final proven-dead sweep,
+                // even if Dart never retries dispose for this session ID.
+                automaticReleaseReaps.remove(id)
+            }
+        }
+    }
+
+    private fun reapCompletedSessions() {
+        val completed = sessions.entries
+            .filter { (_, session) -> session.releaseCanBeReaped }
+            .map { (id, _) -> id }
+        completed.forEach { id ->
+            sessions.remove(id)
+            automaticReleaseReaps.remove(id)
+        }
+    }
+
     fun close() {
         if (closed) return
         closed = true
         methods.setMethodCallHandler(null)
         events.setStreamHandler(null)
         sink = null
+        val interruptedReleases = pendingReleaseReplies.toList()
+        pendingReleaseReplies.clear()
+        interruptedReleases.forEach {
+            it.error(
+                "media3_closed",
+                "Media3 closed while waiting for player cleanup.",
+                null,
+            )
+        }
         sessions.values.forEach { runCatching(it::dispose) }
         sessions.clear()
+        automaticReleaseReaps.clear()
         handler.removeCallbacksAndMessages(null)
+    }
+}
+
+/** Completes a pending Flutter dispose call exactly once during teardown. */
+private class PendingMedia3ReleaseReply(private val result: MethodChannel.Result) {
+    private var completed = false
+
+    fun success(details: Map<String, Any?>) {
+        if (completed) return
+        completed = true
+        runCatching { result.success(details) }
+    }
+
+    fun error(code: String, message: String, details: Map<String, Any?>?) {
+        if (completed) return
+        completed = true
+        runCatching { result.error(code, message, details) }
     }
 }
 
@@ -216,10 +395,14 @@ private class Media3Session(
     private val emit: (Map<String, Any?>) -> Unit,
 ) {
     private data class Sidecar(val id: String, val uri: String, val title: String?, val language: String?, val mimeType: String)
-    private data class OpenRequest(val uri: String, val headers: Map<String, String>, val openId: Long, val subtitles: List<Sidecar>, val mimeType: String?, val endMs: Long?)
+    private data class AudioSidecar(val uri: String, val title: String?, val language: String?, val mimeType: String)
+    private data class OpenRequest(val uri: String, val headers: Map<String, String>, val openId: Long, val subtitles: List<Sidecar>, val audioTracks: List<AudioSidecar>, val mimeType: String?, val endMs: Long?)
     private var request: OpenRequest? = null
     private var player: ExoPlayer? = null
+    private var releaseThread: Thread? = null
+    private var releaseRequiredWaitState = false
     private var httpClient: OkHttpClient? = null
+    private var activeMediaSourceFactory: DefaultMediaSourceFactory? = null
     private var view: PlayerView? = null
     private val callbacks = Media3CallbackEpoch()
     private var eventGeneration = 0L
@@ -246,6 +429,7 @@ private class Media3Session(
     private var firstFrameAfterMs: Long? = null
     private var openStartedMs = 0L
     private var terminalError: String? = null
+    private var externalAudioFallbackApplied = false
     private val chapters = sortedMapOf<Long, String?>()
     private var chapterPeriodUid: Any? = null
     private val tick = object : Runnable {
@@ -270,9 +454,15 @@ private class Media3Session(
             val fields = item as? Map<*, *> ?: throw IllegalArgumentException("invalid_subtitle")
             parseSidecar(fields, "sidecar:${index + 1}")
         }
+        val audioTracks = raw["audioTracks"] as? List<*> ?: emptyList<Any>()
+        require(audioTracks.size <= Media3BridgePolicy.MAX_AUDIO_SIDECARS)
+        val parsedAudio = audioTracks.map { item ->
+            val fields = item as? Map<*, *> ?: throw IllegalArgumentException("invalid_audio_sidecar")
+            parseAudioSidecar(fields)
+        }
         val mimeType = (raw["mimeType"] as? String)?.lowercase()?.substringBefore(';')?.trim()
         require(mimeType == null || mimeType in setOf(MimeTypes.APPLICATION_M3U8, "application/x-mpegurl", MimeTypes.APPLICATION_MPD, "video/mp4", "video/webm", "video/x-matroska", "video/mp2t", "application/octet-stream"))
-        val next = OpenRequest(uri, headers, nextOpenId, parsed, if (mimeType == "application/x-mpegurl") MimeTypes.APPLICATION_M3U8 else mimeType, endMs)
+        val next = OpenRequest(uri, headers, nextOpenId, parsed, parsedAudio, if (mimeType == "application/x-mpegurl") MimeTypes.APPLICATION_M3U8 else mimeType, endMs)
         releasePlayer()
         request = next
         openId = nextOpenId
@@ -281,6 +471,7 @@ private class Media3Session(
         groupIds.clear() // Genuine new open only; decoder restart preserves IDs.
         audioSelection = "auto"
         subtitleSelection = "auto"
+        externalAudioFallbackApplied = false
         desiredPlaying = raw["play"] as? Boolean ?: true
         createPlayer(next, startMs)
     }
@@ -307,15 +498,20 @@ private class Media3Session(
         httpClient = http
         val dataSource = DefaultDataSource.Factory(context,
             OkHttpDataSource.Factory(http).setDefaultRequestProperties(open.headers))
+        val mediaSourceFactory = DefaultMediaSourceFactory(dataSource)
+        activeMediaSourceFactory = mediaSourceFactory
         val software = decoderMode == "software"
         val selector = MediaCodecSelector { mime, secure, tunneling ->
             val decoders = MediaCodecSelector.DEFAULT.getDecoderInfos(mime, secure, tunneling)
             if (software && mime.startsWith("video/")) decoders.filter { it.softwareOnly } else decoders
         }
         val native = ExoPlayer.Builder(context)
+            // Release completion below relies on the default per-player owned
+            // PlaybackLooperProvider. Never introduce a shared/external
+            // playback looper without replacing that ownership barrier.
             .setLooper(Looper.getMainLooper())
             .setRenderersFactory(DefaultRenderersFactory(context).setEnableDecoderFallback(true).setMediaCodecSelector(selector))
-            .setMediaSourceFactory(DefaultMediaSourceFactory(dataSource))
+            .setMediaSourceFactory(mediaSourceFactory)
             .setLoadControl(DefaultLoadControl.Builder().setTargetBufferBytes(48 * 1024 * 1024).build())
             .setReleaseTimeoutMs(Media3BridgePolicy.RELEASE_TIMEOUT_MS)
             .setDetachSurfaceTimeoutMs(500)
@@ -351,6 +547,33 @@ private class Media3Session(
             }
             override fun onPlayerError(error: PlaybackException) {
                 if (!active()) return
+                if (Media3BridgePolicy.shouldRetryPrimaryWithoutExternalAudio(
+                        externalAudioCount = open.audioTracks.size,
+                        alreadyRetried = externalAudioFallbackApplied,
+                    )
+                ) {
+                    // A merged child can fail after its successful network
+                    // probe (period mismatch, demuxing, or a later request).
+                    // Retry this same primary once without optional audio so a
+                    // bad sidecar cannot strand otherwise playable video. A
+                    // genuine primary failure is surfaced by the next error.
+                    externalAudioFallbackApplied = true
+                    val fallback = open.copy(audioTracks = emptyList())
+                    request = fallback
+                    audioSelection = "auto"
+                    trackOverrides.clear()
+                    groupIds.clear()
+                    val position = native.currentPosition.coerceAtLeast(0)
+                    native.setMediaSource(
+                        buildMediaSource(fallback, mediaSourceFactory),
+                        position,
+                    )
+                    native.prepare()
+                    native.playWhenReady = desiredPlaying && foreground
+                    emitState()
+                    scheduleTick()
+                    return
+                }
                 terminalError = Media3BridgePolicy.errorCode(error.errorCodeName)
                 desiredPlaying = false
                 handler.removeCallbacks(tick)
@@ -373,11 +596,40 @@ private class Media3Session(
         native.setPlaybackSpeed(rate)
         applyOptions()
         view?.player = native
-        native.setMediaItem(mediaItem(open), startMs)
+        native.setMediaSource(buildMediaSource(open, mediaSourceFactory), startMs)
         native.prepare()
         native.playWhenReady = desiredPlaying && foreground
         emitState()
         scheduleTick()
+    }
+
+    private fun buildMediaSource(
+        open: OpenRequest,
+        factory: DefaultMediaSourceFactory,
+    ): MediaSource {
+        val primarySource = factory.createMediaSource(mediaItem(open))
+        return if (open.audioTracks.isEmpty()) {
+            primarySource
+        } else {
+            val audioSources = open.audioTracks.mapIndexed { index, audio ->
+                FilteringMediaSource(
+                    factory.createMediaSource(
+                        MediaItem.Builder()
+                            .setMediaId("media3-audio-$id-${open.openId}-${index + 1}")
+                            .setUri(Uri.parse(audio.uri))
+                            .setMimeType(audio.mimeType)
+                            .build(),
+                    ),
+                    C.TRACK_TYPE_AUDIO,
+                )
+            }
+            MergingMediaSource(
+                true,
+                true,
+                primarySource,
+                *audioSources.toTypedArray(),
+            )
+        }
     }
 
     private fun mediaItem(open: OpenRequest): MediaItem = MediaItem.Builder()
@@ -497,7 +749,13 @@ private class Media3Session(
         request = updated
         player?.let { native ->
             val position = native.currentPosition.coerceAtLeast(0)
-            native.setMediaItem(mediaItem(updated), position)
+            val sourceFactory = requireNotNull(activeMediaSourceFactory) {
+                "media_source_unavailable"
+            }
+            native.setMediaSource(
+                buildMediaSource(updated, sourceFactory),
+                position,
+            )
             native.prepare()
             native.playWhenReady = desiredPlaying && foreground
         }
@@ -527,6 +785,22 @@ private class Media3Session(
         require(mime in setOf(MimeTypes.TEXT_VTT, MimeTypes.APPLICATION_SUBRIP, MimeTypes.TEXT_SSA, MimeTypes.APPLICATION_TTML))
         fun label(key: String, max: Int) = (raw[key] as? String)?.take(max)?.replace(Regex("[\\p{Cc}&&[^\\t]]"), "")
         return Sidecar(sid, finalUri, label("title", 160), label("language", 32), mime)
+    }
+
+    private fun parseAudioSidecar(raw: Map<*, *>): AudioSidecar {
+        val uri = raw["uri"] as? String ?: throw IllegalArgumentException("invalid_audio_sidecar")
+        require(Media3BridgePolicy.ownedLoopbackAudioUri(uri))
+        val mime = requireNotNull(Media3BridgePolicy.externalAudioMime(raw["mimeType"] as? String)) {
+            "invalid_audio_sidecar_mime"
+        }
+        fun label(key: String, max: Int) = (raw[key] as? String)
+            ?.take(max)?.replace(Regex("[\\p{Cc}&&[^\\t]]"), "")
+        return AudioSidecar(
+            uri,
+            label("title", 160),
+            label("language", 32),
+            if (mime == "application/x-mpegurl") MimeTypes.APPLICATION_M3U8 else mime,
+        )
     }
 
     fun setTrack(value: String, type: Int) {
@@ -560,11 +834,23 @@ private class Media3Session(
     private fun trackId(group: Tracks.Group, index: Int): String {
         val format = group.getTrackFormat(index)
         if (group.type == C.TRACK_TYPE_TEXT) {
-            Media3BridgePolicy.sidecarTrackId(format.id, request?.subtitles?.map { it.id } ?: emptyList())
+            Media3BridgePolicy.sidecarTrackId(
+                format.id,
+                request?.subtitles?.map { it.id } ?: emptyList(),
+                primaryWrappedForExternalAudio = request?.audioTracks?.isNotEmpty() == true,
+            )
                 ?.let { return it }
         }
         val gid = groupIds.idFor(group.mediaTrackGroup)
         return "${if (group.type == C.TRACK_TYPE_AUDIO) "audio" else "subtitle"}/g$gid/t$index"
+    }
+
+    private fun externalAudio(group: Tracks.Group): AudioSidecar? {
+        if (group.type != C.TRACK_TYPE_AUDIO) return null
+        val childIndex = Media3BridgePolicy.mergedChildIndex(group.mediaTrackGroup.id)
+            ?: return null
+        if (childIndex <= 0) return null
+        return request?.audioTracks?.getOrNull(childIndex - 1)
     }
 
     private fun updateTrackOverrides(tracks: Tracks) {
@@ -587,7 +873,8 @@ private class Media3Session(
             for (index in 0 until minOf(group.length, 128)) {
                 val format = group.getTrackFormat(index)
                 val tid = trackId(group, index)
-                val entry = linkedMapOf<String, Any?>("id" to tid, "title" to format.label?.take(160), "language" to format.language?.take(32), "codec" to (Media3BridgePolicy.codec(format.sampleMimeType) ?: format.sampleMimeType?.take(64)), "supported" to group.isTrackSupported(index))
+                val externalAudio = externalAudio(group)
+                val entry = linkedMapOf<String, Any?>("id" to tid, "title" to (externalAudio?.title ?: format.label)?.take(160), "language" to (externalAudio?.language ?: format.language)?.take(32), "codec" to (Media3BridgePolicy.codec(format.sampleMimeType) ?: format.sampleMimeType?.take(64)), "supported" to group.isTrackSupported(index))
                 entry["isDefault"] = format.selectionFlags and C.SELECTION_FLAG_DEFAULT != 0
                 if (format.channelCount > 0) entry["channels"] = format.channelCount
                 if (format.sampleRate > 0) entry["sampleRate"] = format.sampleRate
@@ -635,6 +922,7 @@ private class Media3Session(
             }
         }
         firstFrameAfterMs?.let { result["firstFrameAfterMs"] = it }
+        if (externalAudioFallbackApplied) result["externalAudioFallback"] = true
         Media3BridgePolicy.codec(native.videoFormat?.sampleMimeType)?.let { result["codec"] = it }
         Media3BridgePolicy.codec(native.audioFormat?.sampleMimeType)?.let { result["audioCodec"] = it }
         native.videoFormat?.frameRate?.takeIf { it.isFinite() && it > 0 }?.let { result["sourceFps"] = it.toDouble() }
@@ -773,7 +1061,13 @@ private class Media3Session(
         if (!disposed && foreground && terminalError == null && player != null) handler.postDelayed(tick, 250)
     }
 
-    private fun releasePlayer() {
+    private fun releasePlayer(requireImmediateCompletion: Boolean = true) {
+        if (releaseThread != null) {
+            if (playbackThreadAlive && requireImmediateCompletion) {
+                throw Media3ReleasePendingException()
+            }
+            return
+        }
         cancelScreenshot()
         callbacks.invalidate() // Before detach/release can enqueue events.
         handler.removeCallbacks(tick)
@@ -782,11 +1076,31 @@ private class Media3Session(
         runCatching { view?.player = null }
         val client = httpClient
         httpClient = null
+        activeMediaSourceFactory = null
         client?.dispatcher?.cancelAll()
         try {
             // Media3 performs codec teardown on its playback thread and bounds
-            // the main-looper wait with the configured release timeout.
-            old?.release()
+            // the main-looper wait with the configured release timeout. The
+            // default Builder gives this player its own playback thread; that
+            // thread ending is the public, observable completion barrier.
+            if (old != null) {
+                val ownedPlaybackThread = old.playbackLooper.thread
+                releaseThread = ownedPlaybackThread
+                Media3ProcessReleaseSafety.track(ownedPlaybackThread)
+                try {
+                    old.release()
+                } catch (_: RuntimeException) {
+                    releaseRequiredWaitState = true
+                }
+                if (ownedPlaybackThread.isAlive) {
+                    releaseRequiredWaitState = true
+                    if (requireImmediateCompletion) {
+                        throw Media3ReleasePendingException()
+                    }
+                } else {
+                    releaseThread = null
+                }
+            }
         } finally {
             client?.connectionPool?.evictAll()
             client?.dispatcher?.executorService?.shutdown()
@@ -796,11 +1110,37 @@ private class Media3Session(
     fun dispose() {
         if (disposed) return
         disposed = true
-        releasePlayer()
-        view = null
-        request = null
-        sidecarAliases.clear()
-        trackOverrides.clear()
-        groupIds.clear()
+        try {
+            releasePlayer(requireImmediateCompletion = false)
+        } finally {
+            view = null
+            request = null
+            sidecarAliases.clear()
+            trackOverrides.clear()
+            groupIds.clear()
+        }
     }
+
+    val playbackThreadAlive: Boolean
+        get() {
+            val thread = releaseThread ?: return false
+            if (thread.isAlive) return true
+            releaseThread = null
+            return false
+        }
+
+    val releaseRequiredWait: Boolean get() = releaseRequiredWaitState
+
+    val releaseCanBeReaped: Boolean get() = disposed && !playbackThreadAlive
 }
+
+/** Prevents any bridge instance from overlapping an owned playback thread. */
+private object Media3ProcessReleaseSafety {
+    private val playbackThreads = Media3PlaybackThreadRegistry<Thread>(Thread::isAlive)
+
+    fun track(thread: Thread) = playbackThreads.track(thread)
+    fun allReleased(): Boolean = playbackThreads.allReleased()
+}
+
+/** Closed marker: never carries a native stack message, URL, or headers. */
+private class Media3ReleasePendingException : RuntimeException()

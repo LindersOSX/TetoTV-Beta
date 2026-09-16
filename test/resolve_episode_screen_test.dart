@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
+import 'package:anime_tv/core/preferences/title_language_preference.dart';
 import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/core/preferences/playback_audio_preference.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
@@ -16,6 +17,7 @@ import 'package:anime_tv/features/marketplace/data/addon_store.dart';
 import 'package:anime_tv/features/marketplace/data/web_stream_validator.dart';
 import 'package:anime_tv/features/marketplace/domain/addon_models.dart';
 import 'package:anime_tv/features/player/domain/library_playback_request.dart';
+import 'package:anime_tv/features/settings/application/display_preferences_controller.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:anime_tv/features/streaming/data/composite_release_source.dart';
 import 'package:anime_tv/features/streaming/data/all_debrid_client.dart';
@@ -86,6 +88,57 @@ void main() {
       isTrue,
     );
   });
+
+  testWidgets(
+    'resolver header follows Title Language while provider identity stays canonical',
+    (tester) async {
+      FlutterSecureStorage.setMockInitialValues({
+        DebridService.realDebrid.tokenStorageKey: 'valid-manual-token',
+      });
+      await tester.binding.setSurfaceSize(const Size(1920, 1080));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      EpisodeReference? searchedEpisode;
+      const episode = EpisodeReference(
+        anilistMediaId: 88000,
+        title: 'Canonical provider identity',
+        titleEnglish: 'English display title',
+        titleRomaji: 'Romaji display title',
+        episode: 4,
+      );
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            titleLanguagePreferenceProvider.overrideWith(
+              (_) => _ResolveTitleLanguageController(
+                TitleLanguagePreference.romaji,
+              ),
+            ),
+            configuredReleaseSourceProvider.overrideWithValue(
+              _CapturingReleaseSource((value) => searchedEpisode = value),
+            ),
+            webStreamAggregatorProvider.overrideWithValue(
+              _FixedWebAggregator(const []),
+            ),
+          ],
+          child: const MaterialApp(
+            home: ResolveEpisodeScreen(episode: episode),
+          ),
+        ),
+      );
+
+      await _pumpUntilFound(
+        tester,
+        find.text('Romaji display title • Episode 4'),
+      );
+      await _pumpUntilCondition(tester, () => searchedEpisode != null);
+
+      expect(searchedEpisode, same(episode));
+      expect(searchedEpisode?.title, 'Canonical provider identity');
+      expect(find.text('English display title • Episode 4'), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   test('download source revision reacts only to matching completions', () {
     final now = DateTime.utc(2026, 8, 24);
@@ -194,7 +247,7 @@ void main() {
     expect(catalogFallback, contains('fallback-complete'));
   });
 
-  test('offline web download blocks external caption sidecars', () {
+  test('offline web download blocks external caption and audio sidecars', () {
     final stream = WebStreamResult(
       providerId: 'provider',
       providerName: 'Provider',
@@ -204,6 +257,22 @@ void main() {
     );
 
     expect(webStreamRequiresExternalSubtitleDownload(stream), isTrue);
+    expect(
+      webStreamRequiresExternalSubtitleDownload(
+        WebStreamResult(
+          providerId: 'provider',
+          providerName: 'Provider',
+          title: 'External audio',
+          uri: Uri.parse('https://cdn.example.com/video-only.m3u8'),
+          externalAudioTracks: [
+            WebExternalAudioTrack(
+              uri: Uri.parse('https://cdn.example.com/audio.aac'),
+            ),
+          ],
+        ),
+      ),
+      isTrue,
+    );
     expect(
       webStreamRequiresExternalSubtitleDownload(
         WebStreamResult(
@@ -672,6 +741,8 @@ void main() {
     );
 
     await _pumpUntilFound(tester, find.text('DEBRID STREAMS'));
+    await tester.tap(find.byKey(const ValueKey('stream-picker-all')));
+    await tester.pump();
     expect(find.text('WEB STREAMS'), findsOneWidget);
     expect(
       tester.getTopLeft(find.text('WEB STREAMS')).dy,
@@ -698,6 +769,7 @@ void main() {
       quality: '1080p',
     );
     PlaybackLaunch? opened;
+    String? openedTitle;
     var debridCalls = 0;
     final router = GoRouter(
       initialLocation: '/resolve',
@@ -708,7 +780,9 @@ void main() {
             episode: EpisodeReference(
               anilistMediaId: 88002,
               malMediaId: 1887,
-              title: 'Source Priority',
+              title: 'Canonical Source Priority',
+              titleEnglish: 'English Source Priority',
+              titleRomaji: 'Romaji Source Priority',
               episode: 18,
               autoPlay: true,
             ),
@@ -718,6 +792,7 @@ void main() {
           path: '/player',
           builder: (_, state) {
             opened = state.extra! as PlaybackLaunch;
+            openedTitle = state.uri.queryParameters['title'];
             return Scaffold(
               body: Text(
                 opened!.stream.isWebStream
@@ -734,6 +809,10 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
+          titleLanguagePreferenceProvider.overrideWith(
+            (_) =>
+                _ResolveTitleLanguageController(TitleLanguagePreference.romaji),
+          ),
           configuredReleaseSourceProvider.overrideWithValue(
             const _FakeReleaseSource(),
           ),
@@ -744,6 +823,7 @@ void main() {
           webStreamPreflightProvider.overrideWithValue((
             uri,
             headers, {
+            audioTracks,
             subtitleUri,
           }) async {
             return ValidatedWebStream(
@@ -771,6 +851,8 @@ void main() {
     expect(opened?.episode.anilistMediaId, 88002);
     expect(opened?.episode.malMediaId, 1887);
     expect(opened?.episode.episode, 18);
+    expect(opened?.episode.title, 'Canonical Source Priority');
+    expect(openedTitle, 'Romaji Source Priority • Episode 18');
   });
 
   testWidgets(
@@ -843,6 +925,7 @@ void main() {
             webStreamPreflightProvider.overrideWithValue((
               uri,
               headers, {
+              audioTracks,
               subtitleUri,
             }) async {
               return ValidatedWebStream(
@@ -944,6 +1027,7 @@ void main() {
           webStreamPreflightProvider.overrideWithValue((
             uri,
             headers, {
+            audioTracks,
             subtitleUri,
           }) async {
             throw const FormatException('broken web stream');
@@ -1340,7 +1424,7 @@ void main() {
   );
 
   testWidgets(
-    'Web audio controls place dual in All Sub and Dub without leaking singles',
+    'Web-only results open in All and stay out of torrent audio tabs',
     (tester) async {
       await tester.binding.setSurfaceSize(const Size(1280, 720));
       addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -1365,6 +1449,13 @@ void main() {
         quality: '720p',
         audioCapability: WebStreamAudioCapability.dub,
       );
+      final unknown = _providerWebStream(
+        providerId: 'unknown-provider',
+        providerName: 'Audio unreported result',
+        quality: '480p',
+        isDubbed: false,
+        audioCapability: WebStreamAudioCapability.unknown,
+      );
 
       await tester.pumpWidget(
         ProviderScope(
@@ -1381,7 +1472,7 @@ void main() {
             ),
             configuredReleaseSourceProvider.overrideWithValue(null),
             webStreamAggregatorProvider.overrideWithValue(
-              _FixedWebAggregator([dual, sub, dub]),
+              _FixedWebAggregator([dual, sub, dub, unknown]),
             ),
             seriesPreferencesReaderProvider.overrideWithValue(
               (_) async => const SeriesPlaybackPreferences(),
@@ -1408,27 +1499,144 @@ void main() {
 
       await _pumpUntilFound(tester, find.text(dual.title));
       expect(find.text(dub.title), findsOneWidget);
+      expect(find.text(sub.title), findsOneWidget);
+      expect(find.text(unknown.title), findsOneWidget);
+
+      await tester.tap(find.byKey(const ValueKey('stream-picker-sub')));
+      await tester.pump();
+      expect(find.text(dual.title), findsNothing);
       expect(find.text(sub.title), findsNothing);
+      expect(find.text(dub.title), findsNothing);
+      expect(find.text(unknown.title), findsNothing);
+
+      await tester.tap(find.byKey(const ValueKey('stream-picker-dub')));
+      await tester.pump();
+      expect(find.text(dual.title), findsNothing);
+      expect(find.text(sub.title), findsNothing);
+      expect(find.text(dub.title), findsNothing);
 
       await tester.tap(find.byKey(const ValueKey('stream-picker-all')));
       await tester.pump();
       expect(find.text(dual.title), findsOneWidget);
       expect(find.text(sub.title), findsOneWidget);
       expect(find.text(dub.title), findsOneWidget);
-
-      await tester.tap(find.byKey(const ValueKey('stream-picker-sub')));
-      await tester.pump();
-      expect(find.text(dual.title), findsOneWidget);
-      expect(find.text(sub.title), findsOneWidget);
-      expect(find.text(dub.title), findsNothing);
-
-      await tester.tap(find.byKey(const ValueKey('stream-picker-dub')));
-      await tester.pump();
-      expect(find.text(dual.title), findsOneWidget);
-      expect(find.text(sub.title), findsNothing);
-      expect(find.text(dub.title), findsOneWidget);
+      expect(find.text(unknown.title), findsOneWidget);
     },
   );
+
+  testWidgets('Sub preference still opens a Web-only picker on All', (
+    tester,
+  ) async {
+    final stream = _providerWebStream(
+      providerId: 'web-audio-unreported',
+      providerName: 'Web result',
+      quality: '1080p',
+      audioCapability: WebStreamAudioCapability.unknown,
+    );
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          settingsPreferencesProvider.overrideWith(
+            (_) => _ResolveSettingsController(
+              const SettingsPreferences(
+                loaded: true,
+                debridStreamsEnabled: false,
+                webStreamsEnabled: true,
+                preferredAudio: PlaybackAudioPreference.sub,
+              ),
+            ),
+          ),
+          configuredReleaseSourceProvider.overrideWithValue(null),
+          webStreamAggregatorProvider.overrideWithValue(
+            _FixedWebAggregator([stream]),
+          ),
+          seriesPreferencesReaderProvider.overrideWithValue(
+            (_) async => const SeriesPlaybackPreferences(),
+          ),
+          seriesPreferencesWriterProvider.overrideWithValue((_, _) async {}),
+          resolveDeviceProfileReaderProvider.overrideWithValue(
+            () async => const TvDeviceProfile.unknown(),
+          ),
+          resolveFailureCountsReaderProvider.overrideWithValue(
+            (_) async => const {},
+          ),
+        ],
+        child: const MaterialApp(
+          home: ResolveEpisodeScreen(
+            episode: EpisodeReference(
+              anilistMediaId: 42007,
+              title: 'Web only fixture',
+              episode: 1,
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await _pumpUntilFound(tester, find.text(stream.title));
+    await tester.tap(find.byKey(const ValueKey('stream-picker-sub')));
+    await tester.pump();
+    expect(find.text(stream.title), findsNothing);
+  });
+
+  testWidgets('Dub tab filters torrents while All includes Web results', (
+    tester,
+  ) async {
+    final stream = _providerWebStream(
+      providerId: 'mixed-web',
+      providerName: 'Web result',
+      quality: '720p',
+      audioCapability: WebStreamAudioCapability.unknown,
+    );
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          settingsPreferencesProvider.overrideWith(
+            (_) => _ResolveSettingsController(
+              const SettingsPreferences(
+                loaded: true,
+                debridStreamsEnabled: true,
+                webStreamsEnabled: true,
+                preferredAudio: PlaybackAudioPreference.dub,
+              ),
+            ),
+          ),
+          configuredReleaseSourceProvider.overrideWithValue(
+            const _FakeReleaseSource(),
+          ),
+          webStreamAggregatorProvider.overrideWithValue(
+            _FixedWebAggregator([stream]),
+          ),
+          seriesPreferencesReaderProvider.overrideWithValue(
+            (_) async => const SeriesPlaybackPreferences(),
+          ),
+          seriesPreferencesWriterProvider.overrideWithValue((_, _) async {}),
+          resolveDeviceProfileReaderProvider.overrideWithValue(
+            () async => const TvDeviceProfile.unknown(),
+          ),
+          resolveFailureCountsReaderProvider.overrideWithValue(
+            (_) async => const {},
+          ),
+        ],
+        child: const MaterialApp(
+          home: ResolveEpisodeScreen(
+            episode: EpisodeReference(
+              anilistMediaId: 42008,
+              title: 'Mixed sources fixture',
+              episode: 1,
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await _pumpUntilFound(tester, find.text('Dubbed release'));
+    expect(find.text(stream.title), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('stream-picker-all')));
+    await tester.pump();
+    expect(find.text('Dubbed release'), findsOneWidget);
+    expect(find.text(stream.title), findsOneWidget);
+  });
 
   testWidgets(
     'Direct torrent fills the source picker and plays without a Debrid account',
@@ -2400,6 +2608,7 @@ void main() {
           tester,
           find.byKey(const ValueKey('stream-picker-search-input')),
         );
+        await tester.tap(find.byKey(const ValueKey('stream-picker-all')));
         await tester.pump(const Duration(milliseconds: 300));
         if (find.text('WEB STREAMS').evaluate().isEmpty) {
           await tester.scrollUntilVisible(
@@ -3580,6 +3789,7 @@ void main() {
             webStreamPreflightProvider.overrideWithValue((
               uri,
               headers, {
+              audioTracks,
               subtitleUri,
             }) async {
               await allowPreflight.future;
@@ -3661,6 +3871,7 @@ void main() {
             webStreamPreflightProvider.overrideWithValue((
               uri,
               headers, {
+              audioTracks,
               subtitleUri,
             }) async {
               preflightUri = uri;
@@ -3748,6 +3959,7 @@ void main() {
             webStreamPreflightProvider.overrideWithValue((
               uri,
               headers, {
+              audioTracks,
               subtitleUri,
             }) async {
               preflighted.add(uri);
@@ -3831,6 +4043,7 @@ void main() {
             webStreamPreflightProvider.overrideWithValue((
               uri,
               headers, {
+              audioTracks,
               subtitleUri,
             }) async {
               preflighted.add(uri);
@@ -3901,6 +4114,7 @@ void main() {
             webStreamPreflightProvider.overrideWithValue((
               uri,
               headers, {
+              audioTracks,
               subtitleUri,
             }) async {
               throw const FormatException('fallback rejected');
@@ -3974,6 +4188,7 @@ void main() {
             webStreamPreflightProvider.overrideWithValue((
               uri,
               headers, {
+              audioTracks,
               subtitleUri,
             }) async {
               return ValidatedWebStream(
@@ -4063,6 +4278,7 @@ void main() {
             webStreamPreflightProvider.overrideWithValue((
               uri,
               headers, {
+              audioTracks,
               subtitleUri,
             }) async {
               preflighted.add(uri);
@@ -4144,6 +4360,7 @@ void main() {
             webStreamPreflightProvider.overrideWithValue((
               uri,
               headers, {
+              audioTracks,
               subtitleUri,
             }) async {
               preflighted.add(uri);
@@ -4224,6 +4441,7 @@ void main() {
           webStreamPreflightProvider.overrideWithValue((
             uri,
             headers, {
+            audioTracks,
             subtitleUri,
           }) async {
             return ValidatedWebStream(
@@ -4268,7 +4486,7 @@ void main() {
             _FixedWebAggregator([stream]),
           ),
           webStreamPreflightProvider.overrideWithValue(
-            (uri, headers, {subtitleUri}) => preflight.future,
+            (uri, headers, {audioTracks, subtitleUri}) => preflight.future,
           ),
         ],
         child: const MaterialApp(
@@ -4422,6 +4640,7 @@ void main() {
           webStreamPreflightProvider.overrideWithValue((
             uri,
             headers, {
+            audioTracks,
             subtitleUri,
           }) async {
             return ValidatedWebStream(
@@ -4558,6 +4777,7 @@ void main() {
             webStreamPreflightProvider.overrideWithValue((
               uri,
               headers, {
+              audioTracks,
               subtitleUri,
             }) async {
               throw const FormatException('web stream rejected');
@@ -4624,6 +4844,7 @@ void main() {
             webStreamPreflightProvider.overrideWithValue((
               uri,
               headers, {
+              audioTracks,
               subtitleUri,
             }) {
               preflightCalls++;
@@ -4686,6 +4907,7 @@ void main() {
           webStreamPreflightProvider.overrideWithValue((
             uri,
             headers, {
+            audioTracks,
             subtitleUri,
           }) async {
             preflightCalls++;
@@ -5336,7 +5558,7 @@ void main() {
       ),
       releases: const [_autoPickDub1080],
       webStreams: [excludedWeb],
-      preflight: (uri, headers, {subtitleUri}) async {
+      preflight: (uri, headers, {audioTracks, subtitleUri}) async {
         webPreflightCalls++;
         return ValidatedWebStream(
           uri: uri,
@@ -5951,7 +6173,7 @@ void main() {
       ),
       releases: releases,
       webStreams: webStreams,
-      preflight: (uri, headers, {subtitleUri}) async {
+      preflight: (uri, headers, {audioTracks, subtitleUri}) async {
         webAttempts++;
         throw StateError('web unavailable');
       },
@@ -6400,7 +6622,7 @@ void main() {
       ),
       releases: const [_autoPickDub1080],
       webStreams: [web],
-      preflight: (uri, headers, {subtitleUri}) async {
+      preflight: (uri, headers, {audioTracks, subtitleUri}) async {
         await preflightGate.future;
         return ValidatedWebStream(
           uri: uri,
@@ -6789,11 +7011,12 @@ Future<_AutoPickProbe> _pumpAutoPickScenario(
         ),
         webStreamPreflightProvider.overrideWithValue(
           preflight ??
-              (uri, headers, {subtitleUri}) async => ValidatedWebStream(
-                uri: uri,
-                headers: headers,
-                contentType: 'video/mp4',
-              ),
+              (uri, headers, {audioTracks, subtitleUri}) async =>
+                  ValidatedWebStream(
+                    uri: uri,
+                    headers: headers,
+                    contentType: 'video/mp4',
+                  ),
         ),
         if (libraryService != null)
           libraryEpisodeSourceServiceProvider.overrideWithValue(libraryService),
@@ -6878,6 +7101,32 @@ class _FakeReleaseSource implements ReleaseSource {
       codec: 'H.264',
     ),
   ];
+}
+
+class _CapturingReleaseSource implements ReleaseSource {
+  const _CapturingReleaseSource(this.onSearch);
+
+  final void Function(EpisodeReference episode) onSearch;
+
+  @override
+  String get id => 'capturing';
+
+  @override
+  Future<List<ReleaseCandidate>> search(EpisodeReference episode) async {
+    onSearch(episode);
+    return const [];
+  }
+}
+
+class _ResolveTitleLanguageController
+    extends TitleLanguagePreferenceController {
+  _ResolveTitleLanguageController(TitleLanguagePreference initial)
+    : super(const FlutterSecureStorage()) {
+    state = initial;
+  }
+
+  @override
+  Future<void> load() async {}
 }
 
 class _CallbackReleaseSource implements ReleaseSource {
@@ -6969,6 +7218,7 @@ Future<PlaybackLaunch> _pumpAutoplayLaunch(
         webStreamPreflightProvider.overrideWithValue((
           uri,
           headers, {
+          audioTracks,
           subtitleUri,
         }) async {
           return ValidatedWebStream(

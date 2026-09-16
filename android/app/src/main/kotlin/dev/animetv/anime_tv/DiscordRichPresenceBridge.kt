@@ -9,6 +9,7 @@ import com.discord.socialsdk.DiscordSocialSdkInit
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import java.net.URI
+import java.util.Locale
 
 /**
  * Small, token-safe adapter around Discord's native Social SDK.
@@ -187,6 +188,7 @@ object DiscordRichPresenceBridge {
                         chapterLabel,
                         page,
                         pageCount,
+                        sanitizeDiscordMangaArtworkUrl(call.argument<String>("artworkUrl")),
                     )
                 }
                 result.success(null)
@@ -406,6 +408,7 @@ object DiscordRichPresenceBridge {
         chapterLabel: String,
         page: Int,
         pageCount: Int,
+        artworkUrl: String,
     )
     private external fun nativeClearPresence()
     private external fun nativeDisconnect()
@@ -430,3 +433,52 @@ internal fun sanitizeDiscordArtworkUrl(value: String?): String {
         }
     }.getOrDefault("")
 }
+
+/**
+ * Public-host lexical validation for optional manga covers sent to Discord.
+ * This does not resolve DNS or prove a host's provenance. No image is fetched,
+ * uploaded, or accompanied by source credentials here. Keep the anime policy
+ * above independent: manga extensions can use ordinary public CDN domains.
+ */
+internal fun sanitizeDiscordMangaArtworkUrl(value: String?): String {
+    if (value == null || value.any(::unsafeMangaArtworkCharacter)) return ""
+    val candidate = value.trim()
+    if (candidate.isEmpty() || candidate.length > 300) return ""
+    return runCatching {
+        val uri = URI(candidate)
+        val host = uri.host?.lowercase(Locale.ROOT).orEmpty()
+        val labels = host.split('.')
+        val labelPattern = Regex("[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
+        val suffixPattern = Regex("(?:[a-z]{2,63}|xn--[a-z0-9-]{2,59})")
+        val reserved = setOf(
+            "localhost", "local", "lan", "internal", "home", "home.arpa",
+            "localdomain", "test", "invalid", "example", "onion",
+        )
+        if (
+            !uri.scheme.equals("https", ignoreCase = true) ||
+            host.isEmpty() || host.length > 253 || labels.size < 2 ||
+            labels.any { !labelPattern.matches(it) } ||
+            !suffixPattern.matches(labels.last()) ||
+            reserved.any { host == it || host.endsWith(".$it") } ||
+            uri.rawUserInfo != null || uri.rawQuery != null || uri.rawFragment != null ||
+            (uri.port != -1 && uri.port != 443) ||
+            // No encoded authority, empty port, or alternate numeric port spelling.
+            !(uri.rawAuthority.equals(host, ignoreCase = true) ||
+                uri.rawAuthority.equals("$host:443", ignoreCase = true)) ||
+            uri.path.orEmpty().any { unsafeMangaArtworkCharacter(it) || it.isWhitespace() } ||
+            Regex("%(?:0[0-9a-f]|1[0-9a-f]|7f|5c)", RegexOption.IGNORE_CASE)
+                .containsMatchIn(uri.path.orEmpty())
+        ) {
+            ""
+        } else {
+            // Preserve encoded path delimiters, normalize scheme/host/default
+            // port, and percent-encode any non-ASCII path characters for JNI.
+            val canonical = URI("https://$host${uri.rawPath.orEmpty()}").toASCIIString()
+            if (canonical.length <= 300) canonical else ""
+        }
+    }.getOrDefault("")
+}
+
+private fun unsafeMangaArtworkCharacter(value: Char): Boolean =
+    Character.isISOControl(value) || Character.getType(value) == Character.FORMAT.toInt() ||
+        value == '\\'

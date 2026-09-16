@@ -1,3 +1,4 @@
+import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'dart:async';
 import 'dart:math' as math;
 
@@ -7,6 +8,7 @@ import 'package:anime_tv/core/widgets/network_artwork.dart';
 import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
 import 'package:anime_tv/features/catalog/domain/catalog_episode_metadata.dart';
 import 'package:anime_tv/features/catalog/domain/episode_airing_availability.dart';
+import 'localized_episode_airing.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -429,7 +431,7 @@ class _EpisodeBrowserHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final palette = context.appPalette;
-    final countdown = nextEpisodeAiringCountdownLabel(anime: anime, now: now);
+    final countdown = localizedNextEpisodeCountdown(context, anime, now: now);
     final nextAirDate = anime.nextAiringAt;
     return Row(
       children: [
@@ -447,7 +449,7 @@ class _EpisodeBrowserHeader extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                'Episodes',
+                context.tr("Episodes"),
                 style: TextStyle(
                   color: palette.primaryText,
                   fontSize: compact ? 20 : 28,
@@ -457,7 +459,10 @@ class _EpisodeBrowserHeader extends StatelessWidget {
               ),
               SizedBox(height: compact ? 3 : 5),
               Text(
-                '$selectedEpisode of $totalEpisodes selected',
+                context.tr("{value1} of {value2} selected", {
+                  'value1': selectedEpisode,
+                  'value2': totalEpisodes,
+                }),
                 style: TextStyle(
                   color: palette.mutedText,
                   fontSize: compact ? 11 : 13,
@@ -468,7 +473,7 @@ class _EpisodeBrowserHeader extends StatelessWidget {
                 SizedBox(height: compact ? 2 : 4),
                 Text(
                   '${countdown[0].toUpperCase()}${countdown.substring(1)}'
-                  '${nextAirDate == null ? '' : ' · ${episodeAiringDateLabel(nextAirDate)}'}',
+                  '${nextAirDate == null ? '' : ' · ${TetoLocalizations.of(context).date(nextAirDate)}'}',
                   key: const ValueKey('episode-browser-next-airing'),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
@@ -632,12 +637,12 @@ class _EpisodeBrowserCardState extends State<_EpisodeBrowserCard> {
         widget.anime.bannerImageUrl ??
         widget.anime.coverImageUrl;
     final usesSeriesArtwork = episodeArtwork == null && artwork != null;
-    final title = widget.metadata?.title ?? 'Title unavailable';
+    final title = widget.metadata?.title ?? context.tr('Title unavailable');
     final statusLabel = widget.availability.isAvailable
         ? null
         : expectedAt == null
-        ? 'UNAIRED'
-        : episodeAiringDateLabel(expectedAt);
+        ? context.tr('UNAIRED')
+        : TetoLocalizations.of(context).date(expectedAt);
     final semantics = <String>[
       'Episode ${widget.episode}, $title',
       if (runtime != null) '$runtime minutes',
@@ -714,7 +719,7 @@ class _EpisodeBrowserCardState extends State<_EpisodeBrowserCard> {
                         left: widget.compact ? 8 : 10,
                         bottom: widget.compact ? 7 : 9,
                         child: Text(
-                          'EP ${widget.episode}',
+                          context.tr("EP {value1}", {'value1': widget.episode}),
                           style: TextStyle(
                             color: Colors.white,
                             fontSize: widget.compact ? 11 : 13,
@@ -737,7 +742,7 @@ class _EpisodeBrowserCardState extends State<_EpisodeBrowserCard> {
                               borderRadius: BorderRadius.circular(5),
                             ),
                             child: Text(
-                              'SERIES ART',
+                              context.tr("SERIES ART"),
                               style: TextStyle(
                                 color: Colors.white.withValues(alpha: .9),
                                 fontSize: widget.compact ? 6 : 8,
@@ -758,7 +763,10 @@ class _EpisodeBrowserCardState extends State<_EpisodeBrowserCard> {
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         Text(
-                          'Episode ${widget.episode}${runtime == null ? '' : ' · $runtime min'}',
+                          context.tr("Episode {value1}{value2}", {
+                            'value1': widget.episode,
+                            'value2': runtime == null ? '' : ' · $runtime min',
+                          }),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(

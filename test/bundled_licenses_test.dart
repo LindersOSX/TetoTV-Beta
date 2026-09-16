@@ -27,12 +27,24 @@ void main() {
       byPackage['QuickJS 2026-06-04'],
       contains('Copyright (c) 2017-2021 Fabrice Bellard'),
     );
+    expect(
+      byPackage['Cash App QuickJS Android 0.9.2 wrapper'],
+      contains('Apache License'),
+    );
+    expect(
+      byPackage['Cash App QuickJS Android 0.9.2 embedded QuickJS engine'],
+      contains('Copyright (c) 2017-2021 Fabrice Bellard'),
+    );
     final javascriptNotices =
         byPackage['Bundled add-on JavaScript runtime packages'];
     expect(javascriptNotices, contains('Package: linkedom 0.18.12'));
     expect(javascriptNotices, contains('Package: sucrase 3.35.0'));
     expect(javascriptNotices, contains('Package: boolbase 1.0.0'));
     expect(byPackage['Noto Sans Regular'], contains('SIL OPEN FONT LICENSE'));
+    expect(
+      byPackage['Noto Sans Devanagari'],
+      contains('SIL OPEN FONT LICENSE'),
+    );
     expect(
       byPackage['Noto Sans Regular'],
       contains('Copyright 2018 The Noto Project Authors'),

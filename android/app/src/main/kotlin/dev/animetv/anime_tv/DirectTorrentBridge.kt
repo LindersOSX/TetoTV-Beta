@@ -95,7 +95,15 @@ object DirectTorrentBridge {
         val episode = call.argument<Number>("episode")?.toInt()
         val requestedSeason = call.argument<Number>("season")
             ?.toInt()
-            ?.takeIf { it in 1..999 }
+            ?.takeIf { it in 0..999 }
+        val requestedAbsoluteEpisode = call.argument<Number>("absoluteEpisode")
+            ?.toInt()
+            ?.takeIf { it in 1..100_000 }
+        val requestedSpecial = call.argument<Boolean>("requestedSpecial") == true
+        val allowSeasonRelativeBare =
+            call.argument<Boolean>("allowSeasonRelativeBare") == true
+        val requireNumberingSchemeEvidence =
+            call.argument<Boolean>("requireNumberingSchemeEvidence") == true
         val preferredFileIndex = call.argument<Number>("preferredFileIndex")?.toInt()
         val manager = synchronized(lock) {
             if (active != null) null else DirectTorrentManager(context).also { created ->
@@ -135,6 +143,10 @@ object DirectTorrentBridge {
                     episode,
                     preferredFileIndex,
                     requestedSeason,
+                    requestedAbsoluteEpisode,
+                    requestedSpecial,
+                    allowSeasonRelativeBare,
+                    requireNumberingSchemeEvidence,
                 )
                 val stillActive = synchronized(lock) {
                     if (active === manager && activeRequestId == requestId) {

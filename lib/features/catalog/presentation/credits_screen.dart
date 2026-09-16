@@ -1,8 +1,10 @@
+import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/widgets/network_artwork.dart';
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
 import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
+import 'package:anime_tv/features/settings/application/display_preferences_controller.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -14,6 +16,7 @@ class CreditsScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final details = ref.watch(animeDetailsProvider(mediaId));
+    final titlePreference = ref.watch(titleLanguagePreferenceProvider);
     return Scaffold(
       backgroundColor: context.appPalette == AppThemePalette.defaults
           ? Colors.black
@@ -36,13 +39,13 @@ class CreditsScreen extends ConsumerWidget {
                 ),
                 const SizedBox(width: 14),
                 Text(
-                  'Cast & crew',
+                  context.tr("Cast & crew"),
                   style: Theme.of(context).textTheme.headlineSmall,
                 ),
                 const SizedBox(width: 14),
                 Expanded(
                   child: Text(
-                    details.asData?.value.title ?? '',
+                    details.asData?.value.displayTitle(titlePreference) ?? '',
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(color: context.appPalette.mutedText),
                   ),
@@ -57,8 +60,13 @@ class CreditsScreen extends ConsumerWidget {
                     color: context.appPalette.accentBright,
                   ),
                 ),
-                error: (error, _) =>
-                    Center(child: Text('Could not load credits: $error')),
+                error: (error, _) => Center(
+                  child: Text(
+                    context.tr("Could not load credits: {value1}", {
+                      'value1': error,
+                    }),
+                  ),
+                ),
                 data: (anime) => _CreditsContent(anime: anime),
               ),
             ),
@@ -80,7 +88,7 @@ class _CreditsContent extends StatelessWidget {
     children: [
       if (anime.studios.isNotEmpty) ...[
         Text(
-          'STUDIOS',
+          context.tr("STUDIOS"),
           style: TextStyle(
             color: context.appPalette.accentBright,
             fontSize: 10,
@@ -104,7 +112,7 @@ class _CreditsContent extends StatelessWidget {
         const SizedBox(height: 18),
       ],
       Text(
-        'CHARACTERS & ENGLISH CAST',
+        context.tr("CHARACTERS & ENGLISH CAST"),
         style: TextStyle(
           color: context.appPalette.accentBright,
           fontSize: 10,
@@ -124,7 +132,7 @@ class _CreditsContent extends StatelessWidget {
       ),
       const SizedBox(height: 18),
       Text(
-        'STAFF',
+        context.tr("STAFF"),
         style: TextStyle(
           color: context.appPalette.accentBright,
           fontSize: 10,
@@ -261,7 +269,7 @@ class _CharacterCard extends StatelessWidget {
                 ),
                 if (voice != null)
                   Text(
-                    'EN: ${voice.name}',
+                    context.tr("EN: {value1}", {'value1': voice.name}),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(

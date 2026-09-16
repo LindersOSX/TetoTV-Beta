@@ -83,10 +83,10 @@ TetoTV runs directly on the Android device with no companion server required for
 | User-supplied extensions | Optional | No extension or catalog is bundled, recommended, or endorsed. Compatibility depends on the service the user configures. |
 | AniList / MyAnimeList | Optional | Sync lists and progress, or use a local-only profile. |
 | SIMKL | Optional | Uses SIMKL's official TV PIN flow and supports profile, list, status, and episode-progress integration. Each imported SIMKL entry links back to its SIMKL page. |
-| Media3 playback | Android, optional | Select **Media3 (Built in)** in Playback settings for the shared TetoTV HUD. MPV remains the default; see [features and differences](docs/MEDIA3_PLAYBACK.md). |
-| MPV playback | Supported | Integrated audio/caption selection remembers explicit choices between episodes; Playback settings include Preferred CC Automatic, On, and Off. |
+| Media3 playback | Android, default | New and reset installs use **Media3 (Built in)** with SurfaceView and the shared TetoTV HUD. Existing explicit player and rendering choices are preserved; see [features and differences](docs/MEDIA3_PLAYBACK.md). |
+| MPV playback | Supported | Selectable compatibility engine with integrated audio/caption selection; explicit MPV choices are preserved between launches. |
 | Offline downloads | Beta | Individual episodes, whole-season queues, and offline playback. |
-| Manga reader | Developer preview | Hidden unless Developer Mode is enabled. Reads user-added OPDS catalogs and user-installed Seanime-format manga extensions; no manga catalog is bundled or recommended, and no repository or provider is bundled. |
+| Manga reader | Optional, enabled by default | The preference is enabled by default, setup asks whether to keep it enabled, and it can be disabled in **Settings > Services**. Core Manga does not require Developer Mode. New sources use user-installed Seanime-format manga extensions; previously saved OPDS/data catalogs and downloads remain available. No manga catalog is bundled or recommended, and no repository or provider is bundled. Experimental Aniyomi compatibility remains Developer Mode-only. |
 | Debrid services | Optional | Users may connect a supported account for media they are authorized to access. |
 | Direct peer-to-peer playback | Optional beta | Off by default and requires an explicit privacy warning and opt-in. |
 | Plex / Jellyfin | Optional | Requires the viewer's own configured media server. |
@@ -132,14 +132,23 @@ TetoTV ships without a catalog, suggested repository, provider, media index, or 
 
 Third-party services and extensions can change independently of TetoTV. TetoTV does not host or relay their media and does not guarantee their availability, legality, security, or fitness for use.
 
-## Developer Manga Preview
+## Optional Manga Reader
 
-Developer Mode exposes a book destination for TetoTV's experimental manga
-reader. This preview is isolated from anime provider extensions and accepts
-only sources that the viewer adds. Viewers can connect OPDS 1.x/2.0 catalogs,
-use a declarative TetoTV document that points to OPDS catalogs, or install a
-Seanime-format `manga-provider` extension from a Marketplace repository they
-entered themselves. Manga extensions provide a source-search, chapter-list,
+The Manga reader preference is enabled by default, and first-run setup asks the
+viewer whether to keep it enabled. Core Manga does not require Developer Mode.
+It can be disabled in **Settings > Services**. Disabling it removes the book
+destination and blocks reader routes
+without deleting the local library, progress, settings, or downloads. Disabling
+the reader pauses active and queued Manga downloads and suspends pending Manga
+tracker delivery until the feature is re-enabled. Downloads stay paused until
+the viewer explicitly resumes them. Its discovery/runtime entry points are
+separate from anime
+extensions and use only sources the viewer adds. New sources use a Seanime-format
+`manga-provider` extension installed from a compatible Marketplace repository
+the viewer entered. Previously saved OPDS 1.x/2.0 and declarative data catalogs
+remain accessible, together with existing library entries and completed
+downloads; the new-source UI does not offer a new OPDS/data-catalog setup flow.
+Manga extensions provide a source-search, chapter-list,
 and page-resolution flow similar to a dedicated source-based reader; they do
 not require a personal server. TetoTV does not ship, suggest, rank, or remotely
 install a manga catalog, repository URL, provider, or title.
@@ -153,20 +162,28 @@ Mihon/Tachiyomi `index.pb` stores contain native Android extension APKs and are
 explicitly rejected as incompatible rather than saved or treated as working
 TetoTV repositories.
 
-The preview includes paged, vertical, and webtoon reading; right-to-left and
+The reader includes paged, vertical, and webtoon reading; right-to-left and
 left-to-right navigation; single, double, and automatic spreads; page-fit,
 spacing, background, preload, and book-animation controls; app-private reading
-progress; and compatible reading-order or ZIP/CBZ chapter downloads. Active
+progress; categories/statuses, chapter bookmarks and unread filters; bounded
+chapter-update checks; and compatible reading-order or ZIP/CBZ chapter downloads.
+The sequential download queue supports pause/resume and batches of the next
+5 or 10 unread chapters. Active
 manga downloads use a best-effort Android foreground-service lease so they can
 normally continue after Home/minimize. They are not scheduled server jobs:
-force-stop or process death ends the transfer, and a retry requires the viewer
-to reconnect or reselect the source because remote URLs and request headers
-are not persisted. Automatic spreads can use a separating vertical fold or
+force-stop or process death ends the transfer. On reopening, interrupted jobs
+remain local until an explicit resume asks the matching enabled Seanime source
+for fresh page capabilities using the active profile's protected title identity.
+Remote URLs and request headers are not persisted; changed capabilities or a
+missing source can require re-downloading/reselection. Verified retained pages
+are reused only after fingerprint/hash checks. Paused jobs stay paused.
+Automatic spreads can use a separating vertical fold or
 hinge so an opened foldable displays two physical pages without losing the
 current reading position.
 
-OPDS and declarative TetoTV repositories are data-only; they do not install
-extensions or execute code. A manga-provider
+Previously saved OPDS and declarative data catalogs are data-only; they do not
+install extensions or execute code. This does not describe the new extension
+path: a Seanime manga-provider
 extension is untrusted JavaScript or TypeScript that runs inside TetoTV's
 bounded QuickJS compatibility runtime with public-HTTPS-only networking,
 request/response limits, cancellation, and no direct Android, file, native,
@@ -180,10 +197,28 @@ Keystore-backed secure storage rather than in the repository document,
 catalog/download database, or diagnostics. Credentials are forwarded only to
 the exact source origin; reader redirects to another origin continue without
 them. If Discord Rich Presence is linked and enabled, the open reader can
-share the title, chapter, and page/total. TetoTV never forwards a user-added
-manga source, catalog, cover, or page URL to Discord because such a URL may be
-a private or signed capability. A reader privacy control replaces the title
-with **Reading manga** while retaining chapter/page activity.
+share the title, chapter, page/total, and a validated public book-cover URL.
+Protected/signed covers and local images fall back to the TetoTV logo. TetoTV
+never forwards a user-added source/catalog URL, page URL, or request headers
+to Discord. Turning title sharing off hides both the title and cover, using
+**Reading manga** and **Private chapter** while retaining page/total activity.
+
+Optional manga tracking requires choosing and confirming the exact record on
+AniList or MAL; SIMKL is not a manga-tracking option. Future reader completions
+with whole-number chapter numbers can update that record, with protected
+owner/account-bound pending retries. Linking does not upload prior history or
+change score, volume count or online list status. The local encrypted backup
+flow uses a passphrase and Android's document picker with preview/confirmation;
+it includes supported Seanime library/history/reader settings, not downloaded
+pages, source installations, credentials or tracker links/outbox. See
+[Manga library and reader](docs/MANGA_READER.md) for controls, limits and recovery
+behavior. These features are not a device-compatibility certification.
+
+Experimental Aniyomi extension compatibility is a separate feature. Its
+repository, install, discovery, and reader entry points remain available only
+while Developer Mode is enabled; turning Developer Mode off revokes an active
+Aniyomi reader session. The normal Seanime manga flow does not require
+Developer Mode.
 
 Only connect catalogs and download material that you are authorized to use.
 The [manga source and repository format](docs/MANGA_REPOSITORIES.md) documents
@@ -277,7 +312,7 @@ The main TetoTV repository holds the full Flutter, Android, native-integration, 
 
 ## Diagnostics and privacy
 
-Anonymous crash reporting is off by default. A diagnostics report is created only when the viewer chooses to share one. Reports include a bounded 48-hour troubleshooting timeline while automatically removing credentials, room codes, media URLs, filenames, and private-server information.
+Anonymous crash reporting starts enabled only on genuinely new installs, is disclosed during setup, and can be turned off there or later in Settings. Existing installs keep their stored choice; an upgrade does not silently opt in an installation with a missing legacy preference. Manual diagnostics still require the viewer to choose to share them. Reports include a bounded 48-hour troubleshooting timeline while automatically removing credentials, room codes, media URLs, filenames, and private-server information.
 
 Beta builds offer an approximate anonymous aggregate live count, enabled by default with a Settings opt-out. It sends only `active` or `streaming` for a short-lived process session—never a profile, title, episode, source, device ID, URL, filename, or private-server information. Public builds disable this presence; no Public APK is currently published.
 
@@ -297,7 +332,7 @@ TetoTV uses third-party services and open-source components but is not affiliate
 | [Privacy documentation](docs/PRIVACY.md) | Optional network features, diagnostics, redaction, and data handling |
 | [Security policy](SECURITY.md) | Private vulnerability reporting and supported releases |
 | [Architecture](docs/ARCHITECTURE.md) | Application layers, storage, playback, and hosted coordination |
-| [Manga repository format](docs/MANGA_REPOSITORIES.md) | Developer-preview OPDS support, declarative repository schema, and source security boundary |
+| [Manga repository format](docs/MANGA_REPOSITORIES.md) | Seanime-compatible new-source flow, retained legacy OPDS/schema compatibility, and source security boundary |
 | [Windows build guide](docs/BUILD_WINDOWS.md) | Reproducing the Flutter and Android build locally |
 | [Update channels](docs/UPDATE_CHANNELS.md) | Beta/Public identity, signatures, versioning, and updater behavior |
 | [Third-party notices](docs/THIRD_PARTY_NOTICES.md) | Component licenses, service terms, and attribution |

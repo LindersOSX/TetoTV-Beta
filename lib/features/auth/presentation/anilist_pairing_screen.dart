@@ -1,3 +1,4 @@
+import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/widgets/copyable_code_interaction.dart';
 import 'package:anime_tv/core/widgets/copyable_qr_interaction.dart';
@@ -150,6 +151,8 @@ class _TrackingPairingScreenState extends ConsumerState<TrackingPairingScreen> {
                                 showMalCallback:
                                     widget.provider ==
                                     TrackingProvider.myAnimeList,
+                                showKitsuPasswordDisclosure:
+                                    widget.provider == TrackingProvider.kitsu,
                                 session: session,
                                 onRestart: () => ref
                                     .read(
@@ -329,7 +332,7 @@ class _TrackingHeader extends StatelessWidget {
         const SizedBox(width: 18),
         Expanded(
           child: Text(
-            'Connect $providerName',
+            context.tr("Connect {value1}", {'value1': providerName}),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: Theme.of(context).textTheme.headlineSmall,
@@ -338,7 +341,7 @@ class _TrackingHeader extends StatelessWidget {
       ],
     );
     final note = Text(
-      'No password is entered on this TV',
+      context.tr("No password is entered on this TV"),
       style: TextStyle(color: context.appPalette.mutedText),
     );
     if (compact) {
@@ -363,12 +366,14 @@ class _PairingPanel extends StatelessWidget {
     required this.session,
     required this.onRestart,
     this.showMalCallback = false,
+    this.showKitsuPasswordDisclosure = false,
   });
 
   final String providerName;
   final PairingSession session;
   final VoidCallback onRestart;
   final bool showMalCallback;
+  final bool showKitsuPasswordDisclosure;
 
   @override
   Widget build(BuildContext context) {
@@ -383,17 +388,17 @@ class _PairingPanel extends StatelessWidget {
     if (session.status == PairingStatus.authorized) {
       return _StatusPanel(
         icon: Icons.check_circle_rounded,
-        title: '$providerName connected',
-        body: 'Your token is encrypted in the Android Keystore.',
+        title: context.tr("{value1} connected", {'value1': providerName}),
+        body: context.tr("Your token is encrypted in the Android Keystore."),
         color: const Color(0xFF67D49B),
       );
     }
     if (session.status == PairingStatus.expired) {
       return _StatusPanel(
         icon: Icons.timer_off_rounded,
-        title: 'Code expired',
-        body: 'Generate a fresh code and try again.',
-        actionLabel: 'New code',
+        title: context.tr("Code expired"),
+        body: context.tr("Generate a fresh code and try again."),
+        actionLabel: context.tr("New code"),
         onAction: onRestart,
       );
     }
@@ -406,8 +411,8 @@ class _PairingPanel extends StatelessWidget {
           final qrSize = compact ? 190.0 : 220.0;
           final qr = CopyableQrInteraction(
             data: session.verificationUriComplete,
-            semanticsLabel: 'QR code for anime tracker pairing',
-            confirmationMessage: 'Tracker pairing link copied.',
+            semanticsLabel: context.tr("QR code for anime tracker pairing"),
+            confirmationMessage: context.tr("Tracker pairing link copied."),
             child: Container(
               width: qrSize,
               height: qrSize,
@@ -439,20 +444,27 @@ class _PairingPanel extends StatelessWidget {
               const _WaitingPill(),
               const SizedBox(height: 18),
               Text(
-                'Scan with your phone',
+                context.tr("Scan with your phone"),
                 style: Theme.of(context).textTheme.displaySmall,
               ),
               const SizedBox(height: 12),
               Text(
-                'Open ${session.verificationUri} and confirm the code:',
+                context.tr("Open {value1} and confirm the code:", {
+                  'value1': session.verificationUri,
+                }),
                 style: Theme.of(context).textTheme.bodyLarge,
               ),
               const SizedBox(height: 18),
               CopyableCodeInteraction(
                 code: session.userCode,
-                semanticsLabel:
-                    '$providerName one-time pairing code ${session.userCode}',
-                confirmationMessage: '$providerName pairing code copied.',
+                semanticsLabel: context.tr(
+                  "{value1} one-time pairing code {value2}",
+                  {'value1': providerName, 'value2': session.userCode},
+                ),
+                confirmationMessage: context.tr(
+                  "{value1} pairing code copied.",
+                  {'value1': providerName},
+                ),
                 child: Text(
                   session.userCode,
                   style: TextStyle(
@@ -465,17 +477,33 @@ class _PairingPanel extends StatelessWidget {
               ),
               const SizedBox(height: 14),
               Text(
-                'This screen updates automatically after approval.',
+                context.tr("This screen updates automatically after approval."),
                 style: Theme.of(context).textTheme.bodyMedium,
               ),
               if (showMalCallback) ...[
                 const SizedBox(height: 10),
                 Text(
-                  'Registered callback: '
-                  '${malCallback ?? 'your broker /oauth/myanimelist/callback'}',
+                  context.tr("Registered callback: {value1}", {
+                    'value1':
+                        malCallback ??
+                        'your broker /oauth/myanimelist/callback',
+                  }),
                   style: TextStyle(
                     color: context.appPalette.mutedText,
                     fontSize: 11,
+                  ),
+                ),
+              ],
+              if (showKitsuPasswordDisclosure) ...[
+                const SizedBox(height: 10),
+                Text(
+                  context.tr(
+                    'Kitsu does not offer a TV device-code sign-in. Your email and password are entered only on the HTTPS companion page. The companion receives them transiently, immediately forwards them once to Kitsu’s official token endpoint, and never persists or logs them.',
+                  ),
+                  style: TextStyle(
+                    color: context.appPalette.mutedText,
+                    fontSize: 11,
+                    height: 1.35,
                   ),
                 ),
               ],
@@ -597,7 +625,7 @@ class _StatusPanel extends StatelessWidget {
         ),
         const SizedBox(height: 10),
         Text(
-          body,
+          context.tr(body),
           textAlign: TextAlign.center,
           style: Theme.of(context).textTheme.bodyLarge,
         ),
@@ -637,12 +665,12 @@ class _ErrorPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     return _StatusPanel(
       icon: Icons.error_outline_rounded,
-      title: 'Could not start pairing',
+      title: context.tr("Could not start pairing"),
       body: message,
       color: const Color(0xFFFF8892),
-      actionLabel: 'Retry',
+      actionLabel: context.tr("Retry"),
       onAction: onRetry,
-      secondaryActionLabel: 'Change broker URL',
+      secondaryActionLabel: context.tr("Change broker URL"),
       onSecondaryAction: onConfigure,
     );
   }
@@ -683,34 +711,36 @@ class _BrokerSetupPanel extends StatelessWidget {
               ),
               const SizedBox(height: 16),
               Text(
-                'Connect the TetoTV sign-in broker',
+                context.tr("Connect the TetoTV sign-in broker"),
                 style: Theme.of(context).textTheme.headlineSmall,
               ),
               const SizedBox(height: 10),
               Text(
-                'AniList and MAL do not provide a native TV device-code '
-                'login. Deploy the included broker with your registered OAuth '
-                'clients, then enter its public address here. Provider secrets '
-                'stay on the server and never enter the APK.',
+                context.tr(
+                  "AniList, MAL, and Kitsu do not provide a native TV device-code login. Deploy the included companion with your registered public app clients, then enter its public address here. Confidential provider secrets stay on the server and never enter the APK.",
+                ),
                 style: Theme.of(context).textTheme.bodyLarge,
               ),
               const SizedBox(height: 18),
               TvTextInput(
                 controller: controller,
-                labelText: 'HTTPS broker URL',
+                labelText: context.tr("HTTPS broker URL"),
                 hintText: 'https://auth.your-domain.example',
-                keyboardTitle: 'Enter TetoTV broker URL',
+                keyboardTitle: context.tr("Enter TetoTV broker URL"),
                 autofillSuggestions: const ['https://'],
               ),
               if (error case final message?) ...[
                 const SizedBox(height: 10),
-                Text(message, style: const TextStyle(color: Color(0xFFFF929B))),
+                Text(
+                  context.tr(message),
+                  style: const TextStyle(color: Color(0xFFFF929B)),
+                ),
               ],
               const SizedBox(height: 18),
               Align(
                 alignment: Alignment.centerRight,
                 child: _ActionButton(
-                  label: 'Save and connect',
+                  label: context.tr("Save and connect"),
                   onPressed: onSave,
                 ),
               ),

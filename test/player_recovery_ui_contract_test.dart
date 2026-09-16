@@ -17,9 +17,11 @@ void main() {
   });
 
   test('terminal recovery leaves actionable MPV controls visible', () {
-    expect(mpv, contains("label: 'Retry stream'"));
-    expect(mpv, contains("label: 'Next stream'"));
-    expect(mpv, contains("label: 'Choose stream'"));
+    for (final label in ['Retry stream', 'Next stream', 'Choose stream']) {
+      expect(mpv, contains('label: context.tr("$label")'));
+    }
+    expect(mpv, contains('onPressed: onRetry'));
+    expect(mpv, contains('onPressed: onChooseStream'));
     expect(mpv, contains('_playbackError = message'));
   });
 }

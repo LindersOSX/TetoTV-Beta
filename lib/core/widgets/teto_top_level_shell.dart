@@ -190,14 +190,17 @@ class _TetoTopLevelShellState extends ConsumerState<TetoTopLevelShell> {
   @override
   Widget build(BuildContext context) {
     final size = MediaQuery.sizeOf(context);
-    final isTelevision = ref.watch(isTelevisionProvider);
+    final uiTarget = ref.watch(adaptiveUiTargetProvider);
+    final isTelevision = uiTarget == AdaptiveUiTarget.television;
     final accounts = ref.watch(trackingAccountsControllerProvider);
     final localProfiles = ref.watch(localProfilesControllerProvider);
     final hasProfile =
         accounts.profiles.isNotEmpty || localProfiles.activeProfile != null;
-    final isPhysicalPhone = !isTelevision;
-    final isPhoneLandscape = isPhysicalPhone && size.width > size.height;
-    final isPhonePortrait = isPhysicalPhone && !isPhoneLandscape;
+    // `mobile` includes phones, tablets, and foldables. Orientation selects
+    // the shared mobile navigation; screen width only tunes dimensions.
+    final usesMobileUi = uiTarget == AdaptiveUiTarget.mobile;
+    final isPhoneLandscape = usesMobileUi && size.width > size.height;
+    final isPhonePortrait = usesMobileUi && !isPhoneLandscape;
     // Classic Layout deliberately retains the original horizontal top-level
     // navigation, even on a large TV canvas. Modern/Automatic keep the
     // cinematic rail when the viewport has enough room for it.

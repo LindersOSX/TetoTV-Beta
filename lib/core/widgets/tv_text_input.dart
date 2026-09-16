@@ -1,3 +1,4 @@
+import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
@@ -295,7 +296,9 @@ class _TvTextInputState extends ConsumerState<TvTextInput>
             cursorColor: context.appPalette.accentBright,
             decoration: headerSearch
                 ? InputDecoration(
-                    hintText: widget.hintText,
+                    hintText: widget.hintText == null
+                        ? null
+                        : context.tr(widget.hintText!),
                     counterText: '',
                     hintStyle: TextStyle(
                       color: context.appPalette.primaryText.withValues(
@@ -343,9 +346,13 @@ class _TvTextInputState extends ConsumerState<TvTextInput>
                     ),
                   )
                 : InputDecoration(
-                    labelText: widget.labelText,
-                    hintText: widget.hintText,
-                    helperText: widget.helperText,
+                    labelText: context.tr(widget.labelText),
+                    hintText: widget.hintText == null
+                        ? null
+                        : context.tr(widget.hintText!),
+                    helperText: widget.helperText == null
+                        ? null
+                        : context.tr(widget.helperText!),
                     counterText: '',
                     labelStyle: TextStyle(color: context.appPalette.mutedText),
                     hintStyle: TextStyle(color: context.appPalette.mutedText),
@@ -377,8 +384,8 @@ class _TvTextInputState extends ConsumerState<TvTextInput>
       if (!headerSearch) return field;
       return Semantics(
         container: true,
-        label: widget.labelText,
-        hint: 'Activate to enter search text',
+        label: context.tr(widget.labelText),
+        hint: context.tr('Activate to enter search text'),
         child: AnimatedBuilder(
           animation: _focusNode,
           child: field,
@@ -431,9 +438,9 @@ class _TvTextInputState extends ConsumerState<TvTextInput>
       return Semantics(
         container: true,
         textField: true,
-        label: widget.labelText,
+        label: context.tr(widget.labelText),
         value: value,
-        hint: 'Activate to enter search text',
+        hint: context.tr('Activate to enter search text'),
         onTap: () => _openKeyboard(context),
         child: ExcludeSemantics(
           child: TvFocusable(
@@ -474,7 +481,7 @@ class _TvTextInputState extends ConsumerState<TvTextInput>
                   SizedBox(width: compactHeader ? 10 : 14),
                   Expanded(
                     child: Text(
-                      value.isEmpty ? (widget.hintText ?? '') : value,
+                      value.isEmpty ? context.tr(widget.hintText ?? '') : value,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
@@ -518,7 +525,7 @@ class _TvTextInputState extends ConsumerState<TvTextInput>
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    widget.labelText,
+                    context.tr(widget.labelText),
                     style: TextStyle(
                       color: context.appPalette.mutedText,
                       fontSize: 11,
@@ -528,7 +535,7 @@ class _TvTextInputState extends ConsumerState<TvTextInput>
                   if (widget.helperText case final helper?) ...[
                     const SizedBox(height: 3),
                     Text(
-                      helper,
+                      context.tr(helper),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
@@ -540,7 +547,7 @@ class _TvTextInputState extends ConsumerState<TvTextInput>
                   const SizedBox(height: 4),
                   Text(
                     visibleValue.isEmpty
-                        ? (widget.hintText ?? '')
+                        ? context.tr(widget.hintText ?? '')
                         : visibleValue,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
@@ -1207,7 +1214,7 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        widget.title,
+                        context.tr(widget.title),
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
@@ -1223,7 +1230,7 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
                         child: FittedBox(
                           fit: BoxFit.scaleDown,
                           child: Text(
-                            'REMOTE  /  CONTROLLER  /  KEYBOARD',
+                            context.tr("REMOTE  /  CONTROLLER  /  KEYBOARD"),
                             key: const ValueKey('tv-keyboard-input-modes'),
                             style: TextStyle(
                               color: palette.primaryText.withValues(alpha: .90),
@@ -1241,7 +1248,7 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
                     children: [
                       Expanded(
                         child: Text(
-                          widget.title,
+                          context.tr(widget.title),
                           maxLines: widget.numericOnly ? 2 : 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
@@ -1254,7 +1261,7 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
                       ),
                       SizedBox(width: 18 * scale),
                       Text(
-                        'REMOTE  /  CONTROLLER  /  KEYBOARD',
+                        context.tr("REMOTE  /  CONTROLLER  /  KEYBOARD"),
                         key: const ValueKey('tv-keyboard-input-modes'),
                         style: TextStyle(
                           color: palette.primaryText.withValues(alpha: .90),
@@ -1284,7 +1291,9 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
                     children: [
                       Expanded(
                         child: Text(
-                          displayValue.isEmpty ? 'Start typing…' : displayValue,
+                          displayValue.isEmpty
+                              ? context.tr("Start typing…")
+                              : displayValue,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
@@ -1336,7 +1345,7 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
                   Row(
                     children: [
                       Text(
-                        'AUTOFILL',
+                        context.tr("AUTOFILL"),
                         style: TextStyle(
                           color: palette.accentBright,
                           fontSize: (12 * scale).clamp(8, 12),
@@ -1413,7 +1422,7 @@ class _KeyboardKey extends StatelessWidget {
             palette.surface,
           );
     return Semantics(
-      label: semanticLabel,
+      label: context.tr(semanticLabel),
       button: true,
       excludeSemantics: true,
       child: TvFocusable(
@@ -1440,7 +1449,7 @@ class _KeyboardKey extends StatelessWidget {
                   color: palette.primaryText,
                 )
               : Text(
-                  label ?? '',
+                  context.tr(label ?? ''),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(

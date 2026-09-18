@@ -38,7 +38,7 @@ dependencies:
   archive: ^4.2.0
   path: ^1.9.1
   path_provider: ^2.1.5
-  sqflite: ^2.4.2
+  sqflite: ^2.4.4
   # Local compatibility and security patch: QuickJS 2026-06-04 is built from
   # pinned source, while the bridge preserves flutter_js's FFI ABI, bounded
   # execution, and addon sandbox memory limit.

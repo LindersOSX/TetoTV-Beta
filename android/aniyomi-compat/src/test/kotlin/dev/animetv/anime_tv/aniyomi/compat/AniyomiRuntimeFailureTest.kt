@@ -13,6 +13,19 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class AniyomiRuntimeFailureTest {
+    @Test fun brokerReasonsAreClosedAndSurviveWrappedAsyncFailures() {
+        val failure = AniyomiRuntimeFailure.describe(
+            IOException(IOException(AniyomiBrokerUnsupportedCapability(
+                AniyomiBrokerDiagnosticContext(reason = "credential_header"),
+            ))), "source_search",
+        )
+        assertEquals("credential_header", failure.brokerReason)
+        assertThrows(IllegalArgumentException::class.java) {
+            AniyomiBrokerDiagnosticContext(reason = "https://private.example/token")
+        }
+        assertNull(AniyomiRuntimeFailure.describe(AniyomiBrokerUnsupportedCapability(), "source_search").brokerReason)
+    }
+
     @Test fun reflectedConstructorMissingAbiHasFixedCategoryAndStage() {
         val failure = construct(MissingAbiConstructorFixture::class.java)
         assertEquals("source_construct", failure.stage)

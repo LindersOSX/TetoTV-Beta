@@ -1,8 +1,61 @@
 import 'package:anime_tv/features/streaming/data/torbox_client.dart';
+import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  for (final entry in {
+    DioExceptionType.connectionError: 'CONNECTION_FAILED',
+    DioExceptionType.connectionTimeout: 'REQUEST_TIMEOUT',
+    DioExceptionType.sendTimeout: 'REQUEST_TIMEOUT',
+    DioExceptionType.receiveTimeout: 'REQUEST_TIMEOUT',
+    DioExceptionType.badCertificate: 'SECURE_CONNECTION_FAILED',
+  }.entries) {
+    test(
+      '${entry.key} gives safe terminal service failure without retry',
+      () async {
+        var calls = 0;
+        final dio = Dio(BaseOptions(baseUrl: 'https://torbox.test'))
+          ..interceptors.add(
+            InterceptorsWrapper(
+              onRequest: (options, handler) {
+                calls++;
+                handler.reject(
+                  DioException(
+                    requestOptions: options,
+                    type: entry.key,
+                    message:
+                        'private.example token=private-secret at 192.168.1.20',
+                  ),
+                );
+              },
+            ),
+          );
+        final client = TorBoxClient(token: 'test-token', dio: dio);
+        await expectLater(
+          client.account(),
+          throwsA(
+            isA<TorBoxException>()
+                .having((e) => e.code, 'code', entry.value)
+                .having(
+                  (e) => isTerminalDebridFailoverFailure(e),
+                  'stops fan-out',
+                  true,
+                )
+                .having(
+                  (e) => e.toString(),
+                  'safe message',
+                  allOf(
+                    isNot(contains('private')),
+                    isNot(contains('192.168.1.20')),
+                  ),
+                ),
+          ),
+        );
+        expect(calls, 1);
+      },
+    );
+  }
   test(
     'createTorrent sends the atomic cached-only flag and rejects a malformed ID',
     () async {

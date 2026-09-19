@@ -10,7 +10,14 @@ package dev.animetv.anime_tv.aniyomi
  */
 internal class AniyomiExtensionParentClassLoader(
     private val runtimeLoader: ClassLoader,
+    private val resources: AniyomiApkResources = AniyomiApkResources(),
 ) : ClassLoader(null) {
+    // InMemoryDexClassLoader has no APK path to search for assets. Its parent
+    // supplies only the bounded resources extracted from the same verified APK.
+    override fun getResource(name: String): java.net.URL? = resources.find(name)
+    override fun getResources(name: String): java.util.Enumeration<java.net.URL> =
+        java.util.Collections.enumeration(listOfNotNull(getResource(name)))
+
     override fun loadClass(name: String, resolve: Boolean): Class<*> {
         // Use the real bootstrap loader, not the app's parent chain. This also
         // preserves less obvious platform APIs such as org.json on Android.

@@ -1331,6 +1331,27 @@ void main() {
   test('player release diagnostics use a closed privacy-safe classifier', () {
     expect(
       playerReleaseFailureCode(
+        PlatformException(
+          code: 'media3_command_failed',
+          details: {
+            'exceptionKind': 'network_on_main_thread',
+            'url': 'private',
+          },
+        ),
+      ),
+      'media3_network_on_main_thread',
+    );
+    expect(
+      playerReleaseFailureCode(
+        PlatformException(
+          code: 'media3_command_failed',
+          details: {'exceptionKind': 'https://private.example/token'},
+        ),
+      ),
+      'media3_command_failed',
+    );
+    expect(
+      playerReleaseFailureCode(
         PlatformException(code: 'INVALID CODE https://private.example/episode'),
       ),
       'platform_error',

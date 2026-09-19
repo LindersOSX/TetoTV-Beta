@@ -18,16 +18,27 @@ data class AniyomiBrokerDiagnosticContext(
     val redirectCount: Int = 0,
     val responseSizeBucket: String = "none",
     val statusClass: String = "none",
+    val reason: String = "none",
 ) {
     init {
         require(redirectCount in 0..3) { "invalid_broker_redirect_count" }
         require(responseSizeBucket in SIZE_BUCKETS) { "invalid_broker_size_bucket" }
         require(statusClass in STATUS_CLASSES) { "invalid_broker_status_class" }
+        require(reason in REASONS) { "invalid_broker_reason" }
     }
 
     companion object {
         val SIZE_BUCKETS = setOf("none", "lt64k", "64to128k", "128to256k", "over256k")
         val STATUS_CLASSES = setOf("none", "1xx", "2xx", "3xx", "4xx", "5xx")
+        val REASONS = setOf(
+            "none", "client_configuration", "credential_header", "request_method", "request_headers",
+            "request_body", "transport_mutation", "direct_network", "request_envelope",
+            "client_websocket", "client_chain", "client_network_interceptor", "client_proxy", "client_cache",
+            "http_method_unsupported", "get_body_unsupported", "http_request_too_large",
+            "http_headers_too_large", "http_header_not_permitted", "unsupported_http_field",
+            "http_request_limit", "invalid_http_option", "http_redirect_unsupported",
+            "http_redirect_limit", "http_response_too_large",
+        )
         val EMPTY = AniyomiBrokerDiagnosticContext()
     }
 }
@@ -74,6 +85,7 @@ class AniyomiRuntimeFailure private constructor(
     val brokerRedirectCount: Int? = null,
     val brokerResponseSizeBucket: String? = null,
     val brokerStatusClass: String? = null,
+    val brokerReason: String? = null,
 ) : RuntimeException("$stage:$category") {
     internal fun withFallbackBrokerContext(context: AniyomiBrokerDiagnosticContext?): AniyomiRuntimeFailure {
         if (context == null || brokerFailure != null || brokerRedirectCount != null ||
@@ -155,6 +167,7 @@ class AniyomiRuntimeFailure private constructor(
                 brokerRedirectCount = broker?.brokerContext?.redirectCount,
                 brokerResponseSizeBucket = broker?.brokerContext?.responseSizeBucket,
                 brokerStatusClass = broker?.brokerContext?.statusClass,
+                brokerReason = broker?.brokerContext?.reason?.takeUnless { it == "none" },
             )
         }
 

@@ -24,6 +24,58 @@ import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class BrokerTransportOkHttp5Test {
+    @Test fun networkCallbacksRunAfterApplicationCallbacksWithoutTransportAuthority() {
+        val order = ArrayList<String>()
+        val transport = BrokerTransport { input ->
+            order += "broker"
+            assertEquals("fixture", input.getJSONObject("headers").getString("X-Fixture"))
+            response(input)
+        }
+        val client = NetworkHelper(transport).client.newBuilder()
+            .addInterceptor { chain ->
+                order += "application"
+                chain.proceed(chain.request().newBuilder().tag(String::class.java, "rate-limit").build())
+            }
+            .addNetworkInterceptor { chain ->
+                order += "network"
+                assertEquals("rate-limit", chain.request().tag(String::class.java))
+                assertNull(chain.connection())
+                assertFalse(chain.followRedirects)
+                assertThrows(AniyomiBrokerUnsupportedCapability::class.java) { chain.socketFactory.createSocket() }
+                chain.withReadTimeout(2000, TimeUnit.MILLISECONDS)
+                    .proceed(chain.request().newBuilder().header("X-Fixture", "fixture").build())
+                    .also { order += "response" }
+            }.build()
+        client.newCall(request()).execute().close()
+        assertEquals(listOf("application", "network", "broker", "response"), order)
+    }
+
+    @Test fun networkCallbacksCannotChangeOriginOrForwardCredentials() {
+        val mutations = listOf<(Request) -> Request>(
+            { it.newBuilder().url("https://other.invalid/test").build() },
+            { it.newBuilder().url("http://fixture.invalid/test").build() },
+            { it.newBuilder().url("https://fixture.invalid:8443/test").build() },
+            { it.newBuilder().header("Cookie", "private-value").build() },
+        )
+        for (mutate in mutations) {
+            val calls = AtomicInteger()
+            val client = client(calls).newBuilder()
+                .addNetworkInterceptor { it.proceed(mutate(it.request())) }.build()
+            assertThrows(IOException::class.java) { client.newCall(request()).execute().close() }
+            assertEquals(0, calls.get())
+        }
+    }
+
+    @Test fun networkCallbacksCannotProceedTwiceEvenThroughTimeoutCopies() {
+        val calls = AtomicInteger()
+        val client = client(calls).newBuilder().addNetworkInterceptor { chain ->
+            chain.proceed(chain.request()).close()
+            chain.withReadTimeout(1000, TimeUnit.MILLISECONDS).proceed(chain.request())
+        }.build()
+        assertThrows(IOException::class.java) { client.newCall(request()).execute().close() }
+        assertEquals(1, calls.get())
+    }
+
     @Test fun boundedLargeResponsesReachProviderParsersWithoutTheOldOneMiBLimit() {
         for (size in listOf(256 * 1024 + 1, 1024 * 1024 + 1, BrokerTransport.MAX_RESPONSE_BYTES)) {
             val bytes = ByteArray(size) { (it % 251).toByte() }

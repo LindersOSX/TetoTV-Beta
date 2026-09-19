@@ -242,6 +242,7 @@ void main() {
           'execution_ms': 345,
           'total_ms': 357,
           'broker_failure': 'network',
+          'broker_reason': 'client_network_interceptor',
           'broker_redirect_count': 1,
           'broker_response_size_bucket': '64to128k',
           'broker_status_class': '2xx',
@@ -292,6 +293,7 @@ void main() {
       expect(context['execution_ms'], 345);
       expect(context['total_ms'], 357);
       expect(context['broker_failure'], 'network');
+      expect(context['broker_reason'], 'client_network_interceptor');
       expect(context['broker_redirect_count'], 1);
       expect(context['broker_status_class'], '2xx');
       expect(context['video_returned_count'], 5);
@@ -334,6 +336,7 @@ void main() {
       expect(exportedContext['execution_ms'], 345);
       expect(exportedContext['total_ms'], 357);
       expect(exportedContext['broker_failure'], 'network');
+      expect(exportedContext['broker_reason'], 'client_network_interceptor');
       expect(exportedContext['broker_redirect_count'], 1);
       expect(exportedContext['broker_response_size_bucket'], '64to128k');
       expect(exportedContext['broker_status_class'], '2xx');
@@ -452,6 +455,24 @@ void main() {
       );
     },
   );
+
+  test('Aniyomi broker reason never accepts arbitrary diagnostic text', () {
+    for (final value in [
+      'PRIVATE_CANARY',
+      'https://private.example/token',
+      'none',
+      123,
+    ]) {
+      final result =
+          sanitizeDiagnosticContext({
+                'broker_reason': value,
+              }, component: 'aniyomi-runtime')!
+              as Map;
+      expect(result.containsKey('broker_reason'), isFalse);
+      expect(jsonEncode(result), isNot(contains('PRIVATE_CANARY')));
+      expect(jsonEncode(result), isNot(contains('private.example')));
+    }
+  });
 
   test('Aniyomi-only identity keys cannot escape their closed schema', () {
     final ordinary =

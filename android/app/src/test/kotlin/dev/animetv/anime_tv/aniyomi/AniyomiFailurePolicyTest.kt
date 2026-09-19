@@ -4,6 +4,18 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class AniyomiFailurePolicyTest {
+    @Test fun brokerReasonIsAllowlistedAtBothHostBoundaries() {
+        assertEquals("http_request_limit", AniyomiHttpBrokerFailurePolicy.reason(IllegalArgumentException("http_request_limit")))
+        assertEquals("none", AniyomiHttpBrokerFailurePolicy.reason(IllegalArgumentException("private-token")))
+        fun result(reason: String) = AniyomiFailurePolicy.sanitize(
+            "unsupported_extension_capability", "source_search", "unsupported_capability",
+            "unsupported", 0, "none", "none", reason,
+        )
+        assertEquals("client_configuration", result("client_configuration")["broker_reason"])
+        assertFalse(result("private-token").containsKey("broker_reason"))
+        assertFalse(result("none").containsKey("broker_reason"))
+    }
+
     @Test fun workerErrorStageAndCauseAreIndependentlyAllowlisted() {
         val result = AniyomiFailurePolicy.sanitize("unsupported_extension_abi", "source_construct", "method_missing")
         assertEquals(false, result["ok"])

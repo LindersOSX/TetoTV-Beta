@@ -203,6 +203,37 @@ class _AniyomiScreenState extends ConsumerState<AniyomiScreen> {
     }
   }
 
+  Future<void> _restore(Map<String, dynamic> installed) async {
+    final controller = ref.read(aniyomiControllerProvider.notifier);
+    // Explicit recovery only: no background downloads or automatic approvals.
+    await controller.refreshCatalog();
+    if (!mounted) return;
+    final matches = ref
+        .read(aniyomiControllerProvider)
+        .catalog
+        .where((entry) => entry.identityKey == installed['extensionId']);
+    final extension =
+        matches
+            .where((entry) => entry.versionName == installed['versionName'])
+            .firstOrNull ??
+        matches.firstOrNull;
+    if (extension == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            context.tr(
+              'This extension is no longer in your repositories. Add its repository again to reinstall it.',
+            ),
+          ),
+        ),
+      );
+      return;
+    }
+    // Reuse verification and the visible trust prompt. Native approval still
+    // rejects signer changes and version downgrades against the saved identity.
+    await _install(extension);
+  }
+
   Future<void> _chooseLanguage(List<String> languages, String? selected) async {
     final choice = await showDialog<_CatalogLanguageSelection>(
       context: context,
@@ -351,6 +382,7 @@ class _AniyomiScreenState extends ConsumerState<AniyomiScreen> {
                   mangaEnabled: mangaEnabled,
                   readiness: state.readiness[installed['extensionId']],
                   busy: busy,
+                  onRestore: () => _run(() => _restore(installed)),
                   onRetry: _mediaKind(installed['kind']) == null
                       ? null
                       : () => _run(
@@ -534,6 +566,7 @@ class _InstalledExtension extends StatelessWidget {
     required this.busy,
     required this.onRetry,
     required this.onRevoke,
+    required this.onRestore,
   });
   final Map<String, dynamic> installed;
   final AniyomiMediaKind? kind;
@@ -542,6 +575,7 @@ class _InstalledExtension extends StatelessWidget {
   final bool busy;
   final VoidCallback? onRetry;
   final VoidCallback onRevoke;
+  final VoidCallback onRestore;
   @override
   Widget build(BuildContext context) {
     final stage = readiness?.stage ?? AniyomiReadinessStage.installed;
@@ -563,6 +597,7 @@ class _InstalledExtension extends StatelessWidget {
       ),
     };
     final failure = readiness?.failure;
+    final missingSnapshot = failure?.code == 'snapshot_unavailable';
     final fields = failure?.diagnosticFields;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -572,7 +607,20 @@ class _InstalledExtension extends StatelessWidget {
           style: Theme.of(context).textTheme.titleMedium,
         ),
         const SizedBox(height: 6),
-        Text(status),
+        Text(
+          missingSnapshot
+              ? context.tr('Extension files missing • reinstall needed')
+              : status,
+        ),
+        if (missingSnapshot)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Text(
+              context.tr(
+                'The extension files are no longer on this device. Reinstall to restore them; your existing approval will still be checked.',
+              ),
+            ),
+          ),
         if (!mangaEnabled && kind == AniyomiMediaKind.manga)
           Padding(
             padding: const EdgeInsets.only(top: 6),
@@ -594,6 +642,7 @@ class _InstalledExtension extends StatelessWidget {
           runSpacing: 8,
           children: [
             if (onRetry != null &&
+                !missingSnapshot &&
                 (kind != AniyomiMediaKind.manga || mangaEnabled) &&
                 (stage == AniyomiReadinessStage.failed ||
                     stage == AniyomiReadinessStage.installed))
@@ -602,6 +651,14 @@ class _InstalledExtension extends StatelessWidget {
                 icon: Icons.refresh,
                 enabled: !busy,
                 onPressed: onRetry!,
+              ),
+            if (missingSnapshot &&
+                (kind != AniyomiMediaKind.manga || mangaEnabled))
+              _Action(
+                label: context.tr('Reinstall extension'),
+                icon: Icons.download,
+                enabled: !busy,
+                onPressed: onRestore,
               ),
             _Action(
               label: context.tr('Revoke approval'),

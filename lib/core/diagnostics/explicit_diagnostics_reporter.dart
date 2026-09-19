@@ -419,6 +419,20 @@ String buildRedactedDiagnosticsText({
   final text = const JsonEncoder.withIndent('  ').convert(fullPayload);
   if (text.length <= maximumExplicitDiagnosticsCharacters) return text;
 
+  // Formatting must not evict evidence. Large real-world reports can exceed
+  // the share bound by indentation alone; preserve the same fully redacted
+  // payload before resorting to the reduced event ring below.
+  final lightlyIndented = const JsonEncoder.withIndent(
+    ' ',
+  ).convert(fullPayload);
+  if (lightlyIndented.length <= maximumExplicitDiagnosticsCharacters) {
+    return lightlyIndented;
+  }
+  final denseText = jsonEncode(fullPayload);
+  if (denseText.length <= maximumExplicitDiagnosticsCharacters) {
+    return denseText;
+  }
+
   // Preserve valid, parseable JSON if an unusual device produces an enormous
   // capability list. The normal path above retains the complete database
   // event ring.

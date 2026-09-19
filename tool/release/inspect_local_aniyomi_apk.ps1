@@ -157,6 +157,10 @@ foreach ($flag in @('debuggable', 'testOnly')) {
 }
 if ($application.GetAttribute('allowBackup', $androidNs) -ne 'false') { throw 'Release backup restriction missing' }
 if ($manifest.SelectNodes('/manifest/instrumentation').Count -ne 0) { throw 'Release contains instrumentation' }
+if ($manifestXml -match 'Media3FixtureActivity') { throw 'Release contains the test-only Media3 activity' }
+if ($inspectionMapping -match '(?m)^(dev\.animetv\.anime_tv\.player\.(Media3FixtureActivity|Media3PlaybackInstrumentation)|io\.flutter\.plugin\.platform\.Media3FixtureViewAccess)[.$ ]') {
+    throw 'Release mapping contains test-only Media3 playback fixture classes'
+}
 $workers = @($manifest.SelectNodes('/manifest/application/service') | Where-Object {
     $_.GetAttribute('name', $androidNs) -in @('.aniyomi.AniyomiIsolatedService', 'dev.animetv.anime_tv.aniyomi.AniyomiIsolatedService')
 })
@@ -188,7 +192,7 @@ $archive = [IO.Compression.ZipFile]::OpenRead($inspectionApk)
 $changedOwned = @()
 $pinnedCount = 0
 try {
-    if (@($archive.Entries | Where-Object { $_.FullName -match '(?i)\.apk$|aniyomi-fixture|authorized-animegg' }).Count -ne 0) {
+    if (@($archive.Entries | Where-Object { $_.FullName -match '(?i)\.apk$|aniyomi-fixture|media3-fixture|authorized-animegg' }).Count -ne 0) {
         throw 'Release contains an embedded APK or named test fixture asset'
     }
     $native = @($archive.Entries | Where-Object { $_.FullName -match '^lib/[^/]+/[^/]+\.so$' })

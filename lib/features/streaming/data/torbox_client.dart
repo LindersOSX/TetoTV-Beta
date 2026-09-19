@@ -177,6 +177,34 @@ class TorBoxClient {
     } on TorBoxException {
       rethrow;
     } on DioException catch (error) {
+      // Network failures apply to the service, not the selected torrent.
+      // Keep them terminal for automatic torrent fan-out and never surface
+      // a raw Dio message (which may include a URL, token or local address).
+      if (error.type == DioExceptionType.connectionError) {
+        throw const TorBoxException(
+          'Could not connect to TorBox. Check your internet connection and DNS, then retry. Your account is still linked.',
+          code: 'CONNECTION_FAILED',
+          category: DebridFailureCategory.serviceUnavailable,
+        );
+      }
+      if (const {
+        DioExceptionType.connectionTimeout,
+        DioExceptionType.sendTimeout,
+        DioExceptionType.receiveTimeout,
+      }.contains(error.type)) {
+        throw const TorBoxException(
+          'TorBox took too long to respond. Please wait a moment and retry.',
+          code: 'REQUEST_TIMEOUT',
+          category: DebridFailureCategory.serviceUnavailable,
+        );
+      }
+      if (error.type == DioExceptionType.badCertificate) {
+        throw const TorBoxException(
+          'A secure connection to TorBox could not be verified. Check your device date and connection.',
+          code: 'SECURE_CONNECTION_FAILED',
+          category: DebridFailureCategory.serviceUnavailable,
+        );
+      }
       final data = error.response?.data;
       if (data is Map<String, dynamic>) {
         throw TorBoxException(
@@ -193,7 +221,7 @@ class TorBoxClient {
         );
       }
       throw TorBoxException(
-        error.message ?? 'Could not reach TorBox.',
+        'Could not reach TorBox. Please try again shortly.',
         code: '${error.response?.statusCode ?? ''}',
       );
     }

@@ -1,5 +1,7 @@
 package dev.animetv.anime_tv.aniyomi
 
+import dev.animetv.anime_tv.aniyomi.compat.AniyomiBrokerDiagnosticContext
+
 /** Treat worker diagnostics as untrusted input, just like provider result fields. */
 internal object AniyomiFailurePolicy {
     private val errors = setOf("unsupported_extension_capability", "unsupported_extension_abi",
@@ -23,6 +25,7 @@ internal object AniyomiFailurePolicy {
         brokerRedirectCount: Int = -1,
         brokerResponseSizeBucket: String = "",
         brokerStatusClass: String = "",
+        brokerReason: String = "",
     ): Map<String, Any?> = mutableMapOf<String, Any?>(
         "ok" to false,
         "error" to error.takeIf { it in errors }.orEmpty().ifEmpty { "extension_execution_failed" },
@@ -36,6 +39,9 @@ internal object AniyomiFailurePolicy {
             put("broker_redirect_count", brokerRedirectCount)
             put("broker_response_size_bucket", brokerResponseSizeBucket)
             put("broker_status_class", brokerStatusClass)
+            if (brokerReason != "none" && brokerReason in AniyomiBrokerDiagnosticContext.REASONS) {
+                put("broker_reason", brokerReason)
+            }
         }
     }
 }

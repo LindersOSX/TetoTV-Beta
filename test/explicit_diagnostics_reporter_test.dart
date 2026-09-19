@@ -527,15 +527,11 @@ void main() {
       expect(eventExport['droppedForExport'], 500 - events.length);
       expect(eventExport['selection'], 'newest-retained-events');
       final completeness = decoded['reportCompleteness'] as Map;
-      expect(
-        completeness['fullSanitizedCharacters'],
-        greaterThan(maximumExplicitDiagnosticsCharacters),
-      );
-      expect(completeness['reduced'], true);
-      expect(events, hasLength(50));
+      expect(completeness['reduced'], false);
+      expect(events, hasLength(500));
       expect(
         (events.first as Map)['message'],
-        startsWith('Playback diagnostic event 450 '),
+        startsWith('Playback diagnostic event 0 '),
       );
     },
   );

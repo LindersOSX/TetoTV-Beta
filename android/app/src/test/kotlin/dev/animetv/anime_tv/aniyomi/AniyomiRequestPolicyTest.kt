@@ -110,6 +110,7 @@ class AniyomiRequestPolicyTest {
         assertEquals(true, request["resolveLazyHosters"])
         assertEquals(8, request["lazyHosterLimit"])
         assertEquals(750L, request["hosterLoadTimeoutMs"])
+        assertEquals(600L, request["hosterWorkBudgetMs"])
         assertFalse(request.containsKey("timeoutMs"))
 
         for (limit in listOf(0, 9, -1, 1.5, Double.NaN)) {
@@ -124,6 +125,10 @@ class AniyomiRequestPolicyTest {
             )
         }
         rejects { AniyomiRequestPolicy.extensionEnvelope(base + ("hosterLoadTimeoutMs" to 1)) }
+        rejects { AniyomiRequestPolicy.extensionEnvelope(base + ("hosterWorkBudgetMs" to 1)) }
+        val full = AniyomiRequestPolicy.extensionEnvelope(base + ("timeoutMs" to 10_000))
+        assertEquals(6_000L, full["hosterLoadTimeoutMs"])
+        assertEquals(8_000L, full["hosterWorkBudgetMs"])
     }
 
     private fun rejects(block: () -> Unit) {

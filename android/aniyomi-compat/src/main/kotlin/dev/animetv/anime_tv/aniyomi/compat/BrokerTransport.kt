@@ -10,6 +10,7 @@ import okhttp3.CookieJar
 import okhttp3.Dns
 import okhttp3.EventListener
 import okhttp3.Headers
+import okhttp3.HttpUrl
 import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.Protocol
@@ -29,6 +30,7 @@ import java.net.URI
 import java.util.Base64
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.atomic.AtomicInteger
 import javax.net.SocketFactory
 import javax.net.ssl.HostnameVerifier
 import javax.net.ssl.SSLSocketFactory
@@ -57,22 +59,34 @@ internal class BrokerTransport(private val broker: (JSONObject) -> JSONObject) :
 
     private fun interceptChecked(chain: Interceptor.Chain): Response {
         // This is pinned to the published Aniyomi OkHttp 5 ABI, not reflection.
-        val call = chain.call() as? RealCall ?: throw AniyomiBrokerUnsupportedCapability()
+        val call = chain.call() as? RealCall ?: unsupported("client_configuration")
         val ownIndexes = call.client.interceptors.mapIndexedNotNull { index, interceptor ->
             index.takeIf { interceptor === this }
         }
-        if (call.forWebSocket || ownIndexes.size != 1 || call.client.networkInterceptors.isNotEmpty() ||
-            call.client.proxy != null || call.client.cache != null
-        ) throw AniyomiBrokerUnsupportedCapability()
+        if (call.forWebSocket) unsupported("client_websocket")
+        if (ownIndexes.size != 1) unsupported("client_chain")
+        if (call.client.proxy != null) unsupported("client_proxy")
+        if (call.client.cache != null) unsupported("client_cache")
         // Extensions commonly append rate-limit, header or parser interceptors
         // after cloning NetworkHelper.client. Run that remaining application
         // chain inside the isolated process, but always terminate at broker().
         val brokerTerminal = { request: Request ->
-            brokerRequest(
-                request,
-                followRedirects = call.client.followRedirects,
-                followSslRedirects = call.client.followSslRedirects,
-            )
+            // Newer extension helpers use network interceptors for rate limits.
+            // Execute their request/response callbacks in the same isolated,
+            // socket-free chain, never in the trusted process's real client.
+            ApplicationChain(
+                call = call,
+                interceptors = call.client.networkInterceptors,
+                index = 0,
+                currentRequest = request,
+                connectTimeout = chain.connectTimeoutMillis(),
+                readTimeout = chain.readTimeoutMillis(),
+                writeTimeout = chain.writeTimeoutMillis(),
+                networkAuthority = request.url,
+                terminal = { checked ->
+                    brokerRequest(checked, call.client.followRedirects, call.client.followSslRedirects)
+                },
+            ).proceed(request)
         }
         val remaining = call.client.interceptors.drop(ownIndexes.single() + 1)
         if (remaining.isNotEmpty()) {
@@ -95,12 +109,12 @@ internal class BrokerTransport(private val broker: (JSONObject) -> JSONObject) :
         // request must never inherit the status/size of an earlier response.
         lastResponse.set(null)
         if (!request.url.isHttps) throw AniyomiBrokerPolicyDenied()
-        if (request.method !in setOf("GET", "POST")) throw AniyomiBrokerUnsupportedCapability()
+        if (request.method !in setOf("GET", "POST")) unsupported("request_method")
         val headers = JSONObject()
         for (name in request.headers.names()) {
             val lower = name.lowercase()
             if (lower in CREDENTIAL_HEADERS) {
-                throw AniyomiBrokerUnsupportedCapability()
+                unsupported("credential_header")
             }
             // OkHttp derives these from the already-validated URL/body. Some
             // extensions redundantly set Host; ignoring it preserves ordinary
@@ -116,7 +130,7 @@ internal class BrokerTransport(private val broker: (JSONObject) -> JSONObject) :
                 if (lower in COMMA_JOINABLE_HEADERS) values.joinToString(", ") else values.last(),
             )
         }
-        if (headers.toString().length > 8192) throw AniyomiBrokerUnsupportedCapability()
+        if (headers.toString().length > 8192) unsupported("request_headers")
         val envelope = JSONObject().put("url", request.url.toString())
             .put("method", request.method).put("headers", headers)
             // Preserve provider client semantics for the trusted broker. The
@@ -126,10 +140,10 @@ internal class BrokerTransport(private val broker: (JSONObject) -> JSONObject) :
             .put("followSslRedirects", followSslRedirects)
         request.body?.let { body ->
             val size = body.contentLength()
-            if (size < 0 || size > MAX_REQUEST_BYTES) throw AniyomiBrokerUnsupportedCapability()
+            if (size < 0 || size > MAX_REQUEST_BYTES) unsupported("request_body")
             val buffer = Buffer()
             body.writeTo(buffer)
-            if (buffer.size > MAX_REQUEST_BYTES) throw AniyomiBrokerUnsupportedCapability()
+            if (buffer.size > MAX_REQUEST_BYTES) unsupported("request_body")
             envelope.put("bodyBase64", Base64.getEncoder().encodeToString(buffer.readByteArray()))
             body.contentType()?.let { headers.put("Content-Type", it.toString()) }
         }
@@ -187,24 +201,37 @@ internal class BrokerTransport(private val broker: (JSONObject) -> JSONObject) :
         private val connectTimeout: Int,
         private val readTimeout: Int,
         private val writeTimeout: Int,
+        private val networkAuthority: HttpUrl? = null,
+        private val proceeds: AtomicInteger = AtomicInteger(),
         private val terminal: (Request) -> Response,
     ) : Interceptor.Chain {
         override fun request(): Request = currentRequest
 
         override fun proceed(request: Request): Response {
+            if (networkAuthority != null) {
+                if (proceeds.getAndIncrement() != 0 ||
+                    request.url.scheme != networkAuthority.scheme ||
+                    request.url.host != networkAuthority.host || request.url.port != networkAuthority.port
+                ) unsupported("client_network_interceptor")
+            }
             if (index >= interceptors.size) return terminal(request)
-            return interceptors[index].intercept(
-                ApplicationChain(
-                    call,
-                    interceptors,
-                    index + 1,
-                    request,
-                    connectTimeout,
-                    readTimeout,
-                    writeTimeout,
-                    terminal,
-                ),
+            val next = ApplicationChain(
+                call,
+                interceptors,
+                index + 1,
+                request,
+                connectTimeout,
+                readTimeout,
+                writeTimeout,
+                networkAuthority = networkAuthority,
+                terminal = terminal,
             )
+            val response = interceptors[index].intercept(next)
+            if (networkAuthority != null && next.proceeds.get() != 1) {
+                response.close()
+                unsupported("client_network_interceptor")
+            }
+            return response
         }
 
         override fun connection(): Connection? = null
@@ -277,7 +304,9 @@ internal class BrokerTransport(private val broker: (JSONObject) -> JSONObject) :
             connectTimeout,
             readTimeout,
             writeTimeout,
-            terminal,
+            networkAuthority = networkAuthority,
+            proceeds = proceeds,
+            terminal = terminal,
         )
 
         private fun checkedTimeout(timeout: Int, unit: TimeUnit): Int {
@@ -287,10 +316,10 @@ internal class BrokerTransport(private val broker: (JSONObject) -> JSONObject) :
             return millis.toInt()
         }
 
-        private fun unsupportedTransportMutation(): Nothing = throw AniyomiBrokerUnsupportedCapability()
+        private fun unsupportedTransportMutation(): Nothing = unsupported("transport_mutation")
 
         private companion object {
-            val DENIED_DNS = Dns { throw AniyomiBrokerUnsupportedCapability() }
+            val DENIED_DNS = Dns { unsupported("direct_network") }
             val INERT_CONNECTION_POOL = ConnectionPool(0, 1, TimeUnit.NANOSECONDS)
             val DIRECT_ONLY_PROXY_SELECTOR = object : ProxySelector() {
                 override fun select(uri: URI?): List<Proxy> = listOf(Proxy.NO_PROXY)
@@ -302,7 +331,7 @@ internal class BrokerTransport(private val broker: (JSONObject) -> JSONObject) :
                 override fun createSocket(host: String?, port: Int, localHost: InetAddress?, localPort: Int): Socket = denied()
                 override fun createSocket(host: InetAddress?, port: Int): Socket = denied()
                 override fun createSocket(address: InetAddress?, port: Int, localAddress: InetAddress?, localPort: Int): Socket = denied()
-                private fun denied(): Nothing = throw AniyomiBrokerUnsupportedCapability()
+                private fun denied(): Nothing = unsupported("direct_network")
             }
         }
     }
@@ -315,6 +344,8 @@ internal class BrokerTransport(private val broker: (JSONObject) -> JSONObject) :
     }
 
     companion object {
+        private fun unsupported(reason: String): Nothing =
+            throw AniyomiBrokerUnsupportedCapability(AniyomiBrokerDiagnosticContext(reason = reason))
         private const val MAX_REQUEST_BYTES = 1024 * 1024
         // In-process DTO only: the worker receives these bytes through a
         // bounded read-only FD, never as a large Binder JSON transaction.

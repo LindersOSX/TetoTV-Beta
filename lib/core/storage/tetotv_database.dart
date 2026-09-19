@@ -2687,6 +2687,36 @@ Object? _sanitizeAniyomiDiagnosticField(String key, Object? value) {
         ? value
         : _omitAniyomiDiagnosticValue;
   }
+  if (key == 'broker_reason') {
+    return const {
+          'client_configuration',
+          'client_websocket',
+          'client_chain',
+          'client_network_interceptor',
+          'client_proxy',
+          'client_cache',
+          'credential_header',
+          'request_method',
+          'request_headers',
+          'request_body',
+          'transport_mutation',
+          'direct_network',
+          'request_envelope',
+          'http_method_unsupported',
+          'get_body_unsupported',
+          'http_request_too_large',
+          'http_headers_too_large',
+          'http_header_not_permitted',
+          'unsupported_http_field',
+          'http_request_limit',
+          'invalid_http_option',
+          'http_redirect_unsupported',
+          'http_redirect_limit',
+          'http_response_too_large',
+        }.contains(value)
+        ? value
+        : _omitAniyomiDiagnosticValue;
+  }
   if (const {
     'search_http_last_failure',
     'episode_http_last_failure',

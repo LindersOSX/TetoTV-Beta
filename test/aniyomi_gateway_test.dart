@@ -730,6 +730,7 @@ void main() {
       'broker_redirect_count': 3,
       'broker_response_size_bucket': '128to256k',
       'broker_status_class': '4xx',
+      'broker_reason': 'credential_header',
       'message': 'secret-token https://private.example/path',
     };
     try {
@@ -746,6 +747,7 @@ void main() {
         'broker_redirect_count': 3,
         'broker_response_size_bucket': '128to256k',
         'broker_status_class': '4xx',
+        'broker_reason': 'credential_header',
       });
       expect(error.toString(), isNot(contains('secret-token')));
     }
@@ -758,6 +760,7 @@ void main() {
       'broker_redirect_count': 99,
       'broker_response_size_bucket': 'private-size-token',
       'broker_status_class': 'private-status-token',
+      'broker_reason': 'private-header-token',
     };
     try {
       await bridge.call('status');

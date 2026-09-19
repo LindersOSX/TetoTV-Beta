@@ -15,6 +15,7 @@ class AniyomiFailure implements Exception {
     this.brokerRedirectCount,
     this.brokerResponseSizeBucket,
     this.brokerStatusClass,
+    this.brokerReason,
   });
   final String code;
   final String? stage;
@@ -23,6 +24,7 @@ class AniyomiFailure implements Exception {
   final int? brokerRedirectCount;
   final String? brokerResponseSizeBucket;
   final String? brokerStatusClass;
+  final String? brokerReason;
   factory AniyomiFailure.fromNative(Map<dynamic, dynamic>? raw) =>
       AniyomiFailure(
         _nativeErrorCodes.contains(raw?['error'])
@@ -53,6 +55,9 @@ class AniyomiFailure implements Exception {
             _nativeBrokerStatusClasses.contains(raw?['broker_status_class'])
             ? raw!['broker_status_class'] as String
             : null,
+        brokerReason: _nativeBrokerReasons.contains(raw?['broker_reason'])
+            ? raw!['broker_reason'] as String
+            : null,
       );
   Map<String, Object?> get brokerDiagnosticFields => {
     if (_nativeBrokerFailures.contains(brokerFailure))
@@ -63,6 +68,8 @@ class AniyomiFailure implements Exception {
       'broker_response_size_bucket': brokerResponseSizeBucket,
     if (_nativeBrokerStatusClasses.contains(brokerStatusClass))
       'broker_status_class': brokerStatusClass,
+    if (_nativeBrokerReasons.contains(brokerReason))
+      'broker_reason': brokerReason,
   };
   Map<String, Object?> get diagnosticFields => {
     'code': _nativeErrorCodes.contains(code) ? code : 'native_failure',
@@ -73,6 +80,33 @@ class AniyomiFailure implements Exception {
   @override
   String toString() => 'AniyomiFailure($code)';
 }
+
+const _nativeBrokerReasons = {
+  'client_configuration',
+  'client_websocket',
+  'client_chain',
+  'client_network_interceptor',
+  'client_proxy',
+  'client_cache',
+  'credential_header',
+  'request_method',
+  'request_headers',
+  'request_body',
+  'transport_mutation',
+  'direct_network',
+  'request_envelope',
+  'http_method_unsupported',
+  'get_body_unsupported',
+  'http_request_too_large',
+  'http_headers_too_large',
+  'http_header_not_permitted',
+  'unsupported_http_field',
+  'http_request_limit',
+  'invalid_http_option',
+  'http_redirect_unsupported',
+  'http_redirect_limit',
+  'http_response_too_large',
+};
 
 /// One scheduled native request and the only cancellation capability that may
 /// stop it. Every dispatched request receives an opaque scheduling ID so its

@@ -65,17 +65,46 @@ runtime. The implementation bodies in this module come from full Aniyomi
 - Provider application interceptors execute against a synthetic OkHttp 5.4
   chain. Timeout overrides and inert request metadata are supported, while DNS,
   proxy, TLS, cookie-jar, cache, socket and other transport mutations fail with
-  a fixed unsupported-capability error before the broker is invoked. Network
-  interceptors, WebSocket calls and direct transport remain unavailable. The
+  a fixed unsupported-capability error before the broker is invoked. Subset 9
+  also executes network-interceptor request/response callbacks in that isolated
+  synthetic chain, after application callbacks, for newer rate-limit helpers.
+  They cannot access a connection, change scheme/host/port, or proceed more or
+  less than once (including through timeout copies). They never run in the host's
+  real HTTP client. WebSocket calls and direct transport remain unavailable. The
   terminal interceptor reads redirect preferences from OkHttp 5.4's real call
   and sends only two booleans to the broker. Removing the broker gives no
   privileged fallback: the isolated worker UID has no network permission.
-- Non-HTTPS playback/page/track URLs and native MPV/FFmpeg arguments are rejected.
+- Broker failures include a closed, privacy-safe reason enum to distinguish
+  client configuration, forbidden credentials, request limits, and unsupported
+  callback operations. The host and Flutter independently validate these markers;
+  no request URL, header value, query, token or arbitrary exception is included.
+- Non-HTTPS playback/page/track URLs and native MPV/FFmpeg commands are rejected.
+  The exact advisory demuxer hints `demuxer-lavf-o=force_mpegts=1` and
+  `force_mpegts=1` are discarded without discarding an otherwise valid video.
+  They are never forwarded to any player; combined/unknown options still fail
+  closed. No source-specific exception grants native execution.
   Video extraction returns bounded parser order and API-16 sort hooks are
   honored. Provider preference UI and durable preference state are not supported.
   Only a small playback-header allowlist crosses the JSON boundary. The trusted
   host must independently validate returned hosts/grants/public DNS before any
   image or player consumes them. Syntactic HTTPS checks alone are not SSRF defense.
+
+### Subset 9 storage and packaged resources
+
+Approved immutable APK snapshots live in private `noBackupFilesDir`, not
+Android's update-evictable `codeCacheDir`. Existing cached snapshots are migrated
+with a bounded copy and content-hash check, then the normal signature and full
+approval-identity verification runs before execution. If Android already deleted
+the snapshot, the app offers an explicit reinstall and trust prompt; it never
+silently downloads, upgrades, approves a new signer, or downgrades a version.
+
+The isolated in-memory DEX loader exposes only `assets/` and `res/raw/` resources
+from the same verified APK through read-only in-memory URLs. This supports
+extension-bundled localization helpers used by search filters. No host resources,
+filesystem paths, or network URL handlers are supplied. Names, duplicates, entry
+count (256), entry size (1 MiB), and aggregate size (8 MiB) are bounded. The
+Android fixture harness exercises the actual DEX resource lookup and approved
+snapshot migration as well as private-file/direct-socket denial.
 
 WebView/Cloudflare challenges, extension-supplied native libraries, native
 player commands, arbitrary custom sockets, raw loopback/local HTTP services,

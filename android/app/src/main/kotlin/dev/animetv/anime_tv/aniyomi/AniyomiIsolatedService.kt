@@ -90,6 +90,7 @@ class AniyomiIsolatedService : Service() {
                             val failure = AniyomiRuntimeFailure.describe(error, "dex_load")
                             AniyomiWire.error(failure.errorCode).put("stage", failure.stage).put("cause", failure.category).apply {
                                 failure.brokerFailure?.let { put("broker_failure", it) }
+                                failure.brokerReason?.let { put("broker_reason", it) }
                                 failure.brokerRedirectCount?.let { put("broker_redirect_count", it) }
                                 failure.brokerResponseSizeBucket?.let { put("broker_response_size_bucket", it) }
                                 failure.brokerStatusClass?.let { put("broker_status_class", it) }
@@ -166,6 +167,7 @@ class AniyomiIsolatedService : Service() {
                 .put("cause", failure.category)
                 .apply {
                     failure.brokerFailure?.let { put("broker_failure", it) }
+                    failure.brokerReason?.let { put("broker_reason", it) }
                     failure.brokerRedirectCount?.let { put("broker_redirect_count", it) }
                     failure.brokerResponseSizeBucket?.let { put("broker_response_size_bucket", it) }
                     failure.brokerStatusClass?.let { put("broker_status_class", it) }
@@ -193,7 +195,7 @@ class AniyomiIsolatedService : Service() {
             val requestText = try {
                 AniyomiPolicy.boundedText(request.toString(), AniyomiPolicy.MAX_REQUEST_BYTES)
             } catch (_: Exception) {
-                throw AniyomiBrokerUnsupportedCapability()
+                throw AniyomiBrokerUnsupportedCapability(AniyomiBrokerDiagnosticContext(reason = "request_envelope"))
             }
             data.writeString(requestText)
             try {
@@ -223,7 +225,7 @@ class AniyomiIsolatedService : Service() {
                     require(redirects in 0..3)
                     require(size in AniyomiBrokerDiagnosticContext.SIZE_BUCKETS)
                     require(status in AniyomiBrokerDiagnosticContext.STATUS_CLASSES)
-                    AniyomiBrokerDiagnosticContext(redirects, size, status)
+                    AniyomiBrokerDiagnosticContext(redirects, size, status, result.optString("broker_reason", "none"))
                 } catch (_: Exception) {
                     throw AniyomiBrokerInvalidResponse()
                 }
@@ -257,6 +259,7 @@ class AniyomiIsolatedService : Service() {
             .joinToString("") { "%02x".format(it.toInt() and 255) }
         require(actualHash == expectedHash) { "worker_apk_integrity_failed" }
         val dex = sortedMapOf<Int, ByteBuffer>()
+        val resources = AniyomiApkResources()
         var total = 0
         ZipInputStream(bytes.inputStream()).use { zip ->
             var count = 0
@@ -264,6 +267,10 @@ class AniyomiIsolatedService : Service() {
                 val entry = zip.nextEntry ?: break
                 require(++count <= 4096)
                 require(!entry.name.startsWith("lib/") && !entry.name.endsWith(".so"))
+                if (!entry.isDirectory && AniyomiApkResources.validName(entry.name)) {
+                    resources.readEntry(entry.name, zip)
+                    continue
+                }
                 val match = Regex("classes([2-9][0-9]*)?\\.dex").matchEntire(entry.name) ?: continue
                 val index = match.groupValues[1].toIntOrNull() ?: 1
                 require(dex.size < 8 && index !in dex)
@@ -288,6 +295,7 @@ class AniyomiIsolatedService : Service() {
         require(dex.isNotEmpty()) { "dex_missing" }
         val parent = AniyomiExtensionParentClassLoader(
             checkNotNull(AniyomiCompatRuntime::class.java.classLoader),
+            resources,
         )
         return if (Build.VERSION.SDK_INT >= 27) {
             InMemoryDexClassLoader(dex.values.toTypedArray(), parent)

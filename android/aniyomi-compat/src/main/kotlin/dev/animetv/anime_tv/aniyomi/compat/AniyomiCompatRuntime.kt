@@ -48,9 +48,10 @@ import uy.kohesive.injekt.api.addSingleton
  * The worker owns the hard deadline/process kill, APK verification and loader lifetime.
  */
 object AniyomiCompatRuntime {
-    const val RUNTIME_REVISION = "aniyomi-39e9a749-tetotv-subset-8"
+    const val RUNTIME_REVISION = "aniyomi-39e9a749-tetotv-subset-10"
     const val MAX_LAZY_HOSTERS_PER_REQUEST = 8
-    const val MAX_HOSTER_LOAD_MS = 2_000L
+    const val MAX_HOSTER_LOAD_MS = 6_000L
+    const val MAX_HOSTER_WORK_MS = 8_000L
 
     @Synchronized
     fun execute(
@@ -335,6 +336,10 @@ object AniyomiCompatRuntime {
         episode: SEpisode,
         request: JSONObject,
     ): VideoSelection {
+        val workBudgetMs = request.optLong("hosterWorkBudgetMs", MAX_HOSTER_WORK_MS).also {
+            require(it in 1..MAX_HOSTER_WORK_MS) { "Invalid hoster work budget" }
+        }
+        val workDeadlineNanos = System.nanoTime() + workBudgetMs * NANOS_PER_MILLISECOND
         val originalHosters = atOperationStage("source_hosters") { source.getHosterList(episode) }
         if (originalHosters.size > MAX_ORIGINAL_HOSTERS) throw AniyomiResultLimitExceeded()
         val orderedHosters = if (source is AnimeHttpSource) source.run { originalHosters.sortHosters() } else originalHosters
@@ -372,6 +377,7 @@ object AniyomiCompatRuntime {
             source,
             eager + selectedLazy,
             hosterLoadTimeoutMs,
+            workDeadlineNanos,
         )
         schedule.outcomes.forEach { (index, outcome) -> outcomes[index] = outcome }
         // Three hostile eager calls can occupy every hard-bounded slot until
@@ -469,6 +475,7 @@ object AniyomiCompatRuntime {
         source: AnimeSource,
         hosters: List<IndexedHoster>,
         timeoutMs: Long,
+        workDeadlineNanos: Long,
     ): HosterSchedule {
         if (hosters.isEmpty()) return HosterSchedule(emptyMap(), emptySet())
         val pending = java.util.ArrayDeque(hosters)
@@ -487,9 +494,11 @@ object AniyomiCompatRuntime {
 
         try {
             while (pending.isNotEmpty() || active.isNotEmpty()) {
-                while (pending.isNotEmpty() && active.size < MAX_PARALLEL_HOSTERS) {
+                while (pending.isNotEmpty() && active.size < MAX_PARALLEL_HOSTERS &&
+                    System.nanoTime() < workDeadlineNanos) {
                     val indexed = pending.removeFirst()
-                    val deadlineNanos = System.nanoTime() + timeoutMs * NANOS_PER_MILLISECOND
+                    val deadlineNanos = minOf(workDeadlineNanos,
+                        System.nanoTime() + timeoutMs * NANOS_PER_MILLISECOND)
                     val job = taskScope.launch {
                         val outcome = try {
                             loadHosterVideos(source, indexed.hoster)
@@ -515,6 +524,10 @@ object AniyomiCompatRuntime {
                         state.job.cancel()
                     }
                 }
+
+                // Harvest completed siblings before returning; one slow hoster
+                // must not consume the outer process deadline and erase them.
+                if (now >= workDeadlineNanos) break
 
                 if (pending.isEmpty() && active.values.all { it.timedOut }) break
                 if (pending.isNotEmpty() && active.size == MAX_PARALLEL_HOSTERS &&
@@ -758,7 +771,14 @@ object AniyomiCompatRuntime {
         .put("genre", optionalResultText(item.genre, 1024)).put("status", item.status)
 
     private fun videoItem(video: Video): SerializedVideo {
-        if (video.mpvArgs.isNotEmpty() || video.ffmpegStreamArgs.isNotEmpty() || video.ffmpegVideoArgs.isNotEmpty()) {
+        // Some current providers add this exact demuxer hint to every otherwise
+        // standard HTTPS/HLS row. It is advisory, not a prerequisite to extraction.
+        // Discard it: NEVER forward provider options to MPV/FFmpeg/Media3. All
+        // other native arguments (including combined options) remain forbidden.
+        if (video.mpvArgs.any { it != ("demuxer-lavf-o" to "force_mpegts=1") } ||
+            video.ffmpegStreamArgs.any { it != ("force_mpegts" to "1") } ||
+            video.ffmpegVideoArgs.isNotEmpty()
+        ) {
             throw UnsupportedOperationException("Provider native player and FFmpeg arguments are forbidden")
         }
         val subtitles = tracks(video.subtitleTracks)

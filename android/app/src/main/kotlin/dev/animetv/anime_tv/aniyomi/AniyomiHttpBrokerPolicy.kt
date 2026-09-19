@@ -282,6 +282,9 @@ internal object AniyomiHttpBrokerFailurePolicy {
         "http_broker_unavailable",
     )
 
+    /** Only fixed validation markers, never arbitrary network/provider exception text. */
+    fun reason(error: Throwable): String = error.message?.takeIf { it in unsupportedReasons } ?: "none"
+
     fun code(error: Throwable): String {
         val reason = error.message
         return when {

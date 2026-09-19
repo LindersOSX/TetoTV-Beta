@@ -10,9 +10,19 @@ import java.util.List;
 import okhttp3.Request;
 import rx.Observable;
 
-/** Fixture DTOs have public example URLs, but no fixture performs HTTP requests. */
+/** DTOs are offline except the explicit, public example.com broker smoke. */
 public final class OfflineFixtureMangaSource extends FixtureMangaSource {
     @Override public String getBaseUrl() { return "https://example.com"; }
+    @Override public okhttp3.OkHttpClient getClient() {
+        return super.getClient().newBuilder()
+            .addInterceptor(chain -> chain.proceed(chain.request().newBuilder().tag(String.class, "fixture-rate-limit").build()))
+            .addNetworkInterceptor(chain -> {
+                if (chain.connection() != null || !"fixture-rate-limit".equals(chain.request().tag(String.class))) {
+                    throw new AssertionError("Unsafe or incorrectly ordered network callback");
+                }
+                return chain.proceed(chain.request());
+            }).build();
+    }
     private SManga item() {
         SManga item = SManga.Companion.create();
         item.setUrl("/fixture"); item.setTitle("Generated offline manga"); return item;

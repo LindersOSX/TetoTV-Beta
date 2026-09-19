@@ -5,6 +5,25 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class Media3BridgePolicyTest {
+    @Test fun hlsMimeAliasesSelectTheSameMedia3Source() {
+        for (mime in listOf("application/vnd.apple.mpegurl", "application/x-mpegURL",
+            "APPLICATION/VND.APPLE.MPEGURL; charset=utf-8", " application/x-mpegurl ")) {
+            assertEquals(androidx.media3.common.MimeTypes.APPLICATION_M3U8, Media3BridgePolicy.playbackMime(mime))
+            assertEquals(androidx.media3.common.MimeTypes.APPLICATION_M3U8, Media3BridgePolicy.normalizedExternalAudioMime(mime))
+        }
+        assertNull(Media3BridgePolicy.playbackMime(null))
+        assertEquals("video/mp4", Media3BridgePolicy.playbackMime("video/mp4; charset=binary"))
+        for (invalid in listOf("", "text/html", "application/javascript", "video/mp4\r\nX: invalid")) {
+            assertThrows(IllegalArgumentException::class.java) { Media3BridgePolicy.playbackMime(invalid) }
+        }
+    }
+
+    @Test fun nativeFailureClassificationsNeverCopyExceptionMessages() {
+        val privateMessage = "https://private.example/token?secret=value"
+        assertEquals("illegal_state", Media3BridgePolicy.exceptionKind(IllegalStateException(privateMessage)))
+        assertEquals("concurrent_modification", Media3BridgePolicy.exceptionKind(java.util.ConcurrentModificationException(privateMessage)))
+        assertEquals("other", Media3BridgePolicy.exceptionKind(Exception(privateMessage)))
+    }
     @Test
     fun `release poll requires the owned playback thread to terminate`() {
         assertEquals(

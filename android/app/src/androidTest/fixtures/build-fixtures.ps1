@@ -59,7 +59,7 @@ $fixtureClasspath = (@($fixtureUnitClasses) + $fixtureJars) -join [IO.Path]::Pat
 if ($LASTEXITCODE) { throw 'Fixture Java compilation failed' }
 $fixtureD8Args = @('--min-api', '26', '--lib', $fixtureAndroidJar, '--output', $fixtureDex)
 foreach ($jar in $fixtureJars | Where-Object { $_ -ne $fixtureAndroidJar }) { $fixtureD8Args += @('--classpath', $jar) }
-foreach ($name in @('FixtureAnimeSource.class', 'FixtureMangaSource.class')) {
+foreach ($name in @('FixtureAnimeSource.class', 'FixtureMangaSource.class', 'FormatHintVideoSource.class')) {
     $fixtureD8Args += Join-Path $fixtureUnitClasses "tetotv/fixture/$name"
 }
 $fixtureD8Args += @(Get-ChildItem -LiteralPath $fixtureClasses -Recurse -Filter '*.class' | Select-Object -ExpandProperty FullName)
@@ -70,7 +70,10 @@ foreach ($kind in @('anime', 'manga')) {
     & (Join-Path $fixtureTools 'aapt2.exe') link -o $unsignedApk --manifest (Join-Path $PSScriptRoot "$kind-manifest.xml") -I $fixtureAndroidJar
     if ($LASTEXITCODE) { throw 'Fixture manifest compilation failed' }
     $zip = [IO.Compression.ZipFile]::Open($unsignedApk, [IO.Compression.ZipArchiveMode]::Update)
-    try { [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, (Join-Path $fixtureDex 'classes.dex'), 'classes.dex') | Out-Null }
+    try {
+        [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, (Join-Path $fixtureDex 'classes.dex'), 'classes.dex') | Out-Null
+        [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, (Join-Path $PSScriptRoot 'messages_en.properties'), 'assets/i18n/messages_en.properties') | Out-Null
+    }
     finally { $zip.Dispose() }
     if ($kind -eq 'anime') { Copy-Item -LiteralPath $unsignedApk -Destination (Join-Path $fixtureAssets 'aniyomi-fixture-unsigned.apk') -Force }
     $signedApk = Join-Path $fixtureAssets "aniyomi-fixture-$kind.apk"

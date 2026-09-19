@@ -223,12 +223,21 @@ void main() {
         .toList();
     expect(appLibraries, hasLength(2));
     for (final entry in appLibraries) {
-      expect(entry['sourceLocator'], contains('Unpublished post-v2.0.74'));
-      expect(entry['sourceLocator'], isNot(equals('Git tag v2.0.74')));
+      // The release manifest now points to published source, not the pre-2.0.75
+      // staging placeholder. Keep checking a concrete repo/tag locator without
+      // requiring that obsolete placeholder after every release.
+      expect(
+        entry['sourceLocator'],
+        matches(
+          RegExp(
+            r'^https://github\.com/LindersOSX/TetoTV-Beta/tree/v[12]\.\d+\.\d+$',
+          ),
+        ),
+      );
     }
     expect(
       (manifest['knownProvenanceLimits'] as List<dynamic>).join('\n'),
-      contains('replace their source locator'),
+      isNot(contains('replace their source locator')),
     );
 
     final releaseVerifier = File(

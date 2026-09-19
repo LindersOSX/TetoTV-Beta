@@ -46,6 +46,7 @@ internal class AniyomiHttpBroker(
         diagnostics.recordFailure(code)
         return AniyomiWire.error(code)
             .put("broker_failure", AniyomiHttpBrokerFailurePolicy.failureName(code))
+            .put("broker_reason", AniyomiHttpBrokerFailurePolicy.reason(error))
             .put("broker_redirect_count", context.redirectCount.coerceIn(0, 3))
             .put("broker_response_size_bucket", context.responseSizeBucket)
             .put("broker_status_class", context.statusClass)

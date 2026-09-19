@@ -1,6 +1,6 @@
 # First-party Aniyomi isolation fixture
 
-These are generated test providers, not downloads from an extension repository. They are not installed as Android applications. Their signed APK bytes are imported into TetoTV's private cache, explicitly approved by the test, then loaded only in the disposable isolated service. Generated APKs are ignored by Git and are assets of the separate `androidTest` APK only; neither fixture classes nor fixture APKs belong in the normal debug/release app.
+These are generated test providers, not downloads from an extension repository. They are not installed as Android applications. Their signed APK bytes are imported into TetoTV's private, non-backed-up snapshot storage, explicitly approved by the test, then loaded only in the disposable isolated service. Generated APKs are ignored by Git and are assets of the separate `androidTest` APK only; neither fixture classes nor fixture APKs belong in the normal debug/release app.
 
 Preparation (from the repository's `android` directory):
 
@@ -27,6 +27,24 @@ The harness also checks fixed ABI/capability error stage/cause transport without
 provider exception text, and local P-256 key generation/ECDH through the native
 phone-setup bridge. The crypto check makes no setup-session POST and emits no
 key material.
+
+Subset 9 also checks resource-backed search using UTF-8 properties inside the
+fixture APK, safe omission of advisory video-format hints, and migration of an
+approved fixture snapshot from the legacy code cache to durable private storage.
+The public broker smoke traverses application and network callbacks from fixture
+DEX, verifies their ordering and absence of a real network connection, then uses
+the same trusted HTTPS broker.
+It removes only that fixture's old cache file and reopens the approved snapshot
+through a fresh store, preserving the actual signer/content-hash checks.
+
+An opt-in `authorizedAnikotoCurrent=true` check uses the existing split
+`authorizedAnikotoPayload` / `authorizedAnikotoPayloadPart2` arguments for only
+the separately supplied 89,071-byte Anikoto 16.8 APK, SHA-256
+`dabc93fa80b03c38cdf5adf0f9cd1b7ce5e9cbb15f282d0b6d815a061474117b`.
+It retains the existing Yuzono certificate/package/source pins and checks the
+exact One Piece title, episode 1, and nonempty extracted HTTPS videos without
+playing/downloading media. Like other live checks it can fail for external
+provider/network reasons; it is not a universal compatibility guarantee.
 
 Run this harness against a **non-debuggable, minified** debug-signed test app as well as ordinary
 debug. `debuggable=true` suppresses release-mode R8 optimization and renaming,

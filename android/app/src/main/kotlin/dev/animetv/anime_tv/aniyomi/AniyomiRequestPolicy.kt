@@ -109,6 +109,11 @@ internal object AniyomiRequestPolicy {
             envelope["lazyHosterLimit"] = value.toInt()
         }
         if (operation == "videos") {
+            val budget = operationBudgetMs ?: AniyomiPolicy.MAX_OPERATION_BUDGET_MS
+            envelope["hosterWorkBudgetMs"] = minOf(
+                (budget - minOf(1_500L, budget / 5)).coerceAtLeast(1L),
+                AniyomiCompatRuntime.MAX_HOSTER_WORK_MS,
+            )
             envelope["hosterLoadTimeoutMs"] = minOf(
                 operationBudgetMs ?: AniyomiCompatRuntime.MAX_HOSTER_LOAD_MS,
                 AniyomiCompatRuntime.MAX_HOSTER_LOAD_MS,

@@ -304,6 +304,22 @@ class AniyomiCompatRuntimeTest {
         assertFalse(result.toString().contains("http://"))
     }
 
+    @Test fun formatOnlyHintsDoNotDiscardValidVideosOrReachThePlayer() {
+        val result = execute(FormatHintVideoSource::class.java, "anime", "videos")
+        assertEquals(1, result.getJSONArray("videos").length())
+        assertEquals("https://media.example.test/fixture.m3u8", result.getJSONArray("videos").getJSONObject(0).getString("url"))
+        assertFalse(result.toString().contains("force_mpegts"))
+        assertFalse(result.toString().contains("mpvArgs"))
+        assertFalse(result.toString().contains("ffmpeg"))
+    }
+
+    @Test fun formatHintCannotSmuggleCombinedOrOtherNativeArguments() {
+        val result = execute(MixedNativeOptionsSource::class.java, "anime", "videos")
+        assertEquals(1, result.getJSONArray("videos").length())
+        assertEquals(4, result.getInt("discardedVideoCount"))
+        assertEquals("safe", result.getJSONArray("videos").getJSONObject(0).getString("quality"))
+    }
+
     @Test fun legacyHttpSourcesApplyProviderVideoOrdering() {
         val result = execute(SortedLegacyVideoAnimeSource::class.java, "anime", "videos")
         val videos = result.getJSONArray("videos")
@@ -496,6 +512,24 @@ class AniyomiCompatRuntimeTest {
         assertFalse(result.toString().contains("provider-secret"))
     }
 
+    @Test fun api16AllowsHealthyExtractionBeyondTwoSeconds() {
+        val result = execute(SlowHealthyApi16AnimeSource::class.java, "anime", "videos", apiVersion = "16")
+        assertEquals(1, result.getJSONArray("videos").length())
+    }
+
+    @Test fun api16ReturnsFastSiblingsWithinAggregateHosterBudget() {
+        StalledSiblingApi16AnimeSource.resetTestState()
+        val started = System.nanoTime()
+        val result = try {
+            execute(StalledSiblingApi16AnimeSource::class.java, "anime", "videos", apiVersion = "16",
+                requestFields = mapOf("hosterLoadTimeoutMs" to 6_000, "hosterWorkBudgetMs" to 150))
+        } finally {
+            StalledSiblingApi16AnimeSource.releaseStall()
+        }
+        assertTrue(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started) < 1_500)
+        assertTrue(result.getJSONArray("videos").length() > 0)
+    }
+
     @Test fun api16ExplicitlyResolvesBoundedLazyHostersForFlattenedClients() {
         val result = execute(
             AllLazyApi16AnimeSource::class.java,
@@ -667,11 +701,11 @@ class AniyomiCompatRuntimeTest {
         assertEquals("Fixture manga", result.getJSONArray("items").getJSONObject(0).getString("title"))
     }
 
-    @Test fun providerNetworkInterceptorsRemainUnsupported() {
-        val failure = assertThrows(AniyomiRuntimeFailure::class.java) {
-            execute(NetworkInterceptorMangaSource::class.java, "manga", "search") { error("Broker must not run") }
+    @Test fun providerNetworkCallbacksReachOnlyTheBrokerBoundary() {
+        val result = execute(NetworkInterceptorMangaSource::class.java, "manga", "search") { request ->
+            response("<a class='series' href='/series'>Fixture manga</a>", request)
         }
-        assertEquals("unsupported_capability", failure.category)
+        assertEquals("Fixture manga", result.getJSONArray("items").getJSONObject(0).getString("title"))
     }
 
     @Test fun unknownApiFailsBeforeLoadingClasses() {
@@ -908,6 +942,24 @@ class UnsafeVideoSource : FixtureAnimeSource() {
     )))
 }
 
+class FormatHintVideoSource : FixtureAnimeSource() {
+    override fun fetchVideoList(episode: SEpisode) = Observable.just(listOf(Video(
+        videoUrl = "https://media.example.test/fixture.m3u8",
+        mpvArgs = listOf("demuxer-lavf-o" to "force_mpegts=1"),
+        ffmpegStreamArgs = listOf("force_mpegts" to "1"),
+    )))
+}
+
+class MixedNativeOptionsSource : FixtureAnimeSource() {
+    override fun fetchVideoList(episode: SEpisode) = Observable.just(listOf(
+        Video(videoUrl = "https://media.example.test/a.m3u8", mpvArgs = listOf("demuxer-lavf-o" to "force_mpegts=1,other=unsafe")),
+        Video(videoUrl = "https://media.example.test/b.m3u8", ffmpegStreamArgs = listOf("force_mpegts" to "1", "other" to "unsafe")),
+        Video(videoUrl = "https://media.example.test/c.m3u8", ffmpegVideoArgs = listOf("force_mpegts" to "1")),
+        Video(videoUrl = "https://media.example.test/d.m3u8", mpvArgs = listOf("script" to "/unsafe.lua")),
+        Video(videoUrl = "https://media.example.test/safe.m3u8", videoTitle = "safe"),
+    ))
+}
+
 class PreferenceConstructingAnimeSource : FixtureAnimeSource() {
     private val preferences = Injekt.get<Application>().getSharedPreferences("source_42", Context.MODE_PRIVATE)
     private val constructionCount = preferences.getInt("construction_count", 0) + 1
@@ -1102,6 +1154,18 @@ class StalledSiblingApi16AnimeSource : AnimeSource {
         fun releaseStall() {
             stallRelease.countDown()
         }
+    }
+}
+
+class SlowHealthyApi16AnimeSource : AnimeSource {
+    override val id = 169L
+    override val name = "Slow healthy hoster fixture"
+    override suspend fun getSeasonList(anime: SAnime): List<SAnime> = emptyList()
+    override suspend fun getHosterList(episode: SEpisode): List<Hoster> = listOf(
+        Hoster(hosterUrl = "https://hoster.example.test/slow", hosterName = "slow"))
+    override suspend fun getVideoList(hoster: Hoster): List<Video> {
+        delay(2_200)
+        return listOf(Video(videoUrl = "https://media.example.test/slow.mp4", videoTitle = "fixture", initialized = true))
     }
 }
 

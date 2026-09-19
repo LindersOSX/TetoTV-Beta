@@ -309,7 +309,25 @@ class PlayerReleaseCoordinator {
 String playerReleaseFailureCode(Object? error) {
   if (error is PlatformException) {
     final code = error.code.trim().toLowerCase();
-    return const {'media3_release_pending', 'media3_closed'}.contains(code)
+    final details = error.details;
+    if (code == 'media3_command_failed' && details is Map) {
+      final kind = details['exceptionKind'];
+      if (const {
+        'network_on_main_thread',
+        'concurrent_modification',
+        'security',
+        'illegal_state',
+      }.contains(kind)) {
+        return 'media3_$kind';
+      }
+    }
+    return const {
+          'media3_release_pending',
+          'media3_closed',
+          'media3_command_failed',
+          'media3_invalid_argument',
+          'media3_unsupported',
+        }.contains(code)
         ? code
         : 'platform_error';
   }

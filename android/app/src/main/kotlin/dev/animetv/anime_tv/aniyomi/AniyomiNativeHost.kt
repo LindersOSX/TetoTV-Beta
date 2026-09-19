@@ -449,7 +449,8 @@ class AniyomiNativeHost(context: Context, private val isDeveloperModeEnabled: ()
                                 AniyomiFailurePolicy.sanitize(response.optString("error"),
                                     response.optString("stage"), response.optString("cause"),
                                     response.optString("broker_failure"), response.optInt("broker_redirect_count", -1),
-                                    response.optString("broker_response_size_bucket"), response.optString("broker_status_class"))
+                                    response.optString("broker_response_size_bucket"), response.optString("broker_status_class"),
+                                    response.optString("broker_reason"))
                             }
                             finish(this@Pending, checked)
                         } catch (_: Exception) { finish(this@Pending, errorMap("invalid_or_revoked_extension_result")) }

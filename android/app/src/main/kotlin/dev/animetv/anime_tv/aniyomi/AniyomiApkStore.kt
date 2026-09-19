@@ -15,7 +15,11 @@ import org.json.JSONObject
 
 /** Trusted host only. No class loading, application contexts or writable files cross into the worker. */
 internal class AniyomiApkStore(private val context: Context) {
-    private val root = File(context.codeCacheDir, "aniyomi-verified").apply { mkdirs() }.canonicalFile
+    private val snapshots = AniyomiSnapshotStorage(
+        File(context.noBackupFilesDir, "aniyomi-verified"),
+        File(context.codeCacheDir, "aniyomi-verified"),
+    )
+    private val root = snapshots.root
     private val preferences = context.getSharedPreferences("aniyomi_native_approvals_v1", Context.MODE_PRIVATE)
     private val inspections = linkedMapOf<String, JSONObject>()
 
@@ -115,11 +119,7 @@ internal class AniyomiApkStore(private val context: Context) {
     }
 
     private fun snapshot(identity: JSONObject): File {
-        val hash = identity.getString("apkSha256")
-        require(hash.matches(Regex("[0-9a-f]{64}"))) { "invalid_snapshot_identity" }
-        return File(root, "$hash.apk").canonicalFile.also {
-            require(it.parentFile == root && it.isFile) { "snapshot_unavailable" }
-        }
+        return snapshots.resolve(identity.getString("apkSha256"))
     }
 
     @Suppress("DEPRECATION")

@@ -293,6 +293,88 @@ void main() {
   });
 
   testWidgets(
+    'missing cached APK offers explicit reinstall with trust confirmation',
+    (tester) async {
+      final extension = _extension(0);
+      final harness = _Harness(
+        state: AniyomiState(
+          available: true,
+          catalog: [extension],
+          approved: [
+            {
+              'extensionId': extension.identityKey,
+              'packageName': extension.packageName,
+              'kind': 'anime',
+              'versionName': extension.versionName,
+            },
+          ],
+          readiness: {
+            extension.identityKey: const AniyomiReadiness(
+              AniyomiReadinessStage.failed,
+              failure: AniyomiFailure('snapshot_unavailable'),
+            ),
+          },
+        ),
+      );
+      await harness.pump(tester, size: const Size(480, 850));
+      await _show(
+        tester,
+        find.text('Extension files missing • reinstall needed'),
+      );
+      expect(find.text('Retry source discovery'), findsNothing);
+      expect(harness.controller.catalogRefreshes, 0);
+      await _tapVisible(tester, find.text('Reinstall extension'));
+      await tester.pumpAndSettle();
+      expect(harness.controller.catalogRefreshes, 1);
+      expect(harness.controller.inspected, [extension.packageName]);
+      expect(find.text('Trust this experimental extension?'), findsOneWidget);
+      expect(harness.controller.approved, isEmpty);
+      await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+      await tester.pumpAndSettle();
+      expect(harness.controller.approved, isEmpty);
+      expect(harness.controller.retried, isEmpty);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'missing APK without matching repository does not revoke or approve',
+    (tester) async {
+      final harness = _Harness(
+        state: const AniyomiState(
+          available: true,
+          approved: [
+            {
+              'extensionId': 'fixture',
+              'packageName': 'test.fixture',
+              'kind': 'anime',
+            },
+          ],
+          readiness: {
+            'fixture': AniyomiReadiness(
+              AniyomiReadinessStage.failed,
+              failure: AniyomiFailure('snapshot_unavailable'),
+            ),
+          },
+        ),
+      );
+      await harness.pump(tester);
+      await _tapVisible(tester, find.text('Reinstall extension'));
+      await tester.pumpAndSettle();
+      expect(
+        find.text(
+          'This extension is no longer in your repositories. Add its repository again to reinstall it.',
+        ),
+        findsOneWidget,
+      );
+      expect(harness.controller.inspected, isEmpty);
+      expect(harness.controller.approved, isEmpty);
+      expect(harness.controller.state.approved, hasLength(1));
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
     'disabling Developer Mode invalidates a pending trust confirmation',
     (tester) async {
       final harness = _Harness(
@@ -904,6 +986,13 @@ class _FixtureController extends AniyomiController {
   final approved = <String>[];
   final added = <(AniyomiMediaKind, String)>[];
   final retried = <String>[];
+  int catalogRefreshes = 0;
+  @override
+  Future<void> refreshCatalog() async {
+    gateway.check(gateway.generation);
+    catalogRefreshes++;
+  }
+
   void replaceCatalog(List<AniyomiRepositoryExtension> catalog) {
     state = state.copyWith(catalog: catalog);
   }

@@ -5,6 +5,13 @@ import java.util.Locale
 
 /** Pure validation shared by the platform bridge and JVM contract tests. */
 internal object Media3BridgePolicy {
+    fun exceptionKind(error: Exception): String = when {
+        error.javaClass.name == "android.os.NetworkOnMainThreadException" -> "network_on_main_thread"
+        error is java.util.ConcurrentModificationException -> "concurrent_modification"
+        error is SecurityException -> "security"
+        error is IllegalStateException -> "illegal_state"
+        else -> "other"
+    }
     const val MAX_SIDECAR_BYTES = 2 * 1024 * 1024
     const val MAX_SIDECARS = 32
     const val MAX_AUDIO_SIDECARS = 8
@@ -68,6 +75,22 @@ internal object Media3BridgePolicy {
                 "application/octet-stream",
             )
         }
+    }
+
+    // The app-owned HLS proxy uses the registered vendor MIME; Media3 uses
+    // x-mpegURL internally. Normalize both before selecting a MediaSource.
+    fun playbackMime(value: String?): String? {
+        val mime = value?.lowercase(Locale.ROOT)?.substringBefore(';')?.trim() ?: return null
+        return when (mime) {
+            "application/vnd.apple.mpegurl", "application/x-mpegurl" -> "application/x-mpegURL"
+            "application/dash+xml", "video/mp4", "video/webm", "video/x-matroska",
+            "video/mp2t", "application/octet-stream" -> mime
+            else -> throw IllegalArgumentException("invalid_media_mime")
+        }
+    }
+
+    fun normalizedExternalAudioMime(value: String?): String? = externalAudioMime(value)?.let {
+        if (it == "application/vnd.apple.mpegurl" || it == "application/x-mpegurl") "application/x-mpegURL" else it
     }
 
     fun mergedChildIndex(trackGroupId: String): Int? {

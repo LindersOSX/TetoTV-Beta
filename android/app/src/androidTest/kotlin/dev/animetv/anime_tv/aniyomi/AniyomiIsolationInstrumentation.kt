@@ -19,6 +19,8 @@ import java.util.concurrent.atomic.AtomicReference
 
 /** Runs only in the separately built androidTest APK. No dependency on a provider repository. */
 class AniyomiIsolationInstrumentation : Instrumentation() {
+    private var inspectMedia3Playback = false
+    private var inspectMedia3PublicHttps = false
     private var inspectAuthorizedAnimeGG = false
     private var authorizedAnimeGGPayload: String? = null
     private var inspectAuthorizedAnimeGGStreams = false
@@ -26,18 +28,22 @@ class AniyomiIsolationInstrumentation : Instrumentation() {
     private var authorizedKickAssAnimePayload: String? = null
     private var inspectAuthorizedKickAssAnimeStreams = false
     private var inspectAuthorizedAnikoto = false
+    private var inspectAuthorizedAnikotoCurrent = false
     private var authorizedAnikotoPayload: String? = null
     private var authorizedAnikotoPayloadPart2: String? = null
     private var inspectAuthorizedOneTwoThreeAnime = false
     private var authorizedOneTwoThreeAnimePayload: String? = null
     override fun onCreate(arguments: Bundle?) {
+        inspectMedia3Playback = arguments?.getString("media3Playback") == "true"
+        inspectMedia3PublicHttps = arguments?.getString("media3PublicHttps") == "true"
         inspectAuthorizedAnimeGG = arguments?.getString("authorizedAnimeGG") == "true"
         authorizedAnimeGGPayload = arguments?.getString("authorizedAnimeGGPayload")
         inspectAuthorizedAnimeGGStreams = arguments?.getString("authorizedAnimeGGStreams") == "true"
         inspectAuthorizedKickAssAnime = arguments?.getString("authorizedKickAssAnime") == "true"
         authorizedKickAssAnimePayload = arguments?.getString("authorizedKickAssAnimePayload")
         inspectAuthorizedKickAssAnimeStreams = arguments?.getString("authorizedKickAssAnimeStreams") == "true"
-        inspectAuthorizedAnikoto = arguments?.getString("authorizedAnikoto") == "true"
+        inspectAuthorizedAnikotoCurrent = arguments?.getString("authorizedAnikotoCurrent") == "true"
+        inspectAuthorizedAnikoto = arguments?.getString("authorizedAnikoto") == "true" || inspectAuthorizedAnikotoCurrent
         authorizedAnikotoPayload = arguments?.getString("authorizedAnikotoPayload")
         authorizedAnikotoPayloadPart2 = arguments?.getString("authorizedAnikotoPayloadPart2")
         inspectAuthorizedOneTwoThreeAnime = arguments?.getString("authorizedOneTwoThreeAnime") == "true"
@@ -51,6 +57,11 @@ class AniyomiIsolationInstrumentation : Instrumentation() {
         var enabled = true
         val sentinel = File(targetContext.filesDir, "aniyomi-isolation-fixture-sentinel")
         try {
+            if (inspectMedia3Playback) {
+                results.putString("stream", dev.animetv.anime_tv.player.Media3PlaybackInstrumentation.run(this, inspectMedia3PublicHttps) + "\n")
+                finish(Activity.RESULT_OK, results)
+                return
+            }
             AniyomiHttpReplyInstrumentation.run(targetContext, context)
             results.putString("httpBodyTransport", "PASS: isolated Binder 4-MiB read-only unlinked FD + digest; small Parcel, sender-close, malformed/cancelled read checks")
             checkPhoneSetupCrypto()
@@ -74,8 +85,13 @@ class AniyomiIsolationInstrumentation : Instrumentation() {
                     check(second == null || first != null)
                     val payload = first?.let { it + (second ?: "") }
                     inspectAuthorizedProxyFixture(
-                        host, "Anikoto 14.6", "authorized-anikoto-14.6.apk", payload,
-                        113_533, "002fb7d9b9a59b70bc9fcae20e2f5bf7025f868530e73e20815c28e981236c80",
+                        host,
+                        if (inspectAuthorizedAnikotoCurrent) "Anikoto 16.8" else "Anikoto 14.6",
+                        if (inspectAuthorizedAnikotoCurrent) "authorized-anikoto-16.8.apk" else "authorized-anikoto-14.6.apk",
+                        payload,
+                        if (inspectAuthorizedAnikotoCurrent) 89_071 else 113_533,
+                        if (inspectAuthorizedAnikotoCurrent) "dabc93fa80b03c38cdf5adf0f9cd1b7ce5e9cbb15f282d0b6d815a061474117b"
+                            else "002fb7d9b9a59b70bc9fcae20e2f5bf7025f868530e73e20815c28e981236c80",
                         "eu.kanade.tachiyomi.animeextension.en.anikoto", "Anikoto", "4697393375201558791",
                     )
                 } else {
@@ -227,6 +243,21 @@ class AniyomiIsolationInstrumentation : Instrumentation() {
             check((anime["apkSha256"] as String).length == 64)
             check(host.approve(anime.getValue("inspectionId") as String)["ok"] == true)
             val animeId = anime.getValue("extensionId") as String
+            // Simulate a pre-fix cache snapshot, migrate through the real signer/hash
+            // verification path, then remove only this fixture's old cached file.
+            val durableFile = File(targetContext.noBackupFilesDir, "aniyomi-verified/${anime["apkSha256"]}.apk")
+            check(durableFile.isFile)
+            val legacyDirectory = File(targetContext.codeCacheDir, "aniyomi-verified").apply { mkdirs() }
+            val legacyFile = File(legacyDirectory, durableFile.name)
+            durableFile.copyTo(legacyFile, overwrite = true)
+            check(legacyFile.setReadOnly() && durableFile.delete())
+            check(await { host.request(mapOf("extensionId" to animeId, "operation" to "sources"), it) }["ok"] == true)
+            check(durableFile.isFile && legacyFile.delete())
+            val reopened = AniyomiNativeHost(targetContext) { enabled }
+            try {
+                check(await { reopened.request(mapOf("extensionId" to animeId, "operation" to "sources"), it) }["ok"] == true)
+            } finally { reopened.close() }
+            results.putString("snapshotStorage", "PASS: approved APK migrated from old cache, signer/hash reverified, fresh store survives cache-file removal")
             val sources = data(await { host.request(mapOf("extensionId" to animeId, "operation" to "sources"), it) })
             check((sources["sources"] as List<*>).size == 1)
             val noHttp = mapOf("requestCount" to 0, "requestLimit" to 16, "failureCount" to 0,
@@ -243,7 +274,7 @@ class AniyomiIsolationInstrumentation : Instrumentation() {
                     "query" to "isolation:${Process.myUid()}:${sentinel.absolutePath}"), it) }
                 check(response["ok"] == true) { "$operation failed: $response" }
             }
-            results.putString("anime", "PASS: sources, search, details, episodes, videos; isolated UID, private-file denial, direct-socket denial")
+            results.putString("anime", "PASS: sources, asset-backed search, details, episodes, format-hint videos; isolated UID, private-file denial, direct-socket denial")
             for ((query, category) in listOf("failure-abi" to "method_missing", "failure-capability" to "unsupported_capability")) {
                 val failure = await { host.request(mapOf("extensionId" to animeId, "sourceId" to "42",
                     "operation" to "search", "query" to query), it) }
@@ -307,7 +338,8 @@ class AniyomiIsolationInstrumentation : Instrumentation() {
                 "\nAniyomi first-party isolated-process harness: ALL CHECKS PASSED\n")
             finish(Activity.RESULT_OK, results)
         } catch (error: Throwable) {
-            results.putString("stream", "Aniyomi fixture FAILED: ${error.javaClass.simpleName}: ${error.message}\n${error.stackTraceToString()}")
+            val completedChecks = results.keySet().sorted().joinToString("\n") { "$it: ${results.getString(it)}" }
+            results.putString("stream", "$completedChecks\nAniyomi fixture FAILED: ${error.javaClass.simpleName}: ${error.message}\n${error.stackTraceToString()}")
             finish(Activity.RESULT_CANCELED, results)
         } finally {
             if (inspectAuthorizedAnimeGG || inspectAuthorizedKickAssAnime ||
@@ -315,6 +347,7 @@ class AniyomiIsolationInstrumentation : Instrumentation() {
             if (inspectAuthorizedAnimeGG) File(targetContext.cacheDir, "authorized-animegg-14.2.apk").delete()
             if (inspectAuthorizedKickAssAnime) File(targetContext.cacheDir, "authorized-kickassanime-14.61.apk").delete()
             if (inspectAuthorizedAnikoto) File(targetContext.cacheDir, "authorized-anikoto-14.6.apk").delete()
+            if (inspectAuthorizedAnikotoCurrent) File(targetContext.cacheDir, "authorized-anikoto-16.8.apk").delete()
             if (inspectAuthorizedOneTwoThreeAnime) File(targetContext.cacheDir, "authorized-onetwothreeanime-14.2.apk").delete()
             host?.close()
             sentinel.delete()
@@ -377,7 +410,7 @@ class AniyomiIsolationInstrumentation : Instrumentation() {
             } ?: error("Authorized $label exact episode 1 missing (${episodes.size} targeted rows)")
             val videoResponse = await { host.request(mapOf("extensionId" to extensionId,
                 "sourceId" to source["id"], "operation" to "videos", "url" to episode["url"],
-                "title" to episode["name"]), it) }
+                "title" to episode["name"], "resolveLazyHosters" to true), it) }
             check(videoResponse["ok"] == true) {
                 "Authorized $label videos failed after ${matches.size} search rows, details and ${episodes.size} targeted episodes: $videoResponse"
             }

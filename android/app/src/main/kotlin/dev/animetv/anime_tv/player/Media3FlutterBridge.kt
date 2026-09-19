@@ -191,8 +191,11 @@ class Media3FlutterBridge(context: Context, engine: FlutterEngine) :
             result.error("media3_unsupported", "The selected format or decoder is unavailable in Media3 on this device.", null)
         } catch (_: IllegalArgumentException) {
             result.error("media3_invalid_argument", "Invalid Media3 playback argument.", null)
-        } catch (_: Exception) {
-            result.error("media3_command_failed", "Media3 could not complete the playback command.", null)
+        } catch (error: Exception) {
+            // Only closed classifications leave native code, never exception
+            // messages, stack frames, media URLs, or request headers.
+            result.error("media3_command_failed", "Media3 could not complete the playback command.",
+                mapOf("exceptionKind" to Media3BridgePolicy.exceptionKind(error)))
         }
     }
 
@@ -460,9 +463,8 @@ private class Media3Session(
             val fields = item as? Map<*, *> ?: throw IllegalArgumentException("invalid_audio_sidecar")
             parseAudioSidecar(fields)
         }
-        val mimeType = (raw["mimeType"] as? String)?.lowercase()?.substringBefore(';')?.trim()
-        require(mimeType == null || mimeType in setOf(MimeTypes.APPLICATION_M3U8, "application/x-mpegurl", MimeTypes.APPLICATION_MPD, "video/mp4", "video/webm", "video/x-matroska", "video/mp2t", "application/octet-stream"))
-        val next = OpenRequest(uri, headers, nextOpenId, parsed, parsedAudio, if (mimeType == "application/x-mpegurl") MimeTypes.APPLICATION_M3U8 else mimeType, endMs)
+        val mimeType = Media3BridgePolicy.playbackMime(raw["mimeType"] as? String)
+        val next = OpenRequest(uri, headers, nextOpenId, parsed, parsedAudio, mimeType, endMs)
         releasePlayer()
         request = next
         openId = nextOpenId
@@ -790,7 +792,7 @@ private class Media3Session(
     private fun parseAudioSidecar(raw: Map<*, *>): AudioSidecar {
         val uri = raw["uri"] as? String ?: throw IllegalArgumentException("invalid_audio_sidecar")
         require(Media3BridgePolicy.ownedLoopbackAudioUri(uri))
-        val mime = requireNotNull(Media3BridgePolicy.externalAudioMime(raw["mimeType"] as? String)) {
+        val mime = requireNotNull(Media3BridgePolicy.normalizedExternalAudioMime(raw["mimeType"] as? String)) {
             "invalid_audio_sidecar_mime"
         }
         fun label(key: String, max: Int) = (raw[key] as? String)
@@ -799,7 +801,7 @@ private class Media3Session(
             uri,
             label("title", 160),
             label("language", 32),
-            if (mime == "application/x-mpegurl") MimeTypes.APPLICATION_M3U8 else mime,
+            mime,
         )
     }
 
@@ -1077,33 +1079,28 @@ private class Media3Session(
         val client = httpClient
         httpClient = null
         activeMediaSourceFactory = null
-        client?.dispatcher?.cancelAll()
-        try {
-            // Media3 performs codec teardown on its playback thread and bounds
-            // the main-looper wait with the configured release timeout. The
-            // default Builder gives this player its own playback thread; that
-            // thread ending is the public, observable completion barrier.
-            if (old != null) {
-                val ownedPlaybackThread = old.playbackLooper.thread
-                releaseThread = ownedPlaybackThread
-                Media3ProcessReleaseSafety.track(ownedPlaybackThread)
-                try {
-                    old.release()
-                } catch (_: RuntimeException) {
-                    releaseRequiredWaitState = true
-                }
-                if (ownedPlaybackThread.isAlive) {
-                    releaseRequiredWaitState = true
-                    if (requireImmediateCompletion) {
-                        throw Media3ReleasePendingException()
-                    }
-                } else {
-                    releaseThread = null
-                }
+        if (client != null) Media3NetworkCleanup.release(client)
+        // Media3 performs codec teardown on its playback thread and bounds
+        // the main-looper wait with the configured release timeout. The
+        // default Builder gives this player its own playback thread; that
+        // thread ending is the public, observable completion barrier.
+        if (old != null) {
+            val ownedPlaybackThread = old.playbackLooper.thread
+            releaseThread = ownedPlaybackThread
+            Media3ProcessReleaseSafety.track(ownedPlaybackThread)
+            try {
+                old.release()
+            } catch (_: RuntimeException) {
+                releaseRequiredWaitState = true
             }
-        } finally {
-            client?.connectionPool?.evictAll()
-            client?.dispatcher?.executorService?.shutdown()
+            if (ownedPlaybackThread.isAlive) {
+                releaseRequiredWaitState = true
+                if (requireImmediateCompletion) {
+                    throw Media3ReleasePendingException()
+                }
+            } else {
+                releaseThread = null
+            }
         }
     }
 

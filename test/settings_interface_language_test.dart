@@ -452,6 +452,7 @@ void main() {
         // default. Keep this fixture focused on the language write barrier;
         // the crash migration tests separately exercise the missing-key path.
         'privacy_anonymous_crash_reporting': 'true',
+        playerMedia3SurfaceMigration277Key: 'true',
       };
       var reads = 0;
       final controller = SettingsPreferencesController(

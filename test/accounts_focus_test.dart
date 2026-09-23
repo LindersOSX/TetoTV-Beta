@@ -2464,6 +2464,7 @@ void main() {
       'accounts.system.setup',
       'accounts.system.calibration',
       'accounts.system.diagnostics',
+      'accounts.system.experimental-features',
       'accounts.settings-section.app-updates',
       'accounts.updates.automatic',
     ]) {
@@ -2494,7 +2495,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.system.diagnostics',
+      'accounts.system.experimental-features',
       reason:
           'UP from App updates must select the final row of the expanded Device & support section.',
     );
@@ -2589,100 +2590,116 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('ten System activations toggle persistent developer mode', (
-    tester,
-  ) async {
-    FlutterSecureStorage.setMockInitialValues({});
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(androidChannel, (call) async {
-          if (call.method == 'getAppVersion') {
-            return <String, Object?>{
-              'versionName': '1.0.0',
-              'versionCode': 10000,
-            };
+  testWidgets(
+    'visible Experimental options toggle persists the existing mode',
+    (tester) async {
+      FlutterSecureStorage.setMockInitialValues({});
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(androidChannel, (call) async {
+            if (call.method == 'getAppVersion') {
+              return <String, Object?>{
+                'versionName': '1.0.0',
+                'versionCode': 10000,
+              };
+            }
+            return null;
+          });
+      tester.view.physicalSize = const Size(1280, 720);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      await tester.pumpWidget(
+        const ProviderScope(child: MaterialApp(home: AccountsScreen())),
+      );
+      await tester.pumpAndSettle();
+
+      await selectSettingsArea(tester, 'system');
+      expect(
+        FocusManager.instance.primaryFocus?.debugLabel,
+        'accounts.area.system',
+      );
+      for (var index = 0; index < 10; index++) {
+        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+        await tester.pumpAndSettle();
+      }
+      final container = ProviderScope.containerOf(
+        tester.element(find.byType(AccountsScreen)),
+      );
+      expect(
+        container.read(appUpdateControllerProvider).developerMode,
+        isFalse,
+        reason: 'Repeated System activations no longer unlock hidden features.',
+      );
+      final experimentalToggle = find.byKey(
+        const ValueKey('settings-experimental-features-toggle'),
+      );
+      await tester.ensureVisible(experimentalToggle);
+      await tester.tap(experimentalToggle);
+      await tester.pumpAndSettle();
+      await tester.runAsync(() async {
+        final storage = const FlutterSecureStorage();
+        for (var attempt = 0; attempt < 50; attempt++) {
+          if (await storage.read(key: developerModeStorageKey) == 'true') {
+            return;
           }
-          return null;
-        });
-    tester.view.physicalSize = const Size(1280, 720);
-    tester.view.devicePixelRatio = 1;
-    addTearDown(tester.view.resetPhysicalSize);
-    addTearDown(tester.view.resetDevicePixelRatio);
-
-    await tester.pumpWidget(
-      const ProviderScope(child: MaterialApp(home: AccountsScreen())),
-    );
-    await tester.pumpAndSettle();
-
-    await selectSettingsArea(tester, 'system');
-    expect(
-      FocusManager.instance.primaryFocus?.debugLabel,
-      'accounts.area.system',
-    );
-    for (var index = 0; index < 10; index++) {
-      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+          await Future<void>.delayed(const Duration(milliseconds: 2));
+        }
+      });
       await tester.pumpAndSettle();
-    }
-    await tester.runAsync(() async {
-      final storage = const FlutterSecureStorage();
-      for (var attempt = 0; attempt < 50; attempt++) {
-        if (await storage.read(key: developerModeStorageKey) == 'true') return;
-        await Future<void>.delayed(const Duration(milliseconds: 2));
-      }
-    });
-    await tester.pumpAndSettle();
 
-    final container = ProviderScope.containerOf(
-      tester.element(find.byType(AccountsScreen)),
-    );
-    expect(container.read(appUpdateControllerProvider).developerMode, isTrue);
-    expect(find.text('Developer update tools'), findsOneWidget);
-    expect(find.text('Update channel'), findsOneWidget);
-    expect(find.text('Public'), findsOneWidget);
-    expect(find.text('Load release history'), findsOneWidget);
-    expect(
-      find.textContaining(
-        'Android only installs the same or a higher build code',
-      ),
-      findsOneWidget,
-    );
-    expect(
-      find.textContaining('Developer Mode cannot bypass that rule'),
-      findsOneWidget,
-    );
-    expect(
-      find.textContaining('install an older or newer signed build'),
-      findsNothing,
-    );
-    expect(find.textContaining('Beta key'), findsNothing);
-    expect(find.textContaining('Installed version:'), findsOneWidget);
-    expect(find.textContaining('Build:'), findsOneWidget);
-    expect(
-      await const FlutterSecureStorage().read(key: developerModeStorageKey),
-      'true',
-    );
+      expect(container.read(appUpdateControllerProvider).developerMode, isTrue);
+      expect(find.text('Experimental update tools'), findsOneWidget);
+      expect(find.text('Update channel'), findsOneWidget);
+      expect(find.text('Public'), findsOneWidget);
+      expect(find.text('Load release history'), findsOneWidget);
+      expect(
+        find.textContaining(
+          'Android only installs the same or a higher build code',
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('Experimental options cannot bypass that rule'),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('install an older or newer signed build'),
+        findsNothing,
+      );
+      expect(find.textContaining('Beta key'), findsNothing);
+      expect(find.textContaining('Installed version:'), findsOneWidget);
+      expect(find.textContaining('Build:'), findsOneWidget);
+      expect(
+        await const FlutterSecureStorage().read(key: developerModeStorageKey),
+        'true',
+      );
 
-    for (var index = 0; index < 10; index++) {
-      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.ensureVisible(experimentalToggle);
+      await tester.tap(experimentalToggle);
       await tester.pumpAndSettle();
-    }
-    await tester.runAsync(() async {
-      final storage = const FlutterSecureStorage();
-      for (var attempt = 0; attempt < 50; attempt++) {
-        if (await storage.read(key: developerModeStorageKey) == null) return;
-        await Future<void>.delayed(const Duration(milliseconds: 2));
-      }
-    });
-    await tester.pumpAndSettle();
+      await tester.runAsync(() async {
+        final storage = const FlutterSecureStorage();
+        for (var attempt = 0; attempt < 50; attempt++) {
+          if (await storage.read(key: developerModeStorageKey) == null) return;
+          await Future<void>.delayed(const Duration(milliseconds: 2));
+        }
+      });
+      await tester.pumpAndSettle();
 
-    expect(container.read(appUpdateControllerProvider).developerMode, isFalse);
-    expect(find.text('Developer update tools'), findsNothing);
-    expect(find.text('Update channel'), findsNWidgets(2));
-    expect(
-      await const FlutterSecureStorage().read(key: developerModeStorageKey),
-      isNull,
-    );
-    expect(tester.takeException(), isNull);
-  });
+      expect(
+        container.read(appUpdateControllerProvider).developerMode,
+        isFalse,
+      );
+      expect(find.text('Experimental update tools'), findsNothing);
+      expect(find.text('Update channel'), findsNWidgets(2));
+      expect(
+        await const FlutterSecureStorage().read(key: developerModeStorageKey),
+        isNull,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets('legacy Beta key is removed and key controls stay hidden', (
     tester,
@@ -2721,7 +2738,7 @@ void main() {
       await const FlutterSecureStorage().read(key: 'beta_update_access_key'),
       isNull,
     );
-    for (var index = 0; index < 8; index++) {
+    for (var index = 0; index < 9; index++) {
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
       await tester.pumpAndSettle();
     }
@@ -2785,7 +2802,7 @@ void main() {
     expect(donationRect.left, greaterThan(donationQrRect.right));
     expect(donationQrRect.top, greaterThan(discordQrRect.bottom));
 
-    for (var index = 0; index < 10; index++) {
+    for (var index = 0; index < 11; index++) {
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
       await tester.pumpAndSettle();
     }

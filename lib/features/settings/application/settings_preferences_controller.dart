@@ -50,6 +50,8 @@ const _clickSoundsKey = 'audio_click_sounds';
 const _defaultLandingPageKey = 'navigation_default_landing_page';
 const _preferredPlayerKey = 'player_preferred_engine';
 const _media3SurfaceViewEnabledKey = 'player_media3_surface_view_enabled';
+const playerMedia3SurfaceMigration277Key =
+    'player_media3_surface_migration_2_0_77';
 const _preferredAudioKey = 'player_preferred_audio';
 const _preferredAudioLanguageKey = 'player_preferred_audio_language';
 const _preferredCaptionsKey = 'player_preferred_captions';
@@ -1028,6 +1030,9 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
       // hides core Manga while preserving the user's library, downloads, and
       // reader progress. Developer Mode is only required for Aniyomi.
       _safeRead(mangaReaderEnabledStorageKey),
+      // One-time 2.0.77 migration. Existing engine and renderer choices are
+      // deliberately replaced once, then remain user-editable afterward.
+      _safeRead(playerMedia3SurfaceMigration277Key),
     ]);
 
     bool canRestoreRevision(String key) {
@@ -1501,6 +1506,20 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
     if (canRestore(mangaReaderEnabledStorageKey, 65)) {
       restored = restored.copyWith(mangaReaderEnabled: valueAt(65) != 'false');
     }
+    final migratePlayerToMedia3 =
+        canRestore(playerMedia3SurfaceMigration277Key, 66) &&
+        valueAt(66) != 'true' &&
+        !identical(values[28], _preferenceReadFailed) &&
+        !identical(values[61], _preferenceReadFailed);
+    if (migratePlayerToMedia3) {
+      restored = restored.copyWith(
+        preferredPlayer: canRestoreRevision(_preferredPlayerKey)
+            ? PreferredPlayer.media3
+            : null,
+        media3SurfaceViewEnabled:
+            canRestoreRevision(_media3SurfaceViewEnabledKey) ? true : null,
+      );
+    }
     if (restored.preferredPlayer == PreferredPlayer.external &&
         (!restored.externalPlayerEnabled ||
             restored.selectedExternalPlayerPackage == null)) {
@@ -1511,7 +1530,8 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
     _preloadMutations.clear();
     if (repairHiddenSettings ||
         repairRetiredInterfaceMode ||
-        persistFreshCrashReportingDefault) {
+        persistFreshCrashReportingDefault ||
+        migratePlayerToMedia3) {
       await _enqueueStorage(() async {
         if (repairHiddenSettings) {
           await _write(_showSettingsKey, 'true');
@@ -1521,6 +1541,15 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
         }
         if (persistFreshCrashReportingDefault) {
           await _write(_anonymousCrashReportingKey, 'true');
+        }
+        if (migratePlayerToMedia3) {
+          if (canRestoreRevision(_preferredPlayerKey)) {
+            await _write(_preferredPlayerKey, PreferredPlayer.media3.name);
+          }
+          if (canRestoreRevision(_media3SurfaceViewEnabledKey)) {
+            await _write(_media3SurfaceViewEnabledKey, 'true');
+          }
+          await _write(playerMedia3SurfaceMigration277Key, 'true');
         }
       });
     }

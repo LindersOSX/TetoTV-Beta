@@ -338,6 +338,7 @@ extension _SettingsSectionMetadata on _SettingsSection {
       'Run setup again',
       'Device calibration',
       'Diagnostics',
+      'Experimental options',
       'Setup',
     ],
     _SettingsSection.appUpdates => const [
@@ -346,7 +347,7 @@ extension _SettingsSectionMetadata on _SettingsSection {
       'Check for updates',
       'Update channel',
       'Release history',
-      'Developer mode',
+      'Experimental options',
       'Downgrade',
     ],
     _SettingsSection.community => const [
@@ -598,6 +599,9 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
   final _diagnosticsFocus = FocusNode(
     debugLabel: 'accounts.system.diagnostics',
   );
+  final _experimentalFeaturesFocus = FocusNode(
+    debugLabel: 'accounts.system.experimental-features',
+  );
   final _debridConnectFocus = FocusNode(debugLabel: 'accounts.debrid.connect');
   final _tokenFocus = FocusNode(debugLabel: 'accounts.debrid.token');
   final _tokenSaveFocus = FocusNode(debugLabel: 'accounts.debrid.save');
@@ -713,8 +717,6 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
         debugLabel: 'accounts.streaming.auto-pick-quality.${value.name}',
       ),
   };
-  int _systemActivationCount = 0;
-
   void _setCustomizationSectionExpanded(
     _CustomizationSection section,
     bool expanded,
@@ -1063,7 +1065,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
         _discordDisconnectFocus,
         _discordPresenceFocus,
       ]),
-      _SettingsSection.deviceSupport => _diagnosticsFocus,
+      _SettingsSection.deviceSupport => _experimentalFeaturesFocus,
       _SettingsSection.appUpdates => lastMounted([
         _releaseHistoryFocus,
         _updateChannelFocus,
@@ -1184,7 +1186,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       'automatic updates' => _automaticUpdatesFocus,
       'check for updates' => _checkUpdatesFocus,
       'update channel' ||
-      'developer mode' ||
+      'experimental features' ||
       'downgrade' => _updateChannelFocus,
       'release history' => _releaseHistoryFocus,
       'tetotv discord' || 'support' => _discordFocus,
@@ -1209,7 +1211,6 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       _expandedSettingsSections.add(match.section);
       _settingsSearchResultsVisible = false;
       _settingsSearchController.clear();
-      _systemActivationCount = 0;
     });
     if (match.section.area == _SettingsArea.accounts) {
       unawaited(ref.read(simklAccountControllerProvider.notifier).load());
@@ -1377,6 +1378,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     _setupFocus.dispose();
     _calibrationFocus.dispose();
     _diagnosticsFocus.dispose();
+    _experimentalFeaturesFocus.dispose();
     _debridConnectFocus.dispose();
     _tokenFocus.dispose();
     _tokenSaveFocus.dispose();
@@ -1615,6 +1617,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       _automaticUpdatesFocus,
       _updateChannelFocus,
       _releaseHistoryFocus,
+      _experimentalFeaturesFocus,
       _discordPresenceFocus,
       _discordQrFocus,
       _discordFocus,
@@ -2341,11 +2344,14 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
         target = _calibrationFocus;
       }
       if (key == LogicalKeyboardKey.arrowDown) {
-        target = _automaticUpdatesFocus;
+        target = _experimentalFeaturesFocus;
       }
+    } else if (current == _experimentalFeaturesFocus) {
+      if (key == LogicalKeyboardKey.arrowUp) target = _diagnosticsFocus;
+      if (key == LogicalKeyboardKey.arrowDown) target = _automaticUpdatesFocus;
     } else if (current == _automaticUpdatesFocus) {
       if (key == LogicalKeyboardKey.arrowUp) {
-        target = tvListLayout ? _diagnosticsFocus : _setupFocus;
+        target = _experimentalFeaturesFocus;
       }
       if (key == LogicalKeyboardKey.arrowRight && !tvListLayout) {
         target = _checkUpdatesFocus;
@@ -2571,28 +2577,6 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     if (area == _SettingsArea.accounts) {
       unawaited(ref.read(simklAccountControllerProvider.notifier).load());
     }
-    if (area != _SettingsArea.system) {
-      _systemActivationCount = 0;
-      return;
-    }
-    _systemActivationCount += 1;
-    if (_systemActivationCount < 10) return;
-    _systemActivationCount = 0;
-    final updateState = ref.read(appUpdateControllerProvider);
-    final enabled = !updateState.developerMode;
-    await ref
-        .read(appUpdateControllerProvider.notifier)
-        .setDeveloperMode(enabled);
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: LocalizedText(
-          enabled
-              ? 'Developer mode enabled. Release history and experimental Aniyomi extensions are now available.'
-              : 'Developer mode disabled. Standard update controls remain available.',
-        ),
-      ),
-    );
   }
 
   Future<void> _openMenuOrderDialog() async {
@@ -2869,7 +2853,9 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
           _AppearanceToggleRow(
             key: const ValueKey('settings-manga-reader-toggle'),
             label: 'Manga reader',
-            subtitle: preferences.mangaReaderEnabled
+            subtitle: !appUpdate.developerMode
+                ? 'Turn on Experimental options in System to show the manga reader.'
+                : preferences.mangaReaderEnabled
                 ? 'Available in navigation with your library, sources, downloads, and reader settings.'
                 : 'Hidden from navigation. Your manga library and downloads stay safely on this device.',
             icon: Icons.menu_book_rounded,
@@ -3897,8 +3883,41 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                                           'Review system health and export troubleshooting details.',
                                       icon: Icons.monitor_heart_rounded,
                                       focusNode: _diagnosticsFocus,
+                                      showDivider: true,
                                       onPressed: () =>
                                           context.push('/settings/diagnostics'),
+                                    ),
+                                    _AppearanceToggleRow(
+                                      key: const ValueKey(
+                                        'settings-experimental-features-toggle',
+                                      ),
+                                      label: 'Experimental options',
+                                      subtitle: appUpdate.developerMode
+                                          ? 'Enabled. Experimental options may be unfinished or unstable.'
+                                          : 'Turn on to access the manga reader, Aniyomi extensions, and build-switching tools. These options may be unstable.',
+                                      icon: Icons.science_outlined,
+                                      value: appUpdate.developerMode,
+                                      focusNode: _experimentalFeaturesFocus,
+                                      onChanged: (enabled) async {
+                                        await ref
+                                            .read(
+                                              appUpdateControllerProvider
+                                                  .notifier,
+                                            )
+                                            .setDeveloperMode(enabled);
+                                        if (!context.mounted) return;
+                                        ScaffoldMessenger.of(
+                                          context,
+                                        ).showSnackBar(
+                                          SnackBar(
+                                            content: LocalizedText(
+                                              enabled
+                                                  ? 'Experimental options enabled. Manga, Aniyomi, and build-switching tools are available.'
+                                                  : 'Experimental options disabled. Standard features remain available.',
+                                            ),
+                                          ),
+                                        );
+                                      },
                                     ),
                                   ],
                                 ),
@@ -7712,16 +7731,16 @@ class _DeveloperUpdatePanel extends StatelessWidget {
       children: [
         _SettingsPanelSummary(
           title: state.developerMode
-              ? 'Developer update tools'
+              ? 'Experimental update tools'
               : 'Update channel',
           subtitle: state.developerMode
               ? 'Switch channels or inspect signed release history. Android only installs the same or a higher build code.'
               : 'Choose Public or Beta. Beta builds may be less stable.',
           icon: state.developerMode
-              ? Icons.developer_mode_rounded
+              ? Icons.science_outlined
               : Icons.new_releases_rounded,
           status: state.developerMode
-              ? const _StatusPill(connected: true, label: 'HISTORY ENABLED')
+              ? const _StatusPill(connected: true, label: 'EXPERIMENTS ON')
               : null,
         ),
         _SettingsSelection<AppUpdateChannel>(
@@ -7783,7 +7802,7 @@ class _DeveloperUpdatePanel extends StatelessWidget {
           LocalizedText(
             'Entries marked Blocked by Android remain visible for reference '
             'but cannot be selected. Android cannot replace this installation '
-            'with a lower build code; Developer Mode cannot bypass that rule. '
+            'with a lower build code; Experimental options cannot bypass that rule. '
             'A same-or-higher-code rebuild can roll back while preserving data.',
             style: TextStyle(
               color: context.appPalette.mutedText,

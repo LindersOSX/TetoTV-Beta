@@ -6,6 +6,7 @@ import 'package:intl/date_symbol_data_local.dart' show initializeDateFormatting;
 import 'app_language.dart';
 import 'catalogs/aniyomi_strings.dart';
 import 'catalogs/common_strings.dart';
+import 'catalogs/experimental_features_strings.dart';
 import 'catalogs/home_strings.dart';
 import 'catalogs/library_strings.dart';
 import 'catalogs/manga_reader_strings.dart';
@@ -28,6 +29,7 @@ class TetoLocalizations {
   static final catalogs = <Map<String, Map<String, String>>>[
     aniyomiTranslations,
     commonTranslations,
+    experimentalFeaturesTranslations,
     homeTranslations,
     libraryTranslations,
     mangaReaderTranslations,

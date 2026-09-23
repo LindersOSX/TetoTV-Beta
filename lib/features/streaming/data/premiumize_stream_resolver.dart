@@ -39,6 +39,7 @@ class PremiumizeStreamResolver implements StreamResolver {
       requestedSeason: catalogSeasonNumber(episode),
       requestedAbsoluteEpisode: absoluteEpisodeNumber(episode),
       requestedSpecial: episodeReferenceIsSpecial(episode),
+      requestedMovie: episodeReferenceIsMovie(episode),
       containerLabel: release.releaseName,
       requireNumberingSchemeEvidence:
           episodeReferenceHasUnresolvedSequelNumbering(episode),
@@ -64,6 +65,7 @@ PremiumizeFile selectPremiumizeEpisodeFile(
   int? requestedSeason,
   int? requestedAbsoluteEpisode,
   bool requestedSpecial = false,
+  bool requestedMovie = false,
   String? containerLabel,
   bool requireNumberingSchemeEvidence = false,
   int? preferredFileIndex,
@@ -80,6 +82,7 @@ PremiumizeFile selectPremiumizeEpisodeFile(
     requestedSeason: requestedSeason,
     requestedAbsoluteEpisode: requestedAbsoluteEpisode,
     requestedSpecial: requestedSpecial,
+    requestedMovie: requestedMovie,
     containerLabel: containerLabel,
     requireNumberingSchemeEvidence: requireNumberingSchemeEvidence,
     preferredFileIndex: preferredFileIndex,

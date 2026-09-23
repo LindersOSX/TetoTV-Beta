@@ -95,7 +95,9 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.byType(AniyomiScreen), findsNothing);
       expect(
-        find.text('Aniyomi experiments require Developer Mode.'),
+        find.text(
+          'Aniyomi experiments require Experimental options to be enabled.',
+        ),
         findsOneWidget,
       );
     },

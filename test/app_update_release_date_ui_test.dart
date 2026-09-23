@@ -100,7 +100,11 @@ void main() {
       releaseHistoryOnRefresh: [latest, previous],
     );
 
-    for (var index = 0; index < 9; index++) {
+    for (var index = 0; index < 16; index++) {
+      if (FocusManager.instance.primaryFocus?.debugLabel ==
+          'accounts.updates.release-history') {
+        break;
+      }
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
       await tester.pumpAndSettle();
     }

@@ -312,6 +312,12 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 10));
 
+      expect(
+        find.textContaining('Debrid services are paid third-party services'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('active paid subscription'), findsOneWidget);
+
       expect(find.text('Review before applying'), findsOneWidget);
       expect(find.byKey(const ValueKey('phone-setup-apply')), findsOneWidget);
       expect(find.text('AniList'), findsOneWidget);
@@ -392,7 +398,10 @@ void main() {
       await tester.pumpWidget(fixture.app(router: router));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 10));
-      await tester.tap(find.byKey(const ValueKey('phone-setup-apply')));
+      final apply = find.byKey(const ValueKey('phone-setup-apply'));
+      await tester.ensureVisible(apply);
+      await tester.pump();
+      await tester.tap(apply);
       await tester.pumpAndSettle();
 
       final connect = find.byKey(const ValueKey('phone-setup-connect-discord'));
@@ -438,7 +447,10 @@ void main() {
 
     await tester.pumpWidget(fixture.app(router: router));
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('phone-setup-apply')));
+    final apply = find.byKey(const ValueKey('phone-setup-apply'));
+    await tester.ensureVisible(apply);
+    await tester.pump();
+    await tester.tap(apply);
     await tester.pumpAndSettle();
 
     expect(find.text('Discord connected'), findsOneWidget);

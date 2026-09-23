@@ -51,6 +51,7 @@ class AllDebridStreamResolver implements StreamResolver {
         requestedSeason: catalogSeasonNumber(episode),
         requestedAbsoluteEpisode: absoluteEpisodeNumber(episode),
         requestedSpecial: episodeReferenceIsSpecial(episode),
+        requestedMovie: episodeReferenceIsMovie(episode),
         containerLabel: release.releaseName,
         requireNumberingSchemeEvidence:
             episodeReferenceHasUnresolvedSequelNumbering(episode),
@@ -90,6 +91,7 @@ AllDebridTorrentFile selectAllDebridEpisodeFile(
   int? requestedSeason,
   int? requestedAbsoluteEpisode,
   bool requestedSpecial = false,
+  bool requestedMovie = false,
   String? containerLabel,
   bool requireNumberingSchemeEvidence = false,
   int? preferredFileIndex,
@@ -108,6 +110,7 @@ AllDebridTorrentFile selectAllDebridEpisodeFile(
     requestedSeason: requestedSeason,
     requestedAbsoluteEpisode: requestedAbsoluteEpisode,
     requestedSpecial: requestedSpecial,
+    requestedMovie: requestedMovie,
     containerLabel: containerLabel,
     requireNumberingSchemeEvidence: requireNumberingSchemeEvidence,
     preferredFileIndex: preferredFileIndex,

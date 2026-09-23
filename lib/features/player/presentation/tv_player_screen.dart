@@ -1433,6 +1433,12 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
       }
     } finally {
       _playbackPersistenceReady = true;
+      // The initial position/duration callbacks can arrive while persistence
+      // is still guarded. Publish the newly ready sample explicitly so a
+      // Watch Party host does not remain invisible until the next player tick.
+      if (mounted && !_engineHandoffInProgress) {
+        _publishWatchPartyPlayback();
+      }
     }
   }
 
@@ -2149,7 +2155,14 @@ class _MpvTvPlayerScreenState extends ConsumerState<MpvTvPlayerScreen>
       position: position ?? _player.state.position,
       duration: duration,
       playing: _player.state.playing,
-      ready: _playbackPersistenceReady && duration > Duration.zero,
+      // Some streams do not expose a duration at the first decoded frame.
+      // Playing is sufficient proof of an opened media session for the host
+      // to publish its catalog target; position sync can refine later.
+      ready: watchPartyPlaybackIsReady(
+        persistenceReady: _playbackPersistenceReady,
+        playing: _player.state.playing,
+        duration: duration,
+      ),
     );
   }
 

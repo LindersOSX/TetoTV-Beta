@@ -873,6 +873,57 @@ void main() {
   );
 
   test(
+    'native title falls back for an older broker without losing episode identity',
+    () async {
+      final requests = <RequestOptions>[];
+      final dio = Dio(BaseOptions(baseUrl: 'https://tetotv.example'))
+        ..interceptors.add(
+          InterceptorsWrapper(
+            onRequest: (options, handler) {
+              requests.add(options);
+              final media = (options.data as Map)['media'] as Map;
+              final unsupported = media.containsKey('title_native');
+              handler.resolve(
+                Response<Object?>(
+                  requestOptions: options,
+                  statusCode: unsupported ? 400 : 200,
+                  data: unsupported
+                      ? const <String, Object>{'error': 'invalid_media'}
+                      : _snapshotJson(role: 'host'),
+                ),
+              );
+            },
+          ),
+        );
+      final client = WatchPartyClient(
+        baseUrl: 'https://tetotv.example',
+        dio: dio,
+      );
+      const media = WatchPartyMedia(
+        kind: 'anilist',
+        title: 'Frieren',
+        titleNative: '葬送のフリーレン',
+        anilistId: 154587,
+        episode: 2,
+      );
+
+      await client.updateState(
+        session: _session(WatchPartyRole.host),
+        baseRevision: 0,
+        media: media,
+        playing: true,
+        position: const Duration(seconds: 10),
+      );
+
+      expect(requests, hasLength(2));
+      final fallback = (requests.last.data as Map)['media'] as Map;
+      expect(fallback['title_native'], isNull);
+      expect(fallback['anilist_id'], 154587);
+      expect(fallback['episode'], 2);
+    },
+  );
+
+  test(
     'protocol-v3 source descriptor fails open against a v2 broker',
     () async {
       final requests = <RequestOptions>[];

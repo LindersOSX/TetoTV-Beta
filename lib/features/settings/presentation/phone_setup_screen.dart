@@ -112,6 +112,8 @@ class _PhoneSetupScreenState extends ConsumerState<PhoneSetupScreen> {
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
                         _Header(onBack: _goBack),
+                        const SizedBox(height: 16),
+                        const _DebridNotice(),
                         const SizedBox(height: 22),
                         if (wide)
                           Row(
@@ -777,6 +779,37 @@ class _SecurityNotice extends StatelessWidget {
             child: LocalizedText(
               'Protected with end-to-end encryption. You sign in only on each service\'s official page; TetoTV never asks for passwords. The setup companion holds the resulting credentials only temporarily, then your browser encrypts them for this device. Credentials never appear in the QR code, URL, browser draft storage, logs, or diagnostics. After your phone connects, the page can be minimized and reopened without losing the setup draft.',
               style: TextStyle(color: palette.mutedText, height: 1.4),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DebridNotice extends StatelessWidget {
+  const _DebridNotice();
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.appPalette;
+    return Container(
+      key: const ValueKey('phone-setup-debrid-paid-notice'),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: palette.selectableSurface.withValues(alpha: .82),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: palette.accentBright.withValues(alpha: .3)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.info_outline_rounded, color: palette.accentBright),
+          const SizedBox(width: 11),
+          Expanded(
+            child: LocalizedText(
+              'Debrid services are paid third-party services and are not affiliated with TetoTV. You need an active paid subscription from your chosen provider to use debrid features.',
+              style: TextStyle(color: palette.mutedText, height: 1.35),
             ),
           ),
         ],

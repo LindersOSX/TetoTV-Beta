@@ -12,7 +12,7 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   setUp(() => FlutterSecureStorage.setMockInitialValues({}));
 
-  test('runtime order requires only the saved Manga preference', () {
+  test('runtime order requires Manga preference and Experimental options', () {
     const loading = SettingsPreferences();
 
     expect(
@@ -22,15 +22,23 @@ void main() {
 
     const preferences = SettingsPreferences(loaded: true);
     expect(
-      runtimeTopNavigationOrder(preferences),
+      runtimeTopNavigationOrder(preferences, experimentalOptionsEnabled: true),
       contains(TopNavigationDestination.manga),
     );
 
     final optedOutOrder = runtimeTopNavigationOrder(
       const SettingsPreferences(loaded: true, mangaReaderEnabled: false),
+      experimentalOptionsEnabled: true,
     );
     expect(optedOutOrder, isNot(contains(TopNavigationDestination.manga)));
-    final enabledOrder = runtimeTopNavigationOrder(preferences);
+    expect(
+      runtimeTopNavigationOrder(preferences),
+      isNot(contains(TopNavigationDestination.manga)),
+    );
+    final enabledOrder = runtimeTopNavigationOrder(
+      preferences,
+      experimentalOptionsEnabled: true,
+    );
     expect(enabledOrder, contains(TopNavigationDestination.manga));
     expect(
       defaultTopNavigationOrder.indexOf(TopNavigationDestination.manga),
@@ -39,7 +47,7 @@ void main() {
   });
 
   testWidgets(
-    'all shared navigation surfaces expose core Manga without Developer Mode',
+    'all shared navigation surfaces gate Manga on Experimental options',
     (tester) async {
       tester.view.physicalSize = const Size(1280, 720);
       tester.view.devicePixelRatio = 1;
@@ -112,13 +120,13 @@ void main() {
         const AppUpdateState(loaded: true, developerMode: false),
         const SettingsPreferences(loaded: true),
       );
-      expect(find.byKey(const ValueKey('main-nav-manga')), findsNWidgets(3));
+      expect(find.byKey(const ValueKey('main-nav-manga')), findsNothing);
 
       await pumpWith(
         const AppUpdateState(loaded: false, developerMode: false),
         const SettingsPreferences(loaded: true),
       );
-      expect(find.byKey(const ValueKey('main-nav-manga')), findsNWidgets(3));
+      expect(find.byKey(const ValueKey('main-nav-manga')), findsNothing);
 
       await pumpWith(
         const AppUpdateState(loaded: true, developerMode: true),

@@ -29,7 +29,9 @@ class AniyomiExperimentalGate extends ConsumerWidget {
         appBar: AppBar(),
         body: Center(
           child: Text(
-            context.tr('Aniyomi experiments require Developer Mode.'),
+            context.tr(
+              'Aniyomi experiments require Experimental options to be enabled.',
+            ),
           ),
         ),
       );
@@ -164,7 +166,7 @@ class _AniyomiScreenState extends ConsumerState<AniyomiScreen> {
                 const SizedBox(height: 12),
                 Text(
                   context.tr(
-                    'Changing or disabling Developer Mode revokes execution approval. Seanime is unaffected.',
+                    'Changing or disabling Experimental options revokes execution approval. Seanime is unaffected.',
                   ),
                 ),
               ],

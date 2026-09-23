@@ -4,6 +4,81 @@ import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  group('movie file identity', () {
+    test('selects a sole playable movie despite year and part numbers', () {
+      expect(
+        selectEpisodeFileIndex(
+          labels: const ['Movie Part 2 (2025) 1080p.mkv', 'poster.jpg'],
+          playable: const [true, false],
+          sizes: const [4000, 1],
+          requestedEpisode: 1,
+          requestedMovie: true,
+        ),
+        0,
+      );
+    });
+
+    test('does not guess between multiple movie videos', () {
+      expect(
+        () => selectEpisodeFileIndex(
+          labels: const ['movie.mkv', 'alternate-cut.mkv'],
+          playable: const [true, true],
+          sizes: const [4000, 3500],
+          requestedEpisode: 1,
+          requestedMovie: true,
+          preferredFileIndex: 0,
+        ),
+        throwsA(
+          isA<EpisodeIdentityAmbiguousException>().having(
+            (error) => error.reasonCode,
+            'reasonCode',
+            'movie_file_identity_ambiguous',
+          ),
+        ),
+      );
+    });
+
+    test('does not parse movie filename numbers as episode mismatches', () {
+      final assessment = assessPlaybackEpisodeIdentity(
+        episode: const EpisodeReference(
+          anilistMediaId: 1,
+          title: 'Movie Part 2',
+          episode: 1,
+          format: 'MOVIE',
+        ),
+        stream: StreamReady(
+          uri: Uri.parse('https://example.invalid/play'),
+          displayName: 'Movie Part 2 (2025).mkv',
+          debridService: DebridService.torBox,
+        ),
+        release: _release('Movie Part 2 (2025)'),
+      );
+      expect(assessment.verdict, EpisodeIdentityVerdict.match);
+      expect(assessment.reasonCode, 'movie_file_selected');
+    });
+
+    test('explicit provider mismatch still rejects a movie stream', () {
+      final assessment = assessPlaybackEpisodeIdentity(
+        episode: const EpisodeReference(
+          anilistMediaId: 1,
+          title: 'Movie Part 2',
+          episode: 1,
+          format: 'MOVIE',
+        ),
+        stream: StreamReady(
+          uri: Uri.parse('https://example.invalid/play'),
+          displayName: 'Movie Part 2',
+          providerEpisodeIdentity: const ProviderEpisodeIdentity(
+            episodeNumber: 2,
+            seriesTitle: 'Movie Part 2',
+          ),
+        ),
+        release: _release('Movie Part 2'),
+      );
+      expect(assessment.verdict, EpisodeIdentityVerdict.mismatch);
+    });
+  });
+
   group('free-form episode identity', () {
     test('uses numeric boundaries instead of substring matching', () {
       expect(

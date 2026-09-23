@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:anime_tv/core/preferences/playback_audio_preference.dart';
+import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/features/settings/application/display_preferences_controller.dart';
 import 'package:anime_tv/features/streaming/application/next_episode_preparation_controller.dart';
 import 'package:anime_tv/features/watch_together/application/watch_party_controller.dart';
@@ -468,6 +469,9 @@ class _WatchPartyMediaFollowScopeState
       affinity: ref.read(watchPartyPlaybackAffinityProvider),
     );
     if (request == null) return;
+    _recordFollowEvent('guest_follow_target_received', {
+      'source_specific': request.sourceKey != null,
+    });
     if (_retryBudget.observe(request)) {
       _retryTimer?.cancel();
       _retryTimer = null;
@@ -518,6 +522,7 @@ class _WatchPartyMediaFollowScopeState
         if (routeHandoff.hasActivePlayer) {
           final released = await routeHandoff.releaseActivePlayer();
           if (!released || !mounted) {
+            _recordFollowEvent('guest_follow_player_release_failed');
             if (mounted) _scheduleNavigationRetry(latest);
             retryCandidate = null;
             return;
@@ -540,6 +545,7 @@ class _WatchPartyMediaFollowScopeState
 
         final prepared = ownedPrepared;
         if (prepared != null) {
+          _recordFollowEvent('guest_follow_navigation', {'prepared': true});
           final lease = prepared.launch.stream.playbackLease;
           if (latest.sourceKey case final sourceKey?) {
             ref
@@ -564,12 +570,14 @@ class _WatchPartyMediaFollowScopeState
             onRejected: () async => lease?.close(),
           );
         } else {
+          _recordFollowEvent('guest_follow_navigation', {'prepared': false});
           _trackRouteReplacement(_replaceRoute(latest.location), latest);
         }
         retryCandidate = null;
         return;
       }
     } catch (_) {
+      _recordFollowEvent('guest_follow_navigation_failed');
       final failed = retryCandidate;
       if (mounted && failed != null) _scheduleNavigationRetry(failed);
     } finally {
@@ -650,6 +658,21 @@ class _WatchPartyMediaFollowScopeState
       if (exhausted) _retryBudget.reset(request);
       _evaluate();
     });
+  }
+
+  void _recordFollowEvent(
+    String event, [
+    Map<String, Object?> details = const {},
+  ]) {
+    unawaited(
+      TetoTvDatabase.instance
+          .recordDiagnosticEvent(
+            category: 'watch-party',
+            message: 'Watch Party guest follow',
+            details: {'event': event, ...details},
+          )
+          .catchError((_) {}),
+    );
   }
 
   @override

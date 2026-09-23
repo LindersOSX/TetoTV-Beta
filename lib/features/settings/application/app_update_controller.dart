@@ -833,7 +833,7 @@ String androidVersionDowngradeMessage({
   required int releaseVersionCode,
 }) =>
     'Android blocks in-place downgrades: target build $releaseVersionCode is '
-    'lower than installed build $installedVersionCode. Developer mode cannot '
+    'lower than installed build $installedVersionCode. Experimental options cannot '
     'bypass this rule. Use a signed channel build $installedVersionCode or '
     'newer. Uninstalling first erases TetoTV\'s local data.';
 
@@ -1019,8 +1019,8 @@ class AppUpdateController extends StateNotifier<AppUpdateState> {
       releaseHistory: enabled ? state.releaseHistory : const [],
       releaseHistoryLoading: false,
       message: enabled
-          ? 'Developer mode enabled. Release history is now available.'
-          : 'Developer mode disabled. Standard update controls remain available.',
+          ? 'Experimental options enabled. Release history is now available.'
+          : 'Experimental options disabled. Standard update controls remain available.',
     );
   }
 
@@ -1496,7 +1496,7 @@ String _apkCompatibilityError(ApkCompatibilityInfo inspection) {
         releaseVersionCode: target,
       );
     }
-    return 'Android blocks in-place downgrades. Developer mode can browse '
+    return 'Android blocks in-place downgrades. Experimental options can browse '
         'older releases but cannot bypass this device security rule.';
   }
   return 'This APK is not compatible: ${inspection.issues.join(' ')}';

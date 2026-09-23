@@ -988,6 +988,13 @@ class _StreamingStep extends ConsumerWidget {
           'Choose a debrid provider if you use one. Connecting it now is optional.',
       child: Column(
         children: [
+          const _SetupNote(
+            key: ValueKey('setup-debrid-paid-notice'),
+            icon: Icons.info_outline_rounded,
+            text:
+                'Debrid services are paid third-party services and are not affiliated with TetoTV. You need an active paid subscription from your chosen provider to use debrid features.',
+          ),
+          const SizedBox(height: 12),
           const LocalizedText(
             'Debrid provider',
             style: TextStyle(fontWeight: FontWeight.w900),

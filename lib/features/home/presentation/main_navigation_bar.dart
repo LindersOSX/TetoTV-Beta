@@ -352,13 +352,22 @@ class _HomeSideNavigationState extends ConsumerState<HomeSideNavigation> {
         !accounts.isLoading &&
         widget.preferences.settingsEntryPlacement ==
             SettingsEntryPlacement.profileMenu;
-    final configuredDestinations = runtimeTopNavigationOrder(widget.preferences)
-        .where(
-          (destination) =>
-              destination != TopNavigationDestination.settings ||
-              !settingsInProfileMenu,
-        )
-        .toList(growable: false);
+    final experimentalOptionsEnabled = ref.watch(
+      appUpdateControllerProvider.select(
+        (state) => state.loaded && state.developerMode,
+      ),
+    );
+    final configuredDestinations =
+        runtimeTopNavigationOrder(
+              widget.preferences,
+              experimentalOptionsEnabled: experimentalOptionsEnabled,
+            )
+            .where(
+              (destination) =>
+                  destination != TopNavigationDestination.settings ||
+                  !settingsInProfileMenu,
+            )
+            .toList(growable: false);
     final showBottomSettings = configuredDestinations.contains(
       TopNavigationDestination.settings,
     );
@@ -581,13 +590,22 @@ class _PhoneBottomNavigationState extends ConsumerState<PhoneBottomNavigation> {
         !accounts.isLoading &&
         widget.preferences.settingsEntryPlacement ==
             SettingsEntryPlacement.profileMenu;
-    final destinations = runtimeTopNavigationOrder(widget.preferences)
-        .where(
-          (destination) =>
-              destination != TopNavigationDestination.settings ||
-              !settingsInProfileMenu,
-        )
-        .toList(growable: false);
+    final experimentalOptionsEnabled = ref.watch(
+      appUpdateControllerProvider.select(
+        (state) => state.loaded && state.developerMode,
+      ),
+    );
+    final destinations =
+        runtimeTopNavigationOrder(
+              widget.preferences,
+              experimentalOptionsEnabled: experimentalOptionsEnabled,
+            )
+            .where(
+              (destination) =>
+                  destination != TopNavigationDestination.settings ||
+                  !settingsInProfileMenu,
+            )
+            .toList(growable: false);
 
     return Material(
       key: const ValueKey('phone-bottom-navigation'),
@@ -2030,13 +2048,22 @@ class MainNavigationBar extends ConsumerWidget {
             !accounts.isLoading &&
             preferences.settingsEntryPlacement ==
                 SettingsEntryPlacement.profileMenu;
-        final visibleDestinations = runtimeTopNavigationOrder(preferences)
-            .where(
-              (destination) =>
-                  destination != TopNavigationDestination.settings ||
-                  !settingsInProfileMenu,
-            )
-            .toList(growable: false);
+        final experimentalOptionsEnabled = ref.watch(
+          appUpdateControllerProvider.select(
+            (state) => state.loaded && state.developerMode,
+          ),
+        );
+        final visibleDestinations =
+            runtimeTopNavigationOrder(
+                  preferences,
+                  experimentalOptionsEnabled: experimentalOptionsEnabled,
+                )
+                .where(
+                  (destination) =>
+                      destination != TopNavigationDestination.settings ||
+                      !settingsInProfileMenu,
+                )
+                .toList(growable: false);
         // Header height depends only on width, never on asynchronously loaded
         // account data, so linking/loading a tracker cannot shift the screen.
         final headerHeight = width >= 760 ? 96.0 : 62.0;

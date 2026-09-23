@@ -226,9 +226,17 @@ class WatchPartyClient {
 
     final mediaCandidates = <WatchPartyMedia?>[
       media,
+      if (media?.titleNative != null) media?.withoutNativeTitle(),
       if (media?.timelineProfile != null) media?.withoutTimelineProfile(),
+      if (media?.titleNative != null && media?.timelineProfile != null)
+        media?.withoutNativeTitle().withoutTimelineProfile(),
       if (media?.sourceDescriptor != null)
         media?.withoutSourceDescriptor().withoutTimelineProfile(),
+      if (media?.titleNative != null && media?.sourceDescriptor != null)
+        media
+            ?.withoutNativeTitle()
+            .withoutSourceDescriptor()
+            .withoutTimelineProfile(),
     ];
     var includeForceResync = forceResync;
     WatchPartyClientException? lastError;

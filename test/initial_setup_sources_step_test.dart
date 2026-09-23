@@ -207,6 +207,12 @@ void main() {
         reason: '$label must be visible on the Streaming step',
       );
     }
+    expect(
+      find.textContaining('Debrid services are paid third-party services'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('not affiliated with TetoTV'), findsOneWidget);
+    expect(find.textContaining('active paid subscription'), findsOneWidget);
 
     await tester.tap(find.text('Continue'));
     await tester.pumpAndSettle();

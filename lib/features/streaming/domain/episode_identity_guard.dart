@@ -90,6 +90,9 @@ bool episodeReferenceIsSpecial(EpisodeReference episode) {
   return const {'SPECIAL', 'OVA', 'ONA', 'MUSIC'}.contains(format);
 }
 
+bool episodeReferenceIsMovie(EpisodeReference episode) =>
+    episode.format?.trim().toUpperCase() == 'MOVIE';
+
 /// True when catalog titles identify a later installment but do not supply a
 /// numeric season or authoritative absolute offset. Bare file numbers are
 /// unsafe in this case because releases may restart at 1 or keep counting.
@@ -356,6 +359,19 @@ EpisodeIdentityAssessment assessPlaybackEpisodeIdentity({
       return explicitProviderAssessment;
     }
   }
+  // Movie catalog entries use a synthetic episode 1 for the playback route.
+  // A year, part number, or disc number in a movie filename is not an episode
+  // mismatch. The debrid selector has already proved a unique playable file.
+  if (episodeReferenceIsMovie(episode)) {
+    return EpisodeIdentityAssessment(
+      strictTorrentFile
+          ? EpisodeIdentityVerdict.match
+          : EpisodeIdentityVerdict.unknown,
+      strictTorrentFile
+          ? 'movie_file_selected'
+          : 'movie_episode_number_not_applicable',
+    );
+  }
   final season = catalogSeasonNumber(episode);
   final absoluteEpisode = absoluteEpisodeNumber(episode);
   final special = episodeReferenceIsSpecial(episode);
@@ -429,12 +445,29 @@ int selectEpisodeFileIndex({
   int? requestedSeason,
   int? requestedAbsoluteEpisode,
   bool requestedSpecial = false,
+  bool requestedMovie = false,
   String? containerLabel,
   bool requireNumberingSchemeEvidence = false,
   int? preferredFileIndex,
 }) {
   if (labels.length != playable.length || labels.length != sizes.length) {
     throw ArgumentError('Episode file metadata lengths must match.');
+  }
+  if (requestedMovie) {
+    final videoIndexes = <int>[
+      for (var index = 0; index < playable.length; index++)
+        if (playable[index]) index,
+    ];
+    if (videoIndexes.isEmpty) {
+      throw StateError('The source contains no supported video files.');
+    }
+    // A movie's synthetic episode number is not file identity evidence. A
+    // single playable file is unambiguous; multi-video torrents stay closed
+    // instead of guessing between movie, sample, extras, or multiple cuts.
+    if (videoIndexes.length == 1) return videoIndexes.single;
+    throw const EpisodeIdentityAmbiguousException(
+      reasonCode: 'movie_file_identity_ambiguous',
+    );
   }
   final candidates = <_FileIdentityCandidate>[];
   final containerSeason = _explicitSeasonNumber(containerLabel ?? '');

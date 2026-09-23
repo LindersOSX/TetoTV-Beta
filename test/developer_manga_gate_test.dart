@@ -15,7 +15,7 @@ import 'package:go_router/go_router.dart';
 void main() {
   setUp(() => FlutterSecureStorage.setMockInitialValues({}));
 
-  testWidgets('core reader waits only for the saved Manga preference', (
+  testWidgets('core reader waits for Manga and Experimental options', (
     tester,
   ) async {
     final settings = _MutableSettingsController(
@@ -39,22 +39,24 @@ void main() {
       const SettingsPreferences(loaded: true, mangaReaderEnabled: true),
     );
     await tester.pump();
+    expect(find.byKey(const ValueKey('manga-reader-content')), findsNothing);
+    update.replace(const AppUpdateState(loaded: true, developerMode: true));
+    await tester.pump();
     expect(find.byKey(const ValueKey('manga-reader-content')), findsOneWidget);
 
     update.replace(const AppUpdateState(loaded: true, developerMode: false));
     await tester.pump();
-    expect(find.byKey(const ValueKey('manga-reader-content')), findsOneWidget);
-    expect(router.routerDelegate.currentConfiguration.uri.path, '/manga/read');
+    expect(find.byKey(const ValueKey('manga-reader-content')), findsNothing);
   });
 
-  testWidgets('core reader is public when the Manga preference is enabled', (
+  testWidgets('core reader opens when both switches are enabled', (
     tester,
   ) async {
     final settings = _MutableSettingsController(
       const SettingsPreferences(loaded: true, mangaReaderEnabled: true),
     );
     final update = _MutableAppUpdateController(
-      const AppUpdateState(loaded: true, developerMode: false),
+      const AppUpdateState(loaded: true, developerMode: true),
     );
     final router = _router(_request());
     addTearDown(router.dispose);
@@ -64,7 +66,7 @@ void main() {
     expect(find.byKey(const ValueKey('manga-reader-content')), findsOneWidget);
   });
 
-  testWidgets('only the Manga preference revokes an already-open core reader', (
+  testWidgets('either switch revokes an already-open core reader', (
     tester,
   ) async {
     final settings = _MutableSettingsController(
@@ -81,7 +83,9 @@ void main() {
 
     update.replace(const AppUpdateState(loaded: true, developerMode: false));
     await tester.pump();
-    expect(find.byKey(const ValueKey('manga-reader-content')), findsOneWidget);
+    expect(find.byKey(const ValueKey('manga-reader-content')), findsNothing);
+    update.replace(const AppUpdateState(loaded: true, developerMode: true));
+    await tester.pump();
     settings.replace(
       const SettingsPreferences(loaded: true, mangaReaderEnabled: false),
     );
@@ -92,19 +96,20 @@ void main() {
     expect(router.routerDelegate.currentConfiguration.uri.path, '/');
   });
 
-  test('core feature work follows preference, not Developer Mode', () {
+  test('core feature work requires Manga preference and experiments', () {
     final settings = _MutableSettingsController(const SettingsPreferences());
+    final update = _MutableAppUpdateController(const AppUpdateState());
     final container = ProviderContainer(
       overrides: [
         settingsPreferencesProvider.overrideWith((_) => settings),
-        appUpdateControllerProvider.overrideWith(
-          (_) => throw StateError('Core Manga must not load Developer Mode'),
-        ),
+        appUpdateControllerProvider.overrideWith((_) => update),
       ],
     );
     addTearDown(container.dispose);
     expect(container.read(mangaFeatureAvailableProvider), isFalse);
     settings.replace(const SettingsPreferences(loaded: true));
+    expect(container.read(mangaFeatureAvailableProvider), isFalse);
+    update.replace(const AppUpdateState(loaded: true, developerMode: true));
     expect(container.read(mangaFeatureAvailableProvider), isTrue);
     settings.replace(
       const SettingsPreferences(loaded: true, mangaReaderEnabled: false),
@@ -124,7 +129,7 @@ void main() {
     addTearDown(container.dispose);
     expect(container.read(aniyomiMangaEnabledProvider), isFalse);
     settings.replace(const SettingsPreferences(loaded: true));
-    expect(container.read(mangaFeatureAvailableProvider), isTrue);
+    expect(container.read(mangaFeatureAvailableProvider), isFalse);
     expect(container.read(aniyomiMangaEnabledProvider), isFalse);
     update.replace(const AppUpdateState(loaded: true, developerMode: false));
     expect(container.read(aniyomiMangaEnabledProvider), isFalse);
@@ -139,7 +144,7 @@ void main() {
     expect(container.read(aniyomiMangaEnabledProvider), isTrue);
     update.replace(const AppUpdateState(loaded: true, developerMode: false));
     expect(container.read(aniyomiMangaEnabledProvider), isFalse);
-    expect(container.read(mangaFeatureAvailableProvider), isTrue);
+    expect(container.read(mangaFeatureAvailableProvider), isFalse);
   });
 
   test(
@@ -180,7 +185,7 @@ void main() {
       update.replace(const AppUpdateState(loaded: true, developerMode: false));
       await tester.pump();
       expect(
-        find.text('Aniyomi experiments require Developer Mode.'),
+        find.text('Manga reader requires Experimental options to be enabled.'),
         findsOneWidget,
       );
       expect(find.byKey(const ValueKey('manga-reader-content')), findsNothing);

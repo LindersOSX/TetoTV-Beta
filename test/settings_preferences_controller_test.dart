@@ -11,7 +11,9 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   test('stream source and keyboard preferences persist', () async {
-    FlutterSecureStorage.setMockInitialValues({});
+    FlutterSecureStorage.setMockInitialValues({
+      playerMedia3SurfaceMigration277Key: 'true',
+    });
     const storage = FlutterSecureStorage();
     final controller = SettingsPreferencesController(storage);
 
@@ -618,6 +620,38 @@ void main() {
   );
 
   test(
+    '2.0.77 resets earlier player choices once, then permits opt-out',
+    () async {
+      FlutterSecureStorage.setMockInitialValues({
+        'player_preferred_engine': 'mpv',
+        'player_media3_surface_view_enabled': 'false',
+        initialSetupCompletedStorageKey: 'true',
+      });
+      const storage = FlutterSecureStorage();
+      final migrated = SettingsPreferencesController(storage);
+      await migrated.load();
+      expect(migrated.state.preferredPlayer, PreferredPlayer.media3);
+      expect(migrated.state.media3SurfaceViewEnabled, isTrue);
+      expect(await storage.read(key: 'player_preferred_engine'), 'media3');
+      expect(
+        await storage.read(key: 'player_media3_surface_view_enabled'),
+        'true',
+      );
+      expect(
+        await storage.read(key: playerMedia3SurfaceMigration277Key),
+        'true',
+      );
+
+      await migrated.setPreferredPlayer(PreferredPlayer.mpv);
+      await migrated.setMedia3SurfaceViewEnabled(false);
+      final restored = SettingsPreferencesController(storage);
+      await restored.load();
+      expect(restored.state.preferredPlayer, PreferredPlayer.mpv);
+      expect(restored.state.media3SurfaceViewEnabled, isFalse);
+    },
+  );
+
+  test(
     'disabling external handoff preserves a selected Media3 engine',
     () async {
       FlutterSecureStorage.setMockInitialValues({});
@@ -651,6 +685,7 @@ void main() {
         FlutterSecureStorage.setMockInitialValues({
           'player_preferred_engine': 'media3',
           'player_media3_surface_view_enabled': ?testCase.$1,
+          playerMedia3SurfaceMigration277Key: 'true',
         });
         final controller = SettingsPreferencesController(
           const FlutterSecureStorage(),
@@ -733,7 +768,9 @@ void main() {
   );
 
   test('SurfaceView preference never overrides a later MPV choice', () async {
-    FlutterSecureStorage.setMockInitialValues({});
+    FlutterSecureStorage.setMockInitialValues({
+      playerMedia3SurfaceMigration277Key: 'true',
+    });
     const storage = FlutterSecureStorage();
     final controller = SettingsPreferencesController(storage);
     addTearDown(controller.dispose);
@@ -809,7 +846,9 @@ void main() {
   test(
     'specific external player persists and returns to the Media3 default',
     () async {
-      FlutterSecureStorage.setMockInitialValues({});
+      FlutterSecureStorage.setMockInitialValues({
+        playerMedia3SurfaceMigration277Key: 'true',
+      });
       const storage = FlutterSecureStorage();
       final controller = SettingsPreferencesController(storage);
 
@@ -1653,7 +1692,7 @@ void main() {
       gate.complete();
       await Future.wait([firstLoad, duplicateLoad]);
 
-      expect(reads, 66, reason: 'duplicate startup loads must be coalesced');
+      expect(reads, 67, reason: 'duplicate startup loads must be coalesced');
       expect(controller.state.webStreamsEnabled, isTrue);
       expect(controller.state.navigationSounds, isFalse);
     },

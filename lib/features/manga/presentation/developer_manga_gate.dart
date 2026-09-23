@@ -7,13 +7,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-/// Route-level preference guard for Manga, with an experimental-only boundary.
+/// Route-level preference and experimental access guard for Manga.
 ///
 /// Hiding the navigation icon is not enough because typed route extras and
 /// internal links can outlive a settings change. The gate fails closed until
 /// the saved preference loads and removes its child immediately when Manga is
-/// disabled, without deleting data. Only Aniyomi reader requests also require
-/// loaded, enabled Developer Mode.
+/// disabled, without deleting data. The experimental switch controls the
+/// reader, while Aniyomi retains its separate source authorization.
 class MangaFeatureGate extends ConsumerWidget {
   const MangaFeatureGate({
     required this.child,
@@ -26,18 +26,15 @@ class MangaFeatureGate extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final update = requiresDeveloperMode
-        ? ref.watch(appUpdateControllerProvider)
-        : null;
+    final update = ref.watch(appUpdateControllerProvider);
     final preferences = ref.watch(settingsPreferencesProvider);
-    if (!preferences.loaded || (update != null && !update.loaded)) {
+    if (!preferences.loaded || !update.loaded) {
       return const Scaffold(
         key: ValueKey('manga-feature-gate-loading'),
         body: Center(child: CircularProgressIndicator()),
       );
     }
-    if (!ref.watch(mangaFeatureAvailableProvider) ||
-        (update != null && !update.developerMode)) {
+    if (!ref.watch(mangaFeatureAvailableProvider)) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (context.mounted) GoRouter.maybeOf(context)?.go('/');
       });
@@ -46,8 +43,8 @@ class MangaFeatureGate extends ConsumerWidget {
         body: Center(
           child: Text(
             context.tr(
-              update != null && !update.developerMode
-                  ? 'Aniyomi experiments require Developer Mode.'
+              !update.developerMode
+                  ? 'Manga reader requires Experimental options to be enabled.'
                   : 'Manga is disabled in Settings.',
             ),
           ),
@@ -60,8 +57,8 @@ class MangaFeatureGate extends ConsumerWidget {
 
 /// Applies the Manga preference and preserves experimental request provenance.
 ///
-/// Core Seanime, saved catalogs, and downloads do not require Developer Mode.
-/// Aniyomi requests retain that restriction even if opened from an older link.
+/// Both Seanime and Aniyomi reader routes require Experimental options; the
+/// Aniyomi source still retains its separate execution approval boundary.
 class MangaReaderRouteGate extends StatelessWidget {
   const MangaReaderRouteGate({
     required this.request,

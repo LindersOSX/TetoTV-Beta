@@ -322,6 +322,22 @@ class WatchPartyMedia {
     sourceDescriptor: sourceDescriptor,
   );
 
+  /// Older brokers do not allow the optional native title field. Dropping it
+  /// preserves the canonical catalog target and source fingerprint.
+  WatchPartyMedia withoutNativeTitle() => WatchPartyMedia(
+    kind: kind,
+    title: title,
+    anilistId: anilistId,
+    episode: episode,
+    titleEnglish: titleEnglish,
+    titleRomaji: titleRomaji,
+    year: year,
+    coverUrl: coverUrl,
+    timelineFingerprint: timelineFingerprint,
+    timelineProfile: timelineProfile,
+    sourceDescriptor: sourceDescriptor,
+  );
+
   bool sameTimeline(WatchPartyMedia other) =>
       kind == other.kind &&
       anilistId == other.anilistId &&

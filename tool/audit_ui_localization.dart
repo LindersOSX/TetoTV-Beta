@@ -6,6 +6,7 @@ import 'package:analyzer/dart/ast/ast.dart';
 import 'package:analyzer/dart/ast/visitor.dart';
 import 'package:anime_tv/core/localization/catalogs/aniyomi_strings.dart';
 import 'package:anime_tv/core/localization/catalogs/common_strings.dart';
+import 'package:anime_tv/core/localization/catalogs/experimental_features_strings.dart';
 import 'package:anime_tv/core/localization/catalogs/home_strings.dart';
 import 'package:anime_tv/core/localization/catalogs/library_strings.dart';
 import 'package:anime_tv/core/localization/catalogs/manga_reader_strings.dart';
@@ -36,6 +37,7 @@ auditUiLocalizations() {
   final catalogs = [
     aniyomiTranslations,
     commonTranslations,
+    experimentalFeaturesTranslations,
     homeTranslations,
     libraryTranslations,
     mangaReaderTranslations,

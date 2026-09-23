@@ -12,6 +12,14 @@ import 'package:flutter/foundation.dart';
 typedef WatchPartyPlaybackCommand = Future<void> Function();
 typedef WatchPartySeekCommand = Future<void> Function(Duration position);
 
+/// A started video can be shared before the demuxer reports its duration.
+/// Persistence readiness prevents a pre-resume position from being published.
+bool watchPartyPlaybackIsReady({
+  required bool persistenceReady,
+  required bool playing,
+  required Duration duration,
+}) => persistenceReady && (playing || duration > Duration.zero);
+
 /// Identifies one concrete player instance attached to a party session.
 ///
 /// A new generation is issued whenever MPV takes ownership.

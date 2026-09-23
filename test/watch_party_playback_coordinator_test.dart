@@ -7,6 +7,33 @@ import 'package:anime_tv/features/watch_together/domain/watch_party_timeline.dar
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('a playing host is ready before duration metadata arrives', () {
+    expect(
+      watchPartyPlaybackIsReady(
+        persistenceReady: true,
+        playing: true,
+        duration: Duration.zero,
+      ),
+      isTrue,
+    );
+    expect(
+      watchPartyPlaybackIsReady(
+        persistenceReady: false,
+        playing: true,
+        duration: Duration.zero,
+      ),
+      isFalse,
+    );
+    expect(
+      watchPartyPlaybackIsReady(
+        persistenceReady: true,
+        playing: false,
+        duration: Duration.zero,
+      ),
+      isFalse,
+    );
+  });
+
   const episode = EpisodeReference(
     anilistMediaId: 154587,
     title: 'Frieren',

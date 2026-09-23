@@ -850,6 +850,15 @@ class WatchPartyController extends StateNotifier<WatchPartyState> {
       guestSyncOffset: roleChanged ? Duration.zero : state.guestSyncOffset,
       message: wasReconnecting ? 'Watch Party reconnected.' : state.message,
     );
+    if (snapshot.role == WatchPartyRole.guest &&
+        currentSnapshot?.media != snapshot.media) {
+      _recordDiagnostics('Watch Party host media changed', {
+        'event': 'guest_host_media_changed',
+        'media_kind': snapshot.media?.kind ?? 'none',
+        'has_catalog_target': snapshot.media?.isCatalogEpisode == true,
+        'has_source_descriptor': snapshot.media?.sourceDescriptor != null,
+      });
+    }
     _ingestMembershipEvents(snapshot);
 
     if (snapshot.role == WatchPartyRole.guest) {
@@ -912,6 +921,7 @@ class WatchPartyController extends StateNotifier<WatchPartyState> {
         currentSnapshot.playing != sample.playing ||
         (currentSnapshot.expectedPositionAt(now) - sample.position).abs() >
             const Duration(seconds: 3);
+    final publishingNewMedia = currentSnapshot?.media != sample.media;
     if (!force &&
         !immediateChange &&
         last != null &&
@@ -950,6 +960,14 @@ class WatchPartyController extends StateNotifier<WatchPartyState> {
           timelineMismatch: false,
           timelineCompatibility: WatchPartyTimelineCompatibility.exact,
         );
+        if (publishingNewMedia) {
+          _recordDiagnostics('Watch Party host media published', {
+            'event': 'host_media_published',
+            'media_kind': sample.media.kind,
+            'has_catalog_target': sample.media.isCatalogEpisode,
+            'has_source_descriptor': sample.media.sourceDescriptor != null,
+          });
+        }
         if (requestResync) {
           _completeResyncPublish(
             snapshot.resyncRevision > previousResyncRevision,
@@ -957,6 +975,11 @@ class WatchPartyController extends StateNotifier<WatchPartyState> {
         }
       }
     } on WatchPartyClientException catch (error) {
+      _recordDiagnostics('Watch Party host media publish failed', {
+        'event': 'host_media_publish_failed',
+        'error_code': error.code,
+        'new_media': publishingNewMedia,
+      });
       if (error.code == 'stale_revision' || error.code == 'host_required') {
         _schedulePoll(_generation, immediate: true);
       }

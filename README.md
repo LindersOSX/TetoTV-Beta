@@ -83,7 +83,7 @@ TetoTV runs directly on the Android device with no companion server required for
 | User-supplied extensions | Optional | No extension or catalog is bundled, recommended, or endorsed. Compatibility depends on the service the user configures. |
 | AniList / MyAnimeList | Optional | Sync lists and progress, or use a local-only profile. |
 | SIMKL | Optional | Uses SIMKL's official TV PIN flow and supports profile, list, status, and episode-progress integration. Each imported SIMKL entry links back to its SIMKL page. |
-| Media3 playback | Android, default | New and reset installs use **Media3 (Built in)** with SurfaceView and the shared TetoTV HUD. Existing explicit player and rendering choices are preserved; see [features and differences](docs/MEDIA3_PLAYBACK.md). |
+| Media3 playback | Android, default | New installs and existing installs at the 2.0.77 migration use **Media3 (Built in)** with SurfaceView and the shared TetoTV HUD. Viewers can change this afterward; see [features and differences](docs/MEDIA3_PLAYBACK.md). |
 | MPV playback | Supported | Selectable compatibility engine with integrated audio/caption selection; explicit MPV choices are preserved between launches. |
 | Offline downloads | Beta | Individual episodes, whole-season queues, and offline playback. |
 | Manga reader | Optional, enabled by default | The preference is enabled by default, setup asks whether to keep it enabled, and it can be disabled in **Settings > Services**. Core Manga does not require Developer Mode. New sources use user-installed Seanime-format manga extensions; previously saved OPDS/data catalogs and downloads remain available. No manga catalog is bundled or recommended, and no repository or provider is bundled. Experimental Aniyomi compatibility remains Developer Mode-only. |
@@ -97,10 +97,10 @@ TetoTV runs directly on the Android device with no companion server required for
 | Channel | Version | Best for |
 | --- | --- | --- |
 | Public | Not published | Source and release-readiness documents are available, but no Public APK is currently offered |
-| Beta | [2.0.76](docs/RELEASE_NOTES_2.0.76.md) | More reliable Media3/web-stream playback, Fire TV ANR mitigation, and improved extension troubleshooting |
+| Beta | [2.0.77](docs/RELEASE_NOTES_2.0.77.md) | Safer movie torrent selection, improved Watch Party handoff, and clearer setup options |
 
 > [!WARNING]
-> Beta 2.0.76 uses the repository's explicit unreviewed-Beta exception. Its native-library and corresponding-source material did not receive independent license review, and automated integrity checks are not a legal compliance determination. Read the [complete Beta disclosure](docs/RELEASE_NOTES_2.0.76.md). This exception does not apply to a future Public release.
+> Beta 2.0.77 uses the repository's explicit unreviewed-Beta exception. Its native-library and corresponding-source material did not receive independent license review, and automated integrity checks are not a legal compliance determination. Read the [complete Beta disclosure](docs/RELEASE_NOTES_2.0.77.md). This exception does not apply to a future Public release.
 
 The Public updater repository intentionally has no release while the Public build is held for review. Existing Beta installations continue to update from the Beta repository. Android never permits an in-place install of an APK with a lower build code; Developer Mode does not bypass that platform rule.
 

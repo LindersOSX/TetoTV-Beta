@@ -1,6 +1,6 @@
 # Built-in Android playback engines
 
-Media3 is the default built-in player on Android. New and reset installs use AndroidX Media3/ExoPlayer for the next playback session; valid saved choices remain unchanged, including an explicit MPV choice. Choose **Settings → Playback → Default player** to switch engines. Existing preferences are never migrated to an external player.
+Media3 is the default built-in player on Android. New installs and existing installs at the one-time 2.0.77 migration use AndroidX Media3/ExoPlayer with SurfaceView for the next playback session, even if a different engine or renderer was previously selected. After that migration, explicit choices remain unchanged. Choose **Settings → Playback → Default player** to switch engines. Existing preferences are never migrated to an external player.
 
 Android Playback settings also include **Media3 SurfaceView**, which is on by default. Turning it off uses TextureView for the next Media3 session without changing the selected player. Turning it on selects Media3 and uses SurfaceView for the next playback session. A later explicit choice of MPV is respected; the rendering preference never changes MPV's output or decoder configuration.
 

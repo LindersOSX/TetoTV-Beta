@@ -21,6 +21,8 @@ const _watchPartyAvatarHosts = <String>{
   'img.anili.st',
   'cdn.myanimelist.net',
   'api-cdn.myanimelist.net',
+  'media.kitsu.io',
+  'simkl.in',
 };
 
 @immutable
@@ -208,6 +210,7 @@ class WatchPartyMedia {
     required this.title,
     this.anilistId,
     this.episode,
+    this.format,
     this.titleEnglish,
     this.titleRomaji,
     this.titleNative,
@@ -222,6 +225,10 @@ class WatchPartyMedia {
   final String title;
   final int? anilistId;
   final int? episode;
+
+  /// Only the catalog movie discriminator is shared. Other formats retain
+  /// the legacy wire shape for older room services.
+  final String? format;
   final String? titleEnglish;
   final String? titleRomaji;
   final String? titleNative;
@@ -252,6 +259,7 @@ class WatchPartyMedia {
 
     add('anilist_id', anilistId);
     add('episode', episode);
+    add('format', format);
     add('title_english', titleEnglish);
     add('title_romaji', titleRomaji);
     add('title_native', titleNative);
@@ -271,6 +279,7 @@ class WatchPartyMedia {
       title: value['title'] as String? ?? 'Watch Party',
       anilistId: (value['anilist_id'] as num?)?.toInt(),
       episode: (value['episode'] as num?)?.toInt(),
+      format: value['format'] == 'MOVIE' ? 'MOVIE' : null,
       titleEnglish: value['title_english'] as String?,
       titleRomaji: value['title_romaji'] as String?,
       titleNative: value['title_native'] as String?,
@@ -299,6 +308,7 @@ class WatchPartyMedia {
     title: title,
     anilistId: anilistId,
     episode: episode,
+    format: format,
     titleEnglish: titleEnglish,
     titleRomaji: titleRomaji,
     titleNative: titleNative,
@@ -313,6 +323,7 @@ class WatchPartyMedia {
     title: title,
     anilistId: anilistId,
     episode: episode,
+    format: format,
     titleEnglish: titleEnglish,
     titleRomaji: titleRomaji,
     titleNative: titleNative,
@@ -329,8 +340,25 @@ class WatchPartyMedia {
     title: title,
     anilistId: anilistId,
     episode: episode,
+    format: format,
     titleEnglish: titleEnglish,
     titleRomaji: titleRomaji,
+    year: year,
+    coverUrl: coverUrl,
+    timelineFingerprint: timelineFingerprint,
+    timelineProfile: timelineProfile,
+    sourceDescriptor: sourceDescriptor,
+  );
+
+  /// A legacy room service may not know the optional movie discriminator.
+  WatchPartyMedia withoutFormat() => WatchPartyMedia(
+    kind: kind,
+    title: title,
+    anilistId: anilistId,
+    episode: episode,
+    titleEnglish: titleEnglish,
+    titleRomaji: titleRomaji,
+    titleNative: titleNative,
     year: year,
     coverUrl: coverUrl,
     timelineFingerprint: timelineFingerprint,
@@ -342,6 +370,7 @@ class WatchPartyMedia {
       kind == other.kind &&
       anilistId == other.anilistId &&
       episode == other.episode &&
+      format == other.format &&
       (timelineFingerprint == null ||
           other.timelineFingerprint == null ||
           timelineFingerprint == other.timelineFingerprint);
@@ -353,6 +382,7 @@ class WatchPartyMedia {
       title == other.title &&
       anilistId == other.anilistId &&
       episode == other.episode &&
+      format == other.format &&
       titleEnglish == other.titleEnglish &&
       titleRomaji == other.titleRomaji &&
       titleNative == other.titleNative &&
@@ -368,6 +398,7 @@ class WatchPartyMedia {
     title,
     anilistId,
     episode,
+    format,
     titleEnglish,
     titleRomaji,
     titleNative,

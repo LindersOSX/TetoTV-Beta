@@ -4,6 +4,38 @@ import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('account torrent history parses a ready item and its hash', () async {
+    final dio = Dio(BaseOptions(baseUrl: 'https://torbox.test'))
+      ..interceptors.add(
+        InterceptorsWrapper(
+          onRequest: (options, handler) {
+            expect(options.path, '/torrents/mylist');
+            handler.resolve(
+              Response<Map<String, dynamic>>(
+                requestOptions: options,
+                statusCode: 200,
+                data: const {
+                  'success': true,
+                  'data': [
+                    {
+                      'id': 42,
+                      'name': 'Example - 02',
+                      'hash': 'ABCDEF1234',
+                      'download_finished': true,
+                      'files': [],
+                    },
+                  ],
+                },
+              ),
+            );
+          },
+        ),
+      );
+    final items = await TorBoxClient(token: 'test', dio: dio).accountTorrents();
+    expect(items.single.hash, 'abcdef1234');
+    expect(items.single.downloadFinished, isTrue);
+  });
+
   for (final entry in {
     DioExceptionType.connectionError: 'CONNECTION_FAILED',
     DioExceptionType.connectionTimeout: 'REQUEST_TIMEOUT',

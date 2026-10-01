@@ -28,6 +28,8 @@ import 'package:anime_tv/features/manga/presentation/manga_screen.dart';
 import 'package:anime_tv/features/player/presentation/tv_player_screen.dart';
 import 'package:anime_tv/features/settings/presentation/accounts_screen.dart';
 import 'package:anime_tv/features/settings/presentation/device_setup_screen.dart';
+import 'package:anime_tv/features/settings/presentation/display_studio_screen.dart';
+import 'package:anime_tv/features/settings/presentation/caption_studio_screen.dart';
 import 'package:anime_tv/features/settings/presentation/diagnostics_screen.dart';
 import 'package:anime_tv/features/settings/presentation/initial_setup_screen.dart';
 import 'package:anime_tv/features/settings/presentation/phone_setup_screen.dart';
@@ -207,6 +209,14 @@ final appRouter = GoRouter(
     GoRoute(
       path: ThemeStudioScreen.routePath,
       builder: (context, state) => const ThemeStudioScreen(),
+    ),
+    GoRoute(
+      path: DisplayStudioScreen.routePath,
+      builder: (context, state) => const DisplayStudioScreen(),
+    ),
+    GoRoute(
+      path: CaptionStudioScreen.routePath,
+      builder: (context, state) => const CaptionStudioScreen(),
     ),
     GoRoute(
       path: '/settings/marketplace',

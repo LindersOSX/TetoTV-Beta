@@ -125,6 +125,28 @@ abstract interface class ExternalIdTrackingRepository {
   Future<void> removeFromListByIds(TrackingMediaIds ids);
 }
 
+/// Playback progress and any resulting Completed status are one retryable
+/// outbox operation. Manual list/progress edits retain their existing behavior.
+abstract interface class AutomaticCompletionTrackingRepository {
+  Future<void> updateProgressAndCompletion({
+    required TrackingMediaIds ids,
+    required int completedEpisodes,
+  });
+}
+
+/// Require the matched tracker's final episode count, not an aired-so-far count
+/// or a guessed franchise/season total. Unknown or still-airing entries stay
+/// Watching. An earlier episode during a rewatch must not restore Completed.
+bool trackingSeriesIsComplete({
+  required int completedEpisodes,
+  required int? totalEpisodes,
+  required bool finishedAiring,
+}) =>
+    finishedAiring &&
+    totalEpisodes != null &&
+    totalEpisodes > 0 &&
+    completedEpisodes == totalEpisodes;
+
 /// Optional mutation surface for trackers that may normalize the requested
 /// watchlist status and return the authoritative value they stored.
 abstract interface class ResolvedStatusTrackingRepository {

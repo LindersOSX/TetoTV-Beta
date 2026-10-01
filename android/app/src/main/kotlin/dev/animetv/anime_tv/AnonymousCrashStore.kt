@@ -222,19 +222,27 @@ object AnonymousCrashStore {
             preferences.getString(LOCAL_CRASH_SUMMARIES_KEY, null),
         ).toMutableList()
         var newestScannedExit = preferences.getLong(LOCAL_LAST_SCANNED_EXIT_KEY, 0L)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        val exitScan = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            captureExitHistoryScan(
+                sdk = Build.VERSION.SDK_INT,
+                readExits = {
+                    val activityManager =
+                        context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+                    // Android documents zero as "all available". The result is
+                    // OS-bounded; both exported histories below are capped at 12.
+                    activityManager.getHistoricalProcessExitReasons(context.packageName, 0, 0)
+                },
+                lowMemorySupport = { ActivityManager.isLowMemoryKillReportSupported() },
+            )
+        } else ExitHistoryScan("unsupported")
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && exitScan.status == "scanned") {
             val previouslyScannedExit = newestScannedExit
-            val activityManager =
-                context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
-            activityManager
-                // Android documents zero as "all available". The result is
-                // still OS-bounded, and the local report ring below remains 12.
-                .getHistoricalProcessExitReasons(context.packageName, 0, 0)
+            exitScan.exits
                 .asSequence()
                 .filter {
                     it.timestamp > previouslyScannedExit && isReportableReason(it.reason)
                 }
-                .mapNotNull { exit -> exitSummary(context, exit) }
+                .mapNotNull { exit -> runCatching { exitSummary(context, exit) }.getOrNull() }
                 .forEach { summary ->
                     summaries.add(summary)
                     newestScannedExit = maxOf(
@@ -260,6 +268,110 @@ object AnonymousCrashStore {
             "summaries" to bounded.summaries,
             "dropped_outside_window" to droppedOutsideWindow,
             "dropped_for_capacity" to droppedForCapacity,
+            // A missing crash summary is not proof of a clean exit: Android
+            // can terminate the process without a Java/native crash or ANR.
+            // Keep that evidence separate from crashes and anonymous uploads.
+            "exit_history" to exitHistoryMetadata(
+                scanStatus = exitScan.status,
+                lowMemoryKillReportSupported = exitScan.lowMemoryKillReportSupported,
+                exits = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    exitScan.exits.mapNotNull { exit ->
+                        runCatching {
+                            OsExitEvidence(
+                                occurredAtMillis = exit.timestamp,
+                                reason = exit.reason,
+                                status = exit.status,
+                                importance = exit.importance,
+                                pssKilobytes = exit.pss,
+                                rssKilobytes = exit.rss,
+                                processRole = exitProcessRole(exit.processName, context.packageName),
+                            )
+                        }.getOrNull()
+                    }
+                } else emptyList(),
+                nowMillis = now,
+            ),
+        )
+    }
+
+    internal data class ExitHistoryScan(
+        val status: String,
+        val exits: List<ApplicationExitInfo> = emptyList(),
+        val lowMemoryKillReportSupported: Boolean? = null,
+    )
+
+    /** Failed OEM history queries must not hide already persisted JVM crashes. */
+    internal fun captureExitHistoryScan(
+        sdk: Int,
+        readExits: () -> List<ApplicationExitInfo>,
+        lowMemorySupport: () -> Boolean,
+    ): ExitHistoryScan {
+        if (sdk < Build.VERSION_CODES.R) return ExitHistoryScan("unsupported")
+        val exits = runCatching(readExits).getOrNull() ?: return ExitHistoryScan("unavailable")
+        return ExitHistoryScan(
+            status = "scanned",
+            exits = exits,
+            lowMemoryKillReportSupported = runCatching(lowMemorySupport).getOrNull(),
+        )
+    }
+
+    internal data class OsExitEvidence(
+        val occurredAtMillis: Long,
+        val reason: Int,
+        val status: Int,
+        val importance: Int,
+        val pssKilobytes: Long,
+        val rssKilobytes: Long,
+        val processRole: String,
+    )
+
+    internal fun exitProcessRole(processName: String?, packageName: String): String = when {
+        processName == packageName -> "main"
+        processName == "$packageName:aniyomi_worker" -> "aniyomi_worker"
+        else -> "other"
+    }
+
+    /** Numeric OS fields and fixed categories only; never descriptions or IDs. */
+    internal fun exitHistoryMetadata(
+        scanStatus: String,
+        lowMemoryKillReportSupported: Boolean?,
+        exits: List<OsExitEvidence>,
+        nowMillis: Long,
+    ): Map<String, Any?> {
+        val status = scanStatus.takeIf { it in setOf("scanned", "unsupported", "unavailable") }
+            ?: "unavailable"
+        val bounded = if (status == "scanned") {
+            exits.asSequence()
+                .filter {
+                    it.occurredAtMillis > 0L &&
+                        it.occurredAtMillis in (nowMillis - LOCAL_HISTORY_MILLIS)..nowMillis
+                }
+                .distinct()
+                .sortedBy { it.occurredAtMillis }
+                .toList()
+                .takeLast(MAX_LOCAL_CRASH_SUMMARIES)
+        } else emptyList()
+        return linkedMapOf(
+            "schema" to "tetotv-os-exit-history-v1",
+            "scan_status" to status,
+            "low_memory_kill_report_supported" to lowMemoryKillReportSupported,
+            "hours" to 48,
+            "capacity" to MAX_LOCAL_CRASH_SUMMARIES,
+            "exits" to bounded.map { exit ->
+                linkedMapOf(
+                    "occurred_at_ms" to exit.occurredAtMillis,
+                    "reason" to exitReasonName(exit.reason),
+                    "reason_code" to exit.reason.coerceIn(0, 999),
+                    "status" to exit.status.coerceIn(-999, 999),
+                    "importance" to importanceName(exit.importance),
+                    "pss_mb" to memoryMegabytes(exit.pssKilobytes),
+                    "rss_mb" to memoryMegabytes(exit.rssKilobytes),
+                    "process_role" to (
+                        exit.processRole.takeIf { it in setOf("main", "aniyomi_worker") } ?: "other"
+                    ),
+                    "reportable_crash" to isReportableReason(exit.reason),
+                )
+            },
         )
     }
 
@@ -1014,15 +1126,25 @@ object AnonymousCrashStore {
     }
 
     private fun memoryMegabytes(kilobytes: Long): Long =
-        if (kilobytes <= 0L) 0L else ((kilobytes + 512L) / 1_024L).coerceAtMost(1_048_576L)
+        if (kilobytes <= 0L) 0L else (kilobytes.coerceAtMost(1_073_741_824L) + 512L) / 1_024L
 
     private fun bytesMegabytes(bytes: Long): Long =
         if (bytes <= 0L) 0L else ((bytes + 524_288L) / 1_048_576L).coerceAtMost(1_048_576L)
 
     private fun exitReasonName(reason: Int): String = when (reason) {
+        ApplicationExitInfo.REASON_UNKNOWN -> "unknown"
+        ApplicationExitInfo.REASON_EXIT_SELF -> "self_exit"
+        ApplicationExitInfo.REASON_SIGNALED -> "signal"
+        ApplicationExitInfo.REASON_LOW_MEMORY -> "low_memory"
         ApplicationExitInfo.REASON_CRASH -> "java_crash"
         ApplicationExitInfo.REASON_CRASH_NATIVE -> "native_crash"
         ApplicationExitInfo.REASON_ANR -> "anr"
+        ApplicationExitInfo.REASON_INITIALIZATION_FAILURE -> "initialization_failure"
+        ApplicationExitInfo.REASON_PERMISSION_CHANGE -> "permission_change"
+        ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE -> "excessive_resource_usage"
+        ApplicationExitInfo.REASON_USER_REQUESTED -> "user_requested"
+        ApplicationExitInfo.REASON_USER_STOPPED -> "user_stopped"
+        ApplicationExitInfo.REASON_DEPENDENCY_DIED -> "dependency_died"
         else -> "other"
     }
 

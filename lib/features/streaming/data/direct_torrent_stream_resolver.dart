@@ -25,6 +25,16 @@ abstract interface class DirectTorrentPlatformClient {
   Future<bool> stop(String sessionId);
 }
 
+/// Only one native peer-stream session can own the local torrent engine.
+/// This is a recoverable playback conflict, not an application crash.
+class DirectTorrentBusyException implements Exception {
+  const DirectTorrentBusyException();
+
+  @override
+  String toString() =>
+      'Another direct torrent is still playing. Exit that player before starting a new torrent.';
+}
+
 class AndroidDirectTorrentPlatformClient
     implements DirectTorrentPlatformClient {
   const AndroidDirectTorrentPlatformClient();
@@ -171,6 +181,9 @@ class DirectTorrentStreamResolver implements StreamResolver {
             preferredFileIndex: selected.preferredFileIndex,
           );
         } on PlatformException catch (error) {
+          if (error.code.toUpperCase() == 'DIRECT_TORRENT_BUSY') {
+            throw const DirectTorrentBusyException();
+          }
           if (error.code.toUpperCase() == 'DIRECT_TORRENT_EPISODE_AMBIGUOUS') {
             throw const EpisodeIdentityAmbiguousException(
               reasonCode: 'episode_file_identity_ambiguous',

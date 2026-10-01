@@ -37,6 +37,44 @@ internal object Media3BridgePolicy {
         else -> throw IllegalArgumentException("invalid_surface_type")
     }
 
+    // The same narrowly scoped compatibility trial used by Flutter must also
+    // apply before inflating PlayerView. A late/failed device-profile lookup
+    // must not accidentally create the output path that the viewer reported
+    // as corrupt. This does not claim to detect corrupt pixels or fix firmware.
+    fun effectiveSurfaceType(requested: String, manufacturer: String, model: String): String {
+        require(requested == "surface" || requested == "texture")
+        return if (requested == "surface" && manufacturer.equals("amazon", true) &&
+            model.equals("aftkrt", true)
+        ) "texture" else requested
+    }
+
+    // The reported 2160p HEVC encode renders green on this exact Fire TV even
+    // through TextureView. Media3 1.11 defaults to asynchronous codec queueing
+    // on Amazon TV devices from API 28; compare its synchronous adapter for
+    // only the confirmed native format/decoder combination. This is a bounded
+    // compatibility trial, not a diagnosis of all HEVC or HDR playback.
+    fun useSynchronousVideoQueueing(
+        manufacturer: String,
+        model: String,
+        sdk: Int,
+        decoderName: String,
+        mimeType: String?,
+        width: Int,
+        height: Int,
+    ): Boolean = manufacturer.equals("amazon", true) &&
+        model.equals("aftkrt", true) && sdk == 30 &&
+        decoderName == "OMX.MTK.VIDEO.DECODER.HEVC" &&
+        mimeType == "video/hevc" && width == 3840 && height == 2160
+
+    // The asynchronous implementation is not public API in Media3 1.11.0.
+    // Report only reviewed actual implementations, never a guessed mode or
+    // the arbitrary runtime class name of an unknown/future adapter.
+    fun codecQueueingMode(adapterClassName: String): String? = when (adapterClassName) {
+        "androidx.media3.exoplayer.mediacodec.SynchronousMediaCodecAdapter" -> "synchronous"
+        "androidx.media3.exoplayer.mediacodec.AsynchronousMediaCodecAdapter" -> "asynchronous"
+        else -> null
+    }
+
     fun screenshotSize(width: Int, height: Int): Pair<Int, Int>? {
         if (width <= 0 || height <= 0) return null
         val scale = minOf(1.0, SCREENSHOT_MAX_DIMENSION.toDouble() / maxOf(width, height))
@@ -224,6 +262,32 @@ internal object Media3BridgePolicy {
         "audio/mpeg" -> "mp3"
         "audio/raw" -> "pcm"
         else -> null
+    }
+}
+
+internal data class Media3CodecQueueingSnapshot(val mode: String, val compatibility: Boolean)
+
+/** Atomic scalar-only evidence belonging to the current video adapter. */
+internal class Media3CodecQueueingState {
+    class Ticket internal constructor()
+    private data class State(val ticket: Ticket, val snapshot: Media3CodecQueueingSnapshot?)
+    @Volatile private var state: State? = null
+    val snapshot: Media3CodecQueueingSnapshot? get() = state?.snapshot
+
+    @Synchronized
+    fun begin(): Ticket = Ticket().also { state = State(it, null) }
+
+    @Synchronized
+    fun created(ticket: Ticket, adapterClassName: String, compatibility: Boolean) {
+        if (state?.ticket !== ticket) return
+        state = State(ticket, Media3BridgePolicy.codecQueueingMode(adapterClassName)?.let {
+            Media3CodecQueueingSnapshot(it, compatibility)
+        })
+    }
+
+    @Synchronized
+    fun released(ticket: Ticket) {
+        if (state?.ticket === ticket) state = null
     }
 }
 

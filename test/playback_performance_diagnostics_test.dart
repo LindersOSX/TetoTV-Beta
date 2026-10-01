@@ -48,6 +48,60 @@ void main() {
     expect(summary, isNot(contains('estimatedDisplayFps')));
   });
 
+  test('reviewed platform decoder and effective surface survive export', () {
+    final accumulator = _accumulator(engine: 'media3');
+    accumulator.addSample({
+      ..._sample(0),
+      'decoderName': 'OMX.MTK.VIDEO.DECODER.HEVC',
+      'surfaceType': 'texture',
+      'codecQueueingMode': 'synchronous',
+      'codecQueueingCompatibility': true,
+      'androidSdk': 30,
+      'audioUnderruns': 0,
+      'audioSinkErrors': 0,
+      'videoCodecErrors': 0,
+    });
+    final snapshot = accumulator.snapshot();
+    final roundTrip = sanitizePlaybackPerformanceSnapshot(
+      jsonDecode(jsonEncode(snapshot)),
+    );
+    expect(roundTrip, snapshot);
+    expect(roundTrip['summary'], containsPair('surfaceType', 'texture'));
+    expect(
+      roundTrip['summary'],
+      containsPair('codecQueueingMode', 'synchronous'),
+    );
+    expect(
+      roundTrip['summary'],
+      containsPair('codecQueueingCompatibility', true),
+    );
+    expect(roundTrip['summary'], containsPair('androidSdk', 30));
+    expect(
+      roundTrip['summary'],
+      containsPair('decoderName', 'omx.mtk.video.decoder.hevc'),
+    );
+
+    accumulator.addSample({
+      ..._sample(5000),
+      'decoderName': 'c2.private.title.decoder',
+      'surfaceType': 'texture/https://private.example',
+      'codecQueueingMode': 'synchronous/https://private.example',
+      'codecQueueingCompatibility': 'private-title',
+      'androidSdk': 0,
+    });
+    final last = (accumulator.snapshot()['samples'] as List).last as Map;
+    for (final field in [
+      'decoderName',
+      'surfaceType',
+      'androidSdk',
+      'codecQueueingMode',
+      'codecQueueingCompatibility',
+    ]) {
+      expect(last, isNot(contains(field)));
+    }
+    expect(jsonEncode(accumulator.snapshot()), isNot(contains('private')));
+  });
+
   test('strict allowlist removes private data at every nesting level', () {
     final accumulator = _accumulator();
     accumulator.addSample({

@@ -240,7 +240,7 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      for (final status in ['AIRING', 'FINISHED', 'UNRELEASED']) {
+      for (final status in ['Airing', 'Finished', 'Unreleased']) {
         final translated = const TetoLocalizations(
           AppLanguage.spanish,
         ).text(status);

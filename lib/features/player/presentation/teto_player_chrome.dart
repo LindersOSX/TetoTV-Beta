@@ -2,7 +2,9 @@ import 'dart:async';
 
 import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/theme/teto_ui_tokens.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
+import 'package:anime_tv/core/widgets/teto_backdrop_blur.dart';
 import 'package:anime_tv/features/player/presentation/player_control_overlay.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -22,11 +24,17 @@ const Color _defaultPlayerControlSurface = Color(0x8F242429);
 const Color _defaultPlayerSkipSurface = Color(0xB30B0B0D);
 const Color _defaultPlayerSkipShadow = Color(0x77000000);
 const playerSkipIdleTimeout = Duration(seconds: 3);
+const playerSkipHiddenTimeout = Duration(seconds: 5);
 const playerSkipFadeDuration = Duration(milliseconds: 350);
 const double playerSkipIdleOpacity = .3;
 
 bool _usesDefaultPlayerPalette(AppThemePalette palette) =>
     palette == AppThemePalette.defaults;
+
+/// A wide landscape phone/tablet gets the same player chrome density as TV.
+/// Narrow landscape phones still use the compact, scrollable control row.
+bool _isCompactPlayerViewport(Size viewport) =>
+    viewport.width < 720 || (viewport.height < 480 && viewport.width < 800);
 
 Color _playerChromePanelColor(AppThemePalette palette) =>
     _usesDefaultPlayerPalette(palette)
@@ -86,7 +94,7 @@ double playerSkipOverlayBottomInset({
   bool scrubbing = false,
 }) {
   if (!controlsVisible) return 26 + safeAreaBottom.clamp(0, 160);
-  final compact = viewport.width < 720 || viewport.height < 480;
+  final compact = _isCompactPlayerViewport(viewport);
   final base = compact
       ? _compactPlayerChromeReservedHeight
       : _regularPlayerChromeReservedHeight;
@@ -149,6 +157,7 @@ class TetoPlayerChrome extends StatelessWidget {
     this.partyStatus,
     this.watchingCount,
     this.playbackControlsLocked = false,
+    this.backdropBlurEnabled = true,
     this.footerHint = 'D-pad controls  |  J/L seek  |  Menu/Y options',
     super.key,
   });
@@ -160,6 +169,7 @@ class TetoPlayerChrome extends StatelessWidget {
   final String? partyStatus;
   final int? watchingCount;
   final bool playbackControlsLocked;
+  final bool backdropBlurEnabled;
   final Duration position;
   final Duration duration;
   final bool isPlaying;
@@ -196,7 +206,7 @@ class TetoPlayerChrome extends StatelessWidget {
   Widget build(BuildContext context) {
     final media = MediaQuery.of(context);
     final palette = context.appPalette;
-    final compact = media.size.width < 720 || media.size.height < 480;
+    final compact = _isCompactPlayerViewport(media.size);
     final accessibleLayout = media.textScaler.scale(1) > 1.4;
     final horizontalInset = compact
         ? 12.0
@@ -218,107 +228,134 @@ class TetoPlayerChrome extends StatelessWidget {
           horizontalInset,
           bottomInset,
         ),
-        child: DecoratedBox(
-          key: ValueKey('$engineKey-bottom-player-chrome'),
-          decoration: BoxDecoration(
-            color: _playerChromePanelColor(palette),
-            borderRadius: BorderRadius.circular(compact ? 12 : 16),
-            border: Border.all(
-              color: palette.accent.withValues(alpha: .78),
-              width: 1.4,
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: _playerChromeShadowColor(palette),
-                blurRadius: 26,
-                offset: Offset(0, 10),
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            Positioned.fill(
+              child: IgnorePointer(
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(compact ? 12 : 16),
+                  child: TetoBackdropBlur(
+                    filterKey: ValueKey('$engineKey-player-backdrop-blur'),
+                    // Do no filter work for an idle/hidden HUD or under a popup.
+                    enabled:
+                        backdropBlurEnabled &&
+                        (ModalRoute.of(context)?.isCurrent ?? true),
+                    child: const SizedBox.expand(),
+                  ),
+                ),
               ),
-            ],
-          ),
-          child: Padding(
-            padding: EdgeInsets.fromLTRB(
-              compact ? 10 : 16,
-              compact ? 5 : 6,
-              compact ? 10 : 16,
-              compact ? 4 : 5,
             ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _TetoPlayerHeader(
-                  engineKey: engineKey,
-                  title: title,
-                  streamLabel: streamLabel,
-                  engineLabel: engineLabel,
-                  partyStatus: partyStatus,
-                  watchingCount: watchingCount,
-                  compact: compact,
-                  accessibleLayout: accessibleLayout,
-                  alignBadgesRight: wideReferenceLayout,
+            // The readable tint also works with native SurfaceView video,
+            // which Flutter's compositor cannot always sample for backdrop blur.
+            DecoratedBox(
+              key: ValueKey('$engineKey-bottom-player-chrome'),
+              decoration: BoxDecoration(
+                color: _playerChromePanelColor(palette),
+                borderRadius: BorderRadius.circular(compact ? 12 : 16),
+                border: Border.all(
+                  color: palette.accent.withValues(alpha: .78),
+                  width: 1.4,
                 ),
-                const SizedBox(height: 4),
-                _TetoPlayerControlStrip(
-                  engineKey: engineKey,
-                  preferScrollable: compact || accessibleLayout,
-                  isPlaying: isPlaying,
-                  playFocusNode: playFocusNode,
-                  seekBackSeconds: seekBackSeconds,
-                  seekForwardSeconds: seekForwardSeconds,
-                  playbackControlsLocked: playbackControlsLocked,
-                  onRewind: onRewind,
-                  onPlayPause: onPlayPause,
-                  onForward: onForward,
-                  onPreviousEpisode: onPreviousEpisode,
-                  previousEpisodeEnabled: previousEpisodeEnabled,
-                  onNextEpisode: onNextEpisode,
-                  nextEpisodeEnabled: nextEpisodeEnabled,
-                  onPlaybackSpeed: onPlaybackSpeed,
-                  playbackSpeed: playbackSpeed,
-                  playbackSpeedFocusNode: playbackSpeedFocusNode,
-                  playbackSpeedEnabled: playbackSpeedEnabled,
-                  onAudio: onAudio,
-                  onSubtitles: onSubtitles,
-                  onPicture: onPicture,
-                  onSources: onSources,
-                  onWatchTogether: onWatchTogether,
-                  watchTogetherFocusNode: watchTogetherFocusNode,
-                  onOptions: onOptions,
-                  onInteraction: onInteraction,
-                  onMoveDown: moveFromControls,
-                  onDismiss: onDismiss,
-                  inlineTime: wideReferenceLayout
-                      ? _PlayerProgressTime(
-                          key: ValueKey('$engineKey-inline-player-time'),
-                          position: position,
-                          duration: duration,
-                          compact: false,
-                          palette: palette,
-                        )
-                      : null,
+                boxShadow: [
+                  BoxShadow(
+                    color: _playerChromeShadowColor(palette),
+                    blurRadius: 26,
+                    offset: Offset(0, 10),
+                  ),
+                ],
+              ),
+              child: Padding(
+                padding: EdgeInsets.fromLTRB(
+                  compact ? 10 : 16,
+                  compact ? 5 : 6,
+                  compact ? 10 : 16,
+                  compact ? 4 : 5,
                 ),
-                const SizedBox(height: 5),
-                _TetoPlayerProgressScrubber(
-                  engineKey: engineKey,
-                  position: position,
-                  duration: duration,
-                  enabled: canSeek,
-                  compact: compact,
-                  palette: palette,
-                  focusNode: progressFocusNode,
-                  returnFocusNode: playFocusNode,
-                  seekBackSeconds: seekBackSeconds,
-                  seekForwardSeconds: seekForwardSeconds,
-                  footerHint: footerHint,
-                  onSeek: onSeek,
-                  onSeekPreview: onSeekPreview,
-                  onInteractionChanged: onScrubInteractionChanged,
-                  onDismiss: onDismiss,
-                  showSupplementalRow: !wideReferenceLayout,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _TetoPlayerHeader(
+                      engineKey: engineKey,
+                      title: title,
+                      streamLabel: streamLabel,
+                      engineLabel: engineLabel,
+                      partyStatus: partyStatus,
+                      watchingCount: watchingCount,
+                      compact: compact,
+                      accessibleLayout: accessibleLayout,
+                      alignBadgesRight: wideReferenceLayout,
+                    ),
+                    const SizedBox(height: 4),
+                    _TetoPlayerControlStrip(
+                      engineKey: engineKey,
+                      preferScrollable:
+                          compact ||
+                          accessibleLayout ||
+                          (media.size.height < 480 &&
+                              media.size.width > media.size.height &&
+                              media.size.width < 900),
+                      isPlaying: isPlaying,
+                      playFocusNode: playFocusNode,
+                      seekBackSeconds: seekBackSeconds,
+                      seekForwardSeconds: seekForwardSeconds,
+                      playbackControlsLocked: playbackControlsLocked,
+                      onRewind: onRewind,
+                      onPlayPause: onPlayPause,
+                      onForward: onForward,
+                      onPreviousEpisode: onPreviousEpisode,
+                      previousEpisodeEnabled: previousEpisodeEnabled,
+                      onNextEpisode: onNextEpisode,
+                      nextEpisodeEnabled: nextEpisodeEnabled,
+                      onPlaybackSpeed: onPlaybackSpeed,
+                      playbackSpeed: playbackSpeed,
+                      playbackSpeedFocusNode: playbackSpeedFocusNode,
+                      playbackSpeedEnabled: playbackSpeedEnabled,
+                      onAudio: onAudio,
+                      onSubtitles: onSubtitles,
+                      onPicture: onPicture,
+                      onSources: onSources,
+                      onWatchTogether: onWatchTogether,
+                      watchTogetherFocusNode: watchTogetherFocusNode,
+                      onOptions: onOptions,
+                      onInteraction: onInteraction,
+                      onMoveDown: moveFromControls,
+                      onDismiss: onDismiss,
+                      inlineTime: wideReferenceLayout
+                          ? _PlayerProgressTime(
+                              key: ValueKey('$engineKey-inline-player-time'),
+                              position: position,
+                              duration: duration,
+                              compact: false,
+                              palette: palette,
+                            )
+                          : null,
+                    ),
+                    const SizedBox(height: 5),
+                    _TetoPlayerProgressScrubber(
+                      engineKey: engineKey,
+                      position: position,
+                      duration: duration,
+                      enabled: canSeek,
+                      compact: compact,
+                      palette: palette,
+                      focusNode: progressFocusNode,
+                      returnFocusNode: playFocusNode,
+                      seekBackSeconds: seekBackSeconds,
+                      seekForwardSeconds: seekForwardSeconds,
+                      footerHint: footerHint,
+                      onSeek: onSeek,
+                      onSeekPreview: onSeekPreview,
+                      onInteractionChanged: onScrubInteractionChanged,
+                      onDismiss: onDismiss,
+                      showSupplementalRow: !wideReferenceLayout,
+                    ),
+                  ],
                 ),
-              ],
+              ),
             ),
-          ),
+          ],
         ),
       ),
     );
@@ -1452,12 +1489,18 @@ class TetoSkipSegmentOverlay extends StatefulWidget {
     required this.label,
     required this.onPressed,
     this.focusNode,
+    this.controlsVisible = true,
+    this.hudInteractionVersion = 0,
+    this.onHidden,
     super.key,
   });
 
   final String label;
   final VoidCallback onPressed;
   final FocusNode? focusNode;
+  final bool controlsVisible;
+  final int hudInteractionVersion;
+  final VoidCallback? onHidden;
 
   @override
   State<TetoSkipSegmentOverlay> createState() => _TetoSkipSegmentOverlayState();
@@ -1465,7 +1508,9 @@ class TetoSkipSegmentOverlay extends StatefulWidget {
 
 class _TetoSkipSegmentOverlayState extends State<TetoSkipSegmentOverlay> {
   Timer? _idleTimer;
+  Timer? _hiddenTimer;
   double _opacity = 1;
+  bool _hidden = false;
 
   @override
   void initState() {
@@ -1476,21 +1521,40 @@ class _TetoSkipSegmentOverlayState extends State<TetoSkipSegmentOverlay> {
   @override
   void didUpdateWidget(covariant TetoSkipSegmentOverlay oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.label != widget.label) {
+    if (oldWidget.label != widget.label ||
+        (!oldWidget.controlsVisible && widget.controlsVisible) ||
+        oldWidget.hudInteractionVersion != widget.hudInteractionVersion) {
       _restoreAndRestartIdleTimer();
     }
   }
 
   void _restartIdleTimer() {
     _idleTimer?.cancel();
+    _hiddenTimer?.cancel();
     _idleTimer = Timer(playerSkipIdleTimeout, () {
       if (!mounted || _opacity == playerSkipIdleOpacity) return;
       setState(() => _opacity = playerSkipIdleOpacity);
+      _hiddenTimer = Timer(
+        playerSkipFadeDuration + playerSkipHiddenTimeout,
+        () {
+          if (!mounted || _hidden) return;
+          if (widget.focusNode?.hasFocus == true) widget.onHidden?.call();
+          setState(() {
+            _hidden = true;
+            _opacity = 0;
+          });
+        },
+      );
     });
   }
 
   void _restoreAndRestartIdleTimer() {
-    if (_opacity != 1 && mounted) setState(() => _opacity = 1);
+    if ((_opacity != 1 || _hidden) && mounted) {
+      setState(() {
+        _hidden = false;
+        _opacity = 1;
+      });
+    }
     _restartIdleTimer();
   }
 
@@ -1502,6 +1566,7 @@ class _TetoSkipSegmentOverlayState extends State<TetoSkipSegmentOverlay> {
   @override
   void dispose() {
     _idleTimer?.cancel();
+    _hiddenTimer?.cancel();
     super.dispose();
   }
 
@@ -1526,60 +1591,66 @@ class _TetoSkipSegmentOverlayState extends State<TetoSkipSegmentOverlay> {
           child: AnimatedOpacity(
             key: const ValueKey('player-skip-segment-opacity'),
             opacity: _opacity,
-            duration: playerSkipFadeDuration,
+            duration: TetoUiMotion.duration(context, playerSkipFadeDuration),
             curve: Curves.easeOutCubic,
-            child: TvFocusable(
-              key: const ValueKey('player-skip-segment-overlay'),
-              focusNode: widget.focusNode,
-              onFocusChanged: (focused) {
-                if (focused) _restoreAndRestartIdleTimer();
-              },
-              onPressed: _activate,
-              focusScale: 1.025,
-              borderRadius: BorderRadius.circular(10),
-              child: Container(
-                constraints: BoxConstraints(
-                  minHeight: 44,
-                  maxWidth: maximumWidth,
-                ),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 18,
-                  vertical: 11,
-                ),
-                decoration: BoxDecoration(
-                  color: _playerSkipSurfaceColor(palette),
+            child: ExcludeFocus(
+              excluding: _hidden,
+              child: IgnorePointer(
+                ignoring: _hidden,
+                child: TvFocusable(
+                  key: const ValueKey('player-skip-segment-overlay'),
+                  focusNode: widget.focusNode,
+                  onFocusChanged: (focused) {
+                    if (focused) _restoreAndRestartIdleTimer();
+                  },
+                  onPressed: _activate,
+                  focusScale: 1.025,
                   borderRadius: BorderRadius.circular(10),
-                  border: Border.all(
-                    color: palette.accentBright.withValues(alpha: .82),
-                  ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: _playerSkipShadowColor(palette),
-                      blurRadius: 16,
+                  child: Container(
+                    constraints: BoxConstraints(
+                      minHeight: 44,
+                      maxWidth: maximumWidth,
                     ),
-                  ],
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      Icons.skip_next_rounded,
-                      color: palette.accentBright,
-                      size: 21,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 18,
+                      vertical: 11,
                     ),
-                    const SizedBox(width: 8),
-                    Flexible(
-                      child: Text(
-                        widget.label,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: _playerPrimaryTextColor(palette),
-                          fontWeight: FontWeight.w900,
-                        ),
+                    decoration: BoxDecoration(
+                      color: _playerSkipSurfaceColor(palette),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: palette.accentBright.withValues(alpha: .82),
                       ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: _playerSkipShadowColor(palette),
+                          blurRadius: 16,
+                        ),
+                      ],
                     ),
-                  ],
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.skip_next_rounded,
+                          color: palette.accentBright,
+                          size: 21,
+                        ),
+                        const SizedBox(width: 8),
+                        Flexible(
+                          child: Text(
+                            widget.label,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: _playerPrimaryTextColor(palette),
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
               ),
             ),

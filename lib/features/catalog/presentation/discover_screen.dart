@@ -1,12 +1,18 @@
+import 'package:anime_tv/core/widgets/teto_dialog.dart';
 import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'dart:async';
 
 import 'package:anime_tv/core/diagnostics/anonymous_crash_reporter.dart';
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/theme/teto_box_style.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/tv/tv_shelf_focus.dart';
 import 'package:anime_tv/core/widgets/teto_top_level_shell.dart';
+import 'package:anime_tv/core/widgets/teto_back_button.dart';
+import 'package:anime_tv/core/widgets/teto_apply_button.dart';
+import 'package:anime_tv/core/widgets/teto_browse_status.dart';
+import 'package:anime_tv/core/widgets/teto_switch_indicator.dart';
 import 'package:anime_tv/core/widgets/tv_text_input.dart';
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
 import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
@@ -32,11 +38,20 @@ class DiscoverScreen extends ConsumerStatefulWidget {
 class _DiscoverScreenState extends ConsumerState<DiscoverScreen> {
   CatalogFilters _filters = const CatalogFilters();
   late Future<List<AnimeSummary>> _results;
+  List<AnimeSummary> _firstPageItems = const [];
+  final List<AnimeSummary> _additionalItems = [];
+  int _queryGeneration = 0;
+  int _nextPage = 2;
+  bool _hasMore = true;
+  bool _loadingMore = false;
+  bool _loadMoreScheduled = false;
+  Object? _loadMoreError;
   final _backFocus = FocusNode(debugLabel: 'discover.back');
   final _resetFocus = FocusNode(debugLabel: 'discover.reset');
   final _filtersFocus = FocusNode(debugLabel: 'discover.filters');
   final _firstResultFocus = FocusNode(debugLabel: 'discover.result.first');
   final _emptyFiltersFocus = FocusNode(debugLabel: 'discover.empty.filters');
+  final _loadMoreFocus = FocusNode(debugLabel: 'discover.load-more');
   final _headerRepeatGate = TvDirectionalRepeatGate(
     repeatInterval: const Duration(milliseconds: 92),
   );
@@ -44,12 +59,17 @@ class _DiscoverScreenState extends ConsumerState<DiscoverScreen> {
   @override
   void initState() {
     super.initState();
-    _results = _discover();
+    _results = _loadFirstPage(_filters, _queryGeneration);
   }
 
-  Future<List<AnimeSummary>> _discover() async {
+  Future<List<AnimeSummary>> _discover(
+    CatalogFilters filters, {
+    required int page,
+  }) async {
     try {
-      return await ref.read(catalogClientProvider).discover(_filters);
+      return await ref
+          .read(catalogClientProvider)
+          .discover(filters, page: page);
     } catch (error, stackTrace) {
       unawaited(
         recordAnonymousHandledError(
@@ -62,25 +82,95 @@ class _DiscoverScreenState extends ConsumerState<DiscoverScreen> {
     }
   }
 
+  Future<List<AnimeSummary>> _loadFirstPage(
+    CatalogFilters filters,
+    int generation,
+  ) async {
+    final items = await _discover(filters, page: 1);
+    if (mounted && generation == _queryGeneration) _firstPageItems = items;
+    return items;
+  }
+
+  void _restartDiscover(CatalogFilters filters) {
+    setState(() {
+      _queryGeneration++;
+      _filters = filters;
+      _firstPageItems = const [];
+      _additionalItems.clear();
+      _nextPage = 2;
+      _hasMore = true;
+      _loadingMore = false;
+      _loadMoreScheduled = false;
+      _loadMoreError = null;
+      _results = _loadFirstPage(filters, _queryGeneration);
+    });
+  }
+
+  void _scheduleLoadMore({bool retry = false}) {
+    if (!mounted || !_hasMore || _loadingMore || _loadMoreScheduled) return;
+    if (_loadMoreError != null && !retry) return;
+    _loadMoreScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _loadMoreScheduled = false;
+      if (mounted) unawaited(_loadMore());
+    });
+  }
+
+  Future<void> _loadMore() async {
+    if (!mounted || !_hasMore || _loadingMore) return;
+    final generation = _queryGeneration;
+    final page = _nextPage;
+    final filters = _filters;
+    setState(() {
+      _loadingMore = true;
+      _loadMoreError = null;
+    });
+    try {
+      final pageItems = await _discover(filters, page: page);
+      if (!mounted || generation != _queryGeneration) return;
+      final seenIds = <int>{
+        ..._firstPageItems.map((anime) => anime.id),
+        ..._additionalItems.map((anime) => anime.id),
+      };
+      final newItems = [
+        for (final anime in pageItems)
+          if (seenIds.add(anime.id)) anime,
+      ];
+      setState(() {
+        _additionalItems.addAll(newItems);
+        _nextPage = page + 1;
+        // A source that repeats a whole page must not loop forever.
+        _hasMore = pageItems.isNotEmpty && newItems.isNotEmpty;
+        _loadingMore = false;
+      });
+    } catch (error) {
+      if (!mounted || generation != _queryGeneration) return;
+      setState(() {
+        _loadingMore = false;
+        _loadMoreError = error;
+      });
+    }
+  }
+
+  void _onGridBottom() {
+    if (_loadMoreError != null && _loadMoreFocus.context != null) {
+      _loadMoreFocus.requestFocus();
+    } else {
+      _scheduleLoadMore();
+    }
+  }
+
   Future<void> _openFilters() async {
-    final next = await showDialog<CatalogFilters>(
+    final next = await showTetoDialog<CatalogFilters>(
       context: context,
       barrierDismissible: true,
       builder: (context) => _DiscoverFiltersDialog(initial: _filters),
     );
     if (next == null || !mounted) return;
-    setState(() {
-      _filters = next;
-      _results = _discover();
-    });
+    _restartDiscover(next);
   }
 
-  void _reset() {
-    setState(() {
-      _filters = const CatalogFilters();
-      _results = _discover();
-    });
-  }
+  void _reset() => _restartDiscover(const CatalogFilters());
 
   KeyEventResult _handleNavigation(
     FocusNode _,
@@ -178,6 +268,7 @@ class _DiscoverScreenState extends ConsumerState<DiscoverScreen> {
     _filtersFocus.dispose();
     _firstResultFocus.dispose();
     _emptyFiltersFocus.dispose();
+    _loadMoreFocus.dispose();
     super.dispose();
   }
 
@@ -207,10 +298,8 @@ class _DiscoverScreenState extends ConsumerState<DiscoverScreen> {
             Row(
               children: [
                 if (preferences.interfaceMode == InterfaceMode.phone) ...[
-                  _HeaderButton(
+                  TetoBackButton(
                     focusNode: _backFocus,
-                    icon: Icons.arrow_back_rounded,
-                    label: context.isCompactWidth ? null : 'Back',
                     onPressed: () => _returnToPreviousOrHome(context),
                   ),
                   const SizedBox(width: 14),
@@ -259,20 +348,17 @@ class _DiscoverScreenState extends ConsumerState<DiscoverScreen> {
                 future: _results,
                 builder: (context, snapshot) {
                   if (snapshot.connectionState != ConnectionState.done) {
-                    return Center(
-                      child: CircularProgressIndicator(
-                        color: context.appPalette.accentBright,
-                      ),
-                    );
+                    return const TetoBrowseLoading();
                   }
                   if (snapshot.hasError) {
                     return _DiscoverError(
                       message: snapshot.error.toString(),
-                      onRetry: () => setState(() => _results = _discover()),
+                      onRetry: () => _restartDiscover(_filters),
                       onReset: _reset,
                     );
                   }
-                  final items = snapshot.data ?? const <AnimeSummary>[];
+                  final firstPage = snapshot.data ?? const <AnimeSummary>[];
+                  final items = [...firstPage, ..._additionalItems];
                   if (items.isEmpty) {
                     return _DiscoverEmptyState(
                       resetFocusNode: _firstResultFocus,
@@ -286,26 +372,112 @@ class _DiscoverScreenState extends ConsumerState<DiscoverScreen> {
                           : null,
                     );
                   }
-                  return CatalogGrid(
-                    items: items,
-                    titlePreference: titlePreference,
-                    autofocus: true,
-                    firstFocusNode: _firstResultFocus,
-                    onNavigateLeftFromFirstColumn:
-                        layout.usesPersistentNavigation
-                        ? layout.focusRail
-                        : preferences.interfaceMode == InterfaceMode.phone
-                        ? _backFocus.requestFocus
-                        : null,
-                    onNavigateUpFromFirstRow: () =>
-                        _focusAndReveal(_filtersFocus, towardEnd: false),
-                    onLongPress: (anime) => unawaited(
-                      manageCatalogTrackingStatus(
-                        context: context,
-                        ref: ref,
-                        anime: anime,
+                  return Column(
+                    children: [
+                      Expanded(
+                        child: NotificationListener<ScrollNotification>(
+                          onNotification: (notification) {
+                            final metrics = notification.metrics;
+                            if (notification is ScrollUpdateNotification &&
+                                metrics.axis == Axis.vertical &&
+                                metrics.maxScrollExtent > 0 &&
+                                metrics.extentAfter < 600) {
+                              _scheduleLoadMore();
+                            }
+                            return false;
+                          },
+                          child: CatalogGrid(
+                            items: items,
+                            titlePreference: titlePreference,
+                            autofocus: true,
+                            firstFocusNode: _firstResultFocus,
+                            onEndReached: _scheduleLoadMore,
+                            onNavigateDownFromLastRow: _onGridBottom,
+                            onNavigateLeftFromFirstColumn:
+                                layout.usesPersistentNavigation
+                                ? layout.focusRail
+                                : preferences.interfaceMode ==
+                                      InterfaceMode.phone
+                                ? _backFocus.requestFocus
+                                : null,
+                            onNavigateUpFromFirstRow: () => _focusAndReveal(
+                              _filtersFocus,
+                              towardEnd: false,
+                            ),
+                            onLongPress: (anime) => unawaited(
+                              manageCatalogTrackingStatus(
+                                context: context,
+                                ref: ref,
+                                anime: anime,
+                              ),
+                            ),
+                          ),
+                        ),
                       ),
-                    ),
+                      if (_loadingMore)
+                        Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 10),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: context.appPalette.accentBright,
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              LocalizedText(
+                                'Loading more shows...',
+                                style: TextStyle(
+                                  color: context.appPalette.mutedText,
+                                ),
+                              ),
+                            ],
+                          ),
+                        )
+                      else if (_loadMoreError != null)
+                        Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 6),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              LocalizedText(
+                                'Could not load more shows.',
+                                style: TextStyle(
+                                  color: context.appPalette.mutedText,
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              KeyedSubtree(
+                                key: const ValueKey('discover-load-more-retry'),
+                                child: _HeaderButton(
+                                  focusNode: _loadMoreFocus,
+                                  icon: Icons.refresh_rounded,
+                                  label: 'Retry',
+                                  onPressed: () =>
+                                      _scheduleLoadMore(retry: true),
+                                ),
+                              ),
+                            ],
+                          ),
+                        )
+                      else if (_hasMore && items.length < 30)
+                        Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 6),
+                          child: KeyedSubtree(
+                            key: const ValueKey('discover-load-more'),
+                            child: _HeaderButton(
+                              focusNode: _loadMoreFocus,
+                              icon: Icons.expand_more_rounded,
+                              label: 'Load more shows',
+                              onPressed: _scheduleLoadMore,
+                            ),
+                          ),
+                        ),
+                    ],
                   );
                 },
               ),
@@ -333,65 +505,58 @@ class _DiscoverEmptyState extends StatelessWidget {
   final VoidCallback? onLeft;
 
   @override
-  Widget build(BuildContext context) => Center(
-    child: Column(
-      mainAxisSize: MainAxisSize.min,
+  Widget build(BuildContext context) => TetoBrowseStatus(
+    icon: Icons.filter_alt_off_rounded,
+    title: 'No anime matched these filters.',
+    message: 'Adjust the filters or reset them to browse again.',
+    actions: Wrap(
+      alignment: WrapAlignment.center,
+      spacing: 10,
+      runSpacing: 10,
       children: [
-        Text(
-          context.tr("No anime matched these filters."),
-          style: TextStyle(color: context.appPalette.mutedText),
+        TvFocusable(
+          key: const ValueKey('discover-empty-reset'),
+          focusNode: resetFocusNode,
+          autofocus: true,
+          onPressed: onReset,
+          onKeyEvent: onLeft == null
+              ? null
+              : (_, event) {
+                  if (event is KeyDownEvent &&
+                      event.logicalKey == LogicalKeyboardKey.arrowLeft) {
+                    onLeft!();
+                    return KeyEventResult.handled;
+                  }
+                  if (event is KeyDownEvent &&
+                      event.logicalKey == LogicalKeyboardKey.arrowRight) {
+                    filtersFocusNode.requestFocus();
+                    return KeyEventResult.handled;
+                  }
+                  return KeyEventResult.ignored;
+                },
+          borderRadius: BorderRadius.circular(10),
+          child: _EmptyStateAction(
+            icon: Icons.filter_alt_off_rounded,
+            label: 'Reset filters',
+          ),
         ),
-        const SizedBox(height: 14),
-        Wrap(
-          alignment: WrapAlignment.center,
-          spacing: 10,
-          runSpacing: 10,
-          children: [
-            TvFocusable(
-              key: const ValueKey('discover-empty-reset'),
-              focusNode: resetFocusNode,
-              autofocus: true,
-              onPressed: onReset,
-              onKeyEvent: onLeft == null
-                  ? null
-                  : (_, event) {
-                      if (event is KeyDownEvent &&
-                          event.logicalKey == LogicalKeyboardKey.arrowLeft) {
-                        onLeft!();
-                        return KeyEventResult.handled;
-                      }
-                      if (event is KeyDownEvent &&
-                          event.logicalKey == LogicalKeyboardKey.arrowRight) {
-                        filtersFocusNode.requestFocus();
-                        return KeyEventResult.handled;
-                      }
-                      return KeyEventResult.ignored;
-                    },
-              borderRadius: BorderRadius.circular(10),
-              child: _EmptyStateAction(
-                icon: Icons.filter_alt_off_rounded,
-                label: 'Reset filters',
-              ),
-            ),
-            TvFocusable(
-              key: const ValueKey('discover-empty-filters'),
-              focusNode: filtersFocusNode,
-              onPressed: onFilters,
-              onKeyEvent: (_, event) {
-                if (event is KeyDownEvent &&
-                    event.logicalKey == LogicalKeyboardKey.arrowLeft) {
-                  resetFocusNode.requestFocus();
-                  return KeyEventResult.handled;
-                }
-                return KeyEventResult.ignored;
-              },
-              borderRadius: BorderRadius.circular(10),
-              child: const _EmptyStateAction(
-                icon: Icons.tune_rounded,
-                label: 'Filters',
-              ),
-            ),
-          ],
+        TvFocusable(
+          key: const ValueKey('discover-empty-filters'),
+          focusNode: filtersFocusNode,
+          onPressed: onFilters,
+          onKeyEvent: (_, event) {
+            if (event is KeyDownEvent &&
+                event.logicalKey == LogicalKeyboardKey.arrowLeft) {
+              resetFocusNode.requestFocus();
+              return KeyEventResult.handled;
+            }
+            return KeyEventResult.ignored;
+          },
+          borderRadius: BorderRadius.circular(10),
+          child: const _EmptyStateAction(
+            icon: Icons.tune_rounded,
+            label: 'Filters',
+          ),
         ),
       ],
     ),
@@ -681,9 +846,9 @@ class _DiscoverFiltersDialogState extends State<_DiscoverFiltersDialog> {
             child: DecoratedBox(
               decoration: BoxDecoration(
                 color: const Color(0xFF090909),
-                borderRadius: BorderRadius.circular(compact ? 14 : 20),
+                borderRadius: BorderRadius.circular(TetoBoxStyle.radius),
                 border: Border.all(
-                  color: context.appPalette.accent.withValues(alpha: .65),
+                  color: TetoBoxStyle.outline(context.appPalette),
                 ),
               ),
               child: Column(
@@ -1001,24 +1166,11 @@ class _DiscoverFiltersDialogState extends State<_DiscoverFiltersDialog> {
                                       horizontal: 15,
                                       vertical: 9,
                                     ),
-                                    decoration: BoxDecoration(
-                                      color:
-                                          context.appPalette.selectableSurface,
-                                      borderRadius: BorderRadius.circular(12),
-                                      border: Border.all(color: Colors.white12),
+                                    decoration: TetoBoxStyle.decoration(
+                                      context.appPalette,
                                     ),
                                     child: Row(
                                       children: [
-                                        Icon(
-                                          _includeAdult
-                                              ? Icons.toggle_on_rounded
-                                              : Icons.toggle_off_rounded,
-                                          color: _includeAdult
-                                              ? context.appPalette.accentBright
-                                              : context.appPalette.mutedText,
-                                          size: 36,
-                                        ),
-                                        const SizedBox(width: 12),
                                         Expanded(
                                           child: Column(
                                             crossAxisAlignment:
@@ -1046,6 +1198,10 @@ class _DiscoverFiltersDialogState extends State<_DiscoverFiltersDialog> {
                                               ),
                                             ],
                                           ),
+                                        ),
+                                        const SizedBox(width: 12),
+                                        TetoSwitchIndicator(
+                                          value: _includeAdult,
                                         ),
                                       ],
                                     ),
@@ -1077,11 +1233,11 @@ class _DiscoverFiltersDialogState extends State<_DiscoverFiltersDialog> {
                         const SizedBox(width: 12),
                         Expanded(
                           flex: 2,
-                          child: FilledButton.icon(
+                          child: TetoApplyButton(
                             focusNode: _applyFocus,
                             onPressed: () => Navigator.of(context).pop(_value),
                             icon: const Icon(Icons.search_rounded),
-                            label: Text(context.tr("Show results")),
+                            label: 'Show results',
                           ),
                         ),
                       ],
@@ -1188,7 +1344,7 @@ Future<String?> _choose(
   bool allowAny = true,
 }) async {
   const any = '__ANY__';
-  final result = await showDialog<String>(
+  final result = await showTetoDialog<String>(
     context: context,
     builder: (context) {
       final viewport = MediaQuery.sizeOf(context);
@@ -1208,9 +1364,11 @@ Future<String?> _choose(
             borderRadius: BorderRadius.circular(16),
             child: DecoratedBox(
               decoration: BoxDecoration(
-                color: context.appPalette.surface,
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: Colors.white12),
+                color: TetoBoxStyle.fill(context.appPalette),
+                borderRadius: BorderRadius.circular(TetoBoxStyle.radius),
+                border: Border.all(
+                  color: TetoBoxStyle.outline(context.appPalette),
+                ),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1357,34 +1515,21 @@ class _DiscoverError extends StatelessWidget {
   final VoidCallback onReset;
 
   @override
-  Widget build(BuildContext context) => Center(
-    child: Column(
-      mainAxisSize: MainAxisSize.min,
+  Widget build(BuildContext context) => TetoBrowseStatus(
+    icon: Icons.cloud_off_rounded,
+    title: 'Discover could not load',
+    message: _friendlyDiscoverError(message),
+    actions: Wrap(
+      spacing: 10,
+      runSpacing: 10,
+      alignment: WrapAlignment.center,
       children: [
-        Text(
-          context.tr(_friendlyDiscoverError(message)),
-          textAlign: TextAlign.center,
-          style: TextStyle(color: context.appPalette.mutedText),
+        OutlinedButton.icon(
+          onPressed: onReset,
+          icon: const Icon(Icons.filter_alt_off_rounded),
+          label: Text(context.tr("Reset filters")),
         ),
-        const SizedBox(height: 12),
-        Wrap(
-          spacing: 10,
-          runSpacing: 10,
-          alignment: WrapAlignment.center,
-          children: [
-            OutlinedButton.icon(
-              onPressed: onReset,
-              icon: const Icon(Icons.filter_alt_off_rounded),
-              label: Text(context.tr("Reset filters")),
-            ),
-            FilledButton.icon(
-              autofocus: true,
-              onPressed: onRetry,
-              icon: const Icon(Icons.refresh_rounded),
-              label: Text(context.tr("Retry")),
-            ),
-          ],
-        ),
+        TetoRetryButton(autofocus: true, onPressed: onRetry),
       ],
     ),
   );

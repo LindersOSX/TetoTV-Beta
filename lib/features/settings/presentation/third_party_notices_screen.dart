@@ -2,6 +2,7 @@ import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
+import 'package:anime_tv/core/widgets/teto_back_button.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -188,11 +189,9 @@ class _NoticesHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final palette = context.appPalette;
-    final back = _NoticeAction(
+    final back = TetoBackButton(
       autofocus: true,
       focusNode: backFocusNode,
-      icon: Icons.arrow_back_rounded,
-      label: 'Back',
       onPressed: onBack,
     );
     final licenses = _NoticeAction(
@@ -245,20 +244,17 @@ class _NoticeAction extends StatelessWidget {
     required this.icon,
     required this.label,
     required this.onPressed,
-    this.autofocus = false,
   });
 
   final FocusNode focusNode;
   final IconData icon;
   final String label;
   final VoidCallback onPressed;
-  final bool autofocus;
 
   @override
   Widget build(BuildContext context) {
     final palette = context.appPalette;
     return TvFocusable(
-      autofocus: autofocus,
       focusNode: focusNode,
       borderRadius: BorderRadius.circular(10),
       onPressed: onPressed,

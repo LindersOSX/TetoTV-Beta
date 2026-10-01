@@ -1,4 +1,5 @@
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/theme/teto_box_style.dart';
 import 'package:anime_tv/features/player/presentation/player_control_overlay.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -212,7 +213,7 @@ void main() {
     );
     final decoration = panel.decoration as BoxDecoration;
     expect(decoration.color, palette.surface.withValues(alpha: .98));
-    expect(decoration.border!.top.color, palette.accent.withValues(alpha: .75));
+    expect(decoration.border!.top.color, TetoBoxStyle.outline(palette));
 
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
@@ -294,7 +295,7 @@ void main() {
     );
     expect(
       panelDecoration.border!.top.color,
-      palette.accent.withValues(alpha: .3),
+      TetoBoxStyle.outline(palette),
     );
     final continueSurface = tester.widget<Container>(
       find.byKey(const ValueKey('player-exit-continue-surface')),

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/theme/teto_box_style.dart';
 import 'package:anime_tv/features/marketplace/application/web_stream_aggregator.dart';
 import 'package:anime_tv/features/marketplace/domain/addon_models.dart';
 import 'package:anime_tv/features/player/presentation/player_stream_source_picker.dart';
@@ -791,7 +792,7 @@ void main() {
       decoration.color,
       palette.surface.withValues(alpha: const Color(0xF5080808).a),
     );
-    expect(decoration.border!.top.color, palette.accent.withValues(alpha: .75));
+    expect(decoration.border!.top.color, TetoBoxStyle.outline(palette));
     expect(
       tester.widget<Icon>(find.byIcon(Icons.video_library_rounded)).color,
       palette.accentBright,

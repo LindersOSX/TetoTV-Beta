@@ -8,6 +8,7 @@ import 'package:anime_tv/features/tracking/presentation/my_list_screen.dart';
 import 'package:anime_tv/features/settings/application/tracking_accounts_controller.dart';
 import 'package:anime_tv/features/auth/application/tracking_token_service.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/theme/teto_box_style.dart';
 import 'package:anime_tv/core/widgets/network_artwork.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/tv/tv_shortcuts.dart';
@@ -89,14 +90,25 @@ void main() {
       expect(find.text(status.displayName), findsWidgets);
     }
     expect(find.text('Watching is empty'), findsOneWidget);
-    expect(find.text('Search'), findsNothing);
-    expect(find.text('Home'), findsNothing);
-    expect(find.text('Discover'), findsNothing);
-    expect(find.text('Calendar'), findsNothing);
+    // Compact navigation retains labels for its focus/hover reveal.
+    for (final entry in {
+      'search': 'Search',
+      'home': 'Home',
+      'discover': 'Discover',
+      'calendar': 'Calendar',
+    }.entries) {
+      expect(
+        find.descendant(
+          of: find.byKey(ValueKey('main-nav-${entry.key}')),
+          matching: find.text(entry.value),
+        ),
+        findsOneWidget,
+      );
+    }
     expect(find.byIcon(Icons.search_rounded), findsOneWidget);
-    expect(find.byIcon(Icons.home_rounded), findsOneWidget);
-    expect(find.byIcon(Icons.explore_rounded), findsOneWidget);
-    expect(find.byIcon(Icons.calendar_month_rounded), findsOneWidget);
+    expect(find.byIcon(Icons.home_outlined), findsOneWidget);
+    expect(find.byIcon(Icons.explore_outlined), findsOneWidget);
+    expect(find.byIcon(Icons.calendar_month_outlined), findsOneWidget);
     expect(find.text('Your media'), findsNothing);
     final watchingTab = find.ancestor(
       of: find.text('Watching').first,
@@ -401,8 +413,14 @@ void main() {
     final surfaceMaterial = tester.widget<Material>(menuSurface);
     final surfaceDecoration =
         (surfaceMaterial.child! as DecoratedBox).decoration as BoxDecoration;
-    expect(surfaceDecoration.color, AppThemePalette.defaults.surface);
-    expect(surfaceDecoration.borderRadius, BorderRadius.circular(14));
+    expect(
+      surfaceDecoration.color,
+      AppThemePalette.defaults.surface.withValues(alpha: .92),
+    );
+    expect(
+      surfaceDecoration.borderRadius,
+      BorderRadius.circular(TetoBoxStyle.radius),
+    );
     expect(surfaceDecoration.border, isNotNull);
     final menuAvatar = tester.widget<Container>(
       find.byKey(const ValueKey('main-nav-profile-menu-avatar-anilist')),
@@ -452,7 +470,7 @@ void main() {
     expect(find.text('Mean 82.4/100'), findsOneWidget);
     expect(
       find.byKey(const ValueKey('main-nav-profile-settings')),
-      findsNothing,
+      findsOneWidget,
     );
     expect(
       find.byKey(
@@ -552,6 +570,7 @@ void main() {
                     preferences: SettingsPreferences(
                       settingsEntryPlacement:
                           SettingsEntryPlacement.profileMenu,
+                      showSettings: false,
                     ),
                   ),
                 ],
@@ -1054,7 +1073,8 @@ void main() {
         );
 
     settingsDetector().focusNode!.requestFocus();
-    await tester.pump();
+    // Measure after the focused label has finished expanding, not mid-frame.
+    await tester.pumpAndSettle();
     expect(settingsDetector().focusNode!.hasFocus, isTrue);
     final navigationBefore = tester.getRect(
       find.byKey(const ValueKey('main-navigation')),
@@ -1199,7 +1219,7 @@ void main() {
     expect(settingsDetector().focusNode!.hasFocus, isTrue);
 
     accounts.replace(const TrackingAccountsState());
-    await tester.pump();
+    await tester.pumpAndSettle();
     expect(
       find.byKey(const ValueKey('main-nav-profile-summary')),
       findsNothing,

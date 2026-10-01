@@ -1,3 +1,4 @@
+import 'package:anime_tv/core/widgets/teto_dialog.dart';
 import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'package:anime_tv/features/aniyomi/application/aniyomi_controller.dart';
 import 'package:anime_tv/features/aniyomi/presentation/aniyomi_screen.dart';
@@ -6,8 +7,11 @@ import 'dart:async';
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/widgets/teto_back_button.dart';
+import 'package:anime_tv/core/theme/teto_box_style.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/widgets/tv_text_input.dart';
+import 'package:anime_tv/core/widgets/teto_switch_indicator.dart';
 import 'package:anime_tv/features/manga/application/manga_feature_availability.dart';
 import 'package:anime_tv/features/marketplace/application/marketplace_controller.dart';
 import 'package:anime_tv/features/marketplace/domain/addon_models.dart';
@@ -409,11 +413,7 @@ class _MarketplaceScreenState extends ConsumerState<MarketplaceScreen> {
             children: [
               Row(
                 children: [
-                  _MarketplaceButton(
-                    icon: Icons.arrow_back_rounded,
-                    label: context.isCompactWidth
-                        ? null
-                        : context.tr("Settings"),
+                  TetoBackButton(
                     autofocus: true,
                     focusNode: _backFocus,
                     onPressed: context.pop,
@@ -1009,11 +1009,7 @@ class _RepositoryTile extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
-      decoration: BoxDecoration(
-        color: context.appPalette.surface,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white.withValues(alpha: .08)),
-      ),
+      decoration: TetoBoxStyle.decoration(context.appPalette),
       child: Row(
         children: [
           Icon(
@@ -1051,9 +1047,8 @@ class _RepositoryTile extends StatelessWidget {
             ),
           ),
           _MarketplaceButton(
-            icon: repository.enabled
-                ? Icons.toggle_on_rounded
-                : Icons.toggle_off_rounded,
+            icon: Icons.link_rounded,
+            toggleValue: repository.enabled,
             label: context.isCompactWidth
                 ? null
                 : repository.enabled
@@ -1089,11 +1084,7 @@ class _TorrentSourceTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Container(
     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
-    decoration: BoxDecoration(
-      color: context.appPalette.surface,
-      borderRadius: BorderRadius.circular(16),
-      border: Border.all(color: Colors.white.withValues(alpha: .08)),
-    ),
+    decoration: TetoBoxStyle.decoration(context.appPalette),
     child: Row(
       children: [
         Icon(
@@ -1406,11 +1397,7 @@ class _AddonShell extends StatelessWidget {
     return Container(
       key: ValueKey('marketplace.addon.${addon.id}'),
       padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: context.appPalette.surface,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: Colors.white.withValues(alpha: .08)),
-      ),
+      decoration: TetoBoxStyle.decoration(context.appPalette),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1527,15 +1514,15 @@ class _MarketplaceButton extends StatelessWidget {
     required this.icon,
     required this.label,
     required this.onPressed,
-    this.autofocus = false,
     this.focusNode,
+    this.toggleValue,
   });
 
   final IconData icon;
   final String? label;
   final VoidCallback? onPressed;
-  final bool autofocus;
   final FocusNode? focusNode;
+  final bool? toggleValue;
 
   @override
   Widget build(BuildContext context) {
@@ -1547,7 +1534,6 @@ class _MarketplaceButton extends StatelessWidget {
         child: Opacity(
           opacity: disabled ? .42 : 1,
           child: TvFocusable(
-            autofocus: autofocus,
             focusNode: focusNode,
             onPressed: onPressed ?? () {},
             borderRadius: BorderRadius.circular(12),
@@ -1555,11 +1541,14 @@ class _MarketplaceButton extends StatelessWidget {
             child: Container(
               constraints: const BoxConstraints(minHeight: 42),
               padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 9),
-              color: context.appPalette.selectableSurface,
+              decoration: TetoBoxStyle.decoration(context.appPalette),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(icon, size: 20),
+                  if (toggleValue case final value?)
+                    TetoSwitchIndicator(value: value, compact: true)
+                  else
+                    Icon(icon, size: 20),
                   if (label != null) ...[
                     const SizedBox(width: 7),
                     Text(
@@ -1609,7 +1598,7 @@ Future<_CatalogLanguageSelection?> _chooseCatalogLanguage(
   BuildContext context, {
   required List<String> languages,
   required String? selected,
-}) => showDialog<_CatalogLanguageSelection>(
+}) => showTetoDialog<_CatalogLanguageSelection>(
   context: context,
   builder: (dialogContext) => SimpleDialog(
     backgroundColor: dialogContext.appPalette.surface,
@@ -1641,7 +1630,7 @@ Future<_CatalogLanguageSelection?> _chooseCatalogLanguage(
 Future<MarketplaceCatalogSort?> _chooseCatalogSort(
   BuildContext context, {
   required MarketplaceCatalogSort selected,
-}) => showDialog<MarketplaceCatalogSort>(
+}) => showTetoDialog<MarketplaceCatalogSort>(
   context: context,
   builder: (dialogContext) => SimpleDialog(
     backgroundColor: dialogContext.appPalette.surface,
@@ -1675,7 +1664,7 @@ Future<void> _addRepository(
 ) async {
   final input = TextEditingController();
   try {
-    final accepted = await showDialog<bool>(
+    final accepted = await showTetoDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         backgroundColor: context.appPalette.surface,
@@ -1738,7 +1727,7 @@ Future<void> _addTorrentSource(
 ) async {
   final input = TextEditingController();
   try {
-    final accepted = await showDialog<bool>(
+    final accepted = await showTetoDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         backgroundColor: context.appPalette.surface,
@@ -1908,7 +1897,7 @@ Future<bool> showMarketplaceConfirmationDialog(
   final cancelFocus = FocusNode(debugLabel: 'marketplace.confirm.cancel');
   final actionFocus = FocusNode(debugLabel: 'marketplace.confirm.action');
   try {
-    return await showDialog<bool>(
+    return await showTetoDialog<bool>(
           context: context,
           builder: (dialogContext) => AlertDialog(
             backgroundColor: dialogContext.appPalette.surface,

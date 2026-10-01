@@ -7,9 +7,11 @@ import 'package:anime_tv/core/preferences/title_language_preference.dart';
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/widgets/teto_back_button.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/tv/tv_shelf_focus.dart';
 import 'package:anime_tv/core/widgets/network_artwork.dart';
+import 'package:anime_tv/core/widgets/teto_browse_status.dart';
 import 'package:anime_tv/core/widgets/poster_metadata_overlay.dart';
 import 'package:anime_tv/core/widgets/teto_top_level_shell.dart';
 import 'package:anime_tv/core/widgets/tv_text_input.dart';
@@ -263,27 +265,9 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                   builder: (context, constraints) {
                     final back =
                         preferences.interfaceMode == InterfaceMode.phone
-                        ? TvFocusable(
+                        ? TetoBackButton(
                             focusNode: _backFocusNode,
                             onPressed: () => _returnToPreviousOrHome(context),
-                            borderRadius: BorderRadius.circular(10),
-                            focusScale: 1.02,
-                            child: Container(
-                              decoration: BoxDecoration(
-                                color: context.appPalette.surface.withValues(
-                                  alpha: .92,
-                                ),
-                                borderRadius: BorderRadius.circular(10),
-                                border: Border.all(
-                                  color: context.appPalette.primaryText
-                                      .withValues(alpha: .11),
-                                ),
-                              ),
-                              child: const Padding(
-                                padding: EdgeInsets.all(10),
-                                child: Icon(Icons.arrow_back_rounded, size: 20),
-                              ),
-                            ),
                           )
                         : null;
                     final input = TvTextInput(
@@ -392,17 +376,16 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     TetoTopLevelLayout layout,
   ) {
     return _results.when(
-      loading: () => Center(
-        child: CircularProgressIndicator(
-          color: context.appPalette.secondaryAccent,
-        ),
-      ),
+      loading: () => const TetoBrowseLoading(),
       error: (error, _) => _SearchMessage(
         icon: Icons.cloud_off_rounded,
         title: 'Search failed',
         body: error is StateError
             ? error.message.toString()
             : 'The catalog could not be reached. Please try again.',
+        actions: TetoRetryButton(
+          onPressed: () => _submitSearch(_queryController.text),
+        ),
       ),
       data: (items) {
         if (items.isEmpty) {
@@ -571,25 +554,19 @@ class _SearchMessage extends StatelessWidget {
     required this.icon,
     required this.title,
     required this.body,
+    this.actions,
   });
 
   final IconData icon;
   final String title;
   final String body;
+  final Widget? actions;
 
   @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 60, color: context.appPalette.mutedText),
-          const SizedBox(height: 14),
-          LocalizedText(title, style: Theme.of(context).textTheme.titleLarge),
-          const SizedBox(height: 6),
-          LocalizedText(body, style: Theme.of(context).textTheme.bodyMedium),
-        ],
-      ),
-    );
-  }
+  Widget build(BuildContext context) => TetoBrowseStatus(
+    icon: icon,
+    title: title,
+    message: body,
+    actions: actions,
+  );
 }

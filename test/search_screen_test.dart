@@ -158,6 +158,27 @@ void main() {
     expect(find.text('Results for “Cowboy Bebop”'), findsOneWidget);
   });
 
+  testWidgets('search recovery retries the same query and restores results', (
+    tester,
+  ) async {
+    final client = _RetryCatalogClient();
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [catalogClientProvider.overrideWithValue(client)],
+        child: const MaterialApp(home: SearchScreen(initialQuery: 'retry me')),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Search failed'), findsOneWidget);
+    expect(find.byKey(const ValueKey('browse-status-panel')), findsOneWidget);
+    await tester.tap(find.text('Retry'));
+    await tester.pumpAndSettle();
+    expect(client.queries, ['retry me', 'retry me']);
+    expect(find.text('Recovered result'), findsOneWidget);
+    expect(find.text('Search failed'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('built-in keyboard submission focuses the first result', (
     tester,
   ) async {
@@ -612,6 +633,17 @@ AnimeSummary _anime(int id, String title) => AnimeSummary(
   episodes: 1,
   score: null,
 );
+
+class _RetryCatalogClient extends _DeferredCatalogClient {
+  final queries = <String>[];
+
+  @override
+  Future<List<AnimeSummary>> search(String term, {int page = 1}) async {
+    queries.add(term);
+    if (queries.length == 1) throw StateError('Temporary catalog failure');
+    return [_anime(44, 'Recovered result')];
+  }
+}
 
 class _DeferredCatalogClient extends AniListCatalogClient {
   _DeferredCatalogClient()

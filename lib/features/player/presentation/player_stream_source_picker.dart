@@ -1,7 +1,9 @@
+import 'package:anime_tv/core/widgets/teto_dialog.dart';
 import 'dart:async';
 
 import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/theme/teto_box_style.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/features/marketplace/application/web_stream_aggregator.dart';
 import 'package:anime_tv/features/marketplace/domain/addon_models.dart';
@@ -313,7 +315,7 @@ Future<PlaybackStreamOption?> showPlayerStreamSourcePicker({
   PlayerSourceDiscovery? discover,
 }) {
   final palette = context.appPalette;
-  return showDialog<PlaybackStreamOption>(
+  return showTetoDialog<PlaybackStreamOption>(
     context: context,
     barrierColor: palette.usesDefaultPlayerPalette
         ? const Color(0x99000000)
@@ -490,8 +492,8 @@ class _PlayerStreamSourcePickerState extends State<PlayerStreamSourcePicker> {
               color: palette.playerSurface(
                 defaultColor: const Color(0xF5080808),
               ),
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: palette.accent.withValues(alpha: .75)),
+              borderRadius: BorderRadius.circular(TetoBoxStyle.radius),
+              border: Border.all(color: TetoBoxStyle.outline(palette)),
               boxShadow: [
                 BoxShadow(
                   color: palette.usesDefaultPlayerPalette

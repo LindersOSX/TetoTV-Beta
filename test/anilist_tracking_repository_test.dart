@@ -1,8 +1,44 @@
 import 'package:anime_tv/features/tracking/data/anilist_tracking_repository.dart';
+import 'package:anime_tv/features/tracking/domain/tracking_repository.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test(
+    'starting an absent AniList entry writes CURRENT without progress',
+    () async {
+      final requests = <RequestOptions>[];
+      final dio = Dio(BaseOptions(baseUrl: 'https://graphql.anilist.co'));
+      dio.interceptors.add(
+        InterceptorsWrapper(
+          onRequest: (request, handler) {
+            requests.add(request);
+            handler.resolve(
+              Response<Map<String, dynamic>>(
+                requestOptions: request,
+                statusCode: 200,
+                data: const {
+                  'data': {
+                    'SaveMediaListEntry': {'id': 42, 'status': 'CURRENT'},
+                  },
+                },
+              ),
+            );
+          },
+        ),
+      );
+      await AniListTrackingRepository(
+        accessToken: 'unused',
+        dio: dio,
+      ).updateStatus(mediaId: 9001, status: TrackingListStatus.watching);
+      expect(requests, hasLength(1));
+      final body = requests.single.data as Map<String, dynamic>;
+      expect(body['variables'], {'mediaId': 9001, 'status': 'CURRENT'});
+      expect(body['query'], contains('SaveMediaListEntry'));
+      expect(body['query'], isNot(contains('progress')));
+    },
+  );
+
   test('looks up and deletes the AniList media-list entry', () async {
     final requests = <RequestOptions>[];
     final dio = Dio(BaseOptions(baseUrl: 'https://graphql.anilist.co'));

@@ -1,9 +1,11 @@
 import 'package:anime_tv/app/app.dart';
 import 'package:anime_tv/app/router.dart';
+import 'package:anime_tv/core/widgets/teto_apply_button.dart';
 import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
 import 'package:anime_tv/features/catalog/data/anilist_catalog_client.dart';
 import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
+import 'package:anime_tv/features/catalog/presentation/catalog_grid.dart';
 import 'package:anime_tv/features/catalog/presentation/discover_screen.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/tv/tv_shortcuts.dart';
@@ -318,6 +320,13 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Fantasy').last);
     await tester.pumpAndSettle();
+    expect(
+      find.ancestor(
+        of: find.text('Show results'),
+        matching: find.byType(TetoApplyButton),
+      ),
+      findsOneWidget,
+    );
     await tester.tap(find.text('Show results'));
     await tester.pumpAndSettle();
 
@@ -701,6 +710,115 @@ void main() {
     },
   );
 
+  testWidgets('scrolling Discover loads later pages without replacing shows', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1280, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final catalog = _FakeCatalog(
+      pages: {
+        1: _shows(1, 60),
+        2: _shows(61, 60),
+        3: _shows(121, 5),
+        4: const [],
+      },
+    );
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [catalogClientProvider.overrideWithValue(catalog)],
+        child: const MaterialApp(home: DiscoverScreen()),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(catalog.requestedPages, [1]);
+
+    await tester.drag(find.byType(GridView), const Offset(0, -3000));
+    await tester.pumpAndSettle();
+    expect(catalog.requestedPages, contains(2));
+    expect(
+      tester.widget<CatalogGrid>(find.byType(CatalogGrid)).items.last.id,
+      greaterThanOrEqualTo(120),
+    );
+
+    await tester.drag(find.byType(GridView), const Offset(0, -3000));
+    await tester.pumpAndSettle();
+    expect(catalog.requestedPages, contains(3));
+    expect(
+      tester.widget<CatalogGrid>(find.byType(CatalogGrid)).items.last.id,
+      125,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('TV remote Down loads another Discover page', (tester) async {
+    tester.view.physicalSize = const Size(1280, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final catalog = _FakeCatalog(pages: {1: _shows(1, 5), 2: _shows(6, 5)});
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [catalogClientProvider.overrideWithValue(catalog)],
+        child: const MaterialApp(home: TvShortcuts(child: DiscoverScreen())),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final lastCard = find.ancestor(
+      of: find.text('Show 5'),
+      matching: find.byType(FocusableActionDetector),
+    );
+    tester
+        .widget<FocusableActionDetector>(lastCard.first)
+        .focusNode!
+        .requestFocus();
+    await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+
+    expect(catalog.requestedPages, [1, 2]);
+    expect(
+      tester.widget<CatalogGrid>(find.byType(CatalogGrid)).items.length,
+      10,
+    );
+    expect(_focusedResult(tester, 'Show 5'), isTrue);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('a failed later page keeps results and retries that page', (
+    tester,
+  ) async {
+    final catalog = _FakeCatalog(
+      pages: {1: _shows(1, 5), 2: _shows(6, 5)},
+      transientFailures: {2: 1},
+    );
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [catalogClientProvider.overrideWithValue(catalog)],
+        child: const MaterialApp(home: DiscoverScreen()),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('discover-load-more')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Could not load more shows.'), findsOneWidget);
+    expect(
+      tester.widget<CatalogGrid>(find.byType(CatalogGrid)).items.length,
+      5,
+    );
+    await tester.tap(find.byKey(const ValueKey('discover-load-more-retry')));
+    await tester.pumpAndSettle();
+
+    expect(catalog.requestedPages, [1, 2, 2]);
+    expect(
+      tester.widget<CatalogGrid>(find.byType(CatalogGrid)).items.length,
+      10,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('holding a Discover result can add it to Planning', (
     tester,
   ) async {
@@ -835,11 +953,19 @@ void main() {
 }
 
 class _FakeCatalog extends AniListCatalogClient {
-  _FakeCatalog({this.results = const [], this.error});
+  _FakeCatalog({
+    this.results = const [],
+    this.error,
+    this.pages,
+    Map<int, int>? transientFailures,
+  }) : transientFailures = transientFailures ?? {};
 
   final List<AnimeSummary> results;
   final Object? error;
+  final Map<int, List<AnimeSummary>>? pages;
+  final Map<int, int> transientFailures;
   final requests = <CatalogFilters>[];
+  final requestedPages = <int>[];
 
   @override
   Future<List<AnimeSummary>> discover(
@@ -847,10 +973,27 @@ class _FakeCatalog extends AniListCatalogClient {
     int page = 1,
   }) async {
     requests.add(filters);
+    requestedPages.add(page);
+    final failuresRemaining = transientFailures[page] ?? 0;
+    if (failuresRemaining > 0) {
+      transientFailures[page] = failuresRemaining - 1;
+      throw StateError('Temporary page failure');
+    }
     if (error != null) throw error!;
-    return results;
+    return pages?[page] ?? (pages == null ? results : const []);
   }
 }
+
+List<AnimeSummary> _shows(int firstId, int count) => [
+  for (var offset = 0; offset < count; offset++)
+    AnimeSummary(
+      id: firstId + offset,
+      title: 'Show ${firstId + offset}',
+      description: '',
+      episodes: 12,
+      score: 8,
+    ),
+];
 
 class _LayoutSettingsController extends SettingsPreferencesController {
   _LayoutSettingsController(InterfaceMode mode)

@@ -152,6 +152,91 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('failed Home shelf exposes a reachable remote Retry', (
+    tester,
+  ) async {
+    FlutterSecureStorage.setMockInitialValues({
+      initialSetupCompletedStorageKey: 'true',
+      'home_shelves_v2': 'recentlyReleased',
+      'home_shelf_order_v1': 'recentlyReleased',
+    });
+    tester.view.physicalSize = const Size(1280, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    var attempts = 0;
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          settingsPreferencesProvider.overrideWith(
+            (_) => _RailSettingsController(
+              const SettingsPreferences(
+                interfaceMode: InterfaceMode.television,
+                showHero: true,
+                loaded: true,
+              ),
+            ),
+          ),
+          trendingAnimeProvider.overrideWith(
+            (_) async => const [
+              AnimeSummary(
+                id: 77,
+                title: 'Featured',
+                description: '',
+                episodes: 1,
+                score: null,
+              ),
+            ],
+          ),
+          seasonalAnimeProvider.overrideWith((_) async {
+            attempts++;
+            if (attempts == 1) throw StateError('Offline');
+            return const <AnimeSummary>[];
+          }),
+          trackingHomeProvider.overrideWith(
+            (_) async => const TrackingHomeData(
+              watching: [],
+              planToWatch: [],
+              completed: [],
+            ),
+          ),
+          recentPlaybackProvider.overrideWith((_) async => const []),
+          dismissedContinueWatchingProvider.overrideWith(
+            (_) async => const <int>{},
+          ),
+        ],
+        child: const MaterialApp(home: HomeScreen()),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Retry'), findsOneWidget);
+    final hero = tester.widget<TvFocusable>(
+      find.descendant(
+        of: find.byKey(const ValueKey('home-hero-watch-now')),
+        matching: find.byType(TvFocusable),
+      ),
+    );
+    hero.focusNode!.requestFocus();
+    await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'home.recently-released.retry',
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pump();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'home.recently-released.retry',
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.select);
+    await tester.pumpAndSettle();
+    expect(attempts, 2);
+    expect(find.text('Retry'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
   test('Modern Layout rail metrics scale on common TV canvases', () {
     const expectedWidths = <int, List<double>>{
       960: [48, 60, 72],
@@ -257,7 +342,14 @@ void main() {
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
 
-      final settings = _RailSettingsController();
+      final settings = _RailSettingsController(
+        const SettingsPreferences(
+          interfaceMode: InterfaceMode.television,
+          showHero: false,
+          expandNavigationLabelsOnFocus: false,
+          loaded: true,
+        ),
+      );
       await tester.pumpWidget(
         ProviderScope(
           overrides: [
@@ -293,10 +385,11 @@ void main() {
       for (final size in NavigationChromeSize.values) {
         await settings.setNavigationChromeSize(size);
         await tester.pump();
+        await tester.pump(const Duration(milliseconds: 250));
 
         final expected = homeNavigationRailMetrics(size);
         final railFinder = find.byKey(const ValueKey('main-navigation'));
-        final rail = tester.widget<Container>(railFinder);
+        final rail = tester.widget<AnimatedContainer>(railFinder);
         final decoration = rail.decoration! as BoxDecoration;
         final border = decoration.border! as Border;
         final contentRegion = tester.widget<Positioned>(
@@ -456,6 +549,7 @@ void main() {
                   interfaceMode: InterfaceMode.television,
                   showHero: true,
                   showTitleStyle: ShowTitleStyle.englishLogo,
+                  expandNavigationLabelsOnFocus: false,
                   loaded: true,
                 ),
               ),
@@ -941,7 +1035,7 @@ void main() {
   );
 
   testWidgets(
-    'automatic tablet Home keeps mobile navigation and title bounds',
+    'landscape tablet Home uses the TV hero with touch-sized rail actions',
     (tester) async {
       const tabletTitle = 'The Apothecary Diaries';
       await _pumpFeaturedHomeHero(
@@ -978,8 +1072,8 @@ void main() {
         findsNothing,
       );
       final textWidget = tester.widget<Text>(titleText);
-      expect(textWidget.maxLines, 2);
-      expect(textWidget.overflow, TextOverflow.ellipsis);
+      expect(textWidget.maxLines, isNull);
+      expect(textWidget.overflow, TextOverflow.visible);
       expect(
         tester.renderObject<RenderParagraph>(titleText).didExceedMaxLines,
         isFalse,
@@ -989,7 +1083,11 @@ void main() {
         find.byKey(const ValueKey('phone-bottom-navigation')),
         findsNothing,
       );
-      expect(tester.getSize(titleSlot), const Size(570, 68));
+      expect(tester.getSize(titleSlot), const Size(600, 102));
+      expect(
+        tester.getSize(find.byKey(const ValueKey('main-nav-home'))).height,
+        greaterThanOrEqualTo(44),
+      );
       expect(tester.takeException(), isNull);
     },
   );
@@ -1195,6 +1293,33 @@ void main() {
       'home.shelf.Watch history.item.12',
     );
     expect(FocusManager.instance.primaryFocus?.context, isNotNull);
+
+    final homeScrollView = tester.widget<SingleChildScrollView>(
+      find.byKey(const ValueKey('home-scroll-content')),
+    );
+    final offsetBeforeRailReturn = homeScrollView.controller!.offset;
+    expect(offsetBeforeRailReturn, greaterThan(0));
+
+    // Move back to the left edge, then leave the shelf for the rail. Returning
+    // to navigation must not restore the featured hero or reset the Home
+    // viewport when focus came from a lower shelf.
+    for (var index = 0; index < 12; index++) {
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+      await tester.pumpAndSettle();
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 80)),
+      );
+    }
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+    await tester.pump();
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'home.navigation.home',
+    );
+    expect(
+      homeScrollView.controller!.offset,
+      closeTo(offsetBeforeRailReturn, .5),
+    );
     expect(tester.takeException(), isNull);
   });
 

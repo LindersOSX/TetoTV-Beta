@@ -367,6 +367,30 @@ class RealDebridClient {
     return RealDebridTorrentInfo.fromJson(response.data!);
   }
 
+  /// A bounded snapshot of the user's own torrent history. This is distinct
+  /// from instant availability, which is shared across the service.
+  Future<List<RealDebridTorrentInfo>> accountTorrents({
+    int limit = 100,
+    int offset = 0,
+    CancelToken? cancelToken,
+  }) async {
+    final response = await _request<List<dynamic>>(
+      () => _dio.get(
+        '/torrents',
+        queryParameters: {
+          'limit': limit.clamp(1, 5000),
+          if (offset > 0) 'offset': offset,
+        },
+        cancelToken: cancelToken,
+      ),
+    );
+    return List.unmodifiable([
+      for (final value in response.data ?? const <dynamic>[])
+        if (value is Map<String, dynamic>)
+          RealDebridTorrentInfo.fromJson(value),
+    ]);
+  }
+
   /// Finds a matching account torrent when addMagnet reports that the hash is
   /// already active, or when a previously playable completed copy may still
   /// be reused. The bounded list prevents an account-wide request explosion.

@@ -320,6 +320,7 @@ void main() {
       );
       const preferences = SettingsPreferences(
         settingsEntryPlacement: SettingsEntryPlacement.profileMenu,
+        showSettings: false,
       );
 
       Future<void> pumpNavigation(Widget navigation) => tester.pumpWidget(

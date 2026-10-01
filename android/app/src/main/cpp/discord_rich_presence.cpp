@@ -36,6 +36,7 @@ std::atomic<bool> g_running{false};
 std::atomic<bool> g_ready{false};
 std::atomic<std::uint64_t> g_auth_generation{0};
 std::atomic<std::uint64_t> g_connection_generation{0};
+std::atomic<std::uint64_t> g_installed_token_connection_generation{0};
 std::unique_ptr<discordpp::Client> g_client;
 
 struct Presence {
@@ -120,27 +121,29 @@ void notify_auth(const char* method,
                  int token_type,
                  int expires_in,
                  const std::string& scopes,
-                 const std::string& error) {
+                 const std::string& error,
+                 jlong request_id = 0) {
     with_bridge([&](JNIEnv* env, jclass bridge) {
         const jmethodID callback = env->GetStaticMethodID(
             bridge,
             method,
-            "(ZLjava/lang/String;Ljava/lang/String;IILjava/lang/String;Ljava/lang/String;)V");
+            request_id == 0
+                ? "(ZLjava/lang/String;Ljava/lang/String;IILjava/lang/String;Ljava/lang/String;)V"
+                : "(JZLjava/lang/String;Ljava/lang/String;IILjava/lang/String;Ljava/lang/String;)V");
         if (callback == nullptr) return;
         jstring access = env->NewStringUTF(access_token.c_str());
         jstring refresh = env->NewStringUTF(refresh_token.c_str());
         jstring scope_value = env->NewStringUTF(scopes.c_str());
         jstring error_value = env->NewStringUTF(error.c_str());
-        env->CallStaticVoidMethod(
-            bridge,
-            callback,
-            success,
-            access,
-            refresh,
-            token_type,
-            expires_in,
-            scope_value,
-            error_value);
+        if (request_id == 0) {
+            env->CallStaticVoidMethod(
+                bridge, callback, success, access, refresh, token_type,
+                expires_in, scope_value, error_value);
+        } else {
+            env->CallStaticVoidMethod(
+                bridge, callback, request_id, success, access, refresh, token_type,
+                expires_in, scope_value, error_value);
+        }
         env->DeleteLocalRef(access);
         env->DeleteLocalRef(refresh);
         env->DeleteLocalRef(scope_value);
@@ -353,7 +356,29 @@ void start_worker() {
             [](discordpp::Client::Status status,
                discordpp::Client::Error error,
                std::int32_t error_detail) {
-                post([status, error, error_detail] {
+                const auto connection_generation = g_connection_generation.load();
+                post([status, error, error_detail, connection_generation] {
+                    // Status callbacks are posted back onto the SDK worker.
+                    // A cancellation/replacement may win before that post is
+                    // processed; never settle a new request with old state.
+                    if (!g_client ||
+                        connection_generation != g_connection_generation.load() ||
+                        status != g_client->GetStatus()) {
+                        return;
+                    }
+                    if (status == discordpp::Client::Status::Ready &&
+                        g_installed_token_connection_generation.load() != connection_generation) {
+                        // An old socket can still report Ready while the new
+                        // account token is being installed. Only that token's
+                        // successful callback may complete this connection.
+                        // This installed marker remains valid after the
+                        // one-shot manual-connect marker has been consumed.
+                        g_ready.store(false);
+                        // The atomic installed-token marker also covers the
+                        // interval after JNI increments the generation but
+                        // before its queued worker command starts UpdateToken.
+                        return;
+                    }
                     const bool ready = status == discordpp::Client::Status::Ready;
                     g_ready.store(ready);
                     switch (status) {
@@ -578,14 +603,15 @@ Java_dev_animetv_anime_1tv_DiscordRichPresenceBridge_nativeCancelAuthentication(
 extern "C" JNIEXPORT void JNICALL
 Java_dev_animetv_anime_1tv_DiscordRichPresenceBridge_nativeRefreshToken(JNIEnv* env,
                                                                          jobject,
-                                                                         jstring token) {
+                                                                         jstring token,
+                                                                         jlong request_id) {
     const std::string refresh_token = from_jstring(env, token);
-    post([refresh_token] {
+    post([refresh_token, request_id] {
         if (!g_client) return;
         g_client->RefreshToken(
             kApplicationId,
             refresh_token,
-            [](discordpp::ClientResult result,
+            [request_id](discordpp::ClientResult result,
                std::string access_token,
                std::string new_refresh_token,
                discordpp::AuthorizationTokenType token_type,
@@ -599,7 +625,8 @@ Java_dev_animetv_anime_1tv_DiscordRichPresenceBridge_nativeRefreshToken(JNIEnv* 
                             static_cast<int>(token_type),
                             ok ? expires_in : 0,
                             ok ? scopes : std::string{},
-                            ok ? std::string{} : safe_error(result));
+                            ok ? std::string{} : safe_error(result),
+                            request_id);
             });
     });
 }
@@ -613,6 +640,7 @@ Java_dev_animetv_anime_1tv_DiscordRichPresenceBridge_nativeConnect(JNIEnv* env,
     const auto connection_generation = g_connection_generation.fetch_add(1) + 1;
     post([access_token, token_type, connection_generation] {
         if (!g_client || connection_generation != g_connection_generation.load()) return;
+        g_ready.store(false);
         g_connection_requested = true;
         const auto initial_status = g_client->GetStatus();
         g_manual_connect_after_token_update =
@@ -637,6 +665,7 @@ Java_dev_animetv_anime_1tv_DiscordRichPresenceBridge_nativeConnect(JNIEnv* env,
                         notify_status("error", error);
                         return;
                     }
+                    g_installed_token_connection_generation.store(connection_generation);
                     g_token_ready_connection_generation = connection_generation;
                     // UpdateToken may reconnect an already-connected client by
                     // itself. Calling Connect unconditionally here creates a
@@ -645,6 +674,7 @@ Java_dev_animetv_anime_1tv_DiscordRichPresenceBridge_nativeConnect(JNIEnv* env,
                     if (connect_pending_if_disconnected()) return;
                     const auto status = g_client->GetStatus();
                     if (status == discordpp::Client::Status::Ready) {
+                        g_ready.store(true);
                         g_connection_requested = false;
                         g_manual_connect_after_token_update = false;
                         g_token_ready_connection_generation = 0;

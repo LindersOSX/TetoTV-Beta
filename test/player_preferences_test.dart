@@ -997,6 +997,10 @@ void main() {
       playerSeekPreviewBottom(viewportWidth: 640, viewportHeight: 360),
       162,
     );
+    expect(
+      playerSeekPreviewBottom(viewportWidth: 800, viewportHeight: 360),
+      210,
+    );
   });
 
   test('skip-segment target never lands on the synchronous EOF boundary', () {

@@ -1,4 +1,5 @@
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/theme/teto_box_style.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/tv/interaction_sound_scope.dart';
 import 'package:anime_tv/core/tv/tv_shortcuts.dart';
@@ -32,12 +33,42 @@ void main() {
     final decoration = animated.decoration! as BoxDecoration;
     final foreground = animated.foregroundDecoration! as BoxDecoration;
     expect(foreground.border!.top.color, AppColors.focusRing);
+    expect(foreground.color, Colors.transparent);
     expect(decoration.boxShadow, hasLength(2));
     expect(decoration.boxShadow!.last.color, AppColors.focusGlow);
     expect(
       decoration.boxShadow!.map((shadow) => shadow.color),
       isNot(contains(Colors.white)),
     );
+  });
+
+  testWidgets('pressing a TV control keeps its interior unchanged', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: TvFocusable(
+            autofocus: true,
+            onPressed: () {},
+            child: const SizedBox(width: 120, height: 60),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    final gesture = await tester.startGesture(
+      tester.getCenter(find.byType(TvFocusable)),
+    );
+    await tester.pump();
+    final foreground =
+        tester
+                .widget<AnimatedContainer>(find.byType(AnimatedContainer))
+                .foregroundDecoration!
+            as BoxDecoration;
+    expect(foreground.color, Colors.transparent);
+    expect(foreground.border!.top.color, AppColors.focusRing);
+    await gesture.up();
   });
 
   testWidgets('artwork focus can glow without a dark contrast keyline', (
@@ -167,7 +198,7 @@ void main() {
     expect(foreground.border!.top.color, AppColors.focusRing);
   });
 
-  testWidgets('touch press keeps activation and uses the shared red state', (
+  testWidgets('touch press keeps activation and uses an outer red ring', (
     tester,
   ) async {
     var calls = 0;
@@ -193,22 +224,93 @@ void main() {
     );
     final foreground = pressed.foregroundDecoration! as BoxDecoration;
     expect(foreground.border!.top.color, AppColors.focusRing);
+    expect(
+      tester.widget<AnimatedScale>(find.byType(AnimatedScale)).scale,
+      .985,
+    );
+    expect(foreground.color, Colors.transparent);
 
     await touch.up();
     await tester.pump();
     expect(calls, 1);
   });
 
-  test('shared Material controls use dark-red idle and bright-red focus', () {
-    final style = AppTheme.dark.outlinedButtonTheme.style!;
-    expect(style.backgroundColor!.resolve({}), AppColors.selectableSurface);
-    expect(
-      style.backgroundColor!.resolve({WidgetState.hovered}),
-      AppColors.selectableSurfaceHover,
+  testWidgets('remote press is distinct from focused idle state', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.dark,
+        home: Scaffold(
+          body: TvFocusable(
+            autofocus: true,
+            onPressed: () {},
+            onLongPress: () {},
+            child: const SizedBox(width: 100, height: 60),
+          ),
+        ),
+      ),
     );
+    await tester.pump();
+    expect(
+      tester.widget<AnimatedScale>(find.byType(AnimatedScale)).scale,
+      greaterThan(1),
+    );
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.select);
+    await tester.pump();
+    expect(
+      tester.widget<AnimatedScale>(find.byType(AnimatedScale)).scale,
+      .985,
+    );
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.select);
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(
+      tester.widget<AnimatedScale>(find.byType(AnimatedScale)).scale,
+      greaterThan(1),
+    );
+  });
+
+  testWidgets(
+    'press-only remote controls show feedback without delaying action',
+    (tester) async {
+      var calls = 0;
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: AppTheme.dark,
+          home: Scaffold(
+            body: TvFocusable(
+              autofocus: true,
+              onPressed: () => calls++,
+              child: const SizedBox(width: 100, height: 60),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.select);
+      await tester.pump();
+      expect(
+        tester.widget<AnimatedScale>(find.byType(AnimatedScale)).scale,
+        .985,
+      );
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.select);
+      await tester.pump();
+      expect(
+        tester.widget<AnimatedScale>(find.byType(AnimatedScale)).scale,
+        greaterThan(1),
+      );
+      expect(calls, 1);
+    },
+  );
+
+  test('shared Material controls use neutral cards and accent focus', () {
+    final style = AppTheme.dark.outlinedButtonTheme.style!;
+    final fill = TetoBoxStyle.fill(AppThemePalette.defaults);
+    expect(style.backgroundColor!.resolve({}), fill);
+    expect(style.backgroundColor!.resolve({WidgetState.hovered}), fill);
     expect(
       style.side!.resolve({WidgetState.focused})!.color,
-      AppColors.focusRing,
+      AppThemePalette.defaults.accentBright,
     );
   });
 

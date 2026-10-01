@@ -1,3 +1,4 @@
+import 'package:anime_tv/core/widgets/teto_dialog.dart';
 import 'dart:async';
 
 import 'package:anime_tv/core/localization/teto_localizations.dart';
@@ -6,9 +7,12 @@ import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/layout/poster_card_geometry.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/theme/teto_box_style.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/tv/tv_shelf_focus.dart';
 import 'package:anime_tv/core/widgets/network_artwork.dart';
+import 'package:anime_tv/core/widgets/teto_artwork_scrim.dart';
+import 'package:anime_tv/core/widgets/teto_browse_status.dart';
 import 'package:anime_tv/core/widgets/release_highlights.dart';
 import 'package:anime_tv/core/widgets/poster_metadata_overlay.dart';
 import 'package:anime_tv/core/storage/storage_providers.dart';
@@ -60,6 +64,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   final _searchFocus = FocusNode(debugLabel: 'home.header-search');
   final _notificationFocus = FocusNode(debugLabel: 'home.notifications');
   final _profileFocus = FocusNode(debugLabel: 'home.profile-switcher');
+  final _seasonalRetryFocus = FocusNode(
+    debugLabel: 'home.recently-released.retry',
+  );
   final _homeSearchController = TextEditingController();
   final _scrollController = ScrollController();
   final _verticalRepeatGate = TvDirectionalRepeatGate(
@@ -76,7 +83,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   DateTime? _lastHomeActivation;
   bool _homeRefreshInProgress = false;
   bool _headerVisibleAtTop = true;
-  bool _suppressNextNavigationHeroRestore = false;
   bool _sponsoredHeroRestoreInFlight = false;
   bool? _lastUseSideNavigation;
   bool _lastContentWasHero = true;
@@ -151,7 +157,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     if (!mounted) return;
     final notes = await updater.takeInstalledReleaseNotes();
     if (!mounted || notes == null) return;
-    await showDialog<void>(
+    await showTetoDialog<void>(
       context: context,
       builder: (context) => ReleaseHighlightsDialog(notes: notes),
     );
@@ -196,11 +202,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             _profileFocus.hasFocus)) {
       if (_hasVisibleNavigationAction && _homeNavFocus.context != null) {
         // A pointer/remote scroll can hide the fixed header while Search or
-        // Profile still owns focus. Move focus somewhere visible without
-        // treating that synthetic transfer like an intentional rail visit;
-        // otherwise the rail focus callback immediately scrolls back to the
-        // hero and makes lower shelf cards impossible to interact with.
-        _suppressNextNavigationHeroRestore = true;
+        // Profile still owns focus. Move focus to the visible rail and retain
+        // the current Home viewport.
         _homeNavFocus.requestFocus();
       } else {
         unawaited(_revealAndFocusHeader());
@@ -359,6 +362,18 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
   void _focusShelf(HomeShelf shelf, {int? preferredColumn}) {
     if (!mounted) return;
+    if (shelf == HomeShelf.recentlyReleased &&
+        _seasonalRetryFocus.context != null) {
+      _seasonalRetryFocus.requestFocus();
+      unawaited(
+        Scrollable.ensureVisible(
+          _seasonalRetryFocus.context!,
+          alignment: .62,
+          duration: const Duration(milliseconds: 190),
+        ),
+      );
+      return;
+    }
     final key = _shelfKeys[shelf];
     final state = key?.currentState;
     if (state == null || !state.requestFocus(preferredIndex: preferredColumn)) {
@@ -522,7 +537,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   Future<void> _removeFromLocalHistory(_ShelfItem item) async {
     final mediaId = item.historyMediaId ?? item.animeId;
     if (mediaId == null) return;
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showTetoDialog<bool>(
       context: context,
       barrierDismissible: true,
       builder: (context) => AlertDialog(
@@ -568,7 +583,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   }
 
   Future<void> _manageShelfItem(_ShelfItem item) async {
-    final action = await showDialog<Object>(
+    final action = await showTetoDialog<Object>(
       context: context,
       barrierDismissible: true,
       builder: (dialogContext) => _HomeShowActionsDialog(item: item),
@@ -696,6 +711,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     _searchFocus.dispose();
     _notificationFocus.dispose();
     _profileFocus.dispose();
+    _seasonalRetryFocus.dispose();
     _homeSearchController.dispose();
     _verticalRepeatGate.reset();
     _scrollController.dispose();
@@ -819,6 +835,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 emptyMessage: seasonalAsync.hasError
                     ? 'Recently released titles are temporarily unavailable.'
                     : 'No recently released titles are available yet.',
+                onRetry: seasonalAsync.hasError
+                    ? () {
+                        ref.invalidate(seasonalAnimeProvider);
+                        // The retry row is replaced by loading placeholders.
+                        // Keep the remote on a surviving control while it loads.
+                        _focusHero(resetScroll: false);
+                      }
+                    : null,
               ),
             );
           }
@@ -847,7 +871,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     }
 
     final focusableRows = shelfRows
-        .where((row) => !row.loading && row.items.isNotEmpty)
+        .where(
+          (row) =>
+              !row.loading && (row.items.isNotEmpty || row.onRetry != null),
+        )
         .toList(growable: false);
     _focusableShelfOrder = focusableRows
         .map((row) => row.shelf)
@@ -881,23 +908,21 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     }
     _lastUseSideNavigation = useSideNavigation;
     if (useSideNavigation) {
-      final settingsInProfileMenu =
-          (accounts.profiles.isNotEmpty ||
-              localProfiles.activeProfile != null) &&
-          !accounts.isLoading &&
-          preferences.settingsEntryPlacement ==
-              SettingsEntryPlacement.profileMenu;
-      _hasVisibleNavigationAction = runtimeTopNavigationOrder(preferences).any(
-        (destination) =>
-            destination != TopNavigationDestination.settings ||
-            !settingsInProfileMenu,
-      );
+      _hasVisibleNavigationAction =
+          runtimeTopNavigationOrder(preferences).isNotEmpty ||
+          (accounts.profiles.isEmpty && localProfiles.activeProfile == null);
     } else {
       _hasVisibleNavigationAction = true;
     }
     final railMetrics = isPhoneLandscape
-        ? phoneLandscapeNavigationRailMetrics(preferences.navigationChromeSize)
-        : homeNavigationRailMetrics(preferences.navigationChromeSize);
+        ? phoneLandscapeNavigationRailMetrics(
+            preferences.navigationChromeSize,
+            scale: preferences.navigationChromeScale,
+          )
+        : homeNavigationRailMetrics(
+            preferences.navigationChromeSize,
+            scale: preferences.navigationChromeScale,
+          );
     final railWidth = railMetrics.width;
     final heroHeight = isPhoneLandscape
         ? (screenSize.height * .82).clamp(280.0, 360.0)
@@ -926,6 +951,23 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                     title: row.shelf.displayName,
                     message: row.emptyMessage!,
                     preferences: preferences,
+                    onRetry: row.onRetry,
+                    retryFocusNode: _seasonalRetryFocus,
+                    onFocusChanged: (focused) {
+                      if (focused) _rememberShelfFocus(row.shelf, 0);
+                    },
+                    onKeyEvent: (_, event) {
+                      if (event.logicalKey == LogicalKeyboardKey.arrowLeft) {
+                        if (event is KeyDownEvent) _focusNavigationChrome();
+                        return KeyEventResult.handled;
+                      }
+                      return _handleShelfVerticalKey(
+                        event,
+                        rowIndex: _focusableShelfOrder.indexOf(row.shelf),
+                        column: 0,
+                        showHero: preferences.showHero,
+                      );
+                    },
                   )
                 : _MediaShelf(
                     key: _shelfKeys[row.shelf],
@@ -953,7 +995,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     final heroRoute = hero == null ? '/search?q=Frieren' : '/anime/${hero.id}';
     final heroPanel = _HeroPanel(
       anime: hero,
-      isTelevision: isTelevision,
+      isTelevision: isTelevision || isPhoneLandscape,
       isLoading: trendingAsync.isLoading,
       focusNode: _heroFocus,
       myListFocusNode: _heroMyListFocus,
@@ -1030,7 +1072,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      if (isPhoneLandscape) phoneHeader(),
                       if (preferences.showHero) heroPanel,
                       if (!preferences.showHero) const SizedBox(height: 12),
                       ...buildShelves(tvNavigation: useSideNavigation),
@@ -1052,16 +1093,16 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   onHomePressed: _handleHomeActivation,
                   onExitRight: _restoreContentFocus,
                   onFocusChanged: (focused) {
-                    if (!focused) return;
-                    if (_suppressNextNavigationHeroRestore) {
-                      _suppressNextNavigationHeroRestore = false;
-                      return;
+                    // Visiting the rail from the hero can restore the
+                    // sponsored panel. A lower shelf owns its scroll offset,
+                    // so moving left to the rail must leave that offset alone.
+                    if (focused && _lastContentWasHero) {
+                      unawaited(_restoreSponsoredHero());
                     }
-                    unawaited(_restoreSponsoredHero());
                   },
                 ),
               ),
-              if (useTvRail && _headerVisibleAtTop)
+              if (_headerVisibleAtTop)
                 Positioned(
                   right: screenSize.width >= 1400 ? 30 : 22,
                   top: 14,
@@ -1111,9 +1152,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                           child: heroPanel,
                         ),
                       SizedBox(
-                        height: preferences.homeLayout == HomeLayout.compact
-                            ? 10
-                            : 18,
+                        height: _layoutValue(
+                          18,
+                          10,
+                          preferences.effectiveHomeLayoutCompactness,
+                        ),
                       ),
                       ...buildShelves(tvNavigation: false),
                       const SizedBox(height: 42),
@@ -1156,9 +1199,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                         child: heroPanel,
                       ),
                     SizedBox(
-                      height: preferences.homeLayout == HomeLayout.compact
-                          ? 10
-                          : 18,
+                      height: _layoutValue(
+                        18,
+                        10,
+                        preferences.effectiveHomeLayoutCompactness,
+                      ),
                     ),
                     ...buildShelves(tvNavigation: false),
                     const SizedBox(height: 42),
@@ -1179,6 +1224,7 @@ class _HomeShelfRow {
     this.loading = false,
     this.landscape = false,
     this.emptyMessage,
+    this.onRetry,
   });
 
   final HomeShelf shelf;
@@ -1186,6 +1232,7 @@ class _HomeShelfRow {
   final bool loading;
   final bool landscape;
   final String? emptyMessage;
+  final VoidCallback? onRetry;
 }
 
 class _HeroPanel extends StatelessWidget {
@@ -1224,7 +1271,7 @@ class _HeroPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final compact = context.isCompactWidth;
-    final dense = preferences.homeLayout == HomeLayout.compact;
+    final compactness = preferences.effectiveHomeLayoutCompactness;
     final cinematicTv = height != null && !compact;
     final shortTvHero = cinematicTv && height! < 380;
     final screenWidth = MediaQuery.sizeOf(context).width;
@@ -1248,7 +1295,7 @@ class _HeroPanel extends StatelessWidget {
     final titleStyle = Theme.of(context).textTheme.displaySmall?.copyWith(
       color: context.appPalette.primaryText,
       fontSize: cinematicTv
-          ? (shortTvHero ? 33 : (dense ? 39 : 46))
+          ? (shortTvHero ? 33 : _layoutValue(46, 39, compactness))
           : (compact ? 29 : 39),
       height: .98,
       fontWeight: FontWeight.w900,
@@ -1268,7 +1315,10 @@ class _HeroPanel extends StatelessWidget {
         ? measuredTitleHeight.ceilToDouble()
         : baseTitleHeight;
     final baseHeroHeight =
-        height ?? (compact ? (dense ? 360.0 : 410.0) : (dense ? 290.0 : 350.0));
+        height ??
+        (compact
+            ? _layoutValue(410, 360, compactness)
+            : _layoutValue(350, 290, compactness));
     // TV Home scrolls vertically, so an exceptional localized title can grow
     // the banner instead of shrinking, clipping, or painting over the facts
     // and actions below it. Normal titles keep the established hero height.
@@ -1324,30 +1374,7 @@ class _HeroPanel extends StatelessWidget {
                     cacheWidth: 1280,
                   ),
           ),
-          const DecoratedBox(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [
-                  Color(0xFF030508),
-                  Color(0xF0000308),
-                  Color(0x82000308),
-                  Color(0x12000308),
-                ],
-                stops: [0, .28, .57, 1],
-                begin: Alignment.centerLeft,
-                end: Alignment.centerRight,
-              ),
-            ),
-          ),
-          const DecoratedBox(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [Color(0x16000000), Color(0xE8000000)],
-                begin: Alignment.center,
-                end: Alignment.bottomCenter,
-              ),
-            ),
-          ),
+          const TetoArtworkScrim(hero: true),
           Padding(
             padding: EdgeInsets.fromLTRB(
               cinematicTv ? 34 : (compact ? 15 : 18),
@@ -1613,6 +1640,33 @@ class _HeroDot extends StatelessWidget {
   }
 }
 
+double _layoutValue(double roomy, double compact, double compactness) =>
+    roomy + (compact - roomy) * compactness.clamp(0, 1);
+
+({double height, double width}) _interpolatedPosterCardMetrics(
+  BuildContext context, {
+  required double compactness,
+  required bool matchSearchDefault,
+  required double availableWidth,
+}) {
+  final roomy = _posterCardMetrics(
+    context,
+    dense: false,
+    matchSearchDefault: matchSearchDefault,
+    availableWidth: availableWidth,
+  );
+  final compact = _posterCardMetrics(
+    context,
+    dense: true,
+    matchSearchDefault: matchSearchDefault,
+    availableWidth: availableWidth,
+  );
+  return (
+    height: _layoutValue(roomy.height, compact.height, compactness),
+    width: _layoutValue(roomy.width, compact.width, compactness),
+  );
+}
+
 ({double height, double width}) _posterCardMetrics(
   BuildContext context, {
   required bool dense,
@@ -1708,21 +1762,19 @@ class _MediaShelfState extends State<_MediaShelf> {
   );
 
   Widget _buildShelf(BuildContext context, {required double availableWidth}) {
-    final dense = widget.preferences.homeLayout == HomeLayout.compact;
+    final compactness = widget.preferences.effectiveHomeLayoutCompactness;
     final screenWidth = MediaQuery.sizeOf(context).width;
-    final posterMetrics = _posterCardMetrics(
+    final posterMetrics = _interpolatedPosterCardMetrics(
       context,
-      dense: dense,
+      compactness: compactness,
       matchSearchDefault: widget.modernPosterSizing,
       availableWidth: availableWidth,
     );
-    final spacing = 12 * widget.preferences.contentDensity.spacingScale;
+    final spacing = 12 * widget.preferences.effectiveContentDensityScale;
     final width = widget.landscape
         ? (screenWidth >= 1600
-                  ? (dense ? 304.0 : 350.0)
-                  : dense
-                  ? 238.0
-                  : 278.0) *
+                  ? _layoutValue(350, 304, compactness)
+                  : _layoutValue(278, 238, compactness)) *
               widget.preferences.thumbnailScale
         : posterMetrics.width * widget.preferences.thumbnailScale;
     final cardHeight = widget.landscape
@@ -1734,7 +1786,7 @@ class _MediaShelfState extends State<_MediaShelf> {
     _itemExtent = width;
     _itemSpacing = spacing;
     return Padding(
-      padding: EdgeInsets.only(bottom: dense ? 12 : 18),
+      padding: EdgeInsets.only(bottom: _layoutValue(18, 12, compactness)),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1745,7 +1797,7 @@ class _MediaShelfState extends State<_MediaShelf> {
           SizedBox(
             height:
                 (MediaQuery.sizeOf(context).width >= 840 ? 2 : 9) *
-                widget.preferences.contentDensity.spacingScale,
+                widget.preferences.effectiveContentDensityScale,
           ),
           SizedBox(
             height: cardHeight,
@@ -1822,10 +1874,10 @@ class _MediaShelfSkeleton extends StatelessWidget {
     BuildContext context, {
     required double availableWidth,
   }) {
-    final dense = preferences.homeLayout == HomeLayout.compact;
-    final posterMetrics = _posterCardMetrics(
+    final compactness = preferences.effectiveHomeLayoutCompactness;
+    final posterMetrics = _interpolatedPosterCardMetrics(
       context,
-      dense: dense,
+      compactness: compactness,
       matchSearchDefault: modernPosterSizing,
       availableWidth: availableWidth,
     );
@@ -1834,7 +1886,7 @@ class _MediaShelfSkeleton extends StatelessWidget {
     final artworkHeight =
         cardHeight - (preferences.showCardSubtitles ? 60.0 : 46.0);
     return Padding(
-      padding: EdgeInsets.only(bottom: dense ? 12 : 18),
+      padding: EdgeInsets.only(bottom: _layoutValue(18, 12, compactness)),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1842,7 +1894,7 @@ class _MediaShelfSkeleton extends StatelessWidget {
           SizedBox(
             height:
                 (MediaQuery.sizeOf(context).width >= 840 ? 2 : 9) *
-                preferences.contentDensity.spacingScale,
+                preferences.effectiveContentDensityScale,
           ),
           SizedBox(
             height: cardHeight,
@@ -1850,8 +1902,9 @@ class _MediaShelfSkeleton extends StatelessWidget {
               scrollDirection: Axis.horizontal,
               physics: const NeverScrollableScrollPhysics(),
               itemCount: 8,
-              separatorBuilder: (_, _) =>
-                  SizedBox(width: 10 * preferences.contentDensity.spacingScale),
+              separatorBuilder: (_, _) => SizedBox(
+                width: 10 * preferences.effectiveContentDensityScale,
+              ),
               itemBuilder: (_, _) => SizedBox(
                 width: width,
                 child: Column(
@@ -1892,17 +1945,25 @@ class _MediaShelfNotice extends StatelessWidget {
     required this.title,
     required this.message,
     required this.preferences,
+    this.onRetry,
+    this.retryFocusNode,
+    this.onKeyEvent,
+    this.onFocusChanged,
   });
 
   final String title;
   final String message;
   final SettingsPreferences preferences;
+  final VoidCallback? onRetry;
+  final FocusNode? retryFocusNode;
+  final FocusOnKeyEventCallback? onKeyEvent;
+  final ValueChanged<bool>? onFocusChanged;
 
   @override
   Widget build(BuildContext context) {
-    final dense = preferences.homeLayout == HomeLayout.compact;
+    final compactness = preferences.effectiveHomeLayoutCompactness;
     return Padding(
-      padding: EdgeInsets.only(bottom: dense ? 12 : 18),
+      padding: EdgeInsets.only(bottom: _layoutValue(18, 12, compactness)),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1910,13 +1971,32 @@ class _MediaShelfNotice extends StatelessWidget {
           SizedBox(
             height:
                 (MediaQuery.sizeOf(context).width >= 840 ? 4 : 9) *
-                preferences.contentDensity.spacingScale,
+                preferences.effectiveContentDensityScale,
           ),
-          Text(
-            context.tr(message),
-            key: ValueKey('home-empty-${title.toLowerCase()}'),
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-              color: context.appPalette.mutedText,
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(16),
+            decoration: TetoBoxStyle.decoration(context.appPalette),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  context.tr(message),
+                  key: ValueKey('home-empty-${title.toLowerCase()}'),
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: context.appPalette.mutedText,
+                  ),
+                ),
+                if (onRetry != null) ...[
+                  const SizedBox(height: 12),
+                  TetoRetryButton(
+                    onPressed: onRetry!,
+                    focusNode: retryFocusNode,
+                    onKeyEvent: onKeyEvent,
+                    onFocusChanged: onFocusChanged,
+                  ),
+                ],
+              ],
             ),
           ),
         ],
@@ -2026,9 +2106,13 @@ class _PosterCard extends StatelessWidget {
                       if (animeAiringStatusLabel(item.airingStatus) != null)
                         Positioned(
                           left: 5,
+                          right: 5,
                           top: 5,
-                          child: PosterAiringStatusBadge(
-                            status: item.airingStatus,
+                          child: Align(
+                            alignment: AlignmentDirectional.topStart,
+                            child: PosterAiringStatusBadge(
+                              status: item.airingStatus,
+                            ),
                           ),
                         ),
                       if (item.sourceUrl != null)

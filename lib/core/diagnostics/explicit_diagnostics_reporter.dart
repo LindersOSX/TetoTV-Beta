@@ -1,8 +1,10 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 
 import 'package:anime_tv/core/config/app_config.dart';
 import 'package:anime_tv/core/diagnostics/diagnostic_stack.dart';
+import 'package:anime_tv/core/diagnostics/os_exit_diagnostics.dart';
 import 'package:anime_tv/core/diagnostics/ui_diagnostic_context.dart';
 import 'package:anime_tv/core/diagnostics/playback_performance_diagnostics.dart';
 import 'package:anime_tv/core/diagnostics/playback_session_diagnostics.dart';
@@ -22,6 +24,7 @@ Map<String, Object?> attachRecentCrashSummaries(
   DateTime? now,
   int sourceDroppedOutsideWindow = 0,
   int sourceDroppedForCapacity = 0,
+  Map<String, Object?> sourceExitHistory = const {},
 }) {
   final end = (now ?? DateTime.now()).toUtc();
   final start = end.subtract(diagnosticHistoryWindow);
@@ -114,6 +117,10 @@ Map<String, Object?> attachRecentCrashSummaries(
           sourceDroppedForCapacity.clamp(0, 0x7fffffff) + capacityDrop,
     },
     'recentCrashSummaries': bounded,
+    'recentProcessExitHistory': sanitizeProcessExitHistory(
+      sourceExitHistory,
+      now: end,
+    ),
   };
 }
 
@@ -206,10 +213,27 @@ class ExplicitDiagnosticsAcknowledgement {
   final bool duplicate;
 }
 
+enum DiagnosticsShareFailure {
+  unknown,
+  cancelled,
+  timeout,
+  networkUnavailable,
+  rateLimited,
+  reportTooLarge,
+  reportRejected,
+  invalidConfirmation,
+  channelUnavailable,
+  unsafeConfiguration,
+}
+
 class DiagnosticsShareException implements Exception {
-  const DiagnosticsShareException(this.message);
+  const DiagnosticsShareException(
+    this.message, {
+    this.failure = DiagnosticsShareFailure.unknown,
+  });
 
   final String message;
+  final DiagnosticsShareFailure failure;
 
   @override
   String toString() => message;
@@ -228,10 +252,14 @@ class ExplicitDiagnosticsReportClient implements ExplicitDiagnosticsReportApi {
     Dio? dio,
     String? baseUrl,
     DiagnosticsRetryDelay? retryDelay,
-  }) : _origin = _validatedOrigin(
+    this.cancelToken,
+    Duration overallTimeout = const Duration(seconds: 30),
+  }) : assert(overallTimeout > Duration.zero),
+       _origin = _validatedOrigin(
          (baseUrl ?? AppConfig.diagnosticReportBaseUrl).trim(),
        ),
        _retryDelay = retryDelay ?? Future<void>.delayed,
+       _overallTimeout = overallTimeout,
        _dio =
            dio ??
            Dio(
@@ -245,17 +273,78 @@ class ExplicitDiagnosticsReportClient implements ExplicitDiagnosticsReportApi {
   final String _origin;
   final Dio _dio;
   final DiagnosticsRetryDelay _retryDelay;
+  final CancelToken? cancelToken;
+  final Duration _overallTimeout;
+
+  static const _cancelled = DiagnosticsShareException(
+    'Sending was cancelled. Support may have received the report, but delivery was not confirmed.',
+    failure: DiagnosticsShareFailure.cancelled,
+  );
+  static const _timedOut = DiagnosticsShareException(
+    'Sending took too long, so TetoTV stopped waiting. Support may have received the report, but no confirmation arrived. You can try again.',
+    failure: DiagnosticsShareFailure.timeout,
+  );
 
   @override
   Future<ExplicitDiagnosticsAcknowledgement> send(
     ExplicitDiagnosticsReport report,
   ) async {
+    if (cancelToken?.isCancelled ?? false) throw _cancelled;
+    final requestCancel = CancelToken();
+    final result = Completer<ExplicitDiagnosticsAcknowledgement>();
+    final elapsed = Stopwatch()..start();
+    var finished = false;
+
+    void stop(DiagnosticsShareException error) {
+      if (finished) return;
+      finished = true;
+      // Cancel the actual transport as well as resolving the caller. An
+      // interceptor or adapter that ignores cancellation must not keep the
+      // screen busy, and its eventual acknowledgement must not become success.
+      requestCancel.cancel();
+      result.completeError(error);
+    }
+
+    final deadline = Timer(_overallTimeout, () => stop(_timedOut));
+    unawaited(cancelToken?.whenCancel.then((_) => stop(_cancelled)));
+    unawaited(() async {
+      try {
+        final acknowledgement = await _sendWithRetries(report, requestCancel);
+        if (finished) return;
+        if (elapsed.elapsed >= _overallTimeout) {
+          stop(_timedOut);
+          return;
+        }
+        finished = true;
+        result.complete(acknowledgement);
+      } catch (error, stack) {
+        if (finished) return;
+        finished = true;
+        result.completeError(error, stack);
+      }
+    }());
+
+    try {
+      return await result.future;
+    } finally {
+      finished = true;
+      deadline.cancel();
+      elapsed.stop();
+    }
+  }
+
+  Future<ExplicitDiagnosticsAcknowledgement> _sendWithRetries(
+    ExplicitDiagnosticsReport report,
+    CancelToken requestCancel,
+  ) async {
     for (var attempt = 0; attempt < 3; attempt++) {
+      if (requestCancel.isCancelled) throw _cancelled;
       late final Response<Object?> response;
       try {
         response = await _dio.post<Object?>(
           '$_origin/v1/diagnostic-reports',
           data: report.toWireJson(),
+          cancelToken: requestCancel,
           options: Options(
             headers: const {
               'Accept': 'application/json',
@@ -270,15 +359,33 @@ class ExplicitDiagnosticsReportClient implements ExplicitDiagnosticsReportApi {
           ),
         );
       } on DioException catch (error) {
+        if (requestCancel.isCancelled ||
+            error.type == DioExceptionType.cancel) {
+          throw _cancelled;
+        }
+        if (error.error is FormatException) {
+          throw const DiagnosticsShareException(
+            'The diagnostic service returned an invalid confirmation. Try again.',
+            failure: DiagnosticsShareFailure.invalidConfirmation,
+          );
+        }
         if (attempt < 2 && _retryableDioFailure(error)) {
-          await _retryDelay(Duration(milliseconds: 350 * (attempt + 1)));
+          await _waitBeforeRetry(attempt, requestCancel);
           continue;
         }
+        if (error.type == DioExceptionType.connectionTimeout ||
+            error.type == DioExceptionType.sendTimeout ||
+            error.type == DioExceptionType.receiveTimeout ||
+            error.type == DioExceptionType.transformTimeout) {
+          throw _timedOut;
+        }
         throw const DiagnosticsShareException(
-          'The diagnostic service could not be reached. Check the connection and try again.',
+          'Could not confirm that support received this report. Check the connection and try again.',
+          failure: DiagnosticsShareFailure.networkUnavailable,
         );
       }
 
+      if (requestCancel.isCancelled) throw _cancelled;
       final status = response.statusCode ?? 0;
       if (status == 202) {
         final data = response.data;
@@ -296,35 +403,47 @@ class ExplicitDiagnosticsReportClient implements ExplicitDiagnosticsReportApi {
         }
         throw const DiagnosticsShareException(
           'The diagnostic service returned an invalid confirmation. Try again.',
+          failure: DiagnosticsShareFailure.invalidConfirmation,
         );
       }
       if (status == 503 && attempt < 2) {
-        await _retryDelay(Duration(milliseconds: 350 * (attempt + 1)));
+        await _waitBeforeRetry(attempt, requestCancel);
         continue;
       }
       if (status == 429) {
         throw const DiagnosticsShareException(
           'Too many diagnostic reports were sent. Wait one minute and try again.',
+          failure: DiagnosticsShareFailure.rateLimited,
         );
       }
       if (status == 413) {
         throw const DiagnosticsShareException(
           'The diagnostic report was too large to send. Refresh Diagnostics and try again.',
+          failure: DiagnosticsShareFailure.reportTooLarge,
         );
       }
       if (status == 400 || status == 415) {
         throw const DiagnosticsShareException(
           'The diagnostic service rejected this report. Refresh Diagnostics and try again.',
+          failure: DiagnosticsShareFailure.reportRejected,
         );
       }
       throw const DiagnosticsShareException(
         'The Discord diagnostic channel is temporarily unavailable. Try again shortly.',
+        failure: DiagnosticsShareFailure.channelUnavailable,
       );
     }
     throw const DiagnosticsShareException(
       'The Discord diagnostic channel is temporarily unavailable. Try again shortly.',
+      failure: DiagnosticsShareFailure.channelUnavailable,
     );
   }
+
+  Future<void> _waitBeforeRetry(int attempt, CancelToken requestCancel) =>
+      Future.any([
+        _retryDelay(Duration(milliseconds: 350 * (attempt + 1))),
+        requestCancel.whenCancel.then((_) => throw _cancelled),
+      ]);
 
   static String _validatedOrigin(String value) {
     final uri = Uri.tryParse(value);
@@ -337,6 +456,7 @@ class ExplicitDiagnosticsReportClient implements ExplicitDiagnosticsReportApi {
         (uri.path.isNotEmpty && uri.path != '/')) {
       throw const DiagnosticsShareException(
         'The diagnostic service is not configured safely.',
+        failure: DiagnosticsShareFailure.unsafeConfiguration,
       );
     }
     return uri.origin;
@@ -347,6 +467,7 @@ bool _retryableDioFailure(DioException error) => switch (error.type) {
   DioExceptionType.connectionTimeout ||
   DioExceptionType.sendTimeout ||
   DioExceptionType.receiveTimeout ||
+  DioExceptionType.transformTimeout ||
   DioExceptionType.connectionError ||
   DioExceptionType.unknown => true,
   _ => false,
@@ -368,6 +489,12 @@ String buildRedactedDiagnosticsText({
     ..remove('playbackPerformance')
     ..remove('playbackPerformanceSchema')
     ..remove('playbackPerformanceWindow');
+  if (genericDiagnostics.containsKey('recentProcessExitHistory')) {
+    genericDiagnostics['recentProcessExitHistory'] = sanitizeProcessExitHistory(
+      genericDiagnostics['recentProcessExitHistory'],
+      now: generatedAt,
+    );
+  }
   final payload = <String, Object?>{
     'schema': 'tetotv-explicit-diagnostics-v3',
     'generatedAt': generatedAt.toUtc().toIso8601String(),
@@ -495,6 +622,7 @@ String buildRedactedDiagnosticsText({
   }
   throw const DiagnosticsShareException(
     'The redacted diagnostic snapshot is unexpectedly large. Refresh Diagnostics and try again.',
+    failure: DiagnosticsShareFailure.reportTooLarge,
   );
 }
 
@@ -509,6 +637,15 @@ Map<String, Object?> _attachPlaybackPerformanceForReport(
     payload['diagnostics']! as Map<String, Object?>,
   );
   payload['diagnostics'] = safeDiagnostics;
+  // Preserve this small, closed evidence section even when an unusually large
+  // report must omit other diagnostics. Do not grant arbitrary data an escape
+  // from the normal redaction/size limits.
+  if (rawDiagnostics.containsKey('recentProcessExitHistory')) {
+    safeDiagnostics['recentProcessExitHistory'] = sanitizeProcessExitHistory(
+      rawDiagnostics['recentProcessExitHistory'],
+      now: generatedAt,
+    );
+  }
   final rawEvents = rawDiagnostics['diagnosticEvents'];
   final safeEvents = safeDiagnostics['diagnosticEvents'];
   if (rawEvents is List) {

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:anime_tv/core/storage/storage_providers.dart';
 import 'package:anime_tv/core/storage/tetotv_database.dart';
+import 'package:anime_tv/core/widgets/teto_switch_indicator.dart';
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
 import 'package:anime_tv/features/catalog/application/filler_episode_providers.dart';
 import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
@@ -48,7 +49,12 @@ void main() {
     final toggle = find.byKey(const ValueKey('episode-action-skip-filler'));
     expect(toggle, findsOneWidget);
     expect(find.text('Skip filler'), findsOneWidget);
-    expect(find.text('OFF'), findsOneWidget);
+    expect(
+      tester
+          .widget<TetoSwitchIndicator>(find.byType(TetoSwitchIndicator))
+          .value,
+      isFalse,
+    );
 
     for (var index = 0; index < 4; index++) {
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
@@ -89,7 +95,12 @@ void main() {
 
     expect(savedMediaId, anime.id);
     expect(savedPreferences?.skipFillerEpisodes, isTrue);
-    expect(find.text('ON'), findsOneWidget);
+    expect(
+      tester
+          .widget<TetoSwitchIndicator>(find.byType(TetoSwitchIndicator))
+          .value,
+      isTrue,
+    );
     expect(tester.takeException(), isNull);
   });
 
@@ -105,7 +116,7 @@ void main() {
         preferences: const SeriesPlaybackPreferences(),
       );
 
-      expect(find.text('FILLER'), findsNWidgets(2));
+      expect(find.text('FILLER'), findsOneWidget);
       expect(repository.lookups, 1);
       expect(tester.takeException(), isNull);
     },
@@ -129,7 +140,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('manual Play selected honors skip and names skipped episodes', (
+  testWidgets('Start watching honors skip and names skipped episodes', (
     tester,
   ) async {
     final repository = _FakeFillerRepository(_confirmed({1, 2}));
@@ -143,7 +154,7 @@ void main() {
 
     // Enabled skipping does not prefetch solely to render an indicator.
     expect(repository.lookups, 0);
-    await tester.tap(find.text('Play selected'));
+    await tester.tap(find.text('Start watching'));
     await tester.pumpAndSettle();
 
     expect(
@@ -171,7 +182,7 @@ void main() {
       repository: repository,
       preferences: const SeriesPlaybackPreferences(skipFillerEpisodes: true),
     );
-    await tester.tap(find.text('Play selected'));
+    await tester.tap(find.text('Start watching'));
     await tester.pumpAndSettle();
 
     expect(find.text('Resolved episode 1'), findsOneWidget);
@@ -196,7 +207,7 @@ void main() {
       repository: repository,
       preferences: const SeriesPlaybackPreferences(skipFillerEpisodes: true),
     );
-    await tester.tap(find.text('Play selected'));
+    await tester.tap(find.text('Start watching'));
     await tester.pumpAndSettle();
 
     expect(
@@ -208,7 +219,7 @@ void main() {
     await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.pumpAndSettle();
 
-    expect(find.text('Play selected'), findsOneWidget);
+    expect(find.text('Start watching'), findsOneWidget);
     expect(find.textContaining('Resolved episode'), findsNothing);
     expect(tester.takeException(), isNull);
   });
@@ -225,7 +236,7 @@ void main() {
       repository: repository,
       preferences: const SeriesPlaybackPreferences(skipFillerEpisodes: true),
     );
-    await tester.tap(find.text('Play selected'));
+    await tester.tap(find.text('Start watching'));
     await tester.pump();
     expect(repository.lookups, 1);
 

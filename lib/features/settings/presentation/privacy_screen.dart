@@ -1,7 +1,7 @@
 import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
-import 'package:anime_tv/core/tv/tv_focusable.dart';
+import 'package:anime_tv/core/widgets/teto_back_button.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -66,34 +66,10 @@ class _PrivacyScreenState extends State<PrivacyScreen> {
             children: [
               Row(
                 children: [
-                  TvFocusable(
+                  TetoBackButton(
                     autofocus: true,
                     focusNode: _backFocusNode,
-                    borderRadius: BorderRadius.circular(10),
                     onPressed: Navigator.of(context).pop,
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 14,
-                        vertical: 10,
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            Icons.arrow_back_rounded,
-                            color: palette.primaryText,
-                          ),
-                          const SizedBox(width: 8),
-                          LocalizedText(
-                            'Back',
-                            style: TextStyle(
-                              color: palette.primaryText,
-                              fontWeight: FontWeight.w800,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
                   ),
                   const SizedBox(width: 16),
                   Expanded(

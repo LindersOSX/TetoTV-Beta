@@ -203,6 +203,61 @@ void main() {
   });
 
   test(
+    'host exit bounds auxiliary work but never times out native disposal',
+    () {
+      final handoff = method(
+        'Future<bool> _prepareForEngineHandoff',
+        'void _recordPlayerTeardownStage',
+      );
+      expectInOrder(handoff, [
+        '_engineHandoffInProgress = true',
+        '_queuedSeekTarget = null',
+        'final commandsDrained = await runBestEffortPlayerCleanup',
+        'await _waitForSeekDrain()',
+        'if (skipSeek != null) await skipSeek',
+        'await Future.wait(trickplayOperations)',
+        '}, timeout: _playerMutationReleaseTimeout)',
+        'await _persistPlayback(position, force: true)',
+        '}, timeout: _playerPersistenceCleanupTimeout)',
+        'await _saveSeriesPreferences()',
+        '}, timeout: _playerPersistenceCleanupTimeout)',
+        'final stopped = await runBestEffortPlayerCleanup',
+        'await _player.stop()',
+        '}, timeout: _playerStopReleaseTimeout)',
+        "_recordPlayerTeardownStage('native_release_started')",
+        'await _player.dispose()',
+        '_playerReleasedForHandoff = true',
+        'if (!released)',
+        'return false',
+        'await AndroidTvBridge.instance.clearMediaSession()',
+        '}, timeout: _playerPlatformCleanupTimeout)',
+        'await AndroidTvBridge.instance.clearPreferredFrameRate()',
+        '}, timeout: _playerPlatformCleanupTimeout)',
+      ]);
+      expect(handoff, isNot(contains('_player.dispose().timeout')));
+
+      final exit = method(
+        'Future<void> _confirmExit()',
+        'Future<void> _releaseAfterUnexpectedRouteDispose()',
+      );
+      expectInOrder(exit, [
+        'await runBestEffortPlayerCleanup(',
+        '() => _trackPlayerMutation',
+        'await _player.pause()',
+        'timeout: _playerExitPauseTimeout',
+        'showPlayerExitConfirmation(context)',
+        'if (_engineHandoffInProgress || _playerReleasedForHandoff) return',
+        'if (shouldTemporarilyPause && !_guestControlsLocked)',
+        '() => _trackPlayerMutation',
+        'await _player.play()',
+        'if (mounted && !_engineHandoffInProgress)',
+      ]);
+      expect(source, contains("_tr('Closing player…')"));
+      expect(source, contains('child: _handoffReleaseFailed'));
+    },
+  );
+
+  test(
     'unexpected route dispose reports release failure without Riverpod reads',
     () {
       final unexpectedRelease = method(
@@ -300,7 +355,7 @@ void main() {
       '} catch (error)',
       'automaticDecoderFailureNeedsLibraryRecovery(',
       '_handleLibraryStartupFailure(error)',
-      'setState(() => _playbackError = error.toString())',
+      '_showPlaybackError(error.toString())',
     ]);
   });
 
@@ -315,6 +370,26 @@ void main() {
       'unawaited(_returnToStreamPicker())',
     ]);
     expect(completion, isNot(contains('context.pop()')));
+  });
+
+  test('automatic tracking retries failed saves and reports missing IDs', () {
+    final position = method(
+      'void _onPosition(Duration position)',
+      'void _reportLibraryPlayback',
+    );
+    expectInOrder(position, [
+      'trackerUpdateThresholdReached(',
+      '_recordMissingTrackingTarget();',
+      '_progressHandled = true',
+    ]);
+
+    final sync = method(
+      'Future<void> _syncProgress()',
+      'Future<int?> _openCurrentMedia',
+    );
+    expect(sync, contains('attempt <= 2'));
+    expect(sync, contains('_progressHandled = false'));
+    expect(sync, contains('Automatic episode progress could not be queued'));
   });
 
   test(

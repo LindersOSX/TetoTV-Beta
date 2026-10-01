@@ -416,6 +416,36 @@ class SimklApiClient {
     return List.unmodifiable(result);
   }
 
+  /// Final catalog metadata, separate from watchlist counters which can mean
+  /// episodes aired so far. The canonical ID comes from the verified library.
+  Future<({int? totalEpisodes, bool finishedAiring})> animeCompletionMetadata(
+    SimklAnimeId animeId,
+  ) async {
+    final response = await _get<Map<String, dynamic>>(
+      '/anime/${animeId.value}',
+      queryParameters: const {'extended': 'full'},
+    );
+    final data = response.data;
+    final rawId = _map(data?['ids'])?['simkl'];
+    final canonicalId = rawId is int
+        ? rawId
+        : rawId is String
+        ? int.tryParse(rawId)
+        : null;
+    if (canonicalId != animeId.value) {
+      throw const SimklApiException(
+        statusCode: 200,
+        code: 'invalid_completion_metadata',
+      );
+    }
+    return (
+      totalEpisodes: data?['total_episodes'] is int
+          ? data!['total_episodes'] as int
+          : null,
+      finishedAiring: data?['status'] == 'ended',
+    );
+  }
+
   /// Loads the authoritative current SIMKL IDs for deletion reconciliation.
   Future<Set<int>> animeLibraryIds() async {
     final response = await _get<Map<String, dynamic>>(

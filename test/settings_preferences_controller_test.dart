@@ -9,6 +9,49 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  test(
+    'blur is enabled by default and an explicit opt-out survives loading',
+    () async {
+      FlutterSecureStorage.setMockInitialValues({
+        playerMedia3SurfaceMigration277Key: 'true',
+      });
+      const storage = FlutterSecureStorage();
+      final first = SettingsPreferencesController(storage);
+      expect(first.state.blurEffectsEnabled, isTrue);
+      await first.load();
+      expect(first.state.blurEffectsEnabled, isTrue);
+      await first.setBlurEffectsEnabled(false);
+      final restored = SettingsPreferencesController(storage);
+      await restored.load();
+      expect(restored.state.blurEffectsEnabled, isFalse);
+      await restored.resetAppearanceAndNavigation();
+      expect(restored.state.blurEffectsEnabled, isTrue);
+      expect(await storage.read(key: 'appearance_blur_effects'), isNull);
+      first.dispose();
+      restored.dispose();
+    },
+  );
+
+  test(
+    'reduce motion persists and appearance reset restores its default',
+    () async {
+      FlutterSecureStorage.setMockInitialValues({
+        playerMedia3SurfaceMigration277Key: 'true',
+      });
+      const storage = FlutterSecureStorage();
+      final controller = SettingsPreferencesController(storage);
+      expect(controller.state.reduceMotion, isFalse);
+      await controller.setReduceMotion(true);
+      final restored = SettingsPreferencesController(storage);
+      await restored.load();
+      expect(restored.state.reduceMotion, isTrue);
+      await restored.resetAppearanceAndNavigation();
+      expect(restored.state.reduceMotion, isFalse);
+      expect(await storage.read(key: 'appearance_reduce_motion'), isNull);
+      controller.dispose();
+      restored.dispose();
+    },
+  );
 
   test('stream source and keyboard preferences persist', () async {
     FlutterSecureStorage.setMockInitialValues({
@@ -1435,34 +1478,37 @@ void main() {
     expect(controller.takeInitialLandingRoute(), isNull);
   });
 
-  test('Settings stays visible while Home remains optional', () async {
-    FlutterSecureStorage.setMockInitialValues({});
-    const storage = FlutterSecureStorage();
-    final controller = SettingsPreferencesController(storage);
+  test(
+    'Settings navigation can be hidden while Home remains optional',
+    () async {
+      FlutterSecureStorage.setMockInitialValues({});
+      const storage = FlutterSecureStorage();
+      final controller = SettingsPreferencesController(storage);
 
-    await controller.setShowHome(false);
-    expect(controller.state.showHome, isFalse);
-    expect(controller.state.showSettings, isTrue);
-    expect(
-      controller.state.settingsEntryPlacement,
-      SettingsEntryPlacement.topNavigation,
-    );
+      await controller.setShowHome(false);
+      expect(controller.state.showHome, isFalse);
+      expect(controller.state.showSettings, isTrue);
+      expect(
+        controller.state.settingsEntryPlacement,
+        SettingsEntryPlacement.topNavigation,
+      );
 
-    await controller.setShowSettings(false);
-    expect(controller.state.showSettings, isTrue);
+      await controller.setShowSettings(false);
+      expect(controller.state.showSettings, isFalse);
 
-    await controller.setShowHome(true);
-    await controller.setShowSettings(false);
-    expect(controller.state.showHome, isTrue);
-    expect(controller.state.showSettings, isTrue);
+      await controller.setShowHome(true);
+      await controller.setShowSettings(false);
+      expect(controller.state.showHome, isTrue);
+      expect(controller.state.showSettings, isFalse);
 
-    final restored = SettingsPreferencesController(storage);
-    await restored.load();
-    expect(restored.state.showHome, isTrue);
-    expect(restored.state.showSettings, isTrue);
-  });
+      final restored = SettingsPreferencesController(storage);
+      await restored.load();
+      expect(restored.state.showHome, isTrue);
+      expect(restored.state.showSettings, isFalse);
+    },
+  );
 
-  test('a saved hidden Settings destination is repaired on load', () async {
+  test('a saved hidden Settings navigation button remains hidden', () async {
     FlutterSecureStorage.setMockInitialValues({
       'navigation_show_home': 'false',
       'navigation_show_settings': 'false',
@@ -1473,15 +1519,51 @@ void main() {
     await controller.load();
 
     expect(controller.state.showHome, isFalse);
-    expect(controller.state.showSettings, isTrue);
+    expect(controller.state.showSettings, isFalse);
     expect(
       controller.state.isTopNavigationDestinationVisible(
         TopNavigationDestination.settings,
       ),
-      isTrue,
+      isFalse,
     );
-    expect(await storage.read(key: 'navigation_show_settings'), 'true');
+    expect(await storage.read(key: 'navigation_show_settings'), 'false');
   });
+
+  test(
+    'precise display sliders survive restart and legacy presets remain readable',
+    () async {
+      FlutterSecureStorage.setMockInitialValues({});
+      const storage = FlutterSecureStorage();
+      final controller = SettingsPreferencesController(storage);
+      await controller.setContentDensityScale(.83);
+      await controller.setHomeLayoutCompactness(.37);
+      await controller.setNavigationChromeScale(1.16);
+
+      final restored = SettingsPreferencesController(storage);
+      await restored.load();
+      expect(restored.state.effectiveContentDensityScale, .83);
+      expect(restored.state.effectiveHomeLayoutCompactness, .37);
+      expect(restored.state.effectiveNavigationChromeScale, 1.16);
+
+      await restored.resetAppearanceAndNavigation();
+      expect(restored.state.effectiveContentDensityScale, 1);
+      expect(restored.state.effectiveHomeLayoutCompactness, 0);
+      expect(restored.state.effectiveNavigationChromeScale, 1);
+
+      FlutterSecureStorage.setMockInitialValues({
+        'appearance_content_density': 'compact',
+        'appearance_home_layout': 'compact',
+        'navigation_chrome_size': 'large',
+      });
+      final legacy = SettingsPreferencesController(
+        const FlutterSecureStorage(),
+      );
+      await legacy.load();
+      expect(legacy.state.effectiveContentDensityScale, .88);
+      expect(legacy.state.effectiveHomeLayoutCompactness, 1);
+      expect(legacy.state.effectiveNavigationChromeScale, 1.25);
+    },
+  );
 
   test(
     'Settings placement persists and customization reset restores top row',
@@ -1503,7 +1585,7 @@ void main() {
         controller.state.settingsEntryPlacement,
         SettingsEntryPlacement.profileMenu,
       );
-      expect(controller.state.showSettings, isTrue);
+      expect(controller.state.showSettings, isFalse);
       expect(controller.state.showWatchTogether, isFalse);
       expect(controller.state.mangaReaderEnabled, isFalse);
 
@@ -1612,6 +1694,102 @@ void main() {
     expect(controller.state.topNavigationOrder, defaultTopNavigationOrder);
   });
 
+  test(
+    'navigation label expansion defaults on, remains optional, and resets',
+    () async {
+      FlutterSecureStorage.setMockInitialValues({});
+      const storage = FlutterSecureStorage();
+      final controller = SettingsPreferencesController(storage);
+      await controller.load();
+      expect(controller.state.expandNavigationLabelsOnFocus, isTrue);
+
+      await controller.setExpandNavigationLabelsOnFocus(false);
+      final restored = SettingsPreferencesController(storage);
+      await restored.load();
+      expect(restored.state.expandNavigationLabelsOnFocus, isFalse);
+
+      await restored.resetAppearanceAndNavigation();
+      expect(restored.state.expandNavigationLabelsOnFocus, isTrue);
+      final reset = SettingsPreferencesController(storage);
+      await reset.load();
+      expect(reset.state.expandNavigationLabelsOnFocus, isTrue);
+    },
+  );
+
+  test(
+    'upgrade enables expanded labels exactly once, preserving later opt-out',
+    () async {
+      FlutterSecureStorage.setMockInitialValues({
+        'navigation_expand_labels_on_focus': 'false',
+        playerMedia3SurfaceMigration277Key: 'true',
+      });
+      const storage = FlutterSecureStorage();
+      final controller = SettingsPreferencesController(storage);
+      addTearDown(controller.dispose);
+      await controller.load();
+      expect(controller.state.expandNavigationLabelsOnFocus, isTrue);
+      expect(
+        await storage.read(key: 'navigation_expand_labels_on_focus'),
+        'true',
+      );
+      expect(
+        await storage.read(key: navigationLabelExpansionMigrationKey),
+        'true',
+      );
+      await controller.setExpandNavigationLabelsOnFocus(false);
+      final restarted = SettingsPreferencesController(storage);
+      addTearDown(restarted.dispose);
+      await restarted.load();
+      expect(restarted.state.expandNavigationLabelsOnFocus, isFalse);
+      await restarted.load();
+      expect(restarted.state.expandNavigationLabelsOnFocus, isFalse);
+    },
+  );
+
+  test(
+    'navigation migration does not consume a failed encrypted read',
+    () async {
+      final values = <String, String>{
+        'navigation_expand_labels_on_focus': 'false',
+      };
+      var fail = true;
+      final controller = SettingsPreferencesController(
+        const FlutterSecureStorage(),
+        readValue: (key) async {
+          if (fail && key == 'navigation_expand_labels_on_focus') {
+            throw StateError('unavailable');
+          }
+          return values[key];
+        },
+        writeValue: (key, value) async => values[key] = value,
+      );
+      addTearDown(controller.dispose);
+      await controller.load();
+      expect(values[navigationLabelExpansionMigrationKey], isNull);
+      fail = false;
+      await controller.load();
+      expect(controller.state.expandNavigationLabelsOnFocus, isTrue);
+      expect(values[navigationLabelExpansionMigrationKey], 'true');
+    },
+  );
+
+  test(
+    'an explicit navigation choice before startup load remains durable',
+    () async {
+      FlutterSecureStorage.setMockInitialValues({});
+      const storage = FlutterSecureStorage();
+      final controller = SettingsPreferencesController(storage);
+      addTearDown(controller.dispose);
+      await controller.setExpandNavigationLabelsOnFocus(false);
+      await controller.load();
+      expect(controller.state.expandNavigationLabelsOnFocus, isFalse);
+      final restarted = SettingsPreferencesController(storage);
+      addTearDown(restarted.dispose);
+      await restarted.load();
+      expect(restarted.state.expandNavigationLabelsOnFocus, isFalse);
+    },
+  );
+
   test('configured landing page is consumed only once per launch', () async {
     FlutterSecureStorage.setMockInitialValues({});
     final controller = SettingsPreferencesController(
@@ -1673,15 +1851,16 @@ void main() {
     () async {
       FlutterSecureStorage.setMockInitialValues({});
       final gate = Completer<void>();
-      var reads = 0;
+      final reads = <String, int>{};
       final controller = SettingsPreferencesController(
         const FlutterSecureStorage(),
         readValue: (key) async {
-          reads++;
+          reads.update(key, (count) => count + 1, ifAbsent: () => 1);
           await gate.future;
           return const {
             'streaming_web_enabled': 'false',
             'audio_navigation_sounds': 'false',
+            'appearance_reduce_motion': 'false',
           }[key];
         },
       );
@@ -1689,11 +1868,18 @@ void main() {
       final firstLoad = controller.load();
       final duplicateLoad = controller.load();
       await controller.setWebStreamsEnabled(true);
+      await controller.setReduceMotion(true);
       gate.complete();
       await Future.wait([firstLoad, duplicateLoad]);
 
-      expect(reads, 67, reason: 'duplicate startup loads must be coalesced');
+      expect(reads, isNotEmpty);
+      expect(
+        reads.values,
+        everyElement(1),
+        reason: 'duplicate startup loads must be coalesced',
+      );
       expect(controller.state.webStreamsEnabled, isTrue);
+      expect(controller.state.reduceMotion, isTrue);
       expect(controller.state.navigationSounds, isFalse);
     },
   );

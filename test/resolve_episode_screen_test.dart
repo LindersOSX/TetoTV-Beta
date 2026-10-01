@@ -5,6 +5,8 @@ import 'package:anime_tv/core/preferences/title_language_preference.dart';
 import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/core/preferences/playback_audio_preference.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
+import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/theme/teto_box_style.dart';
 import 'package:anime_tv/core/widgets/tv_text_input.dart';
 import 'package:anime_tv/features/downloads/application/download_manager_controller.dart';
 import 'package:anime_tv/features/downloads/domain/download_job.dart';
@@ -20,24 +22,412 @@ import 'package:anime_tv/features/player/domain/library_playback_request.dart';
 import 'package:anime_tv/features/settings/application/display_preferences_controller.dart';
 import 'package:anime_tv/features/settings/application/settings_preferences_controller.dart';
 import 'package:anime_tv/features/streaming/data/composite_release_source.dart';
+import 'package:anime_tv/features/streaming/data/direct_torrent_stream_resolver.dart';
+import 'package:anime_tv/features/streaming/data/debrid_account_history.dart';
 import 'package:anime_tv/features/streaming/data/all_debrid_client.dart';
 import 'package:anime_tv/features/streaming/data/premiumize_client.dart';
 import 'package:anime_tv/features/streaming/data/real_debrid_client.dart';
 import 'package:anime_tv/features/streaming/data/torbox_client.dart';
 import 'package:anime_tv/features/streaming/domain/debrid_service.dart';
+import 'package:anime_tv/features/streaming/domain/episode_identity_guard.dart';
 import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
 import 'package:anime_tv/features/streaming/domain/stream_ranking_preferences.dart';
 import 'package:anime_tv/features/streaming/presentation/resolve_episode_screen.dart';
 import 'package:anime_tv/features/watch_together/domain/watch_party_source_descriptor.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart' hide ProviderScope;
+import 'package:flutter_riverpod/flutter_riverpod.dart'
+    as riverpod
+    show ProviderScope;
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
+import 'package:dio/dio.dart';
+
+/// Existing picker tests provide fake linked accounts. Keep the new account
+/// history lookup local to those tests instead of contacting a real service.
+// ignore: non_constant_identifier_names
+Widget ProviderScope({
+  Key? key,
+  required Widget child,
+  List<Override> overrides = const [],
+}) => riverpod.ProviderScope(
+  key: key,
+  overrides: [
+    debridAccountHistoryProvider.overrideWithValue(
+      const _EmptyDebridAccountHistory(),
+    ),
+    ...overrides,
+  ],
+  child: child,
+);
+
+class _EmptyDebridAccountHistory extends DebridAccountHistory {
+  const _EmptyDebridAccountHistory();
+
+  @override
+  Future<List<DebridAccountHistoryItem>> list(
+    DebridService service,
+    String token, {
+    CancelToken? cancelToken,
+  }) async => const [];
+
+  @override
+  Future<List<DebridAccountHistoryItem>> listAll(
+    DebridService service,
+    String token, {
+    CancelToken? cancelToken,
+  }) async => const [];
+}
+
+class _FixedDebridAccountHistory extends DebridAccountHistory {
+  const _FixedDebridAccountHistory(this.items);
+
+  final List<DebridAccountHistoryItem> items;
+
+  @override
+  Future<List<DebridAccountHistoryItem>> list(
+    DebridService service,
+    String token, {
+    CancelToken? cancelToken,
+  }) async => items;
+
+  @override
+  Future<List<DebridAccountHistoryItem>> listAll(
+    DebridService service,
+    String token, {
+    CancelToken? cancelToken,
+  }) async => items;
+}
+
+class _ManualDebridAccountHistory extends _FixedDebridAccountHistory {
+  _ManualDebridAccountHistory(super.items, this.files);
+
+  final List<DebridAccountVideoFile> files;
+  int fileQueries = 0;
+  int episodeResolutions = 0;
+
+  @override
+  Future<List<DebridAccountVideoFile>> videoFiles(
+    DebridAccountHistoryItem item,
+    String token,
+  ) async {
+    fileQueries++;
+    return files;
+  }
+
+  @override
+  Future<StreamReady> resolve(
+    DebridAccountHistoryItem item,
+    String token,
+    EpisodeReference episode,
+  ) async {
+    episodeResolutions++;
+    throw const EpisodeIdentityAmbiguousException(
+      reasonCode: 'episode_file_identity_ambiguous',
+    );
+  }
+}
+
+Future<void> _mountManualCachedTest(
+  WidgetTester tester,
+  _ManualDebridAccountHistory history,
+  LibraryPlaybackRouteOpener opener,
+) async {
+  FlutterSecureStorage.setMockInitialValues({
+    DebridService.realDebrid.tokenStorageKey: 'valid-manual-token',
+  });
+  await tester.binding.setSurfaceSize(const Size(1920, 1080));
+  addTearDown(() => tester.binding.setSurfaceSize(null));
+  await tester.pumpWidget(
+    ProviderScope(
+      overrides: [
+        debridAccountHistoryProvider.overrideWithValue(history),
+        libraryPlaybackRouteOpenerProvider.overrideWithValue(opener),
+        configuredReleaseSourceProvider.overrideWithValue(
+          const _FakeReleaseSource(),
+        ),
+        webStreamAggregatorProvider.overrideWithValue(
+          _FixedWebAggregator(const []),
+        ),
+      ],
+      child: const MaterialApp(
+        home: ResolveEpisodeScreen(
+          episode: EpisodeReference(
+            anilistMediaId: 88001,
+            title: 'Current Show',
+            episode: 1,
+          ),
+        ),
+      ),
+    ),
+  );
+  await _pumpUntilFound(
+    tester,
+    find.byKey(const ValueKey('stream-picker-cached')),
+  );
+  await tester.tap(find.byKey(const ValueKey('stream-picker-cached')));
+  await _pumpUntilFound(
+    tester,
+    find.byKey(ValueKey('account:realdebrid:${history.items.first.id}')),
+  );
+  await tester.tap(
+    find.byKey(ValueKey('account:realdebrid:${history.items.first.id}')),
+  );
+  await tester.pump();
+}
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  testWidgets(
+    'manual Cached player failure stays actionable without catalog failover',
+    (tester) async {
+      final history = _ManualDebridAccountHistory(
+        const [
+          DebridAccountHistoryItem(
+            id: 'failed',
+            name: 'Unrecognized show',
+            service: DebridService.realDebrid,
+            ready: true,
+          ),
+        ],
+        [
+          DebridAccountVideoFile(
+            id: '1',
+            name: 'Unrecognized show.mkv',
+            size: 1000,
+            open: () async => StreamReady(
+              uri: Uri.parse('https://cdn.test/a.mkv'),
+              displayName: 'Unrecognized show.mkv',
+            ),
+          ),
+        ],
+      );
+      var opens = 0;
+      await _mountManualCachedTest(tester, history, (
+        _,
+        _, {
+        required automatic,
+      }) async {
+        opens++;
+        return const LibraryPlaybackResult(
+          position: Duration.zero,
+          duration: Duration.zero,
+          reason: LibraryPlaybackEndReason.failed,
+          started: false,
+          error: 'private provider URL must not appear',
+        );
+      });
+      await _pumpUntilFound(
+        tester,
+        find.byKey(const ValueKey('cached-file:1')),
+      );
+      await tester.tap(find.byKey(const ValueKey('cached-file:1')));
+      await _pumpUntilFound(
+        tester,
+        find.textContaining(
+          'This file could not play with your selected player',
+        ),
+      );
+      expect(opens, 1);
+      expect(history.episodeResolutions, 0);
+      expect(find.textContaining('private provider URL'), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'unmatched Cached item opens the chosen file without catalog tracking',
+    (tester) async {
+      var opened = 0;
+      LibraryPlaybackRequest? request;
+      final history = _ManualDebridAccountHistory(
+        const [
+          DebridAccountHistoryItem(
+            id: 'other',
+            name: 'Unrecognized season pack',
+            service: DebridService.realDebrid,
+            ready: true,
+          ),
+        ],
+        [
+          DebridAccountVideoFile(
+            id: '6',
+            name: 'Other Show - 01.mkv',
+            size: 1000,
+            open: () async {
+              opened++;
+              return StreamReady(
+                uri: Uri.parse('https://cdn.test/01.mkv'),
+                displayName: 'Other Show - 01.mkv',
+                debridService: DebridService.realDebrid,
+              );
+            },
+          ),
+          DebridAccountVideoFile(
+            id: '1',
+            name: 'Other Show - 06.mkv',
+            size: 2000,
+            open: () async {
+              opened++;
+              return StreamReady(
+                uri: Uri.parse('https://cdn.test/06.mkv'),
+                displayName: 'Other Show - 06.mkv',
+                debridService: DebridService.realDebrid,
+              );
+            },
+          ),
+        ],
+      );
+      await _mountManualCachedTest(tester, history, (
+        _,
+        value, {
+        required automatic,
+      }) async {
+        request = value;
+        expect(automatic, isFalse);
+        return null;
+      });
+      await _pumpUntilFound(
+        tester,
+        find.byKey(const ValueKey('cached-file:1')),
+      );
+      expect(opened, 0);
+      expect(request, isNull);
+      expect(history.episodeResolutions, 0);
+      expect(find.textContaining('does not update progress'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('cached-file:1')));
+      for (var i = 0; i < 10 && request == null; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+      expect(opened, 1);
+      expect(request!.source.path, '/06.mkv');
+      expect(request!.title, 'Other Show - 06.mkv');
+      expect(request!.sourceProviderId, 'account-realdebrid');
+      expect(request!.watchPartyIdentity, isNull);
+      expect(request!.isolation.animeTrackingEnabled, isFalse);
+      expect(request!.isolation.animeCheckpointEnabled, isFalse);
+      expect(request!.isolation.nextEpisodeEnabled, isFalse);
+      expect(request!.isolation.aniSkipEnabled, isFalse);
+      expect(request!.onProgress, isNull);
+      expect(request!.onFinished, isNull);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('canceling Cached file selection does not open a stream', (
+    tester,
+  ) async {
+    var opened = 0;
+    var routed = 0;
+    final history = _ManualDebridAccountHistory(
+      const [
+        DebridAccountHistoryItem(
+          id: 'cancel',
+          name: 'Other Show',
+          service: DebridService.realDebrid,
+          ready: true,
+        ),
+      ],
+      [
+        DebridAccountVideoFile(
+          id: '1',
+          name: 'Other Show.mkv',
+          size: 1000,
+          open: () async {
+            opened++;
+            throw StateError('Must not open');
+          },
+        ),
+      ],
+    );
+    await _mountManualCachedTest(tester, history, (
+      _,
+      _, {
+      required automatic,
+    }) async {
+      routed++;
+      return null;
+    });
+    await _pumpUntilFound(tester, find.byKey(const ValueKey('cached-file:1')));
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.byKey(const ValueKey('cached-file:1')), findsNothing);
+    expect(opened, 0);
+    expect(routed, 0);
+    expect(find.text('Choose your stream'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'matching Cached pack with ambiguous episode files offers manual selection',
+    (tester) async {
+      final history = _ManualDebridAccountHistory(
+        const [
+          DebridAccountHistoryItem(
+            id: 'ambiguous',
+            name: 'Current Show complete',
+            service: DebridService.realDebrid,
+            ready: true,
+          ),
+        ],
+        [
+          DebridAccountVideoFile(
+            id: 'a',
+            name: 'Unnumbered file.mkv',
+            size: 1000,
+            open: () async => StreamReady(
+              uri: Uri.parse('https://cdn.test/a.mkv'),
+              displayName: 'Unnumbered file.mkv',
+            ),
+          ),
+        ],
+      );
+      await _mountManualCachedTest(
+        tester,
+        history,
+        (_, _, {required automatic}) async => null,
+      );
+      await _pumpUntilFound(
+        tester,
+        find.byKey(const ValueKey('cached-file:a')),
+      );
+      expect(history.episodeResolutions, 1);
+      expect(history.fileQueries, 1);
+      expect(find.textContaining('could not prove'), findsNothing);
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'pending Cached download stays unavailable instead of guessing a file',
+    (tester) async {
+      final history = _ManualDebridAccountHistory(const [
+        DebridAccountHistoryItem(
+          id: 'pending',
+          name: 'Pending Show',
+          service: DebridService.realDebrid,
+          ready: false,
+        ),
+      ], []);
+      await _mountManualCachedTest(
+        tester,
+        history,
+        (_, _, {required automatic}) async => null,
+      );
+      await _pumpUntilFound(
+        tester,
+        find.textContaining('This download is not ready'),
+      );
+      expect(history.fileQueries, 0);
+      expect(history.episodeResolutions, 0);
+      expect(find.text('Choose a video file'), findsNothing);
+    },
+  );
 
   test('download preparation keeps actionable provider failures', () {
     final rateLimited = RealDebridException.rateLimited(
@@ -81,6 +471,10 @@ void main() {
       shouldRecordResolveCrashReport(
         const WebStreamPreflightFailure('validation_failed'),
       ),
+      isFalse,
+    );
+    expect(
+      shouldRecordResolveCrashReport(const DirectTorrentBusyException()),
       isFalse,
     );
     expect(
@@ -139,6 +533,150 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets('Cached lists unrelated and pending account downloads', (
+    tester,
+  ) async {
+    FlutterSecureStorage.setMockInitialValues({
+      DebridService.realDebrid.tokenStorageKey: 'valid-manual-token',
+    });
+    await tester.binding.setSurfaceSize(const Size(1920, 1080));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          debridAccountHistoryProvider.overrideWithValue(
+            const _FixedDebridAccountHistory([
+              DebridAccountHistoryItem(
+                id: 'other-show',
+                name: 'Completely Different Show S01E01',
+                service: DebridService.realDebrid,
+                ready: true,
+              ),
+              DebridAccountHistoryItem(
+                id: 'pending',
+                name: 'Another Movie Download',
+                service: DebridService.realDebrid,
+                ready: false,
+              ),
+            ]),
+          ),
+          configuredReleaseSourceProvider.overrideWithValue(
+            const _FakeReleaseSource(),
+          ),
+          webStreamAggregatorProvider.overrideWithValue(
+            _FixedWebAggregator(const []),
+          ),
+        ],
+        child: const MaterialApp(
+          home: ResolveEpisodeScreen(
+            episode: EpisodeReference(
+              anilistMediaId: 88001,
+              title: 'Current Show',
+              episode: 1,
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await _pumpUntilFound(
+      tester,
+      find.byKey(const ValueKey('stream-picker-cached')),
+    );
+    await tester.tap(find.byKey(const ValueKey('stream-picker-cached')));
+    await _pumpUntilFound(
+      tester,
+      find.text('Completely Different Show S01E01'),
+    );
+    expect(find.text('Another Movie Download'), findsOneWidget);
+    expect(find.text('NOT READY'), findsOneWidget);
+  });
+
+  testWidgets('matching account downloads join the correct audio tabs', (
+    tester,
+  ) async {
+    FlutterSecureStorage.setMockInitialValues({
+      DebridService.realDebrid.tokenStorageKey: 'valid-manual-token',
+    });
+    await tester.binding.setSurfaceSize(const Size(1920, 1080));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          debridAccountHistoryProvider.overrideWithValue(
+            const _FixedDebridAccountHistory([
+              DebridAccountHistoryItem(
+                id: 'dub',
+                name: 'Current Show S01E01 [DUB]',
+                service: DebridService.realDebrid,
+                ready: true,
+              ),
+              DebridAccountHistoryItem(
+                id: 'sub',
+                name: 'Current Show S01E01 [SUB]',
+                service: DebridService.realDebrid,
+                ready: true,
+              ),
+              DebridAccountHistoryItem(
+                id: 'unknown',
+                name: 'Current Show S01E01',
+                service: DebridService.realDebrid,
+                ready: true,
+              ),
+              DebridAccountHistoryItem(
+                id: 'unrelated',
+                name: 'Different Show S01E01 [DUB]',
+                service: DebridService.realDebrid,
+                ready: true,
+              ),
+            ]),
+          ),
+          configuredReleaseSourceProvider.overrideWithValue(
+            const _FakeReleaseSource(),
+          ),
+          webStreamAggregatorProvider.overrideWithValue(
+            _FixedWebAggregator(const []),
+          ),
+        ],
+        child: const MaterialApp(
+          home: ResolveEpisodeScreen(
+            episode: EpisodeReference(
+              anilistMediaId: 88002,
+              title: 'Current Show',
+              episode: 1,
+            ),
+          ),
+        ),
+      ),
+    );
+
+    const dub = ValueKey('matched-account:realdebrid:dub');
+    const sub = ValueKey('matched-account:realdebrid:sub');
+    const unknown = ValueKey('matched-account:realdebrid:unknown');
+    await _pumpUntilFound(
+      tester,
+      find.byKey(const ValueKey('stream-picker-dub')),
+    );
+    await tester.tap(find.byKey(const ValueKey('stream-picker-dub')));
+    await _pumpUntilFound(tester, find.byKey(dub));
+    expect(find.byKey(sub), findsNothing);
+    expect(find.byKey(unknown), findsNothing);
+    expect(find.text('CACHED'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('stream-picker-sub')));
+    await _pumpUntilFound(tester, find.byKey(sub));
+    expect(find.byKey(dub), findsNothing);
+    expect(find.byKey(unknown), findsNothing);
+
+    await tester.tap(find.byKey(const ValueKey('stream-picker-all')));
+    await _pumpUntilFound(tester, find.byKey(unknown));
+    expect(find.byKey(dub), findsOneWidget);
+    expect(find.byKey(sub), findsOneWidget);
+    expect(find.text('Different Show S01E01 [DUB]'), findsNothing);
+  });
 
   test('download source revision reacts only to matching completions', () {
     final now = DateTime.utc(2026, 8, 24);
@@ -1498,6 +2036,16 @@ void main() {
       );
 
       await _pumpUntilFound(tester, find.text(dual.title));
+      expect(find.text('SUB / DUB'), findsOneWidget);
+      expect(find.text('AUDIO UNKNOWN'), findsOneWidget);
+      final titleRect = tester.getRect(find.text(dual.title));
+      final providerRect = tester.getRect(find.text(dual.providerName));
+      final qualityRect = tester.getRect(find.text('1080P'));
+      final audioRect = tester.getRect(find.text('SUB / DUB'));
+      expect(qualityRect.right, lessThan(titleRect.left));
+      expect(providerRect.left, greaterThan(titleRect.left));
+      expect(audioRect.left, titleRect.left + 8);
+      expect(audioRect.top, greaterThan(titleRect.bottom));
       expect(find.text(dub.title), findsOneWidget);
       expect(find.text(sub.title), findsOneWidget);
       expect(find.text(unknown.title), findsOneWidget);
@@ -1774,6 +2322,7 @@ void main() {
         const actionKeys = [
           'stream-picker-search-input',
           'stream-picker-all',
+          'stream-picker-cached',
           'stream-picker-sub',
           'stream-picker-dub',
           'stream-picker-filters',
@@ -1826,6 +2375,7 @@ void main() {
             .requestFocus();
         await tester.pump();
         for (final expected in [
+          'stream-picker.cached',
           'stream-picker.sub',
           'stream-picker.dub',
           'stream-picker.filters',
@@ -2417,6 +2967,234 @@ void main() {
     expect(webStreamMatchesLocalSearch(web, 'dub'), isFalse);
   });
 
+  testWidgets(
+    'compact source cards restore resolution tiles and green Cached',
+    (tester) async {
+      FlutterSecureStorage.setMockInitialValues({
+        DebridService.realDebrid.tokenStorageKey: 'valid-manual-token',
+      });
+      await tester.binding.setSurfaceSize(const Size(1920, 1080));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      const cachedHash = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+      const rawTitle =
+          '[Group] Compact Example S01 [1080p]\n'
+          '[Group] Compact Example S01E01.mkv\n'
+          '👤 67 💾 577.58 MB ⚙️ NyaaSi';
+      const cachedRelease = ReleaseCandidate(
+        infoHash: cachedHash,
+        magnetUri: 'magnet:?xt=urn:btih:$cachedHash',
+        releaseName: rawTitle,
+        quality: '1080p',
+        codec: 'H.264',
+        sizeLabel: '577.58 MB',
+        seeders: 67,
+        sourceId: 'compact',
+        provider: 'NyaaSi',
+        isBatch: true,
+      );
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            debridAccountHistoryProvider.overrideWithValue(
+              const _FixedDebridAccountHistory([
+                DebridAccountHistoryItem(
+                  id: 'cached-compact',
+                  hash: cachedHash,
+                  name: 'Compact Example S01E01 1080p SUB',
+                  service: DebridService.realDebrid,
+                  ready: true,
+                ),
+              ]),
+            ),
+            configuredReleaseSourceProvider.overrideWithValue(
+              const _ListReleaseSource([cachedRelease]),
+            ),
+            webStreamAggregatorProvider.overrideWithValue(
+              _FixedWebAggregator(const []),
+            ),
+          ],
+          child: MaterialApp(
+            theme: AppTheme.dark,
+            home: const ResolveEpisodeScreen(
+              episode: EpisodeReference(
+                anilistMediaId: 88003,
+                title: 'Compact Example',
+                episode: 1,
+              ),
+            ),
+          ),
+        ),
+      );
+      final card = find.byKey(const ValueKey('debrid:$cachedHash'));
+      await _pumpUntilFound(
+        tester,
+        find.byKey(const ValueKey('stream-picker-all')),
+      );
+      await tester.tap(find.byKey(const ValueKey('stream-picker-all')));
+      await _pumpUntilFound(tester, card);
+      await _pumpUntilFound(
+        tester,
+        find.descendant(of: card, matching: find.text('CACHED')),
+      );
+      final tile = find.descendant(
+        of: card,
+        matching: find.byKey(const ValueKey('source-card-quality')),
+      );
+      expect(
+        find.descendant(of: tile, matching: find.text('1080P')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: card, matching: find.text('1080P')),
+        findsOneWidget,
+      );
+      expect(tester.getSize(tile), const Size(68, 68));
+      expect(tester.getSize(card).height, lessThanOrEqualTo(116));
+      final title = find.descendant(
+        of: card,
+        matching: find.byKey(const ValueKey('source-card-title')),
+      );
+      expect(
+        tester.widget<Text>(title).data,
+        '[Group] Compact Example S01 [1080p]',
+      );
+      final metadata = find.descendant(
+        of: card,
+        matching: find.byKey(const ValueKey('source-card-metadata')),
+      );
+      expect(tester.widget<Text>(metadata).data, '67 seeders • 577.58 MB');
+      expect(
+        tester.getRect(metadata).left,
+        greaterThan(tester.getRect(title).left),
+      );
+      final cached = tester.widget<Text>(
+        find.descendant(of: card, matching: find.text('CACHED')),
+      );
+      expect(cached.style?.color, const Color(0xFF65D6A0));
+      expect(
+        tester
+            .widget<Text>(
+              find.descendant(of: card, matching: find.text('RECOMMENDED')),
+            )
+            .style
+            ?.color,
+        AppThemePalette.defaults.accentBright,
+      );
+      final surface = tester.widget<Container>(
+        find.descendant(
+          of: card,
+          matching: find.byKey(const ValueKey('source-card-surface')),
+        ),
+      );
+      final fill = (surface.decoration! as BoxDecoration).color;
+      final focusable = find
+          .ancestor(of: title, matching: find.byType(TvFocusable))
+          .first;
+      final focus = tester.widget<FocusableActionDetector>(
+        find
+            .descendant(
+              of: focusable,
+              matching: find.byType(FocusableActionDetector),
+            )
+            .first,
+      );
+      focus.focusNode!.requestFocus();
+      await tester.pump(const Duration(milliseconds: 200));
+      final focusedSurface = tester.widget<Container>(
+        find.descendant(
+          of: card,
+          matching: find.byKey(const ValueKey('source-card-surface')),
+        ),
+      );
+      expect((focusedSurface.decoration! as BoxDecoration).color, fill);
+      expect(fill, TetoBoxStyle.fill(AppThemePalette.defaults));
+      final focusRing = tester.widget<AnimatedContainer>(
+        find
+            .descendant(of: focusable, matching: find.byType(AnimatedContainer))
+            .first,
+      );
+      expect(
+        (focusRing.foregroundDecoration! as BoxDecoration).color,
+        Colors.transparent,
+      );
+      expect(
+        (focusRing.foregroundDecoration! as BoxDecoration).border!.top.color,
+        AppThemePalette.defaults.focusRing,
+      );
+      // Display shortening must not remove metadata from search or identity.
+      expect(
+        releaseMatchesLocalStreamSearch(cachedRelease, 'S01E01 67 seeders'),
+        isTrue,
+      );
+      expect(cachedRelease.releaseName, rawTitle);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  for (final quality in const {
+    '2160p': '4K',
+    '720p': '720P',
+    '4320p': '8K',
+    '': 'AUTO',
+  }.entries) {
+    testWidgets('source resolution tile labels ${quality.value}', (
+      tester,
+    ) async {
+      FlutterSecureStorage.setMockInitialValues({
+        DebridService.realDebrid.tokenStorageKey: 'valid-manual-token',
+      });
+      await tester.binding.setSurfaceSize(const Size(960, 540));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            configuredReleaseSourceProvider.overrideWithValue(
+              _ListReleaseSource([
+                ReleaseCandidate(
+                  infoHash: 'resolution-tile',
+                  magnetUri: 'magnet:?xt=urn:btih:resolution-tile',
+                  releaseName: 'Resolution example',
+                  quality: quality.key.isEmpty ? null : quality.key,
+                  sourceId: 'compact',
+                  seeders: 12,
+                ),
+              ]),
+            ),
+            webStreamAggregatorProvider.overrideWithValue(
+              _FixedWebAggregator(const []),
+            ),
+          ],
+          child: MaterialApp(
+            theme: AppTheme.dark,
+            home: const ResolveEpisodeScreen(
+              episode: EpisodeReference(
+                anilistMediaId: 88004,
+                title: 'Resolution example',
+                episode: 1,
+              ),
+            ),
+          ),
+        ),
+      );
+      final card = find.byKey(const ValueKey('debrid:resolution-tile'));
+      await _pumpUntilFound(
+        tester,
+        find.byKey(const ValueKey('stream-picker-all')),
+      );
+      await tester.tap(find.byKey(const ValueKey('stream-picker-all')));
+      await _pumpUntilFound(tester, card);
+      final tile = find.descendant(
+        of: card,
+        matching: find.byKey(const ValueKey('source-card-quality')),
+      );
+      expect(
+        find.descendant(of: tile, matching: find.text(quality.value)),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+    });
+  }
+
   test(
     'local stream search covers media server, title, and codec metadata',
     () {
@@ -2634,7 +3412,7 @@ void main() {
             const ValueKey('stream-picker-primary-controls-scroll'),
           );
           expect(controlsScroll, findsOneWidget);
-          await tester.drag(controlsScroll, const Offset(-120, 0));
+          await tester.drag(controlsScroll, const Offset(-300, 0));
           await tester.pumpAndSettle();
           final refreshRect = tester.getRect(
             find.byKey(const ValueKey('stream-picker-refresh')),
@@ -2646,6 +3424,135 @@ void main() {
       },
     );
   }
+
+  testWidgets('source cards fit narrow screens with larger text', (
+    tester,
+  ) async {
+    FlutterSecureStorage.setMockInitialValues({
+      DebridService.realDebrid.tokenStorageKey: 'valid-manual-token',
+    });
+    await tester.binding.setSurfaceSize(const Size(360, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          configuredReleaseSourceProvider.overrideWithValue(
+            const _FakeReleaseSource(),
+          ),
+          webStreamAggregatorProvider.overrideWithValue(
+            _FixedWebAggregator(const []),
+          ),
+        ],
+        child: MaterialApp(
+          theme: AppTheme.dark,
+          builder: (context, child) => MediaQuery(
+            data: MediaQuery.of(
+              context,
+            ).copyWith(textScaler: TextScaler.linear(1.6)),
+            child: child!,
+          ),
+          home: const ResolveEpisodeScreen(
+            episode: EpisodeReference(
+              anilistMediaId: 42,
+              title: 'Compact example',
+              episode: 1,
+            ),
+          ),
+        ),
+      ),
+    );
+    final card = find.byKey(
+      const ValueKey('debrid:0123456789abcdef0123456789abcdef01234567'),
+    );
+    await _pumpUntilFound(tester, card);
+    final tile = find.descendant(
+      of: card,
+      matching: find.byKey(const ValueKey('source-card-quality')),
+    );
+    expect(tester.getSize(tile), const Size(52, 58));
+    expect(
+      find.descendant(of: tile, matching: find.text('1080P')),
+      findsOneWidget,
+    );
+    expect(tester.getRect(card).right, lessThanOrEqualTo(360));
+    expect(tester.getRect(card).left, greaterThanOrEqualTo(0));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('Cached remains readable and resolution follows a custom theme', (
+    tester,
+  ) async {
+    FlutterSecureStorage.setMockInitialValues({
+      DebridService.realDebrid.tokenStorageKey: 'valid-manual-token',
+    });
+    await tester.binding.setSurfaceSize(const Size(1280, 720));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final palette = AppThemePalette.fromSeeds(
+      background: const Color(0xFFFFFFFF),
+      surface: const Color(0xFFF6F6F6),
+      accent: const Color(0xFF6633BB),
+      primaryText: const Color(0xFF101010),
+      mutedText: const Color(0xFF555555),
+    );
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          debridAccountHistoryProvider.overrideWithValue(
+            const _FixedDebridAccountHistory([
+              DebridAccountHistoryItem(
+                id: 'theme-cache',
+                name: 'Compact Example S01E01 1080p SUB',
+                service: DebridService.realDebrid,
+                ready: true,
+              ),
+            ]),
+          ),
+          configuredReleaseSourceProvider.overrideWithValue(
+            const _FakeReleaseSource(),
+          ),
+          webStreamAggregatorProvider.overrideWithValue(
+            _FixedWebAggregator(const []),
+          ),
+        ],
+        child: MaterialApp(
+          theme: AppTheme.darkFor(palette),
+          home: const ResolveEpisodeScreen(
+            episode: EpisodeReference(
+              anilistMediaId: 42,
+              title: 'Compact Example',
+              episode: 1,
+            ),
+          ),
+        ),
+      ),
+    );
+    final cachedTab = find.byKey(const ValueKey('stream-picker-cached'));
+    await _pumpUntilFound(tester, cachedTab);
+    await tester.tap(cachedTab);
+    final card = find.byKey(const ValueKey('account:realdebrid:theme-cache'));
+    await _pumpUntilFound(tester, card);
+    final cached = tester.widget<Text>(
+      find.descendant(of: card, matching: find.text('CACHED')),
+    );
+    final color = cached.style!.color!;
+    final fill = Color.alphaBlend(
+      color.withValues(alpha: .13),
+      TetoBoxStyle.fill(palette),
+    );
+    expect(contrastRatio(color, fill), greaterThanOrEqualTo(4.5));
+    expect(color, isNot(palette.accentBright));
+    final tile = tester.widget<Container>(
+      find.descendant(
+        of: card,
+        matching: find.byKey(const ValueKey('source-card-quality')),
+      ),
+    );
+    expect(
+      ((tile.decoration! as BoxDecoration).gradient! as LinearGradient).colors,
+      [palette.accent, palette.accentBright],
+    );
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets(
     'visible release fallback keeps the selected normalized quality first',
@@ -4129,7 +5036,7 @@ void main() {
       await _pumpUntilFound(tester, find.text('No playable stream found'));
       expect(find.text('Choose your stream'), findsNothing);
       expect(find.text(fallback.title), findsNothing);
-      expect(find.text('Back'), findsOneWidget);
+      expect(find.byIcon(Icons.arrow_back_rounded), findsWidgets);
       expect(find.text('Retry'), findsOneWidget);
       gate.complete();
       await tester.pump();
@@ -4548,7 +5455,7 @@ void main() {
       );
 
       await _pumpUntilFound(tester, find.text('No playable stream found'));
-      expect(find.text('Back'), findsOneWidget);
+      expect(find.byIcon(Icons.arrow_back_rounded), findsWidgets);
       expect(find.text('Retry'), findsOneWidget);
       expect(find.text('Magnet URI'), findsNothing);
       expect(find.text('Send to Real-Debrid'), findsNothing);
@@ -4702,7 +5609,7 @@ void main() {
       await _pumpUntilFound(tester, find.text('No playable stream found'));
       expect(find.text('Choose your stream'), findsNothing);
       expect(find.text('Magnet URI'), findsNothing);
-      expect(find.text('Back'), findsOneWidget);
+      expect(find.byIcon(Icons.arrow_back_rounded), findsWidgets);
       expect(find.text('Retry'), findsOneWidget);
     },
   );
@@ -4748,7 +5655,7 @@ void main() {
       await _pumpUntilFound(tester, find.text('No playable stream found'));
       expect(find.text('Choose your stream'), findsNothing);
       expect(find.text('Magnet URI'), findsNothing);
-      expect(find.text('Back'), findsOneWidget);
+      expect(find.byIcon(Icons.arrow_back_rounded), findsWidgets);
       expect(find.text('Retry'), findsOneWidget);
     },
   );
@@ -6408,8 +7315,8 @@ void main() {
     );
     await _pumpUntilFound(tester, find.text('No playable stream found'));
 
-    await tester.tap(find.text('Back'));
-    await tester.tap(find.text('Back'));
+    await tester.tap(find.byIcon(Icons.arrow_back_rounded).first);
+    await tester.tap(find.byIcon(Icons.arrow_back_rounded).first);
     await tester.pumpAndSettle();
 
     expect(find.text('DETAILS 99013'), findsOneWidget);

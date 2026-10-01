@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/theme/teto_box_style.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/features/manga/application/manga_extension_controller.dart';
 import 'package:anime_tv/features/manga/application/manga_continue_policy.dart';
@@ -307,8 +308,13 @@ class _MangaChapterSheetState extends ConsumerState<MangaChapterSheet> {
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 1120, maxHeight: 900),
           child: Material(
-            color: context.appPalette.surface,
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(22)),
+            color: TetoBoxStyle.fill(context.appPalette),
+            shape: RoundedRectangleBorder(
+              borderRadius: const BorderRadius.vertical(
+                top: Radius.circular(TetoBoxStyle.radius),
+              ),
+              side: BorderSide(color: TetoBoxStyle.outline(context.appPalette)),
+            ),
             clipBehavior: Clip.antiAlias,
             child: FocusTraversalGroup(
               policy: ReadingOrderTraversalPolicy(),

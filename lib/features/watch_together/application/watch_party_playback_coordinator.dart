@@ -12,13 +12,13 @@ import 'package:flutter/foundation.dart';
 typedef WatchPartyPlaybackCommand = Future<void> Function();
 typedef WatchPartySeekCommand = Future<void> Function(Duration position);
 
-/// A started video can be shared before the demuxer reports its duration.
-/// Persistence readiness prevents a pre-resume position from being published.
+/// A verified open can be shared while paused, even when the demuxer has not
+/// reported duration. A stale duration from the previous stream is not proof
+/// that the new stream opened successfully.
 bool watchPartyPlaybackIsReady({
   required bool persistenceReady,
-  required bool playing,
-  required Duration duration,
-}) => persistenceReady && (playing || duration > Duration.zero);
+  required bool streamOpened,
+}) => persistenceReady && streamOpened;
 
 /// Identifies one concrete player instance attached to a party session.
 ///
@@ -300,6 +300,7 @@ class WatchPartyPlaybackCoordinator implements WatchPartyPlaybackPort {
       title: _boundedWatchPartyTitle(episode.title) ?? 'Watch Party',
       anilistId: episode.anilistMediaId,
       episode: episode.episode,
+      format: episode.format?.toUpperCase() == 'MOVIE' ? 'MOVIE' : null,
       titleEnglish: _boundedWatchPartyTitle(episode.titleEnglish),
       titleRomaji: _boundedWatchPartyTitle(episode.titleRomaji),
       titleNative: _boundedWatchPartyTitle(episode.titleNative),

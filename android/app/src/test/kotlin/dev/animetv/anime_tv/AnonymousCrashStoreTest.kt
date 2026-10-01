@@ -15,6 +15,103 @@ class AnonymousCrashStoreTest {
         assertTrue(AnonymousCrashStore.isReportableReason(ApplicationExitInfo.REASON_ANR))
         assertFalse(AnonymousCrashStore.isReportableReason(ApplicationExitInfo.REASON_EXIT_SELF))
         assertFalse(AnonymousCrashStore.isReportableReason(ApplicationExitInfo.REASON_USER_REQUESTED))
+        assertFalse(AnonymousCrashStore.isReportableReason(ApplicationExitInfo.REASON_LOW_MEMORY))
+        assertFalse(AnonymousCrashStore.isReportableReason(ApplicationExitInfo.REASON_SIGNALED))
+    }
+
+    @Test
+    fun `exit history scan distinguishes unavailable OEM query from no recorded exits`() {
+        val unavailable = AnonymousCrashStore.captureExitHistoryScan(
+            sdk = 30,
+            readExits = { throw SecurityException("private exception details") },
+            lowMemorySupport = { throw AssertionError("must not query after failure") },
+        )
+        assertEquals("unavailable", unavailable.status)
+        assertEquals(emptyList<Any>(), unavailable.exits)
+        assertEquals(null, unavailable.lowMemoryKillReportSupported)
+
+        val empty = AnonymousCrashStore.captureExitHistoryScan(30, { emptyList() }, { false })
+        assertEquals("scanned", empty.status)
+        assertEquals(false, empty.lowMemoryKillReportSupported)
+        assertEquals(emptyList<Any>(), empty.exits)
+    }
+
+    @Test
+    fun `older Android avoids exit APIs and missing low memory capability remains unknown`() {
+        val unsupported = AnonymousCrashStore.captureExitHistoryScan(
+            29,
+            { throw AssertionError("old Android must not query exit history") },
+            { throw AssertionError("old Android must not query low-memory capability") },
+        )
+        assertEquals("unsupported", unsupported.status)
+        val unknownCapability = AnonymousCrashStore.captureExitHistoryScan(
+            30, { emptyList() }, { throw UnsupportedOperationException("private details") },
+        )
+        assertEquals("scanned", unknownCapability.status)
+        assertEquals(null, unknownCapability.lowMemoryKillReportSupported)
+    }
+
+    @Test
+    fun `OS exit metadata preserves memory and signal kills without calling them crashes`() {
+        val now = 1_800_000_000_000L
+        val reasons = listOf(
+            ApplicationExitInfo.REASON_LOW_MEMORY,
+            ApplicationExitInfo.REASON_SIGNALED,
+            ApplicationExitInfo.REASON_EXIT_SELF,
+            ApplicationExitInfo.REASON_USER_REQUESTED,
+            ApplicationExitInfo.REASON_CRASH_NATIVE,
+            ApplicationExitInfo.REASON_ANR,
+        )
+        val output = AnonymousCrashStore.exitHistoryMetadata(
+            "scanned", false,
+            reasons.mapIndexed { index, reason ->
+                AnonymousCrashStore.OsExitEvidence(now - 6 + index, reason, 9, 100, 1_024, 2_048, "main")
+            }, now,
+        )
+        @Suppress("UNCHECKED_CAST")
+        val records = output["exits"] as List<Map<String, Any?>>
+        assertEquals(listOf("low_memory", "signal", "self_exit", "user_requested", "native_crash", "anr"), records.map { it["reason"] })
+        assertEquals(listOf(false, false, false, false, true, true), records.map { it["reportable_crash"] })
+        assertEquals(false, output["low_memory_kill_report_supported"])
+        assertEquals(1L, records[0]["pss_mb"])
+        assertEquals(2L, records[0]["rss_mb"])
+        // A SIGKILL on a device lacking low-memory reason support may be a
+        // memory-pressure kill, but it is not proof of that cause.
+        assertEquals("signal", records[1]["reason"])
+        assertFalse(output.toString().contains("description"))
+        assertFalse(output.toString().contains("trace"))
+    }
+
+    @Test
+    fun `OS exit evidence is fixed-field bounded recent and never exports raw process names`() {
+        val now = 1_800_000_000_000L
+        fun exit(at: Long) = AnonymousCrashStore.OsExitEvidence(
+            at, Int.MAX_VALUE, Int.MAX_VALUE, 100, Long.MAX_VALUE, -1, "user@example.com-private-process",
+        )
+        val output = AnonymousCrashStore.exitHistoryMetadata(
+            "scanned", true,
+            (1..20).map { exit(now - it) } + listOf(exit(now + 1), exit(0), exit(now - 48L * 60 * 60 * 1_000 - 1)),
+            now,
+        )
+        @Suppress("UNCHECKED_CAST")
+        val records = output["exits"] as List<Map<String, Any?>>
+        assertEquals(12, records.size)
+        assertEquals(now - 12, records.first()["occurred_at_ms"])
+        assertEquals(now - 1, records.last()["occurred_at_ms"])
+        assertEquals(setOf("occurred_at_ms", "reason", "reason_code", "status", "importance", "pss_mb", "rss_mb", "process_role", "reportable_crash"), records[0].keys)
+        assertEquals(999, records[0]["reason_code"])
+        assertEquals(999, records[0]["status"])
+        assertEquals(1_048_576L, records[0]["pss_mb"])
+        assertEquals(0L, records[0]["rss_mb"])
+        assertEquals("other", records[0]["process_role"])
+        assertFalse(output.toString().contains("private"))
+        assertFalse(output.toString().contains("user@"))
+        for (status in listOf("unsupported", "unavailable", "private-status")) {
+            assertEquals(emptyList<Any>(), AnonymousCrashStore.exitHistoryMetadata(status, null, listOf(exit(now)), now)["exits"])
+        }
+        assertEquals("main", AnonymousCrashStore.exitProcessRole("dev.animetv.anime_tv", "dev.animetv.anime_tv"))
+        assertEquals("aniyomi_worker", AnonymousCrashStore.exitProcessRole("dev.animetv.anime_tv:aniyomi_worker", "dev.animetv.anime_tv"))
+        assertEquals("other", AnonymousCrashStore.exitProcessRole("private-user-process", "dev.animetv.anime_tv"))
     }
 
     @Test

@@ -51,7 +51,12 @@ class _FakeStorage extends Fake implements FlutterSecureStorage {
 class _FakeRepo implements TrackingRepository, ExternalIdTrackingRepository {
   final List<({int mediaId, int episodes})> updates = [];
   final List<({TrackingMediaIds ids, int episodes})> externalUpdates = [];
+  final List<({int mediaId, TrackingListStatus status})> statuses = [];
+  final List<({TrackingMediaIds ids, TrackingListStatus status})>
+  externalStatuses = [];
+  final List<String> operations = [];
   bool shouldFail = false;
+  bool statusShouldFail = false;
   Object? externalFailure;
   Duration updateDelay = Duration.zero;
 
@@ -71,6 +76,7 @@ class _FakeRepo implements TrackingRepository, ExternalIdTrackingRepository {
   }) async {
     if (updateDelay > Duration.zero) await Future<void>.delayed(updateDelay);
     if (shouldFail) throw Exception('network error');
+    operations.add('progress');
     updates.add((mediaId: mediaId, episodes: completedEpisodes));
   }
 
@@ -78,7 +84,11 @@ class _FakeRepo implements TrackingRepository, ExternalIdTrackingRepository {
   Future<void> updateStatus({
     required int mediaId,
     required TrackingListStatus status,
-  }) async {}
+  }) async {
+    if (shouldFail || statusShouldFail) throw Exception('network error');
+    operations.add('watching');
+    statuses.add((mediaId: mediaId, status: status));
+  }
 
   @override
   Future<int?> currentProgressByIds(TrackingMediaIds ids) async => 0;
@@ -93,6 +103,7 @@ class _FakeRepo implements TrackingRepository, ExternalIdTrackingRepository {
   }) async {
     if (externalFailure case final failure?) throw failure;
     if (shouldFail) throw Exception('network error');
+    operations.add('progress');
     externalUpdates.add((ids: ids, episodes: completedEpisodes));
   }
 
@@ -100,7 +111,30 @@ class _FakeRepo implements TrackingRepository, ExternalIdTrackingRepository {
   Future<void> updateStatusByIds({
     required TrackingMediaIds ids,
     required TrackingListStatus status,
-  }) async {}
+  }) async {
+    if (externalFailure case final failure?) throw failure;
+    if (shouldFail || statusShouldFail) throw Exception('network error');
+    operations.add('watching');
+    externalStatuses.add((ids: ids, status: status));
+  }
+}
+
+class _CompletionRepo extends _FakeRepo
+    implements AutomaticCompletionTrackingRepository {
+  final completionCalls = <({TrackingMediaIds ids, int episodes})>[];
+  bool completionShouldFail = false;
+
+  @override
+  Future<void> updateProgressAndCompletion({
+    required TrackingMediaIds ids,
+    required int completedEpisodes,
+  }) async {
+    completionCalls.add((ids: ids, episodes: completedEpisodes));
+    if (shouldFail) throw Exception('offline');
+    operations.add('progress');
+    if (completionShouldFail) throw Exception('status write failed');
+    operations.add('completed');
+  }
 }
 
 class _FakeTimer implements Timer {
@@ -143,6 +177,8 @@ class _TestSyncService extends TrackingSyncService {
     super.resumeDebounce = const Duration(milliseconds: 400),
     super.retryDelays = const [],
     super.timerFactory = _testTimer,
+    super.onProgressDelivered,
+    super.statusRecorder,
   }) : super.withLookup();
 
   final _FakeRepo anilistRepo;
@@ -197,6 +233,8 @@ void main() {
     List<Duration> retryDelays = const [],
     TrackingTimerFactory timerFactory = _testTimer,
     Duration resumeDebounce = const Duration(milliseconds: 400),
+    void Function()? onProgressDelivered,
+    TrackingSyncStatusRecorder? statusRecorder,
   }) {
     return _TestSyncService(
       storage,
@@ -206,6 +244,8 @@ void main() {
       retryDelays: retryDelays,
       timerFactory: timerFactory,
       resumeDebounce: resumeDebounce,
+      onProgressDelivered: onProgressDelivered,
+      statusRecorder: statusRecorder,
       anilistRepo: anilistRepo,
       malRepo: malRepo,
     );
@@ -215,6 +255,182 @@ void main() {
     storage = _FakeStorage();
     anilistRepo = _FakeRepo();
     malRepo = _FakeRepo();
+  });
+
+  group('syncWatching', () {
+    test(
+      'successful Watching delivery refreshes cached tracking views',
+      () async {
+        var refreshes = 0;
+        await buildService(
+          onProgressDelivered: () => refreshes++,
+        ).syncWatching(anilistMediaId: 101);
+        expect(refreshes, 1);
+      },
+    );
+
+    test(
+      'adds a previously absent title to both lists without progress',
+      () async {
+        expect(
+          await buildService().syncWatching(
+            anilistMediaId: 101,
+            malMediaId: 202,
+          ),
+          isTrue,
+        );
+        expect(anilistRepo.statuses, [
+          (mediaId: 101, status: TrackingListStatus.watching),
+        ]);
+        expect(malRepo.statuses, [
+          (mediaId: 202, status: TrackingListStatus.watching),
+        ]);
+        expect(anilistRepo.updates, isEmpty);
+        expect(malRepo.updates, isEmpty);
+        expect(_readOutbox(storage), isEmpty);
+      },
+    );
+
+    test(
+      'fans out through verified Kitsu and SIMKL catalog identities',
+      () async {
+        final service = buildService(
+          tokens: const {
+            TrackingProvider.anilist: 'al-token',
+            TrackingProvider.myAnimeList: 'mal-token',
+            TrackingProvider.kitsu: 'kitsu-token',
+            TrackingProvider.simkl: 'simkl-token',
+          },
+          verifiedProfileLookup: (provider, _) async =>
+              '${provider.slug}-profile',
+        );
+        expect(
+          await service.syncWatching(anilistMediaId: 101, malMediaId: 202),
+          isTrue,
+        );
+        expect(anilistRepo.statuses, hasLength(1));
+        expect(malRepo.statuses, hasLength(1));
+        expect(anilistRepo.externalStatuses, hasLength(2));
+        for (final update in anilistRepo.externalStatuses) {
+          expect(update.ids.anilistId, 101);
+          expect(update.ids.malId, 202);
+          expect(update.status, TrackingListStatus.watching);
+        }
+        expect(anilistRepo.updates, isEmpty);
+        expect(anilistRepo.externalUpdates, isEmpty);
+      },
+    );
+
+    test(
+      'keeps a start row separate from queued completion progress',
+      () async {
+        anilistRepo.shouldFail = true;
+        final service = buildService();
+        await service.syncEpisode(completedEpisodes: 6, anilistMediaId: 101);
+        await service.syncWatching(anilistMediaId: 101);
+        await service.syncWatching(anilistMediaId: 101);
+        final rows = _readOutbox(storage);
+        expect(rows, hasLength(2));
+        expect(rows.where((row) => row['action'] == 'watching'), hasLength(1));
+        expect(
+          rows.singleWhere(
+            (row) => row['action'] == null,
+          )['completed_episodes'],
+          6,
+        );
+        anilistRepo.shouldFail = false;
+        await service.flush();
+        expect(anilistRepo.operations, ['watching', 'progress']);
+        expect(anilistRepo.updates.single.episodes, 6);
+        expect(_readOutbox(storage), isEmpty);
+      },
+    );
+
+    test('a failed start cannot arrive after completion progress', () async {
+      anilistRepo.statusShouldFail = true;
+      final service = buildService();
+      await service.syncWatching(anilistMediaId: 101);
+      await service.syncEpisode(completedEpisodes: 12, anilistMediaId: 101);
+      expect(anilistRepo.updates, isEmpty);
+      expect(_readOutbox(storage), hasLength(2));
+      anilistRepo.statusShouldFail = false;
+      await service.flush();
+      expect(anilistRepo.operations, ['watching', 'progress']);
+      expect(_readOutbox(storage), isEmpty);
+    });
+
+    test(
+      'one unavailable tracker does not stop another list being added',
+      () async {
+        anilistRepo.shouldFail = true;
+        final service = buildService();
+        expect(
+          await service.syncWatching(anilistMediaId: 101, malMediaId: 202),
+          isFalse,
+        );
+        expect(malRepo.statuses, hasLength(1));
+        expect(_readOutbox(storage), hasLength(1));
+        expect(_readOutbox(storage).single['provider'], 'anilist');
+        expect(_readOutbox(storage).single['action'], 'watching');
+      },
+    );
+
+    test(
+      'does not send an old start update to a newly selected account',
+      () async {
+        anilistRepo.shouldFail = true;
+        final original = buildService(
+          profiles: const {TrackingProvider.anilist: 'account-a'},
+        );
+        await original.syncWatching(anilistMediaId: 101);
+        original.dispose();
+        anilistRepo.shouldFail = false;
+        await buildService(
+          profiles: const {TrackingProvider.anilist: 'account-b'},
+        ).flush();
+        expect(anilistRepo.statuses, isEmpty);
+        expect(_readOutbox(storage).single['profile_id'], 'account-a');
+      },
+    );
+
+    test(
+      'external starts never use an unverified account or guessed title',
+      () async {
+        await buildService(
+          tokens: const {
+            TrackingProvider.kitsu: 'kitsu-token',
+            TrackingProvider.simkl: 'simkl-token',
+          },
+        ).syncWatching(anilistMediaId: 101);
+        expect(anilistRepo.externalStatuses, isEmpty);
+        expect(
+          _readOutbox(storage).where(
+            (row) => row['provider'] == 'kitsu' || row['provider'] == 'simkl',
+          ),
+          isEmpty,
+        );
+      },
+    );
+
+    test('unknown queued action cannot become a progress update', () async {
+      _writeOutbox(storage, [
+        {
+          'provider': 'anilist',
+          'media_id': 101,
+          'completed_episodes': 0,
+          'action': 'unexpected-action',
+        },
+      ]);
+      await buildService().flush();
+      expect(anilistRepo.statuses, isEmpty);
+      expect(anilistRepo.updates, isEmpty);
+    });
+
+    test('no catalog identity is a no-op', () async {
+      expect(await buildService().syncWatching(), isFalse);
+      expect(anilistRepo.statuses, isEmpty);
+      expect(malRepo.statuses, isEmpty);
+    });
   });
 
   group('syncEpisode', () {
@@ -258,6 +474,34 @@ void main() {
       expect(malRepo.updates.first.episodes, 5);
     });
 
+    test('refreshes tracking views after delivered progress', () async {
+      var refreshes = 0;
+      final service = buildService(onProgressDelivered: () => refreshes++);
+
+      expect(
+        await service.syncEpisode(completedEpisodes: 5, anilistMediaId: 101),
+        isTrue,
+      );
+      expect(refreshes, 1);
+    });
+
+    test('does not persist an update for an unreadable account slot', () async {
+      final service = _TestSyncService(
+        storage,
+        (_) async => 'token',
+        profileLookup: (_) async => throw StateError('storage unavailable'),
+        anilistRepo: anilistRepo,
+        malRepo: malRepo,
+      );
+
+      await expectLater(
+        service.syncEpisode(completedEpisodes: 5, anilistMediaId: 101),
+        throwsStateError,
+      );
+      expect(_readOutbox(storage), isEmpty);
+      expect(anilistRepo.updates, isEmpty);
+    });
+
     test('maps episode progress to a verified Kitsu account', () async {
       final synced = await buildService(
         tokens: const {
@@ -290,6 +534,40 @@ void main() {
       expect(_readOutbox(storage), hasLength(1));
       expect(_readOutbox(storage).single['provider'], 'anilist');
     });
+
+    test(
+      'diagnostics explain queued progress without exposing media IDs',
+      () async {
+        final statuses = <Map<String, Object?>>[];
+        final service = buildService(
+          tokens: const {
+            TrackingProvider.anilist: null,
+            TrackingProvider.myAnimeList: null,
+          },
+          statusRecorder: (details) async => statuses.add(details),
+        );
+
+        expect(
+          await service.syncEpisode(completedEpisodes: 4, anilistMediaId: 101),
+          isFalse,
+        );
+        expect(
+          statuses,
+          containsAll([
+            {'provider': 'anilist', 'stage': 'queued'},
+            {
+              'provider': 'anilist',
+              'stage': 'deferred',
+              'reason': 'token_missing',
+            },
+          ]),
+        );
+        expect(
+          statuses.every((details) => !details.containsKey('media_id')),
+          isTrue,
+        );
+      },
+    );
 
     test('queues progress when token lookup fails', () async {
       final service = _TestSyncService(
@@ -703,6 +981,137 @@ void main() {
       expect(_readOutbox(storage), hasLength(1));
       expect(timers.single.delay, const Duration(seconds: 5));
       service.dispose();
+    });
+  });
+
+  group('automatic Completed outbox', () {
+    for (final provider in TrackingProvider.values) {
+      test(
+        '${provider.name} delivers completion through verified IDs',
+        () async {
+          final repo = _CompletionRepo();
+          anilistRepo = repo;
+          malRepo = repo;
+          final service = buildService(
+            tokens: {provider: 'unused-token'},
+            profiles: {provider: 'profile'},
+            verifiedProfileLookup: (_, _) async => 'profile',
+          );
+          addTearDown(service.dispose);
+          await service.syncEpisode(
+            completedEpisodes: 12,
+            anilistMediaId: 101,
+            malMediaId: 202,
+          );
+          expect(repo.completionCalls, hasLength(1));
+          final ids = repo.completionCalls.single.ids;
+          if (provider == TrackingProvider.anilist) {
+            expect(ids.anilistId, 101);
+          } else if (provider == TrackingProvider.myAnimeList) {
+            expect(ids.malId, 202);
+          } else {
+            expect(ids.anilistId, 101);
+            expect(ids.malId, 202);
+          }
+          expect(repo.operations, ['progress', 'completed']);
+          expect(
+            _readOutbox(
+              storage,
+            ).where((row) => row['provider'] == provider.slug),
+            isEmpty,
+          );
+        },
+      );
+    }
+
+    test(
+      'failed Completed persists across restart without replaying Watching',
+      () async {
+        final repo = _CompletionRepo()..completionShouldFail = true;
+        anilistRepo = repo;
+        var refreshes = 0;
+        final service = buildService(
+          tokens: const {TrackingProvider.anilist: 'token'},
+          onProgressDelivered: () => refreshes++,
+        );
+        await service.syncWatching(anilistMediaId: 101);
+        expect(refreshes, 1);
+        await service.syncEpisode(completedEpisodes: 12, anilistMediaId: 101);
+        expect(_readOutbox(storage), hasLength(1));
+        expect(refreshes, 1);
+        service.dispose();
+        repo.completionShouldFail = false;
+        final restored = buildService(
+          tokens: const {TrackingProvider.anilist: 'token'},
+          onProgressDelivered: () => refreshes++,
+        );
+        addTearDown(restored.dispose);
+        await restored.flush();
+        expect(repo.operations, [
+          'watching',
+          'progress',
+          'progress',
+          'completed',
+        ]);
+        expect(_readOutbox(storage), isEmpty);
+        expect(refreshes, 2);
+      },
+    );
+
+    test('failed Watching defers Completed until Watching succeeds', () async {
+      final repo = _CompletionRepo()..statusShouldFail = true;
+      anilistRepo = repo;
+      final service = buildService(
+        tokens: const {TrackingProvider.anilist: 'token'},
+      );
+      addTearDown(service.dispose);
+      await service.syncWatching(anilistMediaId: 101);
+      await service.syncEpisode(completedEpisodes: 12, anilistMediaId: 101);
+      expect(repo.completionCalls, isEmpty);
+      expect(_readOutbox(storage), hasLength(2));
+      repo.statusShouldFail = false;
+      await service.flush();
+      expect(repo.operations, ['watching', 'progress', 'completed']);
+      expect(_readOutbox(storage), isEmpty);
+    });
+
+    test(
+      'another linked tracker still completes if one tracker fails',
+      () async {
+        final failed = _CompletionRepo()..completionShouldFail = true;
+        final successful = _CompletionRepo();
+        anilistRepo = failed;
+        malRepo = successful;
+        final service = buildService();
+        addTearDown(service.dispose);
+        await service.syncEpisode(
+          completedEpisodes: 12,
+          anilistMediaId: 101,
+          malMediaId: 202,
+        );
+        expect(successful.operations, ['progress', 'completed']);
+        expect(_readOutbox(storage).single['provider'], 'anilist');
+      },
+    );
+
+    test('pending completion cannot cross into another account', () async {
+      final repo = _CompletionRepo();
+      anilistRepo = repo;
+      _writeOutbox(storage, [
+        {
+          'provider': 'anilist',
+          'profile_id': 'original',
+          'media_id': 101,
+          'completed_episodes': 12,
+        },
+      ]);
+      final service = buildService(
+        profiles: const {TrackingProvider.anilist: 'replacement'},
+      );
+      addTearDown(service.dispose);
+      await service.flush();
+      expect(repo.completionCalls, isEmpty);
+      expect(_readOutbox(storage), hasLength(1));
     });
   });
 

@@ -252,6 +252,10 @@ void main() {
       void expectMetrics(HomeNavigationRailMetrics expected) {
         final rail = find.byKey(const ValueKey('main-navigation'));
         final wordmark = find.byKey(const ValueKey('main-nav-wordmark'));
+        final logo = find.descendant(
+          of: wordmark,
+          matching: find.byType(Image),
+        );
         final activeAction = find.byKey(const ValueKey('main-nav-discover'));
         final contentRegion = tester.widget<Positioned>(
           find.byKey(const ValueKey('top-level-tv-content-region')),
@@ -261,7 +265,7 @@ void main() {
         );
 
         expect(tester.getSize(rail).width, expected.width);
-        expect(tester.getSize(wordmark), Size.square(expected.logoSize));
+        expect(tester.getSize(logo), Size.square(expected.logoSize));
         expect(tester.getSize(activeAction).height, expected.actionHeight);
         expect(icon.size, expected.iconSize);
         expect(contentRegion.left, expected.width);
@@ -275,7 +279,7 @@ void main() {
       expectMetrics(small);
 
       await settings.setNavigationChromeSize(NavigationChromeSize.large);
-      await tester.pump();
+      await tester.pumpAndSettle();
 
       final large = phoneLandscapeNavigationRailMetrics(
         NavigationChromeSize.large,

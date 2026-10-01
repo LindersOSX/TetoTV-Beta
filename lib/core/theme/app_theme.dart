@@ -1,4 +1,6 @@
 import 'package:anime_tv/core/theme/app_theme_palette.dart';
+import 'package:anime_tv/core/theme/teto_box_style.dart';
+import 'package:anime_tv/core/theme/teto_ui_tokens.dart';
 import 'package:flutter/material.dart';
 
 export 'package:anime_tv/core/theme/app_theme_palette.dart';
@@ -50,21 +52,37 @@ abstract final class AppTheme {
     );
 
     return ThemeData(
+      pageTransitionsTheme: const PageTransitionsTheme(
+        builders: {
+          TargetPlatform.android: TetoFadePageTransitionsBuilder(),
+          TargetPlatform.iOS: TetoFadePageTransitionsBuilder(),
+          TargetPlatform.macOS: TetoFadePageTransitionsBuilder(),
+          TargetPlatform.windows: TetoFadePageTransitionsBuilder(),
+          TargetPlatform.linux: TetoFadePageTransitionsBuilder(),
+          TargetPlatform.fuchsia: TetoFadePageTransitionsBuilder(),
+        },
+      ),
       fontFamilyFallback: const ['TetoDevanagari'],
       brightness: Brightness.dark,
       scaffoldBackgroundColor: palette.background,
       canvasColor: palette.background,
       cardColor: palette.surface,
-      dialogTheme: DialogThemeData(backgroundColor: palette.surface),
+      dialogTheme: DialogThemeData(
+        backgroundColor: TetoBoxStyle.fill(palette),
+        surfaceTintColor: Colors.transparent,
+        shape: TetoBoxStyle.shape(palette),
+      ),
+      cardTheme: CardThemeData(
+        color: TetoBoxStyle.fill(palette),
+        surfaceTintColor: Colors.transparent,
+        shape: TetoBoxStyle.shape(palette),
+      ),
       popupMenuTheme: PopupMenuThemeData(
-        color: palette.surface,
+        color: TetoBoxStyle.fill(palette),
         surfaceTintColor: Colors.transparent,
         shadowColor: Colors.black.withValues(alpha: .72),
         elevation: 14,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(14),
-          side: BorderSide(color: palette.accent.withValues(alpha: .70)),
-        ),
+        shape: TetoBoxStyle.shape(palette),
         textStyle: TextStyle(
           color: palette.primaryText,
           fontWeight: FontWeight.w800,
@@ -72,7 +90,7 @@ abstract final class AppTheme {
       ),
       snackBarTheme: SnackBarThemeData(
         behavior: SnackBarBehavior.floating,
-        backgroundColor: palette.surfaceRaised,
+        backgroundColor: TetoBoxStyle.fill(palette),
         actionTextColor: palette.accentBright,
         disabledActionTextColor: palette.mutedText,
         elevation: 12,
@@ -80,14 +98,12 @@ abstract final class AppTheme {
         // regular app label typography so notifications do not look like a
         // separate system UI layered over the app.
         contentTextStyle: appLabelStyle,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
-          side: BorderSide(color: palette.accent.withValues(alpha: .64)),
-        ),
+        shape: TetoBoxStyle.shape(palette),
       ),
       bottomSheetTheme: BottomSheetThemeData(
-        backgroundColor: palette.surface,
-        modalBackgroundColor: palette.surface,
+        backgroundColor: TetoBoxStyle.fill(palette),
+        modalBackgroundColor: TetoBoxStyle.fill(palette),
+        shape: TetoBoxStyle.shape(palette),
       ),
       navigationBarTheme: NavigationBarThemeData(
         backgroundColor: palette.surface,
@@ -162,39 +178,45 @@ abstract final class AppTheme {
       ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
-        fillColor: palette.surfaceRaised,
+        fillColor: TetoBoxStyle.fill(palette),
         labelStyle: TextStyle(color: palette.mutedText),
         hintStyle: TextStyle(color: palette.mutedText),
         enabledBorder: OutlineInputBorder(
-          borderSide: BorderSide(
-            color: palette.primaryText.withValues(alpha: .12),
-          ),
+          borderRadius: BorderRadius.circular(TetoBoxStyle.radius),
+          borderSide: BorderSide(color: TetoBoxStyle.outline(palette)),
         ),
         focusedBorder: OutlineInputBorder(
-          borderSide: BorderSide(color: palette.focusRing, width: 2),
+          borderRadius: BorderRadius.circular(TetoBoxStyle.radius),
+          borderSide: BorderSide(
+            color: TetoBoxStyle.outline(palette, focused: true),
+            width: 2,
+          ),
         ),
       ),
       outlinedButtonTheme: OutlinedButtonThemeData(
         style: ButtonStyle(
+          shape: WidgetStatePropertyAll(TetoBoxStyle.shape(palette)),
           foregroundColor: WidgetStatePropertyAll(palette.primaryText),
-          backgroundColor: WidgetStateProperty.resolveWith(
-            (states) =>
-                states.contains(WidgetState.hovered) ||
-                    states.contains(WidgetState.focused)
-                ? palette.selectableSurfaceHover
-                : palette.selectableSurface,
-          ),
+          backgroundColor: WidgetStatePropertyAll(TetoBoxStyle.fill(palette)),
           side: WidgetStateProperty.resolveWith(
             (states) =>
                 states.contains(WidgetState.hovered) ||
                     states.contains(WidgetState.focused)
-                ? BorderSide(color: palette.focusRing, width: 2)
-                : BorderSide(color: palette.accent.withValues(alpha: .42)),
+                ? BorderSide(
+                    color: TetoBoxStyle.outline(palette, focused: true),
+                    width: 2,
+                  )
+                : BorderSide(color: TetoBoxStyle.outline(palette)),
           ),
         ),
       ),
       filledButtonTheme: FilledButtonThemeData(
         style: ButtonStyle(
+          shape: WidgetStatePropertyAll(
+            RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(TetoBoxStyle.radius),
+            ),
+          ),
           backgroundColor: WidgetStatePropertyAll(palette.accent),
           foregroundColor: WidgetStatePropertyAll(accentForeground),
           overlayColor: WidgetStateProperty.resolveWith(
@@ -216,14 +238,20 @@ abstract final class AppTheme {
       switchTheme: SwitchThemeData(
         thumbColor: WidgetStateProperty.resolveWith(
           (states) => states.contains(WidgetState.selected)
-              ? accentForeground
+              ? contrastForeground(palette.accentBright)
               : palette.mutedText,
         ),
         trackColor: WidgetStateProperty.resolveWith(
           (states) => states.contains(WidgetState.selected)
-              ? palette.accent
+              ? palette.accentBright
               : palette.surfaceRaised,
         ),
+        trackOutlineColor: WidgetStateProperty.resolveWith(
+          (states) => states.contains(WidgetState.selected)
+              ? palette.accentBright
+              : palette.primaryText.withValues(alpha: .18),
+        ),
+        trackOutlineWidth: const WidgetStatePropertyAll(1),
       ),
     );
   }

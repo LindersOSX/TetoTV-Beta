@@ -157,7 +157,7 @@ void main() {
       localState: const LocalMediaState(loaded: true),
     );
 
-    expect(find.text('Back'), findsOneWidget);
+    expect(find.byIcon(Icons.arrow_back_rounded), findsOneWidget);
     expect(
       FocusManager.instance.primaryFocus?.debugLabel,
       'local-media.unified-search',

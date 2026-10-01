@@ -400,6 +400,109 @@ void main() {
     });
 
     test(
+      'load dismisses announcements at seven days but never updates',
+      () async {
+        final cutoff = clock.subtract(appAnnouncementInboxLifetime);
+        final expired = _announcement('a', cutoff);
+        final older = _announcement(
+          'b',
+          cutoff.subtract(const Duration(days: 2)),
+        );
+        final almostExpired = _announcement(
+          'c',
+          cutoff.add(const Duration(milliseconds: 1)),
+        );
+        final future = _announcement('d', clock.add(const Duration(days: 1)));
+        final update = _notice(
+          createdAt: cutoff.subtract(const Duration(days: 60)),
+        );
+        for (final item in [expired, older, almostExpired, future, update]) {
+          await store.upsert(item);
+        }
+
+        await controller.load();
+
+        expect(controller.state.unreadCount, 3);
+        expect(
+          controller.state.inboxItems.map((item) => item.id),
+          containsAll([almostExpired.id, future.id, update.id]),
+        );
+        final stored = {for (final item in await store.load()) item.id: item};
+        expect(stored[expired.id]!.readAtUtc, clock);
+        expect(stored[older.id]!.readAtUtc, clock);
+        expect(stored[update.id]!.isRead, isFalse);
+        expect(stored[almostExpired.id]!.isRead, isFalse);
+      },
+    );
+
+    test(
+      'expired dismissal survives restart and device clock correction',
+      () async {
+        final expired = _announcement(
+          'a',
+          clock.subtract(appAnnouncementInboxLifetime),
+        );
+        await store.upsert(expired);
+        await controller.load();
+        expect(controller.state.inboxItems, isEmpty);
+
+        final restored = AppNotificationController(
+          store,
+          clock: () => clock.subtract(const Duration(days: 3)),
+        );
+        addTearDown(restored.dispose);
+        await restored.load();
+        expect(restored.state.inboxItems, isEmpty);
+        expect(restored.state.items.single.readAtUtc, clock);
+      },
+    );
+
+    test('refresh cannot revive expired notices or reset their age', () async {
+      final createdAt = clock.subtract(appAnnouncementInboxLifetime);
+      final expired = _announcement('a', createdAt);
+      await store.upsert(expired);
+      await controller.load();
+      final remoteController = AppNotificationController(
+        store,
+        announcementApi: _StaticAnnouncementApi([
+          _announcement('a', clock.add(const Duration(days: 1))),
+          _announcement('b', createdAt),
+        ]),
+        clock: () => clock,
+      );
+      addTearDown(remoteController.dispose);
+
+      await remoteController.refreshAnnouncements();
+      expect(remoteController.state.inboxItems, isEmpty);
+      expect(remoteController.state.unreadCount, 0);
+      expect(
+        remoteController.state.items
+            .firstWhere((item) => item.id == expired.id)
+            .createdAtUtc,
+        createdAt,
+      );
+      await remoteController.refreshAnnouncements();
+      expect(remoteController.state.items.every((item) => item.isRead), isTrue);
+    });
+
+    test(
+      'automatic expiry preserves the original manual dismissal time',
+      () async {
+        final notice = _announcement(
+          'a',
+          clock.subtract(const Duration(days: 30)),
+        );
+        final dismissedAt = clock.subtract(const Duration(days: 29));
+        await store.upsert(notice);
+        await store.markRead(notice.id, dismissedAt);
+
+        await controller.load();
+        expect(controller.state.items.single.readAtUtc, dismissedAt);
+        expect(controller.state.inboxItems, isEmpty);
+      },
+    );
+
+    test(
       'remote announcements persist, deduplicate, and retain read state',
       () async {
         final announcement = AppNotification(
@@ -565,6 +668,16 @@ void main() {
     );
   });
 }
+
+AppNotification _announcement(String hashCharacter, DateTime createdAt) =>
+    AppNotification(
+      id: 'app-announcement:${List.filled(64, hashCharacter).join()}',
+      kind: AppNotificationKind.announcement,
+      title: 'TetoTV announcement',
+      body: 'A general announcement.',
+      action: AppNotificationAction.none,
+      createdAtUtc: createdAt,
+    );
 
 AppNotification _notice({
   String id = 'app-update:beta:410042',

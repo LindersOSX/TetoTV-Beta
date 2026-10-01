@@ -9,6 +9,88 @@ import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('host starts only after every connected guest is ready', () {
+    expect(
+      watchPartyAllGuestsReady(participantCount: 0, readyCount: 0),
+      isFalse,
+    );
+    expect(
+      watchPartyAllGuestsReady(participantCount: 1, readyCount: 0),
+      isFalse,
+    );
+    expect(
+      watchPartyAllGuestsReady(participantCount: 2, readyCount: 1),
+      isFalse,
+    );
+    expect(
+      watchPartyAllGuestsReady(participantCount: 2, readyCount: 2),
+      isTrue,
+    );
+  });
+
+  test(
+    'host player waits for a loaded guest and pauses for a new guest',
+    () async {
+      final client = _FakeWatchPartyClient()
+        ..hostSnapshot = _snapshot(
+          role: WatchPartyRole.host,
+          participantCount: 0,
+          readyCount: 0,
+        );
+      final controller = WatchPartyController(client);
+      addTearDown(controller.dispose);
+      expect(await controller.create(), isTrue);
+      final port = _FakePlaybackPort();
+      addTearDown(port.dispose);
+      await controller.attachPlayback(port: port, media: _media);
+
+      void publishAt(int seconds, {bool playing = false}) => port.emit(
+        WatchPartyPlaybackSample(
+          media: _media,
+          position: Duration(seconds: seconds),
+          duration: const Duration(minutes: 24),
+          playing: playing,
+          ready: true,
+          sampledAt: DateTime.now().toUtc(),
+        ),
+      );
+
+      publishAt(1);
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+      expect(port.playCalls, 0);
+
+      client.hostSnapshot = _snapshot(
+        role: WatchPartyRole.host,
+        participantCount: 1,
+        readyCount: 0,
+        media: _media,
+      );
+      publishAt(10);
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+      expect(port.playCalls, 0);
+
+      client.hostSnapshot = _snapshot(
+        role: WatchPartyRole.host,
+        participantCount: 1,
+        readyCount: 1,
+        media: _media,
+      );
+      publishAt(20);
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+      expect(port.playCalls, 1);
+
+      client.hostSnapshot = _snapshot(
+        role: WatchPartyRole.host,
+        participantCount: 2,
+        readyCount: 1,
+        media: _media,
+      );
+      publishAt(30, playing: true);
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+      expect(port.pauseCalls, greaterThan(0));
+    },
+  );
+
   test('room codes normalize separators but accept only digits 2-9', () {
     expect(normalizeWatchPartyCode('2345-6789'), '23456789');
     expect(normalizeWatchPartyCode(' 2345 6789 '), '23456789');
@@ -21,6 +103,63 @@ void main() {
       ),
       'Enter the eight-digit room code using numbers 2-9 only.',
     );
+  });
+
+  testWidgets('removing the last guest does not stop an already started host', (
+    tester,
+  ) async {
+    const guest = WatchPartyParticipant(
+      displayName: 'Guest Viewer',
+      participantId: 'abcdefghijklmnop',
+      role: WatchPartyRole.guest,
+      ready: true,
+    );
+    final client = _FakeWatchPartyClient()
+      ..hostSnapshot = _snapshot(
+        role: WatchPartyRole.host,
+        rosterRevision: 1,
+        media: _media,
+        participants: const [guest],
+      );
+    final controller = WatchPartyController(client);
+    final port = _FakePlaybackPort();
+    try {
+      expect(await controller.create(), isTrue);
+      await controller.attachPlayback(port: port, media: _media);
+      port.emit(_readySample(media: _media));
+      await tester.pump();
+      expect(port.playCalls, 1);
+      port.emit(
+        WatchPartyPlaybackSample(
+          media: _media,
+          position: const Duration(seconds: 4),
+          duration: const Duration(minutes: 24),
+          playing: true,
+          ready: true,
+          sampledAt: DateTime.now().toUtc(),
+        ),
+      );
+      await tester.pump();
+      final pauseCalls = port.pauseCalls;
+      client.hostSnapshot = _snapshot(
+        role: WatchPartyRole.host,
+        revision: 3,
+        rosterRevision: 2,
+        media: _media,
+        playing: true,
+        participantCount: 0,
+        readyCount: 0,
+      );
+      expect(await controller.kick(guest), isTrue);
+      await tester.pump();
+      expect(port.pauseCalls, pauseCalls);
+      expect(controller.state.snapshot?.participantCount, 0);
+      expect(controller.state.isHost, isTrue);
+      expect(controller.state.membershipActionInFlight, isFalse);
+    } finally {
+      controller.dispose();
+      port.dispose();
+    }
   });
 
   test('an invalid join code does not end the active room', () async {
@@ -616,6 +755,168 @@ void main() {
     expect(controller.state.session?.role, WatchPartyRole.guest);
     expect(controller.state.snapshot?.rosterRevision, 2);
   });
+
+  testWidgets(
+    'transferred host can remove the old host without pausing active playback',
+    (tester) async {
+      const originalHost = WatchPartyParticipant(
+        displayName: 'Original Host',
+        participantId: 'hosthosthosthost',
+        role: WatchPartyRole.host,
+        ready: true,
+      );
+      const originalAsGuest = WatchPartyParticipant(
+        displayName: 'Original Host',
+        participantId: 'hosthosthosthost',
+        role: WatchPartyRole.guest,
+        ready: true,
+      );
+      const newHostAsGuest = WatchPartyParticipant(
+        displayName: 'New Host',
+        participantId: 'guestguestguestg',
+        role: WatchPartyRole.guest,
+        ready: true,
+      );
+      const newHost = WatchPartyParticipant(
+        displayName: 'New Host',
+        participantId: 'guestguestguestg',
+        role: WatchPartyRole.host,
+        ready: true,
+      );
+      final originalClient = _FakeWatchPartyClient()
+        ..hostSnapshot = _snapshot(
+          role: WatchPartyRole.host,
+          revision: 4,
+          rosterRevision: 1,
+          media: _media,
+          playing: true,
+          position: const Duration(seconds: 50),
+          participants: const [originalHost, newHostAsGuest],
+        );
+      final newClient = _FakeWatchPartyClient()
+        ..joinSnapshot = _snapshot(
+          role: WatchPartyRole.guest,
+          revision: 4,
+          rosterRevision: 1,
+          media: _media,
+          playing: true,
+          position: const Duration(seconds: 50),
+          participants: const [originalHost, newHostAsGuest],
+        );
+      final original = WatchPartyController(originalClient);
+      final promoted = WatchPartyController(newClient);
+      final originalPort = _FakePlaybackPort();
+      final promotedPort = _FakePlaybackPort();
+      WatchPartyPlaybackSample sample({bool playing = true}) =>
+          WatchPartyPlaybackSample(
+            media: _media,
+            position: const Duration(seconds: 50),
+            duration: const Duration(minutes: 24),
+            playing: playing,
+            ready: true,
+            sampledAt: DateTime.now().toUtc(),
+          );
+      try {
+        expect(await original.create(), isTrue);
+        expect(await promoted.join('23456789'), isTrue);
+        await original.attachPlayback(port: originalPort, media: _media);
+        await promoted.attachPlayback(port: promotedPort, media: _media);
+        originalPort.emit(sample());
+        promotedPort.emit(sample());
+        await tester.pump();
+
+        originalClient.joinSnapshot = _snapshot(
+          role: WatchPartyRole.guest,
+          revision: 6,
+          rosterRevision: 2,
+          media: _media,
+          playing: true,
+          position: const Duration(seconds: 50),
+          participants: const [newHost, originalAsGuest],
+        );
+        newClient.joinSnapshot = _snapshot(
+          role: WatchPartyRole.host,
+          revision: 6,
+          rosterRevision: 2,
+          media: _media,
+          playing: true,
+          position: const Duration(seconds: 50),
+          participants: const [newHost, originalAsGuest],
+        );
+        newClient.hostSnapshot = newClient.joinSnapshot;
+        expect(await original.transferHost(newHostAsGuest), isTrue);
+        await tester.pump(const Duration(milliseconds: 1200));
+        await tester.pump();
+        expect(promoted.state.isHost, isTrue);
+        expect(promoted.state.guestPlaybackControlsLocked, isFalse);
+
+        final pauseCalls = promotedPort.pauseCalls;
+        newClient.hostSnapshot = _snapshot(
+          role: WatchPartyRole.host,
+          revision: 8,
+          rosterRevision: 3,
+          media: _media,
+          playing: true,
+          position: const Duration(seconds: 50),
+          participantCount: 0,
+          readyCount: 0,
+          participants: const [newHost],
+        );
+        expect(await promoted.kick(originalAsGuest), isTrue);
+        promotedPort.emit(sample());
+        await tester.pump();
+        expect(promotedPort.pauseCalls, pauseCalls);
+        expect(promoted.state.isHost, isTrue);
+        expect(promoted.state.membershipActionInFlight, isFalse);
+
+        originalClient.snapshotError = const WatchPartyClientException(
+          'removed_from_party',
+        );
+        await tester.pump(const Duration(milliseconds: 1200));
+        await tester.pump();
+        expect(original.state.isActive, isFalse);
+        expect(original.state.guestPlaybackControlsLocked, isFalse);
+
+        // Promotion must also make the existing player obey the host gate.
+        // Wait for a newly joining viewer, but recover when that viewer leaves.
+        newClient.hostSnapshot = _snapshot(
+          role: WatchPartyRole.host,
+          revision: 10,
+          rosterRevision: 4,
+          media: _media,
+          playing: true,
+          position: const Duration(seconds: 50),
+          participantCount: 1,
+          readyCount: 0,
+        );
+        await tester.pump(const Duration(milliseconds: 1200));
+        await tester.pump();
+        expect(promotedPort.pauseCalls, greaterThan(pauseCalls));
+        promotedPort.emit(sample(playing: false));
+        await tester.pump();
+        final playCalls = promotedPort.playCalls;
+        newClient.hostSnapshot = _snapshot(
+          role: WatchPartyRole.host,
+          revision: 12,
+          rosterRevision: 5,
+          media: _media,
+          playing: false,
+          position: const Duration(seconds: 50),
+          participantCount: 0,
+          readyCount: 0,
+        );
+        await tester.pump(const Duration(milliseconds: 1200));
+        await tester.pump();
+        expect(promotedPort.playCalls, greaterThan(playCalls));
+        expect(promoted.state.connection, WatchPartyConnection.connected);
+      } finally {
+        original.dispose();
+        promoted.dispose();
+        originalPort.dispose();
+        promotedPort.dispose();
+      }
+    },
+  );
 
   test(
     'host kick is roster-revision guarded and surfaces the kicked notice',
@@ -2030,55 +2331,74 @@ void main() {
     }
   });
 
-  test(
-    'promotion during an in-flight guest seek cannot issue stale play',
-    () async {
-      final client = _FakeWatchPartyClient()
-        ..joinSnapshot = _snapshot(
-          role: WatchPartyRole.guest,
-          revision: 10,
-          playing: true,
-          position: const Duration(seconds: 50),
-          media: _media,
-        );
-      final controller = WatchPartyController(client);
-      addTearDown(controller.dispose);
-      expect(await controller.join('23456789'), isTrue);
-      final seekGate = Completer<void>();
-      final port = _FakePlaybackPort()..seekGate = seekGate;
-      addTearDown(port.dispose);
-      await controller.attachPlayback(port: port, media: _media);
-
-      port.emit(
-        WatchPartyPlaybackSample(
-          media: _media,
-          position: const Duration(seconds: 4),
-          duration: const Duration(minutes: 24),
-          playing: false,
-          ready: true,
-          sampledAt: DateTime.now().toUtc(),
-        ),
-      );
-      await Future<void>.delayed(const Duration(milliseconds: 20));
-      expect(port.seekTargets, hasLength(1));
-
-      client.joinSnapshot = _snapshot(
-        role: WatchPartyRole.host,
+  test('promotion and kick cannot overlap an in-flight guest seek', () async {
+    const oldHost = WatchPartyParticipant(
+      displayName: 'Original Host',
+      participantId: 'hosthosthosthost',
+      role: WatchPartyRole.guest,
+      ready: true,
+    );
+    final client = _FakeWatchPartyClient()
+      ..joinSnapshot = _snapshot(
+        role: WatchPartyRole.guest,
         revision: 10,
         playing: true,
         position: const Duration(seconds: 50),
         media: _media,
       );
-      await Future<void>.delayed(const Duration(milliseconds: 1250));
-      expect(controller.state.isHost, isTrue);
+    final controller = WatchPartyController(client);
+    addTearDown(controller.dispose);
+    expect(await controller.join('23456789'), isTrue);
+    final seekGate = Completer<void>();
+    final port = _FakePlaybackPort()..seekGate = seekGate;
+    addTearDown(port.dispose);
+    await controller.attachPlayback(port: port, media: _media);
 
-      seekGate.complete();
-      await Future<void>.delayed(const Duration(milliseconds: 30));
+    port.emit(
+      WatchPartyPlaybackSample(
+        media: _media,
+        position: const Duration(seconds: 4),
+        duration: const Duration(minutes: 24),
+        playing: false,
+        ready: true,
+        sampledAt: DateTime.now().toUtc(),
+      ),
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(port.seekTargets, hasLength(1));
 
-      expect(port.playCalls, 0);
-      expect(port.pauseCalls, 0);
-    },
-  );
+    client.joinSnapshot = _snapshot(
+      role: WatchPartyRole.host,
+      revision: 10,
+      playing: true,
+      position: const Duration(seconds: 50),
+      media: _media,
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 1250));
+    expect(controller.state.isHost, isTrue);
+
+    client.hostSnapshot = _snapshot(
+      role: WatchPartyRole.host,
+      revision: 12,
+      rosterRevision: 2,
+      playing: true,
+      position: const Duration(seconds: 50),
+      media: _media,
+      participantCount: 0,
+      readyCount: 0,
+    );
+    expect(await controller.kick(oldHost), isTrue);
+    expect(controller.state.membershipActionInFlight, isFalse);
+    expect(port.seekTargets, hasLength(1));
+    expect(port.playCalls, 0);
+    expect(port.pauseCalls, 0);
+
+    seekGate.complete();
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+
+    expect(port.playCalls, 0);
+    expect(port.pauseCalls, 0);
+  });
 
   test(
     'guest playback command failures are nonfatal and retry later',
@@ -2331,6 +2651,8 @@ WatchPartySnapshot _snapshot({
   int rosterRevision = 0,
   List<WatchPartyParticipant> participants = const [],
   List<WatchPartyEvent> events = const [],
+  int participantCount = 1,
+  int readyCount = 1,
 }) => WatchPartySnapshot(
   roomCode: '23456789',
   role: role,
@@ -2342,8 +2664,8 @@ WatchPartySnapshot _snapshot({
   effectiveAt: effectiveAt ?? DateTime.now().toUtc(),
   serverTime: serverTime ?? DateTime.now().toUtc(),
   receivedAt: receivedAt,
-  participantCount: 1,
-  readyCount: 1,
+  participantCount: participantCount,
+  readyCount: readyCount,
   rosterRevision: rosterRevision,
   participants: participants,
   events: events,
@@ -2496,6 +2818,11 @@ class _FakeWatchPartyClient extends WatchPartyClient {
       playing: playing,
       position: position,
       media: media,
+      participantCount: hostSnapshot.participantCount,
+      readyCount: hostSnapshot.readyCount,
+      rosterRevision: hostSnapshot.rosterRevision,
+      participants: hostSnapshot.participants,
+      events: hostSnapshot.events,
     );
   }
 

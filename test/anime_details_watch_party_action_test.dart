@@ -275,11 +275,19 @@ void main() {
     );
     expect(nextEpisodeDetector.focusNode?.hasFocus, isTrue);
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('episode-browser-page')), findsOneWidget);
     await tester.binding.handlePopRoute();
     await tester.pumpAndSettle();
-    expect(nextEpisodeDetector.focusNode?.hasFocus, isTrue);
+    final selectorDetector = tester.widget<FocusableActionDetector>(
+      find.descendant(
+        of: find.byKey(const ValueKey('episode-manual-selector')),
+        matching: find.byType(FocusableActionDetector),
+      ),
+    );
+    expect(selectorDetector.focusNode?.hasFocus, isTrue);
     expect(
       find.descendant(
         of: find.byKey(const ValueKey('episode-actions-panel')),
@@ -287,9 +295,11 @@ void main() {
       ),
       findsNothing,
     );
+    await tester.tap(find.byKey(const ValueKey('anime-details-more')));
+    await tester.pumpAndSettle();
     expect(
       find.descendant(
-        of: find.byKey(const ValueKey('anime-details-information-actions')),
+        of: find.byKey(const ValueKey('anime-details-more-menu')),
         matching: find.byKey(const ValueKey('anime-details-download-season')),
       ),
       findsOneWidget,
@@ -320,7 +330,7 @@ void main() {
       expect(find.text('23456789'), findsOneWidget);
       expect(find.text('Watch Party Romaji Title • Episode 4'), findsOneWidget);
       expect(find.text('Watch Party Details Test • Episode 4'), findsNothing);
-      expect(find.text('4 of 12'), findsOneWidget);
+      expect(find.text('Episode 4 of 12'), findsOneWidget);
       expect(find.byKey(const ValueKey('episode-action-resume')), findsNothing);
       expect(
         find.byKey(const ValueKey('episode-action-restart')),

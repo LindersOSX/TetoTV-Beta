@@ -1,3 +1,4 @@
+import 'package:anime_tv/core/widgets/teto_dialog.dart';
 import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'dart:async';
 
@@ -9,6 +10,8 @@ import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
+import 'package:anime_tv/core/widgets/teto_back_button.dart';
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
@@ -49,6 +52,7 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
             (values[3] as LocalCrashSummaryHistory).droppedOutsideWindow,
         sourceDroppedForCapacity:
             (values[3] as LocalCrashSummaryHistory).droppedForCapacity,
+        sourceExitHistory: (values[3] as LocalCrashSummaryHistory).exitHistory,
       ),
       isTelevision: values[4] as bool,
     );
@@ -66,12 +70,7 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
         children: [
           Row(
             children: [
-              _DiagnosticsAction(
-                label: 'Back',
-                icon: Icons.arrow_back_rounded,
-                autofocus: true,
-                onPressed: context.pop,
-              ),
+              TetoBackButton(autofocus: true, onPressed: context.pop),
               const SizedBox(width: 16),
               Expanded(
                 child: LocalizedText(
@@ -106,7 +105,7 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
                     ),
                   );
                 }
-                return _DiagnosticsBody(data: data);
+                return _DiagnosticsBody(data: data, onShareFinished: _refresh);
               },
             ),
           ),
@@ -117,9 +116,10 @@ class _DiagnosticsScreenState extends State<DiagnosticsScreen> {
 }
 
 class _DiagnosticsBody extends StatelessWidget {
-  const _DiagnosticsBody({required this.data});
+  const _DiagnosticsBody({required this.data, required this.onShareFinished});
 
   final _DiagnosticsViewData data;
+  final VoidCallback onShareFinished;
 
   @override
   Widget build(BuildContext context) {
@@ -169,7 +169,15 @@ class _DiagnosticsBody extends StatelessWidget {
                 spacing: 9,
                 runSpacing: 9,
                 children: [
-                  _SendDiagnosticsAction(data: data),
+                  DiagnosticsSendAction(
+                    onDeliveryFinished: onShareFinished,
+                    reportBuilder: () => ExplicitDiagnosticsReport.fromSnapshot(
+                      version: data.version,
+                      profile: data.profile,
+                      isTelevision: data.isTelevision,
+                      diagnostics: data.database,
+                    ),
+                  ),
                   _DiagnosticsAction(
                     label: 'Copy full report',
                     icon: Icons.copy_rounded,
@@ -667,21 +675,147 @@ String _timestampLabel(Object? value) {
   return '${timestamp.month}/${timestamp.day} $hour:$minute $period';
 }
 
-class _SendDiagnosticsAction extends StatefulWidget {
-  const _SendDiagnosticsAction({required this.data});
+typedef DiagnosticsClientFactory =
+    ExplicitDiagnosticsReportApi Function(CancelToken cancellation);
+typedef DiagnosticsShareEventSink =
+    Future<void> Function(Map<String, Object?> details);
 
-  final _DiagnosticsViewData data;
+/// Explicit, consent-gated sharing with a cancellable busy state. The factory
+/// and sink also let tests exercise failures without uploading real reports.
+class DiagnosticsSendAction extends StatefulWidget {
+  const DiagnosticsSendAction({
+    super.key,
+    required this.reportBuilder,
+    this.clientFactory,
+    this.eventSink,
+    this.onDeliveryFinished,
+  });
+
+  final ExplicitDiagnosticsReport Function() reportBuilder;
+  final DiagnosticsClientFactory? clientFactory;
+  final DiagnosticsShareEventSink? eventSink;
+  final VoidCallback? onDeliveryFinished;
 
   @override
-  State<_SendDiagnosticsAction> createState() => _SendDiagnosticsActionState();
+  State<DiagnosticsSendAction> createState() => _DiagnosticsSendActionState();
 }
 
-class _SendDiagnosticsActionState extends State<_SendDiagnosticsAction> {
+class _DiagnosticsSendActionState extends State<DiagnosticsSendAction> {
   bool _sending = false;
+  bool _confirming = false;
+  CancelToken? _cancellation;
+
+  void _record(String outcome, Stopwatch elapsed, {String? reason}) {
+    final details = <String, Object?>{
+      'operation': 'explicit_support_share',
+      'outcome': outcome,
+      'elapsed_ms': elapsed.elapsedMilliseconds,
+      'reason_code': ?reason,
+    };
+    // Storage must never delay the button becoming usable again. This closed
+    // context contains no report body, identities, URLs, or confirmation ID.
+    try {
+      final sink = widget.eventSink;
+      final recorded = sink != null
+          ? sink(details)
+          : TetoTvDatabase.instance.recordDiagnosticEvent(
+              category: 'diagnostic-share',
+              message: 'Explicit support report delivery',
+              details: details,
+            );
+      unawaited(
+        recorded.timeout(const Duration(seconds: 1)).catchError((_) {}).then((
+          _,
+        ) {
+          // A copied report should include the just-recorded result, not the
+          // stale snapshot from before the user pressed Send.
+          if (outcome != 'started' && mounted) {
+            widget.onDeliveryFinished?.call();
+          }
+        }),
+      );
+    } catch (_) {
+      // A diagnostic logger cannot interfere with sharing or cancellation.
+    }
+  }
+
+  @override
+  void dispose() {
+    _cancellation?.cancel();
+    super.dispose();
+  }
 
   Future<void> _send() async {
-    if (_sending) return;
-    final confirmed = await showDialog<bool>(
+    if (_sending) {
+      _cancellation?.cancel();
+      return;
+    }
+    if (_confirming) return;
+    _confirming = true;
+    bool? confirmed;
+    try {
+      confirmed = await _confirmSend();
+    } finally {
+      _confirming = false;
+    }
+    if (confirmed != true || !mounted) return;
+    final cancellation = CancelToken();
+    _cancellation = cancellation;
+    final elapsed = Stopwatch()..start();
+    setState(() => _sending = true);
+    _record('started', elapsed);
+    try {
+      // Paint the cancellable state before preparing the bounded snapshot.
+      await WidgetsBinding.instance.endOfFrame;
+      if (!mounted || cancellation.isCancelled) {
+        throw const DiagnosticsShareException(
+          'Sending was cancelled. Support may have received the report, but delivery was not confirmed.',
+          failure: DiagnosticsShareFailure.cancelled,
+        );
+      }
+      final report = widget.reportBuilder();
+      final client =
+          widget.clientFactory?.call(cancellation) ??
+          ExplicitDiagnosticsReportClient(cancelToken: cancellation);
+      final acknowledgement = await client.send(report);
+      _record(acknowledgement.duplicate ? 'duplicate' : 'confirmed', elapsed);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: LocalizedText(
+            acknowledgement.duplicate
+                ? 'Diagnostic report was already received. Reference: ${acknowledgement.reference}'
+                : 'Diagnostic report sent. Reference: ${acknowledgement.reference}',
+          ),
+        ),
+      );
+    } on DiagnosticsShareException catch (error) {
+      _record('unconfirmed', elapsed, reason: error.failure.name);
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: LocalizedText(error.message)));
+    } catch (_) {
+      _record('unconfirmed', elapsed, reason: 'unknown');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: LocalizedText(
+            'The diagnostic report could not be sent. Try again shortly.',
+          ),
+        ),
+      );
+    } finally {
+      elapsed.stop();
+      if (identical(_cancellation, cancellation)) {
+        _cancellation = null;
+        if (mounted) setState(() => _sending = false);
+      }
+    }
+  }
+
+  Future<bool?> _confirmSend() {
+    return showTetoDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
         title: const LocalizedText('Send diagnostic report?'),
@@ -701,52 +835,12 @@ class _SendDiagnosticsActionState extends State<_SendDiagnosticsAction> {
         ],
       ),
     );
-    if (confirmed != true || !mounted) return;
-    setState(() => _sending = true);
-    try {
-      final data = widget.data;
-      final report = ExplicitDiagnosticsReport.fromSnapshot(
-        version: data.version,
-        profile: data.profile,
-        isTelevision: data.isTelevision,
-        diagnostics: data.database,
-      );
-      final acknowledgement = await ExplicitDiagnosticsReportClient().send(
-        report,
-      );
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: LocalizedText(
-            acknowledgement.duplicate
-                ? 'Diagnostic report was already received. Reference: ${acknowledgement.reference}'
-                : 'Diagnostic report sent. Reference: ${acknowledgement.reference}',
-          ),
-        ),
-      );
-    } on DiagnosticsShareException catch (error) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(error.message)));
-    } catch (_) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: LocalizedText(
-            'The diagnostic report could not be sent. Try again shortly.',
-          ),
-        ),
-      );
-    } finally {
-      if (mounted) setState(() => _sending = false);
-    }
   }
 
   @override
   Widget build(BuildContext context) => _DiagnosticsAction(
-    label: _sending ? 'Sending…' : 'Send to support',
-    icon: _sending ? Icons.hourglass_top_rounded : Icons.send_rounded,
+    label: _sending ? 'Sending… Cancel' : 'Send to support',
+    icon: _sending ? Icons.close_rounded : Icons.send_rounded,
     primary: true,
     onPressed: _send,
   );
@@ -832,14 +926,12 @@ class _DiagnosticsAction extends StatelessWidget {
     required this.icon,
     required this.onPressed,
     this.primary = false,
-    this.autofocus = false,
   });
 
   final String label;
   final IconData icon;
   final VoidCallback onPressed;
   final bool primary;
-  final bool autofocus;
 
   @override
   Widget build(BuildContext context) {
@@ -848,7 +940,6 @@ class _DiagnosticsAction extends StatelessWidget {
         ? contrastForeground(palette.accent)
         : palette.primaryText;
     return TvFocusable(
-      autofocus: autofocus,
       onPressed: onPressed,
       borderRadius: BorderRadius.circular(8),
       child: Container(

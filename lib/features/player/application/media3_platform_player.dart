@@ -30,6 +30,12 @@ class Media3PlatformPlayer extends PlatformPlayer {
   // bounded allowance for platform/plugin cleanup, but never let a broken
   // cancellation strand the authoritative native decoder release.
   static const Duration _eventCancellationTimeout = Duration(milliseconds: 500);
+  // Native release normally replies within its four-second ownership poll.
+  // A missing platform acknowledgement is a failure, never evidence that the
+  // decoder was released. Leave headroom for channel delivery and allow an
+  // explicit retry to recheck native ownership after this deadline.
+  static const Duration _releaseAcknowledgementTimeout = Duration(seconds: 6);
+  static const Duration _dartStateCleanupTimeout = Duration(milliseconds: 500);
   final MethodChannel _channel;
   late final StreamSubscription<dynamic> _events;
   late final Future<int> ready;
@@ -42,6 +48,7 @@ class Media3PlatformPlayer extends PlatformPlayer {
   bool _eventsDisposed = false;
   bool _nativeDisposed = false;
   bool _dartStateDisposed = false;
+  Future<void>? _dartStateDisposeFuture;
   Map<String, Object?> _releaseDiagnostic = const {};
   Future<void> _commands = Future<void>.value();
   Map<String, Object?> _metrics = const {};
@@ -263,6 +270,20 @@ class Media3PlatformPlayer extends PlatformPlayer {
     'audio-bitrate': 'audioBitrate',
     'paused-for-cache': 'pausedForCache',
     'tetotv-external-audio-fallback': 'externalAudioFallback',
+    'tetotv-dolby-vision': 'dolbyVision',
+    'tetotv-hdr-static-metadata': 'hdrStaticMetadata',
+    'tetotv-color-space': 'colorSpace',
+    'tetotv-color-range': 'colorRange',
+    'tetotv-color-transfer': 'colorTransfer',
+    'tetotv-audio-sample-rate': 'audioSampleRate',
+    'tetotv-audio-channel-count': 'audioChannelCount',
+    'tetotv-audio-underrun-count': 'audioUnderruns',
+    'tetotv-audio-sink-error-count': 'audioSinkErrors',
+    'tetotv-video-codec-error-count': 'videoCodecErrors',
+    'tetotv-video-surface-type': 'surfaceType',
+    'tetotv-android-sdk': 'androidSdk',
+    'tetotv-codec-queueing-mode': 'codecQueueingMode',
+    'tetotv-codec-queueing-compatibility': 'codecQueueingCompatibility',
   };
 
   void _onEvent(dynamic event) {
@@ -570,13 +591,12 @@ class Media3PlatformPlayer extends PlatformPlayer {
         }
       }
       if (!_nativeDisposed) {
-        final id = await ready;
-        // Disposal is not queued behind a failed or stale media mutation.
         try {
-          final result = await _channel.invokeMapMethod<String, Object?>(
-            'dispose',
-            {'id': id},
-          );
+          final id = await ready.timeout(_releaseAcknowledgementTimeout);
+          // Disposal is not queued behind a failed or stale media mutation.
+          final result = await _channel
+              .invokeMapMethod<String, Object?>('dispose', {'id': id})
+              .timeout(_releaseAcknowledgementTimeout);
           _captureReleaseDiagnostic(
             result,
             fallbackStatus: 'completed',
@@ -591,12 +611,32 @@ class Media3PlatformPlayer extends PlatformPlayer {
                 : 'platform_error',
           );
           rethrow;
+        } on TimeoutException {
+          _captureReleaseDiagnostic(
+            {'timeoutMs': _releaseAcknowledgementTimeout.inMilliseconds},
+            fallbackStatus: 'failed',
+            fallbackReasonCode: 'timeout',
+          );
+          rethrow;
         }
+        // Only a received, successful native reply can cross this boundary.
+        // Future.timeout observes but ignores a late acknowledgement, so that
+        // reply cannot release the route or alter a later retry's evidence.
         _nativeDisposed = true;
       }
     } finally {
       if (!_dartStateDisposed) {
-        await super.dispose();
+        // A paused broadcast subscriber can delay close() indefinitely. These
+        // are Dart-side controllers, not decoder ownership; start their close
+        // once, keep observing it, and do not let it hide the native result.
+        final cleanup = _dartStateDisposeFuture ??= super.dispose();
+        try {
+          await cleanup.timeout(_dartStateCleanupTimeout);
+        } catch (_) {
+          // No commands/events may publish after _disposed is set. A delayed
+          // close completes when subscribers resume/cancel, without repeating
+          // controller disposal on an explicit native-release retry.
+        }
         _dartStateDisposed = true;
       }
     }
@@ -624,7 +664,8 @@ class Media3PlatformPlayer extends PlatformPlayer {
           : fallbackReasonCode,
       if (elapsed is int) 'wait_elapsed_ms': elapsed.clamp(0, 10_000),
       if (timeout is int) 'timeout_ms': timeout.clamp(0, 10_000),
-      'playback_thread_alive': values['playbackThreadAlive'] == true,
+      if (values['playbackThreadAlive'] is bool)
+        'playback_thread_alive': values['playbackThreadAlive'],
     });
   }
 }

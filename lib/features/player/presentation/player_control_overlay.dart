@@ -1,8 +1,10 @@
+import 'package:anime_tv/core/widgets/teto_dialog.dart';
 import 'dart:async';
 
 import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'package:anime_tv/core/preferences/caption_language.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/theme/teto_box_style.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/features/player/presentation/player_presentation_palette.dart';
 import 'package:flutter/material.dart';
@@ -229,7 +231,8 @@ double playerSeekPreviewBottom({
   required double viewportWidth,
   required double viewportHeight,
 }) {
-  final compact = viewportWidth < 720 || viewportHeight < 480;
+  final compact =
+      viewportWidth < 720 || (viewportHeight < 480 && viewportWidth < 800);
   return compact ? 162 : 210;
 }
 
@@ -504,7 +507,7 @@ Future<T?> showPlayerTrackPicker<T>({
   required T selectedValue,
 }) {
   final palette = context.appPalette;
-  return showDialog<T>(
+  return showTetoDialog<T>(
     context: context,
     barrierColor: palette == AppThemePalette.defaults
         ? const Color(0x99000000)
@@ -612,8 +615,8 @@ class PlayerTrackPicker<T> extends StatelessWidget {
             color: usesDefaultPalette
                 ? const Color(0xFA080808)
                 : palette.surface.withValues(alpha: .98),
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: palette.accent.withValues(alpha: .75)),
+            borderRadius: BorderRadius.circular(TetoBoxStyle.radius),
+            border: Border.all(color: TetoBoxStyle.outline(palette)),
             boxShadow: [
               BoxShadow(
                 color: usesDefaultPalette
@@ -661,7 +664,9 @@ class PlayerTrackPicker<T> extends StatelessWidget {
                         key: ValueKey('player-track-option-$index'),
                         autofocus: selected || (!hasSelected && index == 0),
                         focusScale: 1.02,
-                        borderRadius: BorderRadius.circular(9),
+                        borderRadius: BorderRadius.circular(
+                          TetoBoxStyle.radius,
+                        ),
                         onPressed: () =>
                             Navigator.of(context).pop(option.value),
                         child: Container(
@@ -676,7 +681,14 @@ class PlayerTrackPicker<T> extends StatelessWidget {
                                 : usesDefaultPalette
                                 ? const Color(0xFF171717)
                                 : palette.surfaceRaised,
-                            borderRadius: BorderRadius.circular(9),
+                            borderRadius: BorderRadius.circular(
+                              TetoBoxStyle.radius,
+                            ),
+                            border: Border.all(
+                              color: selected
+                                  ? palette.accentBright.withValues(alpha: .72)
+                                  : TetoBoxStyle.outline(palette),
+                            ),
                           ),
                           child: Row(
                             mainAxisSize: MainAxisSize.min,
@@ -739,7 +751,7 @@ class PlayerTrackPicker<T> extends StatelessWidget {
 
 Future<bool?> showPlayerExitConfirmation(BuildContext context) {
   final palette = context.appPalette;
-  return showDialog<bool>(
+  return showTetoDialog<bool>(
     context: context,
     barrierDismissible: false,
     barrierColor: palette.usesDefaultPlayerPalette
@@ -803,12 +815,8 @@ class _PlayerExitDialogState extends State<PlayerExitDialog> {
               color: palette.playerSurface(
                 defaultColor: const Color(0xFA09090B),
               ),
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(
-                color: palette.usesDefaultPlayerPalette
-                    ? Colors.white.withValues(alpha: .3)
-                    : palette.accent.withValues(alpha: .3),
-              ),
+              borderRadius: BorderRadius.circular(TetoBoxStyle.radius),
+              border: Border.all(color: TetoBoxStyle.outline(palette)),
               boxShadow: [
                 BoxShadow(
                   color: palette.usesDefaultPlayerPalette
@@ -850,7 +858,9 @@ class _PlayerExitDialogState extends State<PlayerExitDialog> {
                         focusNode: _continueFocus,
                         autofocus: true,
                         focusScale: 1.015,
-                        borderRadius: BorderRadius.circular(9),
+                        borderRadius: BorderRadius.circular(
+                          TetoBoxStyle.radius,
+                        ),
                         onPressed: () => Navigator.of(context).pop(false),
                         child: Container(
                           key: const ValueKey('player-exit-continue-surface'),
@@ -864,7 +874,12 @@ class _PlayerExitDialogState extends State<PlayerExitDialog> {
                             color: palette.playerSelectableSurface(
                               defaultColor: const Color(0xA629292E),
                             ),
-                            borderRadius: BorderRadius.circular(9),
+                            borderRadius: BorderRadius.circular(
+                              TetoBoxStyle.radius,
+                            ),
+                            border: Border.all(
+                              color: TetoBoxStyle.outline(palette),
+                            ),
                           ),
                           child: Row(
                             mainAxisAlignment: MainAxisAlignment.center,
@@ -893,7 +908,9 @@ class _PlayerExitDialogState extends State<PlayerExitDialog> {
                         key: const ValueKey('player-exit-confirm'),
                         focusNode: _exitFocus,
                         focusScale: 1.015,
-                        borderRadius: BorderRadius.circular(9),
+                        borderRadius: BorderRadius.circular(
+                          TetoBoxStyle.radius,
+                        ),
                         onPressed: () => Navigator.of(context).pop(true),
                         child: Container(
                           key: const ValueKey('player-exit-confirm-surface'),
@@ -905,7 +922,12 @@ class _PlayerExitDialogState extends State<PlayerExitDialog> {
                           alignment: Alignment.center,
                           decoration: BoxDecoration(
                             color: palette.accent,
-                            borderRadius: BorderRadius.circular(9),
+                            borderRadius: BorderRadius.circular(
+                              TetoBoxStyle.radius,
+                            ),
+                            border: Border.all(
+                              color: TetoBoxStyle.outline(palette),
+                            ),
                           ),
                           child: Row(
                             mainAxisAlignment: MainAxisAlignment.center,

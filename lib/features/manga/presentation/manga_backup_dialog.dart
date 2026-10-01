@@ -1,9 +1,11 @@
+import 'package:anime_tv/core/widgets/teto_dialog.dart';
 import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/theme/teto_box_style.dart';
 import 'package:anime_tv/core/widgets/tv_text_input.dart';
 import 'package:anime_tv/features/auth/application/pairing_controller.dart';
 import 'package:anime_tv/features/manga/application/manga_extension_controller.dart';
@@ -73,7 +75,7 @@ final mangaBackupServiceProvider = Provider<MangaBackupService>((ref) {
 });
 
 Future<bool> showMangaBackupDialog(BuildContext context, WidgetRef ref) async =>
-    await showDialog<bool>(
+    await showTetoDialog<bool>(
       context: context,
       barrierDismissible: false,
       builder: (_) => MangaBackupDialog(
@@ -270,7 +272,8 @@ class _MangaBackupDialogState extends ConsumerState<MangaBackupDialog> {
     return PopScope(
       canPop: !_busy,
       child: Dialog(
-        backgroundColor: palette.surface,
+        backgroundColor: TetoBoxStyle.fill(palette),
+        shape: TetoBoxStyle.shape(palette),
         insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
         child: ConstrainedBox(
           constraints: BoxConstraints(

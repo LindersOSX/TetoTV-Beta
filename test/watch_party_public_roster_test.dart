@@ -253,6 +253,27 @@ void main() {
     expect(snapshot.participants.single.avatarUrl, isNull);
   });
 
+  test('mixed tracker rooms preserve Kitsu and SIMKL public pictures too', () {
+    final host = _trackerIdentity(
+      provider: TrackingProvider.kitsu,
+      username: 'Kitsu Host',
+      avatarUrl: 'https://media.kitsu.io/avatar.jpg',
+    );
+    final guest = _trackerIdentity(
+      provider: TrackingProvider.simkl,
+      username: 'SIMKL Guest',
+      avatarUrl: 'https://simkl.in/avatars/123/user_100.jpg',
+    );
+    final snapshot = _crossTrackerSnapshot(host: host, guest: guest);
+    expect(snapshot.participants.map((person) => person.avatarUrl), [
+      host.avatarUrl,
+      guest.avatarUrl,
+    ]);
+    expect(host.avatarUrl, isNotNull);
+    expect(guest.avatarUrl, isNotNull);
+    expect(host.toJson().keys, unorderedEquals(['display_name', 'avatar_url']));
+  });
+
   test('snapshot accepts a strict bounded public roster only', () {
     final roster = <Object?>[
       {

@@ -1,10 +1,15 @@
+import 'package:anime_tv/core/widgets/teto_dialog.dart';
 import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/theme/teto_box_style.dart';
+import 'package:anime_tv/core/widgets/teto_back_button.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/widgets/network_artwork.dart';
+import 'package:anime_tv/core/widgets/tv_text_input.dart';
+import 'episode_number_control.dart';
 import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
 import 'package:anime_tv/features/catalog/domain/catalog_episode_metadata.dart';
 import 'package:anime_tv/features/catalog/domain/episode_airing_availability.dart';
@@ -20,7 +25,7 @@ Future<int?> showEpisodeBrowserDialog(
   bool isTelevision = false,
   Future<Map<int, CatalogEpisodeMetadata>>? episodeMetadataFuture,
 }) {
-  return showDialog<int>(
+  return showTetoDialog<int>(
     context: context,
     barrierColor: Colors.black.withValues(alpha: .72),
     builder: (_) => EpisodeBrowserDialog(
@@ -73,13 +78,20 @@ class EpisodeBrowserDialog extends StatefulWidget {
 class _EpisodeBrowserDialogState extends State<EpisodeBrowserDialog> {
   final Map<int, FocusNode> _episodeFocusNodes = <int, FocusNode>{};
   int _pageIndex = 0;
+  int _pageMotionDirection = 1;
   int? _pageSize;
+  late int _selectedEpisode;
+  final _numberFocus = FocusNode(debugLabel: 'episode-browser.number');
+  final _previousFocus = FocusNode(debugLabel: 'episode-browser.previous');
+  final _nextFocus = FocusNode(debugLabel: 'episode-browser.next');
+  bool _choosingNumber = false;
   late Map<int, CatalogEpisodeMetadata> _episodeMetadata;
   int _metadataGeneration = 0;
 
   @override
   void initState() {
     super.initState();
+    _selectedEpisode = widget.selectedEpisode;
     _episodeMetadata = widget.episodeMetadata;
     _loadEpisodeMetadata();
   }
@@ -87,6 +99,9 @@ class _EpisodeBrowserDialogState extends State<EpisodeBrowserDialog> {
   @override
   void didUpdateWidget(covariant EpisodeBrowserDialog oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.selectedEpisode != widget.selectedEpisode) {
+      _selectedEpisode = widget.selectedEpisode;
+    }
     if (!identical(oldWidget.episodeMetadata, widget.episodeMetadata) ||
         !identical(
           oldWidget.episodeMetadataFuture,
@@ -126,21 +141,27 @@ class _EpisodeBrowserDialogState extends State<EpisodeBrowserDialog> {
   @override
   void dispose() {
     _metadataGeneration++;
+    _numberFocus.dispose();
+    _previousFocus.dispose();
+    _nextFocus.dispose();
     for (final node in _episodeFocusNodes.values) {
       node.dispose();
     }
     super.dispose();
   }
 
-  void _changePage(int page, {int? focusEpisode}) {
+  void _changePage(int page, {int? focusEpisode, bool focusGrid = true}) {
     final pageSize = _pageSize;
     if (pageSize == null) return;
     final pageCount = (widget.totalEpisodes / pageSize).ceil();
     final nextPage = page.clamp(0, pageCount - 1);
     if (nextPage == _pageIndex) return;
-    setState(() => _pageIndex = nextPage);
+    setState(() {
+      _pageMotionDirection = nextPage > _pageIndex ? 1 : -1;
+      _pageIndex = nextPage;
+    });
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
+      if (!mounted || _pageIndex != nextPage || _pageSize != pageSize) return;
       final firstEpisode = nextPage * pageSize + 1;
       final lastEpisode = math.min(
         firstEpisode + pageSize - 1,
@@ -151,7 +172,17 @@ class _EpisodeBrowserDialogState extends State<EpisodeBrowserDialog> {
         math.min(focusEpisode ?? firstEpisode, lastEpisode),
       );
       final node = _focusNodeForEpisode(targetEpisode);
-      if (node.canRequestFocus && node.context != null) node.requestFocus();
+      if (focusGrid && node.canRequestFocus && node.context != null) {
+        node.requestFocus();
+      }
+      // Only the current grid remains mounted. Release old page nodes after
+      // that grid has detached instead of accumulating one per episode.
+      final obsoleteEpisodes = _episodeFocusNodes.keys
+          .where((episode) => episode < firstEpisode || episode > lastEpisode)
+          .toList();
+      for (final episode in obsoleteEpisodes) {
+        _episodeFocusNodes.remove(episode)?.dispose();
+      }
     });
   }
 
@@ -173,6 +204,58 @@ class _EpisodeBrowserDialogState extends State<EpisodeBrowserDialog> {
     Navigator.pop(context, episode);
   }
 
+  void _jumpTo(int episode) {
+    final pageSize = _pageSize!;
+    setState(() => _selectedEpisode = episode);
+    _changePage(
+      (episode - 1) ~/ pageSize,
+      focusEpisode: episode,
+      focusGrid: false,
+    );
+    // A boundary step can become disabled after this change. Keep focus on
+    // a live header target rather than an unmounted arrow.
+    if ((episode == 1 && _previousFocus.hasFocus) ||
+        (episode == widget.totalEpisodes && _nextFocus.hasFocus)) {
+      _numberFocus.requestFocus();
+    }
+  }
+
+  void _focusSelectedCard() {
+    final first = _pageIndex * _pageSize! + 1;
+    final last = math.min(first + _pageSize! - 1, widget.totalEpisodes);
+    _focusNodeForEpisode(_selectedEpisode.clamp(first, last)).requestFocus();
+  }
+
+  Future<void> _chooseNumber() async {
+    if (_choosingNumber) return;
+    _choosingNumber = true;
+    final value = await showTetoDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => TvKeyboardDialog(
+        title: 'Choose episode (1–${widget.totalEpisodes})',
+        initialValue: '$_selectedEpisode',
+        numericOnly: true,
+        maxLength: widget.totalEpisodes.toString().length,
+        reduceWidthForTelevision: widget.isTelevision,
+        inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+        validator: (input) {
+          final number = int.tryParse(input.trim());
+          return number == null || number < 1 || number > widget.totalEpisodes
+              ? 'Enter an episode from 1 to ${widget.totalEpisodes}.'
+              : null;
+        },
+      ),
+    );
+    _choosingNumber = false;
+    if (!mounted) return;
+    final number = value == null ? null : int.tryParse(value.trim());
+    if (number != null && number >= 1 && number <= widget.totalEpisodes) {
+      _jumpTo(number);
+    }
+    _numberFocus.requestFocus();
+  }
+
   KeyEventResult _handleEpisodeNavigation({
     required int episode,
     required int firstEpisode,
@@ -183,18 +266,40 @@ class _EpisodeBrowserDialogState extends State<EpisodeBrowserDialog> {
     required KeyEvent event,
   }) {
     final isUp = event.logicalKey == LogicalKeyboardKey.arrowUp;
+    final isDown = event.logicalKey == LogicalKeyboardKey.arrowDown;
     final isLeft = event.logicalKey == LogicalKeyboardKey.arrowLeft;
     final isRight = event.logicalKey == LogicalKeyboardKey.arrowRight;
-    if (!isUp && !isLeft && !isRight) return KeyEventResult.ignored;
+    if (!isUp && !isDown && !isLeft && !isRight) {
+      return KeyEventResult.ignored;
+    }
 
     final localIndex = episode - firstEpisode;
     final row = localIndex ~/ columns;
     final column = localIndex % columns;
     if (isUp && row == 0) {
-      if (event is KeyDownEvent) _close();
+      if (event is KeyDownEvent) _numberFocus.requestFocus();
       return KeyEventResult.handled;
     }
-    if (isUp) return KeyEventResult.ignored;
+    final adjacentEpisode = isUp
+        ? episode - columns
+        : isDown
+        ? episode + columns
+        : isLeft && column > 0
+        ? episode - 1
+        : isRight && column < columns - 1
+        ? episode + 1
+        : null;
+    if (adjacentEpisode != null &&
+        adjacentEpisode >= firstEpisode &&
+        adjacentEpisode <= lastEpisode) {
+      // Resolve the grid target directly. Animated focus scales must not
+      // change the geometry used to decide where a rapid D-pad press goes.
+      if (event is KeyDownEvent || event is KeyRepeatEvent) {
+        _focusNodeForEpisode(adjacentEpisode).requestFocus();
+      }
+      return KeyEventResult.handled;
+    }
+    if (isUp || isDown) return KeyEventResult.ignored;
     final crossesPreviousPage = isLeft && column == 0 && _pageIndex > 0;
     final crossesNextPage =
         isRight &&
@@ -244,7 +349,7 @@ class _EpisodeBrowserDialogState extends State<EpisodeBrowserDialog> {
     final pageCount = (widget.totalEpisodes / pageSize).ceil();
     if (_pageSize != pageSize) {
       _pageSize = pageSize;
-      _pageIndex = (widget.selectedEpisode - 1) ~/ pageSize;
+      _pageIndex = (_selectedEpisode - 1) ~/ pageSize;
     } else {
       _pageIndex = _pageIndex.clamp(0, pageCount - 1);
     }
@@ -261,54 +366,45 @@ class _EpisodeBrowserDialogState extends State<EpisodeBrowserDialog> {
             ),
       backgroundColor: Colors.transparent,
       child: Container(
+        key: const ValueKey('episode-browser-surface'),
         width: width,
         height: height,
         padding: EdgeInsets.fromLTRB(
-          compact ? 14 : 22,
           compact ? 12 : 18,
-          compact ? 14 : 22,
-          compact ? 12 : 16,
+          compact ? 10 : 12,
+          compact ? 12 : 18,
+          compact ? 10 : 12,
         ),
-        decoration: BoxDecoration(
-          color: widget.embedded
-              ? palette.background.withValues(alpha: .94)
-              : palette.surface.withValues(alpha: .98),
-          borderRadius: BorderRadius.circular(
-            widget.embedded
-                ? 0
-                : compact
-                ? 16
-                : 22,
-          ),
-          border: widget.embedded
-              ? null
-              : Border.all(
-                  color: palette.accentBright.withValues(alpha: .70),
-                  width: 1.4,
-                ),
-          boxShadow: widget.embedded
-              ? null
-              : [
-                  BoxShadow(
-                    color: palette.focusGlow.withValues(alpha: .32),
-                    blurRadius: 32,
-                    spreadRadius: 2,
-                  ),
-                ],
-        ),
+        decoration: widget.embedded
+            ? const BoxDecoration(color: Colors.transparent)
+            : TetoBoxStyle.translucentPanelDecoration(palette),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             _EpisodeBrowserHeader(
               anime: widget.anime,
-              selectedEpisode: widget.selectedEpisode,
+              selectedEpisode: _selectedEpisode,
               totalEpisodes: widget.totalEpisodes,
               compact: compact,
               now: widget.now,
-              embedded: widget.embedded,
               onClose: _close,
+              numberControl: EpisodeNumberControl(
+                episode: _selectedEpisode,
+                total: widget.totalEpisodes,
+                focusNode: _numberFocus,
+                previousFocusNode: _previousFocus,
+                nextFocusNode: _nextFocus,
+                onChoose: _chooseNumber,
+                onPrevious: _selectedEpisode > 1
+                    ? () => _jumpTo(_selectedEpisode - 1)
+                    : null,
+                onNext: _selectedEpisode < widget.totalEpisodes
+                    ? () => _jumpTo(_selectedEpisode + 1)
+                    : null,
+                onExitDown: _focusSelectedCard,
+              ),
             ),
-            SizedBox(height: compact ? 10 : 16),
+            SizedBox(height: compact ? 8 : 10),
             Expanded(
               child: LayoutBuilder(
                 builder: (context, constraints) {
@@ -325,55 +421,78 @@ class _EpisodeBrowserDialogState extends State<EpisodeBrowserDialog> {
                   final cardHeight =
                       (constraints.maxHeight - verticalGap * (rows - 1)) / rows;
 
-                  return GridView.builder(
-                    key: ValueKey('episode-browser-page-$_pageIndex'),
-                    physics: const NeverScrollableScrollPhysics(),
-                    padding: EdgeInsets.zero,
-                    gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                      crossAxisCount: columns,
-                      crossAxisSpacing: horizontalGap,
-                      mainAxisSpacing: verticalGap,
-                      childAspectRatio: cardWidth / cardHeight,
+                  return AnimatedSwitcher(
+                    key: const ValueKey('episode-browser-page-transition'),
+                    duration: MediaQuery.disableAnimationsOf(context)
+                        ? Duration.zero
+                        : const Duration(milliseconds: 120),
+                    switchInCurve: Curves.easeOutCubic,
+                    switchOutCurve: Curves.easeInCubic,
+                    // Keep the short entrance, but never paint two image-rich
+                    // grids or expose outgoing focus targets at the same time.
+                    layoutBuilder: (currentChild, _) =>
+                        currentChild ?? const SizedBox.expand(),
+                    transitionBuilder: (child, animation) => FadeTransition(
+                      opacity: animation,
+                      child: SlideTransition(
+                        position: Tween<Offset>(
+                          begin: Offset(_pageMotionDirection * .035, 0),
+                          end: Offset.zero,
+                        ).animate(animation),
+                        child: child,
+                      ),
                     ),
-                    itemCount: lastEpisode - firstEpisode + 1,
-                    itemBuilder: (context, index) {
-                      final episode = firstEpisode + index;
-                      return _EpisodeBrowserCard(
-                        key: ValueKey('episode-browser-card-$episode'),
-                        anime: widget.anime,
-                        metadata: _episodeMetadata[episode],
-                        episode: episode,
-                        selected: episode == widget.selectedEpisode,
-                        availability: episodeAiringAvailability(
+                    child: GridView.builder(
+                      key: ValueKey('episode-browser-page-$_pageIndex'),
+                      physics: const NeverScrollableScrollPhysics(),
+                      padding: EdgeInsets.zero,
+                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: columns,
+                        crossAxisSpacing: horizontalGap,
+                        mainAxisSpacing: verticalGap,
+                        childAspectRatio: cardWidth / cardHeight,
+                      ),
+                      itemCount: lastEpisode - firstEpisode + 1,
+                      itemBuilder: (context, index) {
+                        final episode = firstEpisode + index;
+                        return _EpisodeBrowserCard(
+                          key: ValueKey('episode-browser-card-$episode'),
                           anime: widget.anime,
+                          metadata: _episodeMetadata[episode],
                           episode: episode,
-                          now: widget.now,
-                        ),
-                        autofocus: episode == widget.selectedEpisode,
-                        focusNode: _focusNodeForEpisode(episode),
-                        compact: cardWidth < 300 || cardHeight < 175,
-                        artworkWidth: math.min(
-                          cardWidth * .46,
-                          cardHeight * 16 / 9,
-                        ),
-                        onKeyEvent: (_, event) => _handleEpisodeNavigation(
-                          episode: episode,
-                          firstEpisode: firstEpisode,
-                          lastEpisode: lastEpisode,
-                          columns: columns,
-                          pageSize: pageSize,
-                          pageCount: pageCount,
-                          event: event,
-                        ),
-                        onPressed: () => _selectEpisode(episode),
-                      );
-                    },
+                          selected: episode == _selectedEpisode,
+                          availability: episodeAiringAvailability(
+                            anime: widget.anime,
+                            episode: episode,
+                            now: widget.now,
+                          ),
+                          autofocus: episode == _selectedEpisode,
+                          focusNode: _focusNodeForEpisode(episode),
+                          compact: cardWidth < 300 || cardHeight < 175,
+                          dense: cardHeight < 115,
+                          artworkWidth: math.min(
+                            cardWidth * .46,
+                            cardHeight * 16 / 9,
+                          ),
+                          onKeyEvent: (_, event) => _handleEpisodeNavigation(
+                            episode: episode,
+                            firstEpisode: firstEpisode,
+                            lastEpisode: lastEpisode,
+                            columns: columns,
+                            pageSize: pageSize,
+                            pageCount: pageCount,
+                            event: event,
+                          ),
+                          onPressed: () => _selectEpisode(episode),
+                        );
+                      },
+                    ),
                   );
                 },
               ),
             ),
             if (pageCount > 1) ...[
-              SizedBox(height: compact ? 10 : 15),
+              SizedBox(height: compact ? 8 : 10),
               _EpisodeBrowserPagination(
                 pageIndex: _pageIndex,
                 pageCount: pageCount,
@@ -386,26 +505,9 @@ class _EpisodeBrowserDialogState extends State<EpisodeBrowserDialog> {
       ),
     );
 
-    if (!widget.embedded) return dialog;
-    final animationsDisabled = MediaQuery.disableAnimationsOf(context);
-    return TweenAnimationBuilder<double>(
-      key: const ValueKey('episode-browser-open-animation'),
-      tween: Tween<double>(begin: 0, end: 1),
-      duration: animationsDisabled
-          ? Duration.zero
-          : const Duration(milliseconds: 160),
-      curve: Curves.easeOutCubic,
-      child: dialog,
-      builder: (context, progress, child) => Opacity(
-        key: const ValueKey('episode-browser-open-opacity'),
-        opacity: progress,
-        child: Transform.translate(
-          key: const ValueKey('episode-browser-open-slide'),
-          offset: Offset(0, 10 * (1 - progress)),
-          child: child,
-        ),
-      ),
-    );
+    // The details screen owns the entrance/exit of the entire full-screen
+    // browser, including its scrim. Avoid animating this child a second time.
+    return dialog;
   }
 }
 
@@ -415,101 +517,102 @@ class _EpisodeBrowserHeader extends StatelessWidget {
     required this.selectedEpisode,
     required this.totalEpisodes,
     required this.compact,
-    required this.embedded,
     required this.now,
     required this.onClose,
+    required this.numberControl,
   });
 
   final AnimeSummary anime;
   final int selectedEpisode;
   final int totalEpisodes;
   final bool compact;
-  final bool embedded;
   final DateTime? now;
   final VoidCallback onClose;
+  final Widget numberControl;
 
   @override
   Widget build(BuildContext context) {
     final palette = context.appPalette;
     final countdown = localizedNextEpisodeCountdown(context, anime, now: now);
     final nextAirDate = anime.nextAiringAt;
-    return Row(
-      children: [
-        Container(
-          width: compact ? 4 : 5,
-          height: compact ? 32 : 42,
-          decoration: BoxDecoration(
-            color: palette.accentBright,
-            borderRadius: BorderRadius.circular(99),
-          ),
-        ),
-        SizedBox(width: compact ? 10 : 14),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+    return Container(
+      key: const ValueKey('episode-browser-header'),
+      padding: EdgeInsets.symmetric(
+        horizontal: compact ? 10 : 14,
+        vertical: compact ? 7 : 10,
+      ),
+      decoration: TetoBoxStyle.translucentPanelDecoration(palette),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final narrow = constraints.maxWidth < 570;
+          final heading = Row(
             children: [
-              Text(
-                context.tr("Episodes"),
-                style: TextStyle(
-                  color: palette.primaryText,
-                  fontSize: compact ? 20 : 28,
-                  height: 1,
-                  fontWeight: FontWeight.w900,
+              TetoBackButton(
+                key: const ValueKey('episode-browser-close'),
+                onPressed: onClose,
+              ),
+              SizedBox(width: compact ? 10 : 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      context.tr('Episodes'),
+                      style: TextStyle(
+                        color: palette.primaryText,
+                        fontSize: compact ? 19 : 25,
+                        height: 1,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    SizedBox(height: compact ? 3 : 4),
+                    Text(
+                      context.tr('{value1} of {value2} selected', {
+                        'value1': selectedEpisode,
+                        'value2': totalEpisodes,
+                      }),
+                      style: TextStyle(
+                        color: palette.mutedText,
+                        fontSize: compact ? 11 : 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    if (countdown != null) ...[
+                      SizedBox(height: compact ? 2 : 4),
+                      Text(
+                        '${countdown[0].toUpperCase()}${countdown.substring(1)}'
+                        '${nextAirDate == null ? '' : ' · ${TetoLocalizations.of(context).date(nextAirDate)}'}',
+                        key: const ValueKey('episode-browser-next-airing'),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: palette.accentBright,
+                          fontSize: compact ? 10 : 12,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
               ),
-              SizedBox(height: compact ? 3 : 5),
-              Text(
-                context.tr("{value1} of {value2} selected", {
-                  'value1': selectedEpisode,
-                  'value2': totalEpisodes,
-                }),
-                style: TextStyle(
-                  color: palette.mutedText,
-                  fontSize: compact ? 11 : 13,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              if (countdown != null) ...[
-                SizedBox(height: compact ? 2 : 4),
-                Text(
-                  '${countdown[0].toUpperCase()}${countdown.substring(1)}'
-                  '${nextAirDate == null ? '' : ' · ${TetoLocalizations.of(context).date(nextAirDate)}'}',
-                  key: const ValueKey('episode-browser-next-airing'),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: palette.accentBright,
-                    fontSize: compact ? 10 : 12,
-                    fontWeight: FontWeight.w800,
-                  ),
+              if (!narrow) ...[
+                const SizedBox(width: 16),
+                SizedBox(
+                  width: math.min(330, constraints.maxWidth * .45),
+                  child: numberControl,
                 ),
               ],
             ],
-          ),
-        ),
-        TvFocusable(
-          onPressed: onClose,
-          focusScale: 1.02,
-          borderRadius: BorderRadius.circular(10),
-          child: Container(
-            key: const ValueKey('episode-browser-close'),
-            width: compact ? 42 : 50,
-            height: compact ? 36 : 42,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: palette.surfaceRaised,
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(
-                color: palette.primaryText.withValues(alpha: .14),
-              ),
-            ),
-            child: Icon(
-              embedded ? Icons.arrow_upward_rounded : Icons.close_rounded,
-              size: compact ? 20 : 24,
-            ),
-          ),
-        ),
-      ],
+          );
+          return narrow
+              ? Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [heading, const SizedBox(height: 8), numberControl],
+                )
+              : heading;
+        },
+      ),
     );
   }
 }
@@ -524,6 +627,7 @@ class _EpisodeBrowserCard extends StatefulWidget {
     required this.autofocus,
     required this.focusNode,
     required this.compact,
+    required this.dense,
     required this.artworkWidth,
     required this.onKeyEvent,
     required this.onPressed,
@@ -538,6 +642,7 @@ class _EpisodeBrowserCard extends StatefulWidget {
   final bool autofocus;
   final FocusNode focusNode;
   final bool compact;
+  final bool dense;
   final double artworkWidth;
   final FocusOnKeyEventCallback onKeyEvent;
   final VoidCallback onPressed;
@@ -619,6 +724,8 @@ class _EpisodeBrowserCardState extends State<_EpisodeBrowserCard> {
 
   void _resetDescriptionScroll() {
     if (_descriptionScrollController.hasClients) {
+      final position = _descriptionScrollController.position;
+      if (position.pixels == 0 && !position.isScrollingNotifier.value) return;
       // jumpTo also cancels an in-flight animateTo, including the brief frame
       // where the animation is active but has not moved away from zero yet.
       _descriptionScrollController.jumpTo(0);
@@ -650,14 +757,16 @@ class _EpisodeBrowserCardState extends State<_EpisodeBrowserCard> {
       if (expectedAt != null) 'expected ${episodeAiringDateLabel(expectedAt)}',
       if (_description.isNotEmpty) _description,
     ].join(', ');
-    final descriptionMaxLines = widget.compact && statusLabel != null
+    final descriptionMaxLines = widget.dense
+        ? 1
+        : widget.compact && statusLabel != null
         ? 1
         : widget.compact
         ? 2
         : 3;
     final descriptionStyle = TextStyle(
       color: palette.mutedText,
-      fontSize: widget.compact ? 10 : 12,
+      fontSize: widget.compact ? 11 : 13,
       height: 1.25,
       fontWeight: FontWeight.w600,
     );
@@ -675,159 +784,221 @@ class _EpisodeBrowserCardState extends State<_EpisodeBrowserCard> {
         autofocus: widget.autofocus,
         focusNode: widget.focusNode,
         focusScale: 1.018,
-        borderRadius: BorderRadius.circular(widget.compact ? 11 : 14),
+        borderRadius: BorderRadius.circular(TetoBoxStyle.radius),
         onPressed: widget.onPressed,
         onKeyEvent: widget.onKeyEvent,
         onFocusChanged: _handleFocusChanged,
-        child: Container(
-          decoration: BoxDecoration(
-            color: palette.surfaceRaised,
-            borderRadius: BorderRadius.circular(widget.compact ? 11 : 14),
-            border: Border.all(
-              color: widget.selected
-                  ? palette.accentBright.withValues(alpha: .82)
-                  : palette.primaryText.withValues(alpha: .13),
-              width: widget.selected ? 2 : 1,
-            ),
-          ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(widget.compact ? 10 : 13),
-            child: Row(
-              children: [
-                SizedBox(
-                  width: widget.artworkWidth,
-                  height: double.infinity,
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      NetworkArtwork(
-                        url: artwork,
-                        fit: BoxFit.contain,
-                        cacheWidth: widget.compact ? 320 : 640,
-                        icon: Icons.video_library_outlined,
-                      ),
-                      const DecoratedBox(
-                        decoration: BoxDecoration(
-                          gradient: LinearGradient(
-                            colors: [Colors.transparent, Color(0xA6000000)],
-                            begin: Alignment.topCenter,
-                            end: Alignment.bottomCenter,
-                          ),
-                        ),
-                      ),
-                      Positioned(
-                        left: widget.compact ? 8 : 10,
-                        bottom: widget.compact ? 7 : 9,
-                        child: Text(
-                          context.tr("EP {value1}", {'value1': widget.episode}),
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: widget.compact ? 11 : 13,
-                            fontWeight: FontWeight.w900,
-                            letterSpacing: .6,
-                          ),
-                        ),
-                      ),
-                      if (usesSeriesArtwork)
-                        Positioned(
-                          left: widget.compact ? 6 : 8,
-                          top: widget.compact ? 6 : 8,
-                          child: Container(
-                            padding: EdgeInsets.symmetric(
-                              horizontal: widget.compact ? 4 : 6,
-                              vertical: widget.compact ? 2 : 3,
-                            ),
-                            decoration: BoxDecoration(
-                              color: Colors.black.withValues(alpha: .72),
-                              borderRadius: BorderRadius.circular(5),
-                            ),
-                            child: Text(
-                              context.tr("SERIES ART"),
-                              style: TextStyle(
-                                color: Colors.white.withValues(alpha: .9),
-                                fontSize: widget.compact ? 6 : 8,
-                                fontWeight: FontWeight.w900,
-                                letterSpacing: .35,
+        child: RepaintBoundary(
+          key: ValueKey('episode-browser-card-content-${widget.episode}'),
+          child: Container(
+            key: ValueKey('episode-browser-card-surface-${widget.episode}'),
+            decoration: TetoBoxStyle.translucentControlDecoration(palette),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(TetoBoxStyle.radius - 1),
+              child: Row(
+                children: [
+                  SizedBox(
+                    width: widget.artworkWidth,
+                    height: double.infinity,
+                    child: ColoredBox(
+                      color: palette.background,
+                      child: Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          Padding(
+                            padding: const EdgeInsets.all(3),
+                            child: RepaintBoundary(
+                              key: ValueKey(
+                                'episode-browser-artwork-${widget.episode}',
+                              ),
+                              child: NetworkArtwork(
+                                url: artwork,
+                                fit: BoxFit.contain,
+                                cacheWidth:
+                                    ((widget.artworkWidth *
+                                                    MediaQuery.devicePixelRatioOf(
+                                                      context,
+                                                    ) /
+                                                    64)
+                                                .ceil() *
+                                            64)
+                                        .clamp(128, 640),
+                                icon: Icons.video_library_outlined,
                               ),
                             ),
                           ),
-                        ),
-                    ],
-                  ),
-                ),
-                Expanded(
-                  child: Padding(
-                    padding: EdgeInsets.all(widget.compact ? 5 : 13),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Text(
-                          context.tr("Episode {value1}{value2}", {
-                            'value1': widget.episode,
-                            'value2': runtime == null ? '' : ' · $runtime min',
-                          }),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: palette.primaryText,
-                            fontSize: widget.compact ? 13 : 16,
-                            fontWeight: FontWeight.w900,
-                          ),
-                        ),
-                        SizedBox(height: widget.compact ? 3 : 6),
-                        Text(
-                          title,
-                          key: ValueKey(
-                            'episode-browser-title-${widget.episode}',
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: palette.primaryText,
-                            fontSize: widget.compact ? 12 : 15,
-                            fontWeight: FontWeight.w900,
-                          ),
-                        ),
-                        SizedBox(height: widget.compact ? 4 : 7),
-                        ConstrainedBox(
-                          constraints: BoxConstraints(
-                            maxHeight: descriptionViewportHeight,
-                          ),
-                          child: ClipRect(
-                            child: ScrollConfiguration(
-                              behavior: ScrollConfiguration.of(
-                                context,
-                              ).copyWith(scrollbars: false, overscroll: false),
-                              child: SingleChildScrollView(
-                                key: ValueKey(
-                                  'episode-browser-description-scroll-${widget.episode}',
+                          if (usesSeriesArtwork)
+                            Positioned(
+                              left: widget.compact ? 6 : 8,
+                              top: widget.compact ? 6 : 8,
+                              child: Container(
+                                padding: EdgeInsets.symmetric(
+                                  horizontal: widget.compact ? 4 : 6,
+                                  vertical: widget.compact ? 2 : 3,
                                 ),
-                                controller: _descriptionScrollController,
-                                physics: const NeverScrollableScrollPhysics(),
+                                decoration: BoxDecoration(
+                                  color: Colors.black.withValues(alpha: .72),
+                                  borderRadius: BorderRadius.circular(5),
+                                ),
                                 child: Text(
-                                  _description,
-                                  key: ValueKey(
-                                    'episode-browser-description-${widget.episode}',
+                                  context.tr("SERIES ART"),
+                                  style: TextStyle(
+                                    color: Colors.white.withValues(alpha: .9),
+                                    fontSize: widget.compact ? 6 : 8,
+                                    fontWeight: FontWeight.w900,
+                                    letterSpacing: .35,
                                   ),
-                                  style: descriptionStyle,
                                 ),
                               ),
                             ),
-                          ),
-                        ),
-                        if (statusLabel != null) ...[
-                          SizedBox(height: widget.compact ? 4 : 7),
-                          _EpisodeCardBadge(
-                            label: statusLabel,
-                            compact: widget.compact,
-                          ),
                         ],
-                      ],
+                      ),
                     ),
                   ),
-                ),
-              ],
+                  Container(
+                    width: 1,
+                    height: double.infinity,
+                    color: TetoBoxStyle.outline(palette),
+                  ),
+                  Expanded(
+                    child: Padding(
+                      padding: EdgeInsets.all(
+                        widget.dense ? 6 : (widget.compact ? 8 : 14),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  context.tr("Episode {value1}{value2}", {
+                                    'value1': widget.episode,
+                                    'value2': runtime == null
+                                        ? ''
+                                        : ' · $runtime min',
+                                  }),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    color: palette.accentBright,
+                                    fontSize: widget.compact ? 11 : 13,
+                                    fontWeight: FontWeight.w900,
+                                    letterSpacing: .5,
+                                  ),
+                                ),
+                              ),
+                              if (widget.selected) ...[
+                                const SizedBox(width: 6),
+                                Container(
+                                  key: ValueKey(
+                                    'episode-browser-selected-${widget.episode}',
+                                  ),
+                                  padding: EdgeInsets.symmetric(
+                                    horizontal: widget.compact ? 3 : 6,
+                                    vertical: 2,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: palette.background.withValues(
+                                      alpha: .66,
+                                    ),
+                                    borderRadius: BorderRadius.circular(6),
+                                    border: Border.all(
+                                      color: palette.accentBright.withValues(
+                                        alpha: .55,
+                                      ),
+                                    ),
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(
+                                        Icons.check_rounded,
+                                        color: palette.accentBright,
+                                        size: widget.compact ? 12 : 14,
+                                      ),
+                                      if (!widget.compact) ...[
+                                        const SizedBox(width: 3),
+                                        Text(
+                                          context.tr('Selected'),
+                                          style: TextStyle(
+                                            color: palette.primaryText,
+                                            fontSize: 10,
+                                            fontWeight: FontWeight.w800,
+                                          ),
+                                        ),
+                                      ],
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
+                          SizedBox(
+                            height: widget.dense ? 2 : (widget.compact ? 3 : 6),
+                          ),
+                          Text(
+                            title,
+                            key: ValueKey(
+                              'episode-browser-title-${widget.episode}',
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: palette.primaryText,
+                              fontSize: widget.compact ? 13 : 17,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                          SizedBox(
+                            height: widget.dense ? 2 : (widget.compact ? 4 : 7),
+                          ),
+                          ConstrainedBox(
+                            constraints: BoxConstraints(
+                              maxHeight: descriptionViewportHeight,
+                            ),
+                            child: ClipRect(
+                              child: ScrollConfiguration(
+                                behavior: ScrollConfiguration.of(context)
+                                    .copyWith(
+                                      scrollbars: false,
+                                      overscroll: false,
+                                    ),
+                                child: SingleChildScrollView(
+                                  key: ValueKey(
+                                    'episode-browser-description-scroll-${widget.episode}',
+                                  ),
+                                  controller: _descriptionScrollController,
+                                  physics: const NeverScrollableScrollPhysics(),
+                                  child: Text(
+                                    _description,
+                                    key: ValueKey(
+                                      'episode-browser-description-${widget.episode}',
+                                    ),
+                                    style: descriptionStyle,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                          if (statusLabel != null) ...[
+                            SizedBox(
+                              height: widget.dense
+                                  ? 2
+                                  : (widget.compact ? 4 : 7),
+                            ),
+                            _EpisodeCardBadge(
+                              label: statusLabel,
+                              compact: widget.compact,
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ),
@@ -891,56 +1062,63 @@ class _EpisodeBrowserPagination extends StatelessWidget {
       pageCount: pageCount,
       compact: compact,
     );
-    return Row(
+    return Container(
       key: const ValueKey('episode-browser-pagination'),
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        _EpisodePageButton(
-          key: const ValueKey('episode-browser-previous-page'),
-          label: compact ? '' : 'Previous',
-          semanticLabel: 'Previous page',
-          icon: Icons.chevron_left_rounded,
-          enabled: pageIndex > 0,
-          compact: compact,
-          onPressed: () => onPageSelected(pageIndex - 1),
-        ),
-        SizedBox(width: compact ? 6 : 10),
-        for (var index = 0; index < visiblePages.length; index++) ...[
-          if (index > 0) SizedBox(width: compact ? 5 : 7),
-          if (visiblePages[index] case final page?)
-            _EpisodePageButton(
-              key: ValueKey('episode-browser-page-button-$page'),
-              label: '${page + 1}',
-              selected: page == pageIndex,
-              compact: compact,
-              onPressed: () => onPageSelected(page),
-            )
-          else
-            Padding(
-              padding: EdgeInsets.symmetric(horizontal: compact ? 1 : 3),
-              child: Text(
-                '…',
-                key: ValueKey('episode-browser-page-ellipsis-$index'),
-                style: TextStyle(
-                  color: context.appPalette.mutedText,
-                  fontSize: compact ? 14 : 17,
-                  fontWeight: FontWeight.w900,
+      padding: EdgeInsets.symmetric(
+        horizontal: compact ? 8 : 16,
+        vertical: compact ? 4 : 5,
+      ),
+      decoration: TetoBoxStyle.translucentPanelDecoration(context.appPalette),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          _EpisodePageButton(
+            key: const ValueKey('episode-browser-previous-page'),
+            label: compact ? '' : 'Previous',
+            semanticLabel: 'Previous page',
+            icon: Icons.chevron_left_rounded,
+            enabled: pageIndex > 0,
+            compact: compact,
+            onPressed: () => onPageSelected(pageIndex - 1),
+          ),
+          SizedBox(width: compact ? 6 : 10),
+          for (var index = 0; index < visiblePages.length; index++) ...[
+            if (index > 0) SizedBox(width: compact ? 5 : 7),
+            if (visiblePages[index] case final page?)
+              _EpisodePageButton(
+                key: ValueKey('episode-browser-page-button-$page'),
+                label: '${page + 1}',
+                selected: page == pageIndex,
+                compact: compact,
+                onPressed: () => onPageSelected(page),
+              )
+            else
+              Padding(
+                padding: EdgeInsets.symmetric(horizontal: compact ? 1 : 3),
+                child: Text(
+                  '…',
+                  key: ValueKey('episode-browser-page-ellipsis-$index'),
+                  style: TextStyle(
+                    color: context.appPalette.mutedText,
+                    fontSize: compact ? 14 : 17,
+                    fontWeight: FontWeight.w900,
+                  ),
                 ),
               ),
-            ),
+          ],
+          SizedBox(width: compact ? 6 : 10),
+          _EpisodePageButton(
+            key: const ValueKey('episode-browser-next-page'),
+            label: compact ? '' : 'Next',
+            semanticLabel: 'Next page',
+            icon: Icons.chevron_right_rounded,
+            iconAfter: true,
+            enabled: pageIndex < pageCount - 1,
+            compact: compact,
+            onPressed: () => onPageSelected(pageIndex + 1),
+          ),
         ],
-        SizedBox(width: compact ? 6 : 10),
-        _EpisodePageButton(
-          key: const ValueKey('episode-browser-next-page'),
-          label: compact ? '' : 'Next',
-          semanticLabel: 'Next page',
-          icon: Icons.chevron_right_rounded,
-          iconAfter: true,
-          enabled: pageIndex < pageCount - 1,
-          compact: compact,
-          onPressed: () => onPageSelected(pageIndex + 1),
-        ),
-      ],
+      ),
     );
   }
 }
@@ -1006,20 +1184,15 @@ class _EpisodePageButton extends StatelessWidget {
   Widget build(BuildContext context) {
     final palette = context.appPalette;
     final content = Container(
-      height: compact ? 34 : 40,
+      key: ValueKey('episode-page-surface-$label'),
+      height: compact ? 34 : 36,
       constraints: BoxConstraints(minWidth: compact ? 34 : 40),
       padding: EdgeInsets.symmetric(horizontal: compact ? 8 : 12),
       alignment: Alignment.center,
-      decoration: BoxDecoration(
-        color: selected
-            ? palette.accent.withValues(alpha: .60)
-            : palette.surfaceRaised,
-        borderRadius: BorderRadius.circular(9),
-        border: Border.all(
-          color: selected
-              ? palette.accentBright
-              : palette.primaryText.withValues(alpha: .13),
-        ),
+      decoration: TetoBoxStyle.translucentControlDecoration(palette).copyWith(
+        border: selected
+            ? Border.all(color: palette.accentBright, width: 1.4)
+            : null,
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -1029,7 +1202,7 @@ class _EpisodePageButton extends StatelessWidget {
           Text(
             label,
             style: TextStyle(
-              color: palette.primaryText,
+              color: selected ? palette.accentBright : palette.primaryText,
               fontSize: compact ? 10 : 12,
               fontWeight: FontWeight.w900,
             ),
@@ -1044,7 +1217,7 @@ class _EpisodePageButton extends StatelessWidget {
         : TvFocusable(
             onPressed: onPressed,
             focusScale: 1.025,
-            borderRadius: BorderRadius.circular(9),
+            borderRadius: BorderRadius.circular(TetoBoxStyle.radius),
             child: content,
           );
     if (semanticLabel == null) return control;

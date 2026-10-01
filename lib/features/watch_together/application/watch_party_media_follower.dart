@@ -358,6 +358,7 @@ String watchPartyCatalogFollowLocation(
   final query = <String, String>{
     'anilistId': '${target.anilistId}',
     'episode': '${target.episode}',
+    if (media.format == 'MOVIE') 'format': 'MOVIE',
     'title': title,
     'titleEnglish': ?titleEnglish,
     'titleRomaji': ?titleRomaji,

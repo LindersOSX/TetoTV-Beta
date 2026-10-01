@@ -1,5 +1,6 @@
 import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/widgets/teto_back_button.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/widgets/network_artwork.dart';
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
@@ -28,14 +29,10 @@ class CreditsScreen extends ConsumerWidget {
           children: [
             Row(
               children: [
-                TvFocusable(
+                TetoBackButton(
                   key: const ValueKey('credits-back'),
                   autofocus: true,
                   onPressed: context.pop,
-                  child: const Padding(
-                    padding: EdgeInsets.all(10),
-                    child: Icon(Icons.arrow_back_rounded),
-                  ),
                 ),
                 const SizedBox(width: 14),
                 Text(

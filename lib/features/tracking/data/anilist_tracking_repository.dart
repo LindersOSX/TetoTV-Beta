@@ -1,7 +1,8 @@
 import 'package:anime_tv/features/tracking/domain/tracking_repository.dart';
 import 'package:dio/dio.dart';
 
-class AniListTrackingRepository implements TrackingRepository {
+class AniListTrackingRepository
+    implements TrackingRepository, AutomaticCompletionTrackingRepository {
   AniListTrackingRepository({required String accessToken, Dio? dio})
     : _dio =
           dio ??
@@ -134,6 +135,47 @@ mutation ($mediaId: Int!, $progress: Int!) {
 ''',
       {'mediaId': mediaId, 'progress': completedEpisodes},
     );
+  }
+
+  @override
+  Future<void> updateProgressAndCompletion({
+    required TrackingMediaIds ids,
+    required int completedEpisodes,
+  }) async {
+    final mediaId = ids.anilistId;
+    if (mediaId == null || mediaId <= 0 || completedEpisodes <= 0) {
+      throw ArgumentError(
+        'Automatic AniList progress needs a valid catalog ID.',
+      );
+    }
+    final data = await _graphQl(
+      r'''
+query ($mediaId: Int!) {
+  Media(id: $mediaId, type: ANIME) { id episodes status }
+}
+''',
+      {'mediaId': mediaId},
+    );
+    final media = data['Media'];
+    if (media is! Map || media['id'] != mediaId) {
+      throw const FormatException('AniList completion metadata did not match.');
+    }
+    await updateProgress(
+      mediaId: mediaId,
+      completedEpisodes: completedEpisodes,
+    );
+    if (trackingSeriesIsComplete(
+      completedEpisodes: completedEpisodes,
+      totalEpisodes: media['episodes'] is int ? media['episodes'] as int : null,
+      finishedAiring: media['status'] == 'FINISHED',
+    )) {
+      // A failed status write leaves the whole operation queued. On retry,
+      // progress may already match; Completed must still be sent explicitly.
+      await updateStatus(
+        mediaId: mediaId,
+        status: TrackingListStatus.completed,
+      );
+    }
   }
 
   @override

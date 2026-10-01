@@ -1,5 +1,6 @@
 import 'package:anime_tv/app/app.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/theme/teto_box_style.dart';
 import 'package:anime_tv/core/widgets/network_artwork.dart';
 import 'package:anime_tv/features/player/presentation/watch_party_membership_notice.dart';
 import 'package:anime_tv/features/watch_together/application/watch_party_controller.dart';
@@ -11,6 +12,149 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  testWidgets(
+    'party notices use the custom app palette and do not steal remote focus',
+    (tester) async {
+      final palette = AppThemePalette.fromSeeds(
+        background: const Color(0xFF081426),
+        surface: const Color(0xFF13273D),
+        accent: Colors.cyan,
+        primaryText: Colors.white,
+        mutedText: const Color(0xFFB7CADD),
+      );
+      final controller = _NoticeController();
+      final focus = FocusNode(debugLabel: 'existing-player-control');
+      addTearDown(focus.dispose);
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            watchPartyControllerProvider.overrideWith((_) => controller),
+          ],
+          child: MaterialApp(
+            theme: AppTheme.darkFor(palette),
+            home: Scaffold(
+              body: Stack(
+                children: [
+                  Center(
+                    child: TextButton(
+                      focusNode: focus,
+                      autofocus: true,
+                      onPressed: () {},
+                      child: const Text('Player'),
+                    ),
+                  ),
+                  const Positioned.fill(
+                    child: WatchPartyMembershipNoticeOverlay(),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      controller.show(const [
+        WatchPartyNotice(
+          sequence: 1,
+          eventType: WatchPartyEventType.joined,
+          displayName: 'Friend',
+          actionText: 'joined the party',
+          message: 'Friend joined the Watch Party.',
+        ),
+      ]);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(focus.hasPrimaryFocus, isTrue);
+      final surface = tester.widget<DecoratedBox>(
+        find.byKey(const ValueKey('party-notice-surface-1')),
+      );
+      final box = surface.decoration as BoxDecoration;
+      expect(box.color, TetoBoxStyle.fill(palette).withValues(alpha: .96));
+      expect(box.borderRadius, BorderRadius.circular(TetoBoxStyle.radius));
+      expect((box.border as Border).top.color, TetoBoxStyle.outline(palette));
+      expect(
+        tester
+            .widget<Text>(
+              find.byKey(const ValueKey('watch-party-membership-name-1')),
+            )
+            .style
+            ?.color,
+        palette.primaryText,
+      );
+      expect(
+        tester
+            .widget<Text>(
+              find.byKey(const ValueKey('watch-party-membership-action-1')),
+            )
+            .style
+            ?.color,
+        palette.mutedText,
+      );
+      expect(
+        tester
+            .widget<Opacity>(
+              find.byKey(const ValueKey('party-notice-reveal-1')),
+            )
+            .opacity,
+        1,
+      );
+      controller.show(const [
+        WatchPartyNotice(
+          sequence: 1,
+          eventType: WatchPartyEventType.joined,
+          displayName: 'Friend',
+          actionText: 'joined the party',
+          message: 'Friend joined the Watch Party.',
+        ),
+      ]);
+      await tester.pump();
+      expect(
+        tester
+            .widget<Opacity>(
+              find.byKey(const ValueKey('party-notice-reveal-1')),
+            )
+            .opacity,
+        1,
+        reason: 'unrelated rebuilds must not restart the reveal',
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('party notices honor reduced motion', (tester) async {
+    final controller = _NoticeController()
+      ..show(const [
+        WatchPartyNotice(
+          sequence: 1,
+          eventType: WatchPartyEventType.joined,
+          displayName: 'Friend',
+          actionText: 'joined the party',
+          message: 'Friend joined the Watch Party.',
+        ),
+      ]);
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          watchPartyControllerProvider.overrideWith((_) => controller),
+        ],
+        child: MaterialApp(
+          theme: AppTheme.dark,
+          home: const MediaQuery(
+            data: MediaQueryData(size: Size(800, 600), disableAnimations: true),
+            child: WatchPartyMembershipNoticeOverlay(),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(
+      tester
+          .widget<Opacity>(find.byKey(const ValueKey('party-notice-reveal-1')))
+          .opacity,
+      1,
+    );
+    expect(tester.takeException(), isNull);
+  });
   testWidgets(
     'app-wide overlay shows every participant action as a safe top-right queue',
     (tester) async {
@@ -134,7 +278,7 @@ void main() {
         final action = tester.widget<Text>(
           find.byKey(ValueKey('watch-party-membership-action-$sequence')),
         );
-        expect(action.style?.color, AppColors.textPrimary);
+        expect(action.style?.color, AppThemePalette.defaults.mutedText);
         expect(action.style?.decoration, TextDecoration.none);
         expect(
           action.style?.letterSpacing,
@@ -184,7 +328,11 @@ void main() {
             .first,
       );
       final box = decoration.decoration as BoxDecoration;
-      expect(box.color, const Color(0xF20B0B10));
+      expect(
+        box.color,
+        TetoBoxStyle.fill(AppThemePalette.defaults).withValues(alpha: .96),
+      );
+      expect(box.borderRadius, BorderRadius.circular(TetoBoxStyle.radius));
       expect((box.border! as Border).top.width, 1);
       expect(tester.takeException(), isNull);
     },

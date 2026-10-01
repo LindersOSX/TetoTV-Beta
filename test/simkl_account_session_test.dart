@@ -8,6 +8,83 @@ import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  group('automatic SIMKL Completed', () {
+    test('ambiguous stable mappings cannot mutate history or status', () async {
+      final fixture = _CompletionFixture()..ambiguousMapping = true;
+      await expectLater(fixture.sync(12), throwsStateError);
+      expect(fixture.writes, isEmpty);
+    });
+    test(
+      'sends explicit Completed even when progress is already final',
+      () async {
+        final fixture = _CompletionFixture();
+        await fixture.sync(12);
+        expect(fixture.writes, hasLength(1));
+        expect(fixture.writes.single.path, '/sync/add-to-list');
+        expect(fixture.requestedStatus, 'completed');
+        expect(
+          (((fixture.writes.single.data as Map)['anime'] as List).single
+              as Map)['ids'],
+          {'simkl': 37089},
+        );
+        expect(
+          (await fixture.repository.list(
+            TrackingListStatus.completed,
+          )).single.progress,
+          12,
+        );
+      },
+    );
+
+    test('records the final missing episode before Completed', () async {
+      final fixture = _CompletionFixture()..progress = 11;
+      await fixture.sync(12);
+      expect(fixture.writes.map((r) => r.path), [
+        '/sync/history',
+        '/sync/add-to-list',
+      ]);
+      expect(fixture.requestedStatus, 'completed');
+    });
+
+    for (final total in <Object?>[null, 0, -1, 12.5, '12', 24]) {
+      test(
+        'catalog total $total cannot complete an aired-so-far library count',
+        () async {
+          final fixture = _CompletionFixture()..total = total;
+          await fixture.sync(12);
+          expect(fixture.writes, isEmpty);
+        },
+      );
+    }
+
+    test('airing title and earlier rewatch stay Watching', () async {
+      final airing = _CompletionFixture()..ended = false;
+      await airing.sync(12);
+      expect(airing.writes, isEmpty);
+      final rewatch = _CompletionFixture();
+      await rewatch.sync(1);
+      expect(rewatch.writes, isEmpty);
+    });
+
+    test(
+      'requires canonical metadata and the authoritative status response',
+      () async {
+        final mismatch = _CompletionFixture()..metadataId = 999;
+        await expectLater(mismatch.sync(12), throwsA(isA<SimklApiException>()));
+        expect(mismatch.writes, isEmpty);
+        final normalized = _CompletionFixture()..actualStatus = 'watching';
+        await expectLater(normalized.sync(12), throwsStateError);
+        normalized.actualStatus = 'completed';
+        await normalized.sync(12);
+        expect(normalized.writes, hasLength(2));
+        expect(
+          (await normalized.repository.list(TrackingListStatus.completed)),
+          hasLength(1),
+        );
+      },
+    );
+  });
+
   test(
     'anime cache single-flights, merges activity deltas, and diffs removals',
     () async {
@@ -672,6 +749,104 @@ Map<String, dynamic> _animeRow({
     },
   ],
 };
+
+class _CompletionFixture {
+  _CompletionFixture() {
+    repository = SimklTrackingRepository.forTesting(
+      SimklAccountSession(
+        client: _client(
+          _dio((request) {
+            if (request.path == '/sync/activities') {
+              return _response(request, {
+                'all': '2026-10-01T00:00:00Z',
+                'settings': {'all': '2026-10-01T00:00:00Z'},
+                'anime': {
+                  'all': '2026-10-01T00:00:00Z',
+                  'removed_from_list': null,
+                },
+              });
+            }
+            if (request.path == '/sync/all-items/anime') {
+              return _response(request, {
+                'anime': [
+                  _animeRow(
+                    simklId: 37089,
+                    title: 'Matched season',
+                    status: 'watching',
+                    progress: progress,
+                    watchedEpisodeNumbers: [
+                      for (var i = 1; i <= progress; i++) i,
+                    ],
+                  ),
+                  if (ambiguousMapping)
+                    _animeRow(
+                      simklId: 888,
+                      title: 'Conflicting title',
+                      status: 'watching',
+                      progress: progress,
+                    ),
+                ],
+              });
+            }
+            if (request.path == '/anime/37089') {
+              expect(request.queryParameters['extended'], 'full');
+              return _response(request, {
+                'ids': {'simkl': metadataId},
+                'total_episodes': total,
+                'status': ended ? 'ended' : 'airing',
+              });
+            }
+            writes.add(request);
+            if (request.path == '/sync/history') {
+              progress = 12;
+              return _response(request, {
+                'added': {
+                  'episodes': 1,
+                  'statuses': [
+                    {
+                      'response': {'status': 'watching'},
+                    },
+                  ],
+                },
+                'not_found': {'movies': [], 'shows': [], 'episodes': []},
+              }, statusCode: 201);
+            }
+            expect(request.path, '/sync/add-to-list');
+            requestedStatus =
+                (((request.data as Map)['anime'] as List).single as Map)['to']
+                    as String;
+            return _response(request, {
+              'added': {
+                'anime': [
+                  {'to': actualStatus},
+                ],
+              },
+              'not_found': {'movies': [], 'shows': [], 'anime': []},
+            }, statusCode: 201);
+          }),
+        ),
+        persistentCache: _MemoryCache(),
+        cacheScopeLoader: () async => 'completion-profile',
+        delay: (_) async {},
+      ),
+    );
+  }
+
+  late final SimklTrackingRepository repository;
+  final writes = <RequestOptions>[];
+  Object? total = 12;
+  int metadataId = 37089;
+  int progress = 12;
+  bool ended = true;
+  bool ambiguousMapping = false;
+  String actualStatus = 'completed';
+  String? requestedStatus;
+
+  Future<void> sync(int episode) => repository.updateProgressAndCompletion(
+    ids: const TrackingMediaIds(anilistId: 1234, malId: 5678),
+    completedEpisodes: episode,
+  );
+}
 
 class _MemoryCache implements SimklPersistentCache {
   final Map<String, Map<String, dynamic>> values = {};

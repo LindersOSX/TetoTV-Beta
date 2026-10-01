@@ -1,7 +1,9 @@
+import 'package:anime_tv/core/widgets/teto_dialog.dart';
 import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'dart:async';
 
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/theme/teto_box_style.dart';
 import 'package:anime_tv/core/widgets/copyable_code_interaction.dart';
 import 'package:anime_tv/core/widgets/copyable_qr_interaction.dart';
 import 'package:anime_tv/features/marketplace/application/source_pairing_controller.dart';
@@ -10,10 +12,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
-Future<void> showSourcePairingDialog(BuildContext context) => showDialog<void>(
-  context: context,
-  builder: (_) => const SourcePairingDialog(),
-);
+Future<void> showSourcePairingDialog(BuildContext context) =>
+    showTetoDialog<void>(
+      context: context,
+      builder: (_) => const SourcePairingDialog(),
+    );
 
 class SourcePairingDialog extends ConsumerStatefulWidget {
   const SourcePairingDialog({super.key});
@@ -71,7 +74,8 @@ class _SourcePairingDialogState extends ConsumerState<SourcePairingDialog>
         if (didPop) _controller.stop();
       },
       child: Dialog(
-        backgroundColor: context.appPalette.surface,
+        backgroundColor: TetoBoxStyle.fill(context.appPalette),
+        shape: TetoBoxStyle.shape(context.appPalette),
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 900, maxHeight: 700),
           child: Padding(

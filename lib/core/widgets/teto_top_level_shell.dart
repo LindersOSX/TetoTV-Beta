@@ -213,8 +213,12 @@ class _TetoTopLevelShellState extends ConsumerState<TetoTopLevelShell> {
     final railMetrics = isPhoneLandscape
         ? phoneLandscapeNavigationRailMetrics(
             widget.preferences.navigationChromeSize,
+            scale: widget.preferences.navigationChromeScale,
           )
-        : homeNavigationRailMetrics(widget.preferences.navigationChromeSize);
+        : homeNavigationRailMetrics(
+            widget.preferences.navigationChromeSize,
+            scale: widget.preferences.navigationChromeScale,
+          );
     final railWidth = railMetrics.width;
     final responsive = context.responsiveScreenPadding;
     final safeAreaMinimum = usesSideNavigation

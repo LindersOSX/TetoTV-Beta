@@ -1,3 +1,4 @@
+import 'package:anime_tv/core/widgets/teto_dialog.dart';
 import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
@@ -16,7 +17,7 @@ Future<CatalogTrackingSelection?> showTrackingStatusPicker(
   BuildContext context, {
   required String title,
   TrackingListStatus? current,
-}) => showDialog<CatalogTrackingSelection>(
+}) => showTetoDialog<CatalogTrackingSelection>(
   context: context,
   barrierDismissible: true,
   builder: (context) => AlertDialog(

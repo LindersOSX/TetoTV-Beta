@@ -2,6 +2,8 @@ enum AppNotificationKind { appUpdate, announcement }
 
 enum AppNotificationAction { openAppUpdates, none }
 
+const appAnnouncementInboxLifetime = Duration(days: 7);
+
 /// A durable notification shown by TetoTV's in-app inbox.
 ///
 /// Update notices deliberately store a constrained action instead of an
@@ -33,6 +35,12 @@ class AppNotification {
   final String? targetChannel;
 
   bool get isRead => readAtUtc != null;
+
+  /// Announcements age out from their original publication timestamp. Update
+  /// notices remain until dismissed or reconciled by the updater.
+  DateTime? get autoDismissAtUtc => kind == AppNotificationKind.appUpdate
+      ? null
+      : createdAtUtc.toUtc().add(appAnnouncementInboxLifetime);
 
   AppNotification copyWith({DateTime? readAtUtc}) => AppNotification(
     id: id,

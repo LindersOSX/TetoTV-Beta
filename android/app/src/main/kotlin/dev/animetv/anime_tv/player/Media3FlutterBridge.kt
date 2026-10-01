@@ -6,6 +6,7 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.net.Uri
 import android.os.Handler
+import android.os.Build
 import android.os.Looper
 import android.os.SystemClock
 import android.util.Base64
@@ -32,7 +33,6 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
-import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
@@ -83,7 +83,11 @@ class Media3FlutterBridge(context: Context, engine: FlutterEngine) :
             object : PlatformViewFactory(StandardMessageCodec.INSTANCE) {
                 override fun create(context: Context, viewId: Int, args: Any?): PlatformView {
                     val params = args as? Map<*, *>
-                    val surfaceType = Media3BridgePolicy.surfaceType(params?.get("surfaceType"))
+                    val surfaceType = Media3BridgePolicy.effectiveSurfaceType(
+                        Media3BridgePolicy.surfaceType(params?.get("surfaceType")),
+                        Build.MANUFACTURER,
+                        Build.MODEL,
+                    )
                     val id = params?.get("id") as? Number
                     val session = id?.toLong()?.let(sessions::get)
                         ?: throw IllegalArgumentException("Media3 player is unavailable")
@@ -384,7 +388,7 @@ private class Media3VideoView(context: Context, private val session: Media3Sessi
         setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
         setKeepContentOnPlayerReset(false)
     }
-    init { session.attach(video) }
+    init { session.attach(video, surfaceType) }
     override fun getView(): View = video
     override fun dispose() { session.detach(video) }
 }
@@ -402,11 +406,13 @@ private class Media3Session(
     private data class OpenRequest(val uri: String, val headers: Map<String, String>, val openId: Long, val subtitles: List<Sidecar>, val audioTracks: List<AudioSidecar>, val mimeType: String?, val endMs: Long?)
     private var request: OpenRequest? = null
     private var player: ExoPlayer? = null
+    private var codecAdapters: Media3CodecAdapterFactory? = null
     private var releaseThread: Thread? = null
     private var releaseRequiredWaitState = false
     private var httpClient: OkHttpClient? = null
     private var activeMediaSourceFactory: DefaultMediaSourceFactory? = null
     private var view: PlayerView? = null
+    private var attachedSurfaceType = "detached"
     private val callbacks = Media3CallbackEpoch()
     private var eventGeneration = 0L
     private var openId = 0L
@@ -430,6 +436,9 @@ private class Media3Session(
     private val options = mutableMapOf<String, Any?>()
     private var decoderName: String? = null
     private var firstFrameAfterMs: Long? = null
+    private var audioUnderrunCount = 0
+    private var audioSinkErrorCount = 0
+    private var videoCodecErrorCount = 0
     private var openStartedMs = 0L
     private var terminalError: String? = null
     private var externalAudioFallbackApplied = false
@@ -486,6 +495,9 @@ private class Media3Session(
         terminalError = null
         decoderName = null
         firstFrameAfterMs = null
+        audioUnderrunCount = 0
+        audioSinkErrorCount = 0
+        videoCodecErrorCount = 0
         openStartedMs = SystemClock.elapsedRealtime()
         trackOverrides.clear()
         chapters.clear()
@@ -507,12 +519,15 @@ private class Media3Session(
             val decoders = MediaCodecSelector.DEFAULT.getDecoderInfos(mime, secure, tunneling)
             if (software && mime.startsWith("video/")) decoders.filter { it.softwareOnly } else decoders
         }
+        val renderers = Media3RenderersFactory(context)
+        renderers.setEnableDecoderFallback(true).setMediaCodecSelector(selector)
+        codecAdapters = renderers.codecAdapters
         val native = ExoPlayer.Builder(context)
             // Release completion below relies on the default per-player owned
             // PlaybackLooperProvider. Never introduce a shared/external
             // playback looper without replacing that ownership barrier.
             .setLooper(Looper.getMainLooper())
-            .setRenderersFactory(DefaultRenderersFactory(context).setEnableDecoderFallback(true).setMediaCodecSelector(selector))
+            .setRenderersFactory(renderers)
             .setMediaSourceFactory(mediaSourceFactory)
             .setLoadControl(DefaultLoadControl.Builder().setTargetBufferBytes(48 * 1024 * 1024).build())
             .setReleaseTimeoutMs(Media3BridgePolicy.RELEASE_TIMEOUT_MS)
@@ -583,6 +598,15 @@ private class Media3Session(
             }
         })
         native.addAnalyticsListener(object : AnalyticsListener {
+            override fun onAudioUnderrun(eventTime: AnalyticsListener.EventTime, bufferSize: Int, bufferSizeMs: Long, elapsedSinceLastFeedMs: Long) {
+                if (active()) audioUnderrunCount++
+            }
+            override fun onAudioSinkError(eventTime: AnalyticsListener.EventTime, audioSinkError: Exception) {
+                if (active()) audioSinkErrorCount++
+            }
+            override fun onVideoCodecError(eventTime: AnalyticsListener.EventTime, videoCodecError: Exception) {
+                if (active()) videoCodecErrorCount++
+            }
             override fun onVideoDecoderInitialized(eventTime: AnalyticsListener.EventTime, name: String, initializedTimestampMs: Long, initializationDurationMs: Long) {
                 if (active()) decoderName = Media3BridgePolicy.safeDecoderName(name)
             }
@@ -725,18 +749,25 @@ private class Media3Session(
         }
     }
 
-    fun attach(surface: PlayerView) {
+    fun attach(surface: PlayerView, surfaceType: String) {
+        require(surfaceType == "surface" || surfaceType == "texture")
         if (view === surface) return
         cancelScreenshot()
         view?.player = null
         view = surface
+        attachedSurfaceType = surfaceType
         surface.player = player
         applyOptions()
+        emitState()
     }
     fun detach(surface: PlayerView) {
         if (view === surface) cancelScreenshot()
         surface.player = null
-        if (view === surface) view = null
+        if (view === surface) {
+            view = null
+            attachedSurfaceType = "detached"
+            emitState()
+        }
     }
 
     fun addSubtitle(raw: Map<*, *>): Map<String, Any?> {
@@ -915,7 +946,13 @@ private class Media3Session(
     private fun metrics(): Map<String, Any?> {
         val native = player ?: return emptyMap()
         val result = linkedMapOf<String, Any?>()
+        result["surfaceType"] = attachedSurfaceType
+        result["androidSdk"] = Build.VERSION.SDK_INT
         decoderName?.let { result["decoderName"] = it }
+        codecAdapters?.videoQueueing?.let { queueing ->
+            result["codecQueueingMode"] = queueing.mode
+            result["codecQueueingCompatibility"] = queueing.compatibility
+        }
         val mime = native.videoFormat?.sampleMimeType
         if (mime != null && decoderName != null) {
             runCatching { MediaCodecSelector.DEFAULT.getDecoderInfos(mime, false, false).firstOrNull { it.name == decoderName } }.getOrNull()?.let {
@@ -927,6 +964,19 @@ private class Media3Session(
         if (externalAudioFallbackApplied) result["externalAudioFallback"] = true
         Media3BridgePolicy.codec(native.videoFormat?.sampleMimeType)?.let { result["codec"] = it }
         Media3BridgePolicy.codec(native.audioFormat?.sampleMimeType)?.let { result["audioCodec"] = it }
+        result["dolbyVision"] = native.videoFormat?.sampleMimeType == MimeTypes.VIDEO_DOLBY_VISION
+        native.videoFormat?.colorInfo?.let { color ->
+            result["colorSpace"] = color.colorSpace
+            result["colorRange"] = color.colorRange
+            result["colorTransfer"] = color.colorTransfer
+            result["hdrStaticMetadata"] = color.hdrStaticInfo != null
+        }
+        native.audioFormat?.sampleRate?.takeIf { it > 0 }?.let { result["audioSampleRate"] = it }
+        native.audioFormat?.channelCount?.takeIf { it > 0 }?.let { result["audioChannelCount"] = it }
+        // Names match the Dart adapter and performance sampler contract.
+        result["audioUnderruns"] = audioUnderrunCount
+        result["audioSinkErrors"] = audioSinkErrorCount
+        result["videoCodecErrors"] = videoCodecErrorCount
         native.videoFormat?.frameRate?.takeIf { it.isFinite() && it > 0 }?.let { result["sourceFps"] = it.toDouble() }
         native.videoFormat?.bitrate?.takeIf { it > 0 }?.let { result["videoBitrate"] = it }
         native.audioFormat?.bitrate?.takeIf { it > 0 }?.let { result["audioBitrate"] = it }
@@ -1075,6 +1125,7 @@ private class Media3Session(
         handler.removeCallbacks(tick)
         val old = player
         player = null
+        codecAdapters = null
         runCatching { view?.player = null }
         val client = httpClient
         httpClient = null

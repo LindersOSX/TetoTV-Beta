@@ -1,3 +1,4 @@
+import 'package:anime_tv/core/widgets/teto_dialog.dart';
 import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'dart:async';
 import 'dart:io';
@@ -8,6 +9,9 @@ import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/core/preferences/playback_audio_preference.dart';
 import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/widgets/teto_back_button.dart';
+import 'package:anime_tv/core/widgets/teto_browse_status.dart';
+import 'package:anime_tv/core/theme/teto_box_style.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/widgets/tv_text_input.dart';
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
@@ -36,17 +40,20 @@ import 'package:anime_tv/features/streaming/application/user_torrent_sources_con
 import 'package:anime_tv/features/streaming/data/composite_release_source.dart';
 import 'package:anime_tv/features/streaming/data/direct_torrent_stream_resolver.dart';
 import 'package:anime_tv/features/streaming/data/real_debrid_client.dart';
+import 'package:anime_tv/features/streaming/data/debrid_account_history.dart';
 import 'package:anime_tv/features/streaming/domain/debrid_service.dart';
 import 'package:anime_tv/features/streaming/domain/episode_identity_guard.dart';
 import 'package:anime_tv/features/streaming/domain/external_audio_track.dart';
 import 'package:anime_tv/features/streaming/domain/release_audio_preference.dart';
 import 'package:anime_tv/features/streaming/domain/stream_resolver.dart';
 import 'package:anime_tv/features/streaming/domain/stream_ranking_preferences.dart';
+import 'package:anime_tv/features/streaming/presentation/cached_download_file_dialog.dart';
 import 'package:anime_tv/features/watch_together/application/watch_party_controller.dart';
 import 'package:anime_tv/features/watch_together/domain/watch_party_source_descriptor.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/services.dart';
+import 'package:dio/dio.dart';
 import 'package:go_router/go_router.dart';
 
 export 'package:anime_tv/features/streaming/application/episode_release_search_cache.dart'
@@ -81,6 +88,10 @@ final directTorrentCapabilityReaderProvider =
       return AndroidTvBridge.instance.getDirectTorrentCapability;
     });
 
+final debridAccountHistoryProvider = Provider<DebridAccountHistory>(
+  (_) => const DebridAccountHistory(),
+);
+
 String offlineDownloadPreparationMessage(Object error) {
   if (error is EpisodeIdentityMismatchException ||
       error is DebridProviderFailure ||
@@ -100,6 +111,7 @@ String offlineDownloadPreparationMessage(Object error) {
 /// process crash by the anonymous handled-error reporter.
 bool shouldRecordResolveCrashReport(Object error) =>
     error is! EpisodeIdentityMismatchException &&
+    error is! DirectTorrentBusyException &&
     error is! DebridProviderFailure &&
     error is! DebridCacheMissException &&
     error is! DebridCleanupFailureException &&
@@ -589,6 +601,13 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
   int _downloadedAssetRefreshGeneration = 0;
   Set<DebridService> _connectedServices = const {};
   DebridService _debridService = DebridService.realDebrid;
+  List<DebridAccountHistoryItem> _accountHistory = const [];
+  bool _accountHistoryLoading = false;
+  bool _accountHistoryFullLoaded = false;
+  String? _accountHistoryError;
+  bool _showAccountHistory = false;
+  int _accountHistoryGeneration = 0;
+  CancelToken? _accountHistoryCancelToken;
   _StreamLanguageFilter _languageFilter = _StreamLanguageFilter.dub;
   bool _languageFilterSelectedInPicker = false;
   _StreamQualityFilter _qualityFilter = _StreamQualityFilter.any;
@@ -802,11 +821,13 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
     if (_languageFilterSelectedInPicker || !_webSearchEnabled) {
       return _languageFilter;
     }
-    final hasTorrentForEpisode = _releases.any(
-      (release) =>
-          releaseCodecIsPlayableOnDevice(release, device: _deviceProfile) &&
-          _releaseMatchesEpisodeIdentity(release),
-    );
+    final hasTorrentForEpisode =
+        _releases.any(
+          (release) =>
+              releaseCodecIsPlayableOnDevice(release, device: _deviceProfile) &&
+              _releaseMatchesEpisodeIdentity(release),
+        ) ||
+        _accountHistory.any(_historyItemMatchesEpisode);
     // A Web-only search opens on All regardless of the preferred audio mode.
     // Sub and Dub are torrent filters; Web providers do not reliably label
     // every stream's available tracks.
@@ -981,6 +1002,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
       _sortMode = _pickerSortMode(globalPreferences.debridStreamSort);
       _allowBatchStreams = preferences.allowBatchStreams;
     });
+    if (connected.isNotEmpty) unawaited(_loadAccountHistory());
     final downloadedAsset = await _refreshDownloadedAsset();
     if (!mounted) return;
     if (downloadedAsset != null &&
@@ -1023,6 +1045,29 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
     final librarySourceService = ref.read(libraryEpisodeSourceServiceProvider);
     final shouldSearchDebrid = source != null && _canPlayTorrentReleases;
     final shouldSearchLibrary = librarySourceService.hasConnectedServer;
+    if (widget.watchPartyFollow) {
+      unawaited(
+        TetoTvDatabase.instance.recordDiagnosticEvent(
+          category: 'stream-search',
+          message: 'Watch Party local source readiness',
+          details: <String, Object?>{
+            'phase': 'start',
+            'kind': widget.episode.format?.toUpperCase() == 'MOVIE'
+                ? 'movie'
+                : 'episode',
+            'status': shouldSearchDebrid
+                ? 'torrent_search_started'
+                : 'torrent_search_skipped',
+            'reason_code': source == null
+                ? 'no_torrent_source_configured'
+                : !_canPlayTorrentReleases
+                ? 'no_usable_torrent_playback'
+                : 'ready',
+            'watch_party_active': true,
+          },
+        ),
+      );
+    }
     var debridSearchFinished = !shouldSearchDebrid;
     final generation = ++_releaseSearchGeneration;
     setState(() {
@@ -1145,6 +1190,22 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
               _debridSearchFinished = true;
             }
           });
+          if (progress.isComplete && widget.watchPartyFollow) {
+            unawaited(
+              TetoTvDatabase.instance.recordDiagnosticEvent(
+                category: 'stream-search',
+                message: 'Watch Party torrent search completed',
+                details: <String, Object?>{
+                  'phase': 'final',
+                  'status': _releases.isEmpty ? 'no_results' : 'results',
+                  'state': <Map<String, Object>>[
+                    {'kind': 'releases', 'count': _releases.length},
+                    {'kind': 'failed_addons', 'count': _releaseFailures.length},
+                  ],
+                },
+              ),
+            );
+          }
           finishVisibleSearchIfReady();
           _tryStartAutoPlay(
             generation: generation,
@@ -1322,6 +1383,237 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
     } finally {
       if (mounted && generation == _releaseSearchGeneration) {
         setState(() => _retryingWebProviders = false);
+      }
+    }
+  }
+
+  Future<void> _loadAccountHistory({bool full = false}) async {
+    final service = _debridService;
+    final generation = ++_accountHistoryGeneration;
+    _accountHistoryCancelToken?.cancel('Account history superseded');
+    final cancelToken = CancelToken();
+    _accountHistoryCancelToken = cancelToken;
+    if (!mounted || !_connectedServices.contains(service)) return;
+    setState(() {
+      _accountHistoryLoading = true;
+      _accountHistoryError = null;
+      if (!full) {
+        _accountHistory = const [];
+        _accountHistoryFullLoaded = false;
+      }
+    });
+    try {
+      final token = await ref
+          .read(debridTokenServiceProvider)
+          .accessToken(service);
+      if (token == null || token.isEmpty) {
+        throw StateError(
+          'Reconnect $service in Accounts to view your downloads.',
+        );
+      }
+      final history = ref.read(debridAccountHistoryProvider);
+      final items = full
+          ? await history.listAll(service, token, cancelToken: cancelToken)
+          : await history.list(service, token, cancelToken: cancelToken);
+      if (!mounted || generation != _accountHistoryGeneration) return;
+      setState(() {
+        _accountHistory = items;
+        _accountHistoryFullLoaded = full;
+      });
+    } catch (_) {
+      if (!mounted || generation != _accountHistoryGeneration) return;
+      setState(
+        () => _accountHistoryError =
+            'Could not load your ${service.displayName} downloads. Try refreshing.',
+      );
+    } finally {
+      if (mounted && generation == _accountHistoryGeneration) {
+        setState(() => _accountHistoryLoading = false);
+      }
+    }
+  }
+
+  bool _historyItemMatchesEpisode(DebridAccountHistoryItem item) {
+    if (!item.ready || item.service != _debridService) return false;
+    if (item.hash != null &&
+        _releases.any(
+          (release) => release.infoHash.toLowerCase() == item.hash,
+        )) {
+      return true;
+    }
+    String normalize(String value) =>
+        value.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), ' ').trim();
+    final name = normalize(item.name);
+    final aliases = <String?>[
+      widget.episode.title,
+      widget.episode.titleEnglish,
+      widget.episode.titleRomaji,
+      widget.episode.titleNative,
+      ...widget.episode.alternativeTitles,
+    ];
+    if (!aliases.any((value) {
+      final alias = normalize(value ?? '');
+      final rawAlias = (value ?? '').trim().toLowerCase();
+      return (alias.length >= 4 && name.contains(alias)) ||
+          (rawAlias.length >= 2 && item.name.toLowerCase().contains(rawAlias));
+    })) {
+      return false;
+    }
+    return !assessEpisodeIdentityLabel(
+      label: item.name,
+      requestedEpisode: widget.episode.episode,
+      requestedSeason: catalogSeasonNumber(widget.episode),
+      requestedAbsoluteEpisode: absoluteEpisodeNumber(widget.episode),
+      requestedSpecial: episodeReferenceIsSpecial(widget.episode),
+    ).isMismatch;
+  }
+
+  Future<void> _resolveAccountHistoryItem(DebridAccountHistoryItem item) async {
+    if (_resolving) return;
+    if (!item.ready) {
+      setState(() => _error = 'This download is not ready to watch yet.');
+      return;
+    }
+    if (!_historyItemMatchesEpisode(item)) {
+      await _openManualAccountDownload(item);
+      return;
+    }
+    final attempt = ++_resolveAttempt;
+    setState(() {
+      _resolving = true;
+      _status = 'Opening your ${item.service.displayName} download…';
+      _error = null;
+    });
+    try {
+      final token = await ref
+          .read(debridTokenServiceProvider)
+          .accessToken(item.service);
+      if (token == null || token.isEmpty) {
+        throw StateError('Reconnect ${item.service.displayName} in Accounts.');
+      }
+      final ready = await ref
+          .read(debridAccountHistoryProvider)
+          .resolve(item, token, widget.episode);
+      if (!mounted || attempt != _resolveAttempt) return;
+      final selected = item.release;
+      _prepareExactWatchPartySourceHandoff(selected);
+      context.pushReplacement(
+        Uri(
+          path: '/player',
+          queryParameters: {
+            'source': ready.uri.toString(),
+            'title': widget.episode.playbackDisplayTitle(
+              ref.read(titleLanguagePreferenceProvider),
+            ),
+            'anilistId': '${widget.episode.anilistMediaId}',
+            if (widget.episode.malMediaId != null)
+              'malId': '${widget.episode.malMediaId}',
+            'episode': '${widget.episode.episode}',
+            'watchPartyTargetSourceKey': ?_hostSourceKey,
+            'debrid': item.service.slug,
+          },
+        ).toString(),
+        extra: PlaybackLaunch(
+          stream: ready,
+          episode: widget.episode,
+          selectedRelease: selected,
+          requestedAudio: _requestedAudioFromFilter,
+        ),
+      );
+    } catch (error) {
+      if (mounted && attempt == _resolveAttempt) {
+        if (error is EpisodeIdentityMismatchException && _showAccountHistory) {
+          await _openManualAccountDownload(item);
+          return;
+        }
+        setState(
+          () => _error = error is EpisodeIdentityMismatchException
+              ? error.toString()
+              : 'Could not open this account download. Try another item or refresh.',
+        );
+      }
+    } finally {
+      if (mounted && attempt == _resolveAttempt) {
+        setState(() => _resolving = false);
+      }
+    }
+  }
+
+  Future<void> _openManualAccountDownload(DebridAccountHistoryItem item) async {
+    final attempt = ++_resolveAttempt;
+    setState(() {
+      _resolving = true;
+      _status = 'Loading video files from your download…';
+      _error = null;
+    });
+    try {
+      final token = await ref
+          .read(debridTokenServiceProvider)
+          .accessToken(item.service);
+      if (token == null || token.isEmpty) {
+        throw StateError('Reconnect the account before opening this download.');
+      }
+      if (!mounted || attempt != _resolveAttempt) return;
+      final files = await ref
+          .read(debridAccountHistoryProvider)
+          .videoFiles(item, token);
+      if (!mounted || attempt != _resolveAttempt) return;
+      if (files.isEmpty) {
+        setState(
+          () => _error =
+              'No ready-to-watch video files were found in this download.',
+        );
+        return;
+      }
+      final selected = await showTetoDialog<DebridAccountVideoFile>(
+        context: context,
+        builder: (_) =>
+            CachedDownloadFileDialog(downloadName: item.name, files: files),
+      );
+      if (selected == null || !mounted || attempt != _resolveAttempt) return;
+      setState(() => _status = 'Opening the video file you selected…');
+      final ready = await selected.open();
+      if (!mounted || attempt != _resolveAttempt) {
+        await ready.playbackLease?.close();
+        return;
+      }
+      // An explicit file choice is not evidence for the current catalog show.
+      // Reuse the isolated player route: no anime tracking, checkpoints, skip
+      // timing, auto-next, or automatic switching to another show's stream.
+      final key = 'account:${item.service.slug}:${item.id}:${selected.id}';
+      final title = selected.name.replaceAll('\\', '/').split('/').last;
+      final result = await _openLibraryPlayer(
+        LibraryPlaybackRequest(
+          source: ready.uri,
+          title: title,
+          releaseName: item.name,
+          streamLabel: title,
+          sourceProviderId: 'account-${item.service.slug}',
+          sourceProviderName: item.service.displayName,
+          checkpointKey: key,
+          timelineIdentity: key,
+          headers: ready.headers,
+          playbackLease: ready.playbackLease,
+          requestedAudio: _requestedAudioFromFilter,
+        ),
+        automatic: false,
+      );
+      if (mounted && attempt == _resolveAttempt && result?.failed == true) {
+        setState(
+          () => _error =
+              'This file could not play with your selected player. Try another player in Settings or choose a different file.',
+        );
+      }
+    } catch (_) {
+      if (mounted && attempt == _resolveAttempt) {
+        setState(
+          () => _error =
+              'Could not open this account file. Refresh your downloads or reconnect the service, then try again.',
+        );
+      }
+    } finally {
+      if (mounted && attempt == _resolveAttempt) {
+        setState(() => _resolving = false);
       }
     }
   }
@@ -1525,7 +1817,9 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
                   !_failedResolveHashes.contains(item.infoHash.toLowerCase()),
             )
             .firstOrNull;
-        final terminalProviderFailure = isTerminalDebridFailoverFailure(error);
+        final terminalProviderFailure =
+            isTerminalDebridFailoverFailure(error) ||
+            error is DirectTorrentBusyException;
         if (_autoPickActive && terminalProviderFailure) {
           // A provider-wide Debrid failure cannot be fixed by another torrent,
           // but an allowed Web candidate may still be usable.
@@ -2482,7 +2776,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
     required String details,
   }) async {
     if (!mounted) return false;
-    return await showDialog<bool>(
+    return await showTetoDialog<bool>(
           context: context,
           barrierDismissible: false,
           builder: (dialogContext) => AlertDialog(
@@ -2516,7 +2810,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
 
   Future<bool> _confirmDirectPeerDownload({bool debridFailed = false}) async {
     if (!mounted) return false;
-    return await showDialog<bool>(
+    return await showTetoDialog<bool>(
           context: context,
           barrierDismissible: false,
           builder: (dialogContext) => AlertDialog(
@@ -3569,8 +3863,16 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
             allowBatch: ignoreOptionalFilters || _allowBatchStreams,
           );
     }).toList();
-    filtered.sort(
-      (left, right) => compareStreamReleases(
+    final accountHashes = {
+      for (final item in _accountHistory)
+        if (item.ready && item.service == _debridService && item.hash != null)
+          item.hash!.toLowerCase(),
+    };
+    filtered.sort((left, right) {
+      final leftOwned = accountHashes.contains(left.infoHash.toLowerCase());
+      final rightOwned = accountHashes.contains(right.infoHash.toLowerCase());
+      if (leftOwned != rightOwned) return leftOwned ? -1 : 1;
+      return compareStreamReleases(
         left,
         right,
         device: _deviceProfile,
@@ -3580,9 +3882,63 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
         preferredReleaseGroup: _seriesPreferences.preferredReleaseGroup,
         preferredAudio: _preferredAudio,
         rankingPreference: _debridRanking,
-      ),
-    );
+      );
+    });
     return filtered;
+  }
+
+  List<DebridAccountHistoryItem> _matchedAccountHistoryForPicker(
+    List<ReleaseCandidate> visibleReleases,
+  ) {
+    final visibleHashes = {
+      for (final release in visibleReleases) release.infoHash.toLowerCase(),
+    };
+    final filter = _pickerLanguageFilter;
+    return [
+          for (final item in _accountHistory)
+            if (_historyItemMatchesEpisode(item) &&
+                item.name.toLowerCase().contains(
+                  _streamSearchQuery.toLowerCase(),
+                ) &&
+                (item.hash == null ||
+                    !visibleHashes.contains(item.hash!.toLowerCase())))
+              item,
+        ]
+        .where((item) {
+          final matchingRelease = item.hash == null
+              ? null
+              : _releases
+                    .where(
+                      (release) =>
+                          release.infoHash.toLowerCase() ==
+                          item.hash!.toLowerCase(),
+                    )
+                    .firstOrNull;
+          final release = matchingRelease ?? item.release;
+          if (!releaseCodecIsPlayableOnDevice(
+            release,
+            device: _deviceProfile,
+          )) {
+            return false;
+          }
+          // A filename without a declared or recognizable audio mode belongs in
+          // All, never a guessed Sub/Dub bucket.
+          if (filter != _StreamLanguageFilter.all &&
+              release.audioIntent == ReleaseAudioIntent.unknown &&
+              releaseExplicitAudioPreference(release) == null &&
+              !releaseAdvertisesDualAudio(release)) {
+            return false;
+          }
+          return releaseMatchesStreamFilters(
+            release,
+            language: filter.name,
+            quality: _qualityFilter.name,
+            codec: _codecFilter.name,
+            hdr: _hdrFilter.name,
+            allowBatch: _allowBatchStreams,
+          );
+        })
+        .toList(growable: false);
   }
 
   bool _releaseMatchesEpisodeIdentity(ReleaseCandidate release) =>
@@ -3730,6 +4086,8 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
   @override
   void dispose() {
     _releaseSearchGeneration++;
+    _accountHistoryGeneration++;
+    _accountHistoryCancelToken?.cancel('Episode picker closed');
     _preferredWebWaitTimer?.cancel();
     _autoPickDeadlineTimer?.cancel();
     _magnetController.dispose();
@@ -3773,39 +4131,24 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
 
   Widget _body(BuildContext context) {
     if (_loadingAccount) {
-      return CircularProgressIndicator(
-        color: context.appPalette.secondaryAccent,
-      );
+      return const TetoBrowseLoading();
     }
     if (_stableResolveShellVisible) {
       return SizedBox(
         key: const ValueKey('resolve-opening-shell'),
         width: 620,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              Icons.cloud_download_rounded,
-              size: 68,
-              color: context.appPalette.secondaryAccent,
+        child: TetoBrowseStatus(
+          icon: Icons.cloud_download_rounded,
+          title: _status,
+          message: 'Cached releases normally complete in a few seconds.',
+          actions: LinearProgressIndicator(
+            value: _progress <= 0 ? null : _progress,
+            minHeight: 6,
+            backgroundColor: context.appPalette.primaryText.withValues(
+              alpha: .12,
             ),
-            const SizedBox(height: 20),
-            Text(_status, style: Theme.of(context).textTheme.headlineSmall),
-            const SizedBox(height: 18),
-            LinearProgressIndicator(
-              value: _progress <= 0 ? null : _progress,
-              minHeight: 6,
-              backgroundColor: context.appPalette.primaryText.withValues(
-                alpha: .12,
-              ),
-              color: context.appPalette.accentBright,
-            ),
-            const SizedBox(height: 12),
-            Text(
-              context.tr("Cached releases normally complete in a few seconds."),
-              style: Theme.of(context).textTheme.bodyMedium,
-            ),
-          ],
+            color: context.appPalette.accentBright,
+          ),
         ),
       );
     }
@@ -3820,22 +4163,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
       return SizedBox(
         key: const ValueKey('resolve-search-shell'),
         width: 620,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            CircularProgressIndicator(
-              color: context.appPalette.secondaryAccent,
-            ),
-            const SizedBox(height: 22),
-            Text(_status, style: Theme.of(context).textTheme.headlineSmall),
-            const SizedBox(height: 8),
-            Text(
-              _sourceSearchStatus,
-              style: Theme.of(context).textTheme.bodyMedium,
-              textAlign: TextAlign.center,
-            ),
-          ],
-        ),
+        child: TetoBrowseLoading(title: _status, message: _sourceSearchStatus),
       );
     }
     // This must remain reactive while the picker is open. The master
@@ -3885,11 +4213,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
         action: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            _ActionButton(
-              label: context.tr("Back"),
-              icon: Icons.arrow_back_rounded,
-              onPressed: _returnFromResolver,
-            ),
+            TetoBackButton(onPressed: _returnFromResolver),
             const SizedBox(width: 12),
             if (widget.watchPartyFollow) ...[
               _ActionButton(
@@ -3968,6 +4292,7 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
       };
       return _StreamPicker(
         releases: filtered,
+        matchedAccountHistory: _matchedAccountHistoryForPicker(filtered),
         totalCount: _releases.length,
         webStreams: filteredWeb,
         webTotalCount: _webStreams.length,
@@ -3999,7 +4324,38 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
         webEnabled: sourcePreferences.webStreamsEnabled,
         connectedServices: _connectedServices,
         selectedService: _debridService,
-        onServiceChanged: (value) => setState(() => _debridService = value),
+        onServiceChanged: (value) {
+          setState(() => _debridService = value);
+          unawaited(_loadAccountHistory(full: _showAccountHistory));
+        },
+        showAccountHistory: _showAccountHistory,
+        onAccountHistoryChanged: (value) {
+          setState(() => _showAccountHistory = value);
+          if (value && !_accountHistoryFullLoaded) {
+            unawaited(_loadAccountHistory(full: true));
+          }
+        },
+        accountHistory: _accountHistory
+            .where((item) => item.service == _debridService)
+            .where(
+              (item) => item.name.toLowerCase().contains(
+                _streamSearchQuery.toLowerCase(),
+              ),
+            )
+            .toList(growable: false),
+        accountHistoryLoading: _accountHistoryLoading,
+        accountHistoryError: _accountHistoryError,
+        onAccountHistoryRefresh: () =>
+            unawaited(_loadAccountHistory(full: _showAccountHistory)),
+        onAccountHistorySelected: (item) =>
+            unawaited(_resolveAccountHistoryItem(item)),
+        accountHashes: {
+          for (final item in _accountHistory)
+            if (item.ready &&
+                item.service == _debridService &&
+                item.hash != null)
+              item.hash!.toLowerCase(),
+        },
         filter: _pickerLanguageFilter,
         onFilterChanged: (value) => _updatePicker(() {
           _languageFilter = value;
@@ -4090,6 +4446,10 @@ class _ResolveEpisodeScreenState extends ConsumerState<ResolveEpisodeScreen> {
             : directTorrentUnavailable
             ? 'Direct torrent playback is unavailable on this device or CPU. '
                   'Connect a supported debrid service instead.'
+            : widget.watchPartyFollow
+            ? context.tr(
+                'Watch Party searches for streams on each device. Check this device’s torrent add-ons and debrid account, then retry.',
+              )
             : sourcePreferences.webStreamsEnabled
             ? 'Connect a supported debrid service, or install a compatible Web '
                   'Stream provider from Marketplace.'
@@ -4256,6 +4616,7 @@ _StreamSortMode _pickerSortMode(DebridStreamSort preference) =>
 class _StreamPicker extends StatelessWidget {
   const _StreamPicker({
     required this.releases,
+    required this.matchedAccountHistory,
     required this.totalCount,
     required this.webStreams,
     required this.webTotalCount,
@@ -4278,6 +4639,14 @@ class _StreamPicker extends StatelessWidget {
     required this.connectedServices,
     required this.selectedService,
     required this.onServiceChanged,
+    required this.showAccountHistory,
+    required this.onAccountHistoryChanged,
+    required this.accountHistory,
+    required this.accountHistoryLoading,
+    required this.accountHistoryError,
+    required this.onAccountHistoryRefresh,
+    required this.onAccountHistorySelected,
+    required this.accountHashes,
     required this.filter,
     required this.onFilterChanged,
     required this.qualityFilter,
@@ -4312,6 +4681,7 @@ class _StreamPicker extends StatelessWidget {
   });
 
   final List<ReleaseCandidate> releases;
+  final List<DebridAccountHistoryItem> matchedAccountHistory;
   final int totalCount;
   final List<WebStreamResult> webStreams;
   final int webTotalCount;
@@ -4334,6 +4704,14 @@ class _StreamPicker extends StatelessWidget {
   final Set<DebridService> connectedServices;
   final DebridService selectedService;
   final ValueChanged<DebridService> onServiceChanged;
+  final bool showAccountHistory;
+  final ValueChanged<bool> onAccountHistoryChanged;
+  final List<DebridAccountHistoryItem> accountHistory;
+  final bool accountHistoryLoading;
+  final String? accountHistoryError;
+  final VoidCallback onAccountHistoryRefresh;
+  final ValueChanged<DebridAccountHistoryItem> onAccountHistorySelected;
+  final Set<String> accountHashes;
   final _StreamLanguageFilter filter;
   final ValueChanged<_StreamLanguageFilter> onFilterChanged;
   final _StreamQualityFilter qualityFilter;
@@ -4399,10 +4777,50 @@ class _StreamPicker extends StatelessWidget {
                   child: _ReleaseCard(
                     release: release,
                     recommended: index == 0,
+                    inAccount: accountHashes.contains(
+                      release.infoHash.toLowerCase(),
+                    ),
+                    cached: accountHashes.contains(
+                      release.infoHash.toLowerCase(),
+                    ),
                     onPressed: () => onSelected(release),
                     onLongPress: onReleaseDownload == null
                         ? null
                         : () => onReleaseDownload!(release),
+                  ),
+                );
+              },
+            ),
+          ),
+        ];
+
+  List<Widget> get _matchedAccountSlivers => matchedAccountHistory.isEmpty
+      ? const []
+      : [
+          const SliverToBoxAdapter(
+            child: _StreamSectionHeader(
+              icon: Icons.cloud_done_rounded,
+              title: 'CACHED FOR THIS EPISODE',
+            ),
+          ),
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(8, 8, 8, 18),
+            sliver: SliverList.builder(
+              itemCount: matchedAccountHistory.length,
+              itemBuilder: (context, index) {
+                final item = matchedAccountHistory[index];
+                return Padding(
+                  key: ValueKey(
+                    'matched-account:${item.service.slug}:${item.id}',
+                  ),
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: _ReleaseCard(
+                    release: item.release,
+                    recommended: false,
+                    inAccount: true,
+                    cached: true,
+                    onPressed: () => onAccountHistorySelected(item),
+                    onLongPress: null,
                   ),
                 );
               },
@@ -4505,25 +4923,95 @@ class _StreamPicker extends StatelessWidget {
           ),
         ];
 
-  List<Widget> get _orderedStreamSlivers => switch (sourcePriority) {
-    StreamSourcePriority.debridFirst => [
-      ..._downloadedSlivers,
-      ..._librarySlivers,
-      ..._debridSlivers,
-      ..._webSlivers,
-      ..._emptyResultSlivers,
-    ],
-    StreamSourcePriority.webFirst => [
-      ..._downloadedSlivers,
-      ..._librarySlivers,
-      ..._webSlivers,
-      ..._debridSlivers,
-      ..._emptyResultSlivers,
-    ],
-  };
+  List<Widget> get _accountHistorySlivers => [
+    const SliverToBoxAdapter(
+      child: _StreamSectionHeader(
+        icon: Icons.cloud_done_rounded,
+        title: 'YOUR DEBRID DOWNLOADS',
+      ),
+    ),
+    if ((accountHistoryLoading && accountHistory.isEmpty) ||
+        accountHistoryError != null ||
+        accountHistory.isEmpty)
+      SliverToBoxAdapter(
+        child: Padding(
+          padding: const EdgeInsets.all(18),
+          child: accountHistoryLoading
+              ? const TetoBrowseLoading(
+                  title: 'Loading your account downloads…',
+                )
+              : TetoBrowseStatus(
+                  icon: accountHistoryError != null
+                      ? Icons.cloud_off_rounded
+                      : Icons.cloud_done_rounded,
+                  title: 'YOUR DEBRID DOWNLOADS',
+                  message:
+                      accountHistoryError ??
+                      'No downloads were found in this account or search.',
+                  actions: _CompactAction(
+                    icon: Icons.refresh_rounded,
+                    label: 'Refresh downloads',
+                    onPressed: onAccountHistoryRefresh,
+                  ),
+                ),
+        ),
+      )
+    else
+      SliverPadding(
+        padding: const EdgeInsets.fromLTRB(8, 8, 8, 18),
+        sliver: SliverList.builder(
+          itemCount: accountHistory.length,
+          itemBuilder: (context, index) {
+            final item = accountHistory[index];
+            return Padding(
+              key: ValueKey('account:${item.service.slug}:${item.id}'),
+              padding: const EdgeInsets.only(bottom: 12),
+              child: _ReleaseCard(
+                release: item.release,
+                recommended: false,
+                inAccount: true,
+                cached: item.ready,
+                accountStatus: item.ready ? 'READY' : 'NOT READY',
+                onPressed: () => onAccountHistorySelected(item),
+                onLongPress: null,
+              ),
+            );
+          },
+        ),
+      ),
+    if (accountHistoryLoading && accountHistory.isNotEmpty)
+      const SliverToBoxAdapter(
+        child: Padding(
+          padding: EdgeInsets.all(18),
+          child: LocalizedText('Loading the rest of your account downloads…'),
+        ),
+      ),
+  ];
+
+  List<Widget> get _orderedStreamSlivers => showAccountHistory
+      ? _accountHistorySlivers
+      : switch (sourcePriority) {
+          StreamSourcePriority.debridFirst => [
+            ..._downloadedSlivers,
+            ..._librarySlivers,
+            ..._matchedAccountSlivers,
+            ..._debridSlivers,
+            ..._webSlivers,
+            ..._emptyResultSlivers,
+          ],
+          StreamSourcePriority.webFirst => [
+            ..._downloadedSlivers,
+            ..._librarySlivers,
+            ..._matchedAccountSlivers,
+            ..._webSlivers,
+            ..._debridSlivers,
+            ..._emptyResultSlivers,
+          ],
+        };
 
   List<Widget> get _emptyResultSlivers =>
       releases.isNotEmpty ||
+          matchedAccountHistory.isNotEmpty ||
           webStreams.isNotEmpty ||
           librarySources.isNotEmpty ||
           downloadedSource != null
@@ -4532,32 +5020,28 @@ class _StreamPicker extends StatelessWidget {
           SliverToBoxAdapter(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(8, 4, 8, 18),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    searchQuery.isEmpty
-                        ? Icons.filter_alt_off_rounded
-                        : Icons.search_off_rounded,
-                    size: 30,
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    isSearching && searchQuery.isEmpty
-                        ? 'Still searching providers…'
-                        : searchQuery.isEmpty
-                        ? 'No streams match the selected filters.'
-                        : 'No streams match this search.',
-                  ),
-                  if (searchQuery.isNotEmpty) ...[
-                    const SizedBox(height: 10),
-                    _CompactAction(
-                      icon: Icons.clear_rounded,
-                      label: 'Clear search',
-                      onPressed: onSearchCleared,
-                    ),
-                  ],
-                ],
+              child: TetoBrowseStatus(
+                icon: searchQuery.isEmpty
+                    ? Icons.filter_alt_off_rounded
+                    : Icons.search_off_rounded,
+                title: isSearching && searchQuery.isEmpty
+                    ? 'Loading'
+                    : 'No matches found',
+                indicator: isSearching && searchQuery.isEmpty
+                    ? const CircularProgressIndicator()
+                    : null,
+                message: isSearching && searchQuery.isEmpty
+                    ? 'Still searching providers…'
+                    : searchQuery.isEmpty
+                    ? 'No streams match the selected filters.'
+                    : 'No streams match this search.',
+                actions: searchQuery.isNotEmpty
+                    ? _CompactAction(
+                        icon: Icons.clear_rounded,
+                        label: 'Clear search',
+                        onPressed: onSearchCleared,
+                      )
+                    : null,
               ),
             ),
           ),
@@ -4713,6 +5197,11 @@ class _StreamPicker extends StatelessWidget {
               final controls = _StreamPickerPrimaryControls(
                 filter: filter,
                 onFilterChanged: onFilterChanged,
+                showAccountHistory: showAccountHistory,
+                accountHistoryEnabled:
+                    debridEnabled &&
+                    connectedServices.contains(selectedService),
+                onAccountHistoryChanged: onAccountHistoryChanged,
                 showAdvancedFilters: showAdvancedFilters,
                 activeAdvancedFilters: activeAdvancedFilters,
                 onAdvancedFiltersChanged: onAdvancedFiltersChanged,
@@ -5061,6 +5550,9 @@ class _StreamPickerPrimaryControls extends StatefulWidget {
   const _StreamPickerPrimaryControls({
     required this.filter,
     required this.onFilterChanged,
+    required this.showAccountHistory,
+    required this.accountHistoryEnabled,
+    required this.onAccountHistoryChanged,
     required this.showAdvancedFilters,
     required this.activeAdvancedFilters,
     required this.onAdvancedFiltersChanged,
@@ -5069,6 +5561,9 @@ class _StreamPickerPrimaryControls extends StatefulWidget {
 
   final _StreamLanguageFilter filter;
   final ValueChanged<_StreamLanguageFilter> onFilterChanged;
+  final bool showAccountHistory;
+  final bool accountHistoryEnabled;
+  final ValueChanged<bool> onAccountHistoryChanged;
   final bool showAdvancedFilters;
   final int activeAdvancedFilters;
   final ValueChanged<bool> onAdvancedFiltersChanged;
@@ -5083,6 +5578,7 @@ class _StreamPickerPrimaryControlsState
     extends State<_StreamPickerPrimaryControls> {
   late final List<FocusNode> _focusNodes = [
     FocusNode(debugLabel: 'stream-picker.all'),
+    FocusNode(debugLabel: 'stream-picker.cached'),
     FocusNode(debugLabel: 'stream-picker.sub'),
     FocusNode(debugLabel: 'stream-picker.dub'),
     FocusNode(debugLabel: 'stream-picker.filters'),
@@ -5124,7 +5620,7 @@ class _StreamPickerPrimaryControlsState
   @override
   Widget build(BuildContext context) {
     final controls = <Widget>[
-      for (final value in _StreamLanguageFilter.values)
+      for (final value in _StreamLanguageFilter.values) ...[
         _FilterButton(
           key: ValueKey('stream-picker-${value.name}'),
           label: switch (value) {
@@ -5132,12 +5628,31 @@ class _StreamPickerPrimaryControlsState
             _StreamLanguageFilter.sub => context.tr("SUB"),
             _StreamLanguageFilter.dub => context.tr("DUB"),
           },
-          selected: widget.filter == value,
-          onPressed: () => widget.onFilterChanged(value),
-          focusNode: _focusNodes[value.index],
-          onKeyEvent: (node, event) =>
-              _handleHorizontalNavigation(value.index, event),
+          selected: !widget.showAccountHistory && widget.filter == value,
+          onPressed: () {
+            widget.onAccountHistoryChanged(false);
+            widget.onFilterChanged(value);
+          },
+          focusNode:
+              _focusNodes[value == _StreamLanguageFilter.all
+                  ? 0
+                  : value.index + 1],
+          onKeyEvent: (node, event) => _handleHorizontalNavigation(
+            value == _StreamLanguageFilter.all ? 0 : value.index + 1,
+            event,
+          ),
         ),
+        if (value == _StreamLanguageFilter.all)
+          _FilterButton(
+            key: const ValueKey('stream-picker-cached'),
+            label: 'Cached',
+            selected: widget.showAccountHistory,
+            enabled: widget.accountHistoryEnabled,
+            onPressed: () => widget.onAccountHistoryChanged(true),
+            focusNode: _focusNodes[1],
+            onKeyEvent: (node, event) => _handleHorizontalNavigation(1, event),
+          ),
+      ],
       _CompactIconAction(
         key: const ValueKey('stream-picker-filters'),
         icon: widget.showAdvancedFilters
@@ -5151,8 +5666,8 @@ class _StreamPickerPrimaryControlsState
         badge: widget.activeAdvancedFilters,
         onPressed: () =>
             widget.onAdvancedFiltersChanged(!widget.showAdvancedFilters),
-        focusNode: _focusNodes[3],
-        onKeyEvent: (node, event) => _handleHorizontalNavigation(3, event),
+        focusNode: _focusNodes[4],
+        onKeyEvent: (node, event) => _handleHorizontalNavigation(4, event),
       ),
       _CompactIconAction(
         key: const ValueKey('stream-picker-refresh'),
@@ -5160,8 +5675,8 @@ class _StreamPickerPrimaryControlsState
         label: context.tr("Refresh"),
         onPressed: widget.onRefresh,
         enabled: widget.onRefresh != null,
-        focusNode: _focusNodes[4],
-        onKeyEvent: (node, event) => _handleHorizontalNavigation(4, event),
+        focusNode: _focusNodes[5],
+        onKeyEvent: (node, event) => _handleHorizontalNavigation(5, event),
       ),
     ];
     final controlRow = Row(
@@ -5178,7 +5693,7 @@ class _StreamPickerPrimaryControlsState
       policy: OrderedTraversalPolicy(),
       child: LayoutBuilder(
         builder: (context, constraints) {
-          if (constraints.maxWidth >= 420) return controlRow;
+          if (constraints.maxWidth >= 560) return controlRow;
           return SingleChildScrollView(
             key: const ValueKey('stream-picker-primary-controls-scroll'),
             scrollDirection: Axis.horizontal,
@@ -5204,19 +5719,239 @@ class _StreamSectionHeader extends StatelessWidget {
         children: [
           Icon(icon, size: 18, color: context.appPalette.accentBright),
           const SizedBox(width: 8),
-          Text(
-            context.tr(title),
-            style: TextStyle(
-              color: context.appPalette.primaryText.withValues(alpha: .7),
-              fontSize: 13,
-              fontWeight: FontWeight.w900,
-              letterSpacing: 1.1,
+          Expanded(
+            child: Text(
+              context.tr(title),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: context.appPalette.primaryText.withValues(alpha: .7),
+                fontSize: 13,
+                fontWeight: FontWeight.w900,
+                letterSpacing: 1.1,
+              ),
             ),
           ),
         ],
       ),
     );
   }
+}
+
+/// Compact source rows keep resolution on the left and provider details apart
+/// from the release title. Tags can still wrap on phones and with larger text.
+class _SourceCard extends StatelessWidget {
+  const _SourceCard({
+    super.key,
+    required this.title,
+    required this.provider,
+    required this.icon,
+    required this.onPressed,
+    this.onLongPress,
+    this.detail,
+    this.quality,
+    this.tags = const [],
+    this.autofocus = false,
+  });
+
+  final String title;
+  final String provider;
+  final IconData icon;
+  final VoidCallback onPressed;
+  final VoidCallback? onLongPress;
+  final String? detail;
+  final String? quality;
+  final List<Widget> tags;
+  final bool autofocus;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.appPalette;
+    return TvFocusable(
+      autofocus: autofocus,
+      onPressed: onPressed,
+      onLongPress: onLongPress,
+      focusScale: 1.015,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final compact = constraints.maxWidth < 560;
+          final trailingMetadata = constraints.maxWidth >= 900;
+          return Container(
+            key: const ValueKey('source-card-surface'),
+            constraints: BoxConstraints(minHeight: compact ? 88 : 96),
+            padding: EdgeInsets.all(compact ? 12 : 14),
+            decoration: TetoBoxStyle.decoration(palette),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                _SourceQualityTile(
+                  quality: quality,
+                  icon: icon,
+                  compact: compact,
+                ),
+                SizedBox(width: compact ? 10 : 18),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title.replaceAll('\n', ' • '),
+                        key: const ValueKey('source-card-title'),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.titleMedium
+                            ?.copyWith(fontWeight: FontWeight.w700),
+                      ),
+                      if (!trailingMetadata) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          [
+                            provider,
+                            if (detail?.isNotEmpty == true) detail!,
+                          ].join(' • '),
+                          key: const ValueKey('source-card-metadata'),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(color: palette.mutedText),
+                        ),
+                      ],
+                      if (tags.isNotEmpty) ...[
+                        const SizedBox(height: 7),
+                        Wrap(spacing: 6, runSpacing: 5, children: tags),
+                      ],
+                    ],
+                  ),
+                ),
+                if (trailingMetadata) ...[
+                  const SizedBox(width: 18),
+                  SizedBox(
+                    width: 170,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        if (detail?.isNotEmpty == true) ...[
+                          Text(
+                            detail!,
+                            key: const ValueKey('source-card-metadata'),
+                            textAlign: TextAlign.right,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(color: palette.mutedText),
+                          ),
+                          const SizedBox(height: 4),
+                        ],
+                        Text(
+                          provider,
+                          textAlign: TextAlign.right,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(color: palette.mutedText),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+                SizedBox(width: compact ? 8 : 16),
+                Icon(
+                  Icons.play_circle_fill_rounded,
+                  color: palette.accentBright,
+                  size: compact ? 22 : 28,
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _SourceQualityTile extends StatelessWidget {
+  const _SourceQualityTile({
+    required this.quality,
+    required this.icon,
+    required this.compact,
+  });
+
+  final String? quality;
+  final IconData icon;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.appPalette;
+    final hasQuality = quality != null;
+    return Container(
+      key: const ValueKey('source-card-quality'),
+      width: compact ? 52 : 68,
+      height: compact ? 58 : 68,
+      padding: const EdgeInsets.symmetric(horizontal: 5),
+      alignment: Alignment.center,
+      decoration: hasQuality
+          ? BoxDecoration(
+              borderRadius: BorderRadius.circular(TetoBoxStyle.radius),
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [palette.accent, palette.accentBright],
+              ),
+            )
+          : TetoBoxStyle.decoration(
+              palette,
+              color: palette.accent.withValues(alpha: .12),
+            ),
+      child: hasQuality
+          ? FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(
+                quality!,
+                style: TextStyle(
+                  color: contrastForeground(palette.accent),
+                  fontSize: compact ? 13 : 16,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            )
+          : Icon(icon, size: compact ? 22 : 28, color: palette.accentBright),
+    );
+  }
+}
+
+String _sourceQualityLabel(String? quality, {int height = 0}) =>
+    switch (height) {
+      >= 4320 => '8K',
+      >= 2160 => '4K',
+      > 0 => '${height}P',
+      _ => quality?.trim().isNotEmpty == true ? quality!.toUpperCase() : 'AUTO',
+    };
+
+// Stremio-style titles often append the filename and emoji metadata as extra
+// lines. Only shorten presentation; identity checks/search retain releaseName.
+String _releaseCardDisplayTitle(ReleaseCandidate release) {
+  final lines = release.releaseName.trim().split(RegExp(r'\r?\n'));
+  final first = lines.firstWhere(
+    (line) => line.trim().isNotEmpty,
+    orElse: () => '',
+  );
+  final title = first
+      .replaceFirst(RegExp(r'\s*(?:👤|💾|⚙️?).*$', unicode: true), '')
+      .trim();
+  return title.isNotEmpty ? title : release.releaseName.trim();
+}
+
+Color _cachedSourceColor(BuildContext context) {
+  const green = Color(0xFF65D6A0);
+  final surface = TetoBoxStyle.fill(context.appPalette);
+  final foreground = contrastForeground(surface);
+  for (final blend in const [0.0, .2, .4, .6, .8, 1.0]) {
+    final color = Color.lerp(green, foreground, blend)!;
+    final pill = Color.alphaBlend(color.withValues(alpha: .13), surface);
+    if (contrastRatio(color, pill) >= 4.5) return color;
+  }
+  return foreground;
 }
 
 class _DownloadedStreamCard extends StatelessWidget {
@@ -5227,76 +5962,25 @@ class _DownloadedStreamCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final palette = context.appPalette;
     final job = source.job;
-    return TvFocusable(
+    return _SourceCard(
       key: const ValueKey('stream-picker-downloaded-source'),
-      onPressed: onPressed,
       autofocus: true,
-      borderRadius: BorderRadius.circular(18),
-      focusScale: 1.015,
-      child: Container(
-        height: 104,
-        padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 16),
-        decoration: BoxDecoration(
-          color: palette.surface,
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(
-            color: const Color(0xFF67D49B).withValues(alpha: .45),
-          ),
+      onPressed: onPressed,
+      icon: Icons.offline_pin_rounded,
+      quality: _sourceQualityLabel(job.quality),
+      title: job.episodeTitle?.trim().isNotEmpty == true
+          ? job.episodeTitle!
+          : context.tr('Downloaded episode {value1}', {'value1': job.episode}),
+      provider: job.providerName ?? context.tr('Available offline'),
+      tags: [
+        _MetaPill(
+          label: context.tr('Available offline'),
+          color: context.appPalette.accentBright,
         ),
-        child: Row(
-          children: [
-            Container(
-              width: 48,
-              height: 48,
-              decoration: BoxDecoration(
-                color: const Color(0xFF67D49B).withValues(alpha: .18),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: const Icon(
-                Icons.offline_pin_rounded,
-                color: Color(0xFF67D49B),
-              ),
-            ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    job.episodeTitle?.trim().isNotEmpty == true
-                        ? job.episodeTitle!
-                        : context.tr("Downloaded episode {value1}", {
-                            'value1': job.episode,
-                          }),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
-                  const SizedBox(height: 5),
-                  Text(
-                    [
-                      'Available offline',
-                      job.quality,
-                      job.audioLabel,
-                      job.providerName,
-                    ].whereType<String>().join(' • '),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                ],
-              ),
-            ),
-            Icon(
-              Icons.play_arrow_rounded,
-              color: palette.primaryText.withValues(alpha: .8),
-            ),
-          ],
-        ),
-      ),
+        if (job.audioLabel?.isNotEmpty == true)
+          _MetaPill(label: job.audioLabel!),
+      ],
     );
   }
 }
@@ -5313,68 +5997,19 @@ class _LibraryStreamCard extends StatelessWidget {
   final VoidCallback onPressed;
 
   @override
-  Widget build(BuildContext context) {
-    final palette = context.appPalette;
-    final icon = switch (source.origin) {
+  Widget build(BuildContext context) => _SourceCard(
+    title: source.title,
+    provider: source.subtitle,
+    icon: switch (source.origin) {
       LibraryEpisodeOrigin.device => Icons.video_file_rounded,
       LibraryEpisodeOrigin.jellyfin => Icons.live_tv_rounded,
       LibraryEpisodeOrigin.plex => Icons.connected_tv_rounded,
-    };
-    return TvFocusable(
-      onPressed: onPressed,
-      borderRadius: BorderRadius.circular(18),
-      focusScale: 1.015,
-      child: Container(
-        height: 104,
-        padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 16),
-        decoration: BoxDecoration(
-          color: palette.surface,
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: palette.primaryText.withValues(alpha: .08)),
-        ),
-        child: Row(
-          children: [
-            Container(
-              width: 48,
-              height: 48,
-              decoration: BoxDecoration(
-                color: palette.secondaryAccent.withValues(alpha: .18),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Icon(icon, color: palette.secondaryAccent),
-            ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    source.title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
-                  const SizedBox(height: 5),
-                  Text(
-                    '${source.subtitle}'
-                    '${ambiguous ? ' • Multiple exact matches; choose manually' : ''}',
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                ],
-              ),
-            ),
-            Icon(
-              Icons.chevron_right_rounded,
-              color: palette.primaryText.withValues(alpha: .7),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
+    },
+    detail: ambiguous
+        ? context.tr('Multiple exact matches; choose manually')
+        : null,
+    onPressed: onPressed,
+  );
 }
 
 class _WebStreamCard extends StatelessWidget {
@@ -5389,68 +6024,32 @@ class _WebStreamCard extends StatelessWidget {
   final VoidCallback? onLongPress;
 
   @override
-  Widget build(BuildContext context) {
-    final palette = context.appPalette;
-    return TvFocusable(
-      onPressed: onPressed,
-      onLongPress: onLongPress,
-      borderRadius: BorderRadius.circular(18),
-      focusScale: 1.015,
-      child: Container(
-        height: 104,
-        padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 16),
-        decoration: BoxDecoration(
-          color: context.appPalette.surface,
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(
-            color: context.appPalette.primaryText.withValues(alpha: .08),
+  Widget build(BuildContext context) => _SourceCard(
+    title: stream.title,
+    provider: stream.providerName,
+    icon: Icons.language_rounded,
+    quality: _sourceQualityLabel(
+      stream.quality,
+      height: webStreamQualityHeight(stream),
+    ),
+    onPressed: onPressed,
+    onLongPress: onLongPress,
+    tags: [
+      _MetaPill(label: stream.effectiveAudioCapability.pickerLabel),
+      if (stream.subtitleUri != null)
+        _MetaPill(
+          label: context.tr(
+            const {
+                  'en',
+                  'eng',
+                  'english',
+                }.contains(stream.subtitleLanguage?.trim().toLowerCase())
+                ? 'English captions'
+                : 'Captions',
           ),
         ),
-        child: Row(
-          children: [
-            Container(
-              width: 48,
-              height: 48,
-              decoration: BoxDecoration(
-                color: palette.accent.withValues(alpha: .18),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: const Icon(Icons.play_circle_outline_rounded),
-            ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    stream.title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
-                  const SizedBox(height: 5),
-                  Text(
-                    '${stream.providerName} / '
-                    '${stream.effectiveAudioCapability.pickerLabel}'
-                    '${stream.quality == null ? '' : ' / ${stream.quality}'}'
-                    '${stream.subtitleUri == null ? '' : ' / English captions'}',
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                ],
-              ),
-            ),
-            Icon(
-              Icons.chevron_right_rounded,
-              color: palette.primaryText.withValues(alpha: .7),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
+    ],
+  );
 }
 
 class _ReleaseCard extends StatelessWidget {
@@ -5459,163 +6058,58 @@ class _ReleaseCard extends StatelessWidget {
     required this.onPressed,
     required this.onLongPress,
     required this.recommended,
+    this.inAccount = false,
+    this.cached = false,
+    this.accountStatus,
   });
 
   final ReleaseCandidate release;
   final VoidCallback onPressed;
   final VoidCallback? onLongPress;
   final bool recommended;
+  final bool inAccount;
+  final bool cached;
+  final String? accountStatus;
 
   @override
   Widget build(BuildContext context) {
     final palette = context.appPalette;
-    return TvFocusable(
+    return _SourceCard(
+      title: _releaseCardDisplayTitle(release),
+      provider: release.provider ?? context.tr('User source'),
+      quality: _sourceQualityLabel(
+        release.quality,
+        height: releaseQualityHeight(release),
+      ),
+      icon: inAccount
+          ? Icons.cloud_done_rounded
+          : Icons.play_circle_outline_rounded,
       onPressed: onPressed,
       onLongPress: onLongPress,
-      borderRadius: BorderRadius.circular(18),
-      focusScale: 1.015,
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final compact = constraints.maxWidth < 560;
-          final compactMetadata = <String>[
-            releaseAudioPickerLabel(release),
-            release.provider ?? '',
-            release.seeders > 0 ? '${release.seeders} seeders' : '',
-            release.sizeLabel ?? '',
-          ].where((label) => label.isNotEmpty).join(' • ');
-          return Container(
-            height: 126,
-            padding: EdgeInsets.symmetric(
-              horizontal: compact ? 14 : 22,
-              vertical: 17,
-            ),
-            color: palette.surface,
-            child: Row(
-              children: [
-                Container(
-                  width: compact ? 64 : 92,
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      colors: [palette.accent, palette.secondaryAccent],
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                    ),
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                  child: Center(
-                    child: Text(
-                      release.quality?.toUpperCase() ?? 'AUTO',
-                      style: TextStyle(
-                        color: contrastForeground(palette.accent),
-                        fontSize: compact ? 15 : 19,
-                        fontWeight: FontWeight.w900,
-                      ),
-                    ),
-                  ),
-                ),
-                SizedBox(width: compact ? 12 : 20),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Text(
-                        release.releaseName.replaceAll('\n', ' • '),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.titleMedium
-                            ?.copyWith(fontWeight: FontWeight.w700),
-                      ),
-                      SizedBox(height: compact ? 6 : 9),
-                      if (compact)
-                        Text(
-                          compactMetadata,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.bodySmall,
-                        )
-                      else
-                        Wrap(
-                          spacing: 8,
-                          runSpacing: 6,
-                          children: [
-                            if (recommended)
-                              _MetaPill(
-                                label: context.tr("RECOMMENDED"),
-                                color: Color(0xFF67D49B),
-                              ),
-                            _MetaPill(
-                              label: releaseAudioPickerLabel(release),
-                              color: release.isDubbed
-                                  ? const Color(0xFFFFB86C)
-                                  : palette.secondaryAccent,
-                            ),
-                            if (isTvSafeRelease(release))
-                              _MetaPill(
-                                label: context.tr("TV SAFE"),
-                                color: Color(0xFF67D49B),
-                              ),
-                            if (release.hasSubtitles && release.isDubbed)
-                              _MetaPill(
-                                label: context.tr("SUBTITLES"),
-                                color: palette.secondaryAccent,
-                              ),
-                            if (release.codec case final codec?)
-                              _MetaPill(label: codec),
-                            if (release.isHdr)
-                              _MetaPill(
-                                label: context.tr("HDR"),
-                                color: Color(0xFFFFD166),
-                              ),
-                            if (release.isBatch)
-                              _MetaPill(label: context.tr("BATCH")),
-                          ],
-                        ),
-                    ],
-                  ),
-                ),
-                if (!compact) ...[
-                  const SizedBox(width: 18),
-                  SizedBox(
-                    width: 190,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Text(
-                          [
-                            if (release.seeders > 0)
-                              '● ${release.seeders} seeders',
-                            if (release.sizeLabel != null) release.sizeLabel!,
-                          ].join('  •  '),
-                          style: Theme.of(context).textTheme.bodyMedium,
-                        ),
-                        const SizedBox(height: 7),
-                        Text(
-                          release.provider ?? 'User source',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: palette.mutedText,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 18),
-                ] else
-                  const SizedBox(width: 10),
-                Icon(
-                  Icons.play_circle_fill_rounded,
-                  color: palette.accentBright,
-                  size: compact ? 24 : 34,
-                ),
-              ],
-            ),
-          );
-        },
-      ),
+      detail: [
+        if (release.seeders > 0) '${release.seeders} seeders',
+        if (release.sizeLabel != null) release.sizeLabel!,
+      ].join(' • '),
+      tags: [
+        if (!inAccount) _MetaPill(label: releaseAudioPickerLabel(release)),
+        if (cached || inAccount)
+          _MetaPill(
+            label: context.tr(cached ? 'CACHED' : 'IN YOUR DEBRID'),
+            color: cached ? _cachedSourceColor(context) : palette.accentBright,
+          ),
+        if (accountStatus != null) _MetaPill(label: context.tr(accountStatus!)),
+        if (recommended)
+          _MetaPill(
+            label: context.tr('RECOMMENDED'),
+            color: palette.accentBright,
+          ),
+        if (isTvSafeRelease(release)) _MetaPill(label: context.tr('TV SAFE')),
+        if (release.hasSubtitles && release.isDubbed)
+          _MetaPill(label: context.tr('SUBTITLES')),
+        if (release.codec case final codec?) _MetaPill(label: codec),
+        if (release.isHdr) _MetaPill(label: context.tr('HDR')),
+        if (release.isBatch) _MetaPill(label: context.tr('BATCH')),
+      ],
     );
   }
 }
@@ -5625,6 +6119,7 @@ class _FilterButton extends StatelessWidget {
     required this.label,
     required this.selected,
     required this.onPressed,
+    this.enabled = true,
     this.focusNode,
     this.onKeyEvent,
     super.key,
@@ -5633,6 +6128,7 @@ class _FilterButton extends StatelessWidget {
   final String label;
   final bool selected;
   final VoidCallback onPressed;
+  final bool enabled;
   final FocusNode? focusNode;
   final FocusOnKeyEventCallback? onKeyEvent;
 
@@ -5641,6 +6137,7 @@ class _FilterButton extends StatelessWidget {
     final palette = context.appPalette;
     return TvFocusable(
       onPressed: onPressed,
+      enabled: enabled,
       focusNode: focusNode,
       onKeyEvent: onKeyEvent,
       borderRadius: BorderRadius.circular(999),
@@ -5654,7 +6151,9 @@ class _FilterButton extends StatelessWidget {
         child: Text(
           label,
           style: Theme.of(context).textTheme.labelLarge?.copyWith(
-            color: selected
+            color: !enabled
+                ? palette.mutedText.withValues(alpha: .6)
+                : selected
                 ? contrastForeground(palette.accentBright)
                 : palette.primaryText,
           ),
@@ -5699,11 +6198,11 @@ class _CompactAction extends StatelessWidget {
   Widget build(BuildContext context) {
     return TvFocusable(
       onPressed: onPressed,
-      borderRadius: BorderRadius.circular(10),
+      borderRadius: BorderRadius.circular(TetoBoxStyle.radius),
       focusScale: 1.03,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        color: context.appPalette.surface,
+        decoration: TetoBoxStyle.decoration(context.appPalette),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -5862,27 +6361,12 @@ class _Message extends StatelessWidget {
   final Widget action;
 
   @override
-  Widget build(BuildContext context) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(icon, size: 68, color: context.appPalette.mutedText),
-        const SizedBox(height: 16),
-        Text(title, style: Theme.of(context).textTheme.headlineSmall),
-        const SizedBox(height: 8),
-        SizedBox(
-          width: 560,
-          child: Text(
-            context.tr(body),
-            textAlign: TextAlign.center,
-            style: Theme.of(context).textTheme.bodyLarge,
-          ),
-        ),
-        const SizedBox(height: 22),
-        action,
-      ],
-    );
-  }
+  Widget build(BuildContext context) => TetoBrowseStatus(
+    icon: icon,
+    title: title,
+    message: body,
+    actions: action,
+  );
 }
 
 class _BackButton extends StatelessWidget {
@@ -5892,18 +6376,7 @@ class _BackButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return TvFocusable(
-      autofocus: true,
-      onPressed: onPressed,
-      borderRadius: BorderRadius.circular(10),
-      child: ColoredBox(
-        color: context.appPalette.surface,
-        child: const Padding(
-          padding: EdgeInsets.all(10),
-          child: Icon(Icons.arrow_back_rounded, size: 20),
-        ),
-      ),
-    );
+    return TetoBackButton(autofocus: true, onPressed: onPressed);
   }
 }
 
@@ -5920,23 +6393,22 @@ class _ActionButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final foreground = contrastForeground(context.appPalette.primaryText);
+    final palette = context.appPalette;
     return TvFocusable(
       onPressed: onPressed,
-      borderRadius: BorderRadius.circular(10),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-        color: context.appPalette.primaryText,
+        decoration: TetoBoxStyle.decoration(palette),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, color: foreground, size: 19),
+            Icon(icon, color: palette.accentBright, size: 19),
             const SizedBox(width: 8),
             Text(
               label,
               style: Theme.of(
                 context,
-              ).textTheme.labelLarge?.copyWith(color: foreground),
+              ).textTheme.labelLarge?.copyWith(color: palette.primaryText),
             ),
           ],
         ),

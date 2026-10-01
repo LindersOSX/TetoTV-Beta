@@ -1,6 +1,11 @@
+import 'package:anime_tv/core/widgets/teto_dialog.dart';
 import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/theme/teto_box_style.dart';
+import 'package:anime_tv/core/theme/teto_color_presets.dart';
+import 'package:anime_tv/core/theme/teto_ui_tokens.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
+import 'package:anime_tv/core/widgets/teto_studio_components.dart';
 import 'package:anime_tv/features/settings/application/theme_studio_controller.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -65,7 +70,7 @@ class _ThemeStudioScreenState extends ConsumerState<ThemeStudioScreen> {
       Scrollable.ensureVisible(
         targetContext,
         alignment: .5,
-        duration: const Duration(milliseconds: 120),
+        duration: TetoUiMotion.duration(context, TetoUiMotion.focus),
       );
     }
   }
@@ -182,7 +187,7 @@ class _ThemeStudioScreenState extends ConsumerState<ThemeStudioScreen> {
   Future<void> _editColor(AppThemeColorRole role) async {
     final initial = _draft.colorFor(role);
     setState(() => _editorOpen = true);
-    final selected = await showDialog<Color>(
+    final selected = await showTetoDialog<Color>(
       context: context,
       barrierDismissible: false,
       builder: (context) => _ColorEditorDialog(
@@ -204,7 +209,7 @@ class _ThemeStudioScreenState extends ConsumerState<ThemeStudioScreen> {
   }
 
   Future<void> _apply() async {
-    if (_saving) return;
+    if (_saving || !_dirty) return;
     final report = ThemeContrastReport.forPalette(_draft);
     if (_contrastGuardEnabled && report.hasIssues) {
       _showMessage('Fix the contrast warnings or turn off the safeguard.');
@@ -268,51 +273,55 @@ class _ThemeStudioScreenState extends ConsumerState<ThemeStudioScreen> {
               key: const ValueKey('theme-studio-screen'),
               backgroundColor: palette.background,
               body: SafeArea(
-                child: LayoutBuilder(
-                  builder: (context, constraints) {
-                    final compact = constraints.maxWidth < 760;
-                    final horizontalPadding = compact ? 18.0 : 36.0;
-                    return CustomScrollView(
-                      slivers: [
-                        SliverPadding(
-                          padding: EdgeInsets.fromLTRB(
-                            horizontalPadding,
-                            20,
-                            horizontalPadding,
-                            40,
+                child: Center(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 1400),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: TetoUiSpace.pageCompact,
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const SizedBox(height: 12),
+                          TetoStudioHeader(
+                            title: 'Theme Studio',
+                            subtitle: 'Make TetoTV yours',
+                            onBack: () => Navigator.maybePop(context),
+                            backKey: const ValueKey('theme-studio-back'),
+                            backFocusNode: _backFocusNode,
+                            onBackKeyEvent: _handleBackKey,
                           ),
-                          sliver: SliverToBoxAdapter(
-                            child: Center(
-                              child: ConstrainedBox(
-                                constraints: const BoxConstraints(
-                                  maxWidth: 1180,
-                                ),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    _Header(
-                                      onBack: () => Navigator.maybePop(context),
-                                      focusNode: _backFocusNode,
-                                      onKeyEvent: _handleBackKey,
-                                    ),
-                                    const SizedBox(height: 24),
-                                    LocalizedText(
-                                      'Make TetoTV yours',
-                                      style: Theme.of(
-                                        context,
-                                      ).textTheme.displaySmall,
-                                    ),
-                                    const SizedBox(height: 8),
-                                    LocalizedText(
-                                      'Change the app canvas, panels, focus color '
-                                      'and text. Your saved theme is shared by '
-                                      'phone and TV layouts.',
-                                      style: Theme.of(
-                                        context,
-                                      ).textTheme.bodyLarge,
-                                    ),
-                                    const SizedBox(height: 26),
-                                    if (compact) ...[
+                          const SizedBox(height: 16),
+                          Expanded(
+                            child: LayoutBuilder(
+                              builder: (context, constraints) {
+                                final wide =
+                                    constraints.maxWidth >= 820 ||
+                                    (constraints.maxWidth >= 660 &&
+                                        constraints.maxHeight < 320);
+                                // These few color roles keep their focus nodes
+                                // mounted so the remote graph can always reach
+                                // the guard and Apply/Reset below the fold.
+                                final controls = SingleChildScrollView(
+                                  key: const ValueKey('theme-studio-controls'),
+                                  padding: EdgeInsets.only(
+                                    right: wide ? 12 : 0,
+                                    bottom: 96,
+                                  ),
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      LocalizedText(
+                                        'Change the app canvas, panels, focus color '
+                                        'and text. Your saved theme is shared by '
+                                        'phone and TV layouts.',
+                                        style: Theme.of(
+                                          context,
+                                        ).textTheme.bodyLarge,
+                                      ),
+                                      const SizedBox(height: 16),
                                       _ColorRolesPanel(
                                         palette: _draft,
                                         onEdit: _editColor,
@@ -320,155 +329,105 @@ class _ThemeStudioScreenState extends ConsumerState<ThemeStudioScreen> {
                                         onKeyEvent: _handleRoleKey,
                                       ),
                                       const SizedBox(height: 18),
-                                      _ThemePreview(palette: _draft),
-                                    ] else
-                                      Row(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          Expanded(
-                                            flex: 5,
-                                            child: _ColorRolesPanel(
-                                              palette: _draft,
-                                              onEdit: _editColor,
-                                              focusNodes: _roleFocusNodes,
-                                              onKeyEvent: _handleRoleKey,
-                                            ),
-                                          ),
-                                          const SizedBox(width: 22),
-                                          Expanded(
-                                            flex: 4,
-                                            child: _ThemePreview(
-                                              palette: _draft,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    const SizedBox(height: 18),
-                                    Focus(
-                                      canRequestFocus: false,
-                                      onKeyEvent: _handleContrastKey,
-                                      child: _ContrastGuardCard(
-                                        enabled: _contrastGuardEnabled,
-                                        report: report,
-                                        focusNode: _contrastFocusNode,
-                                        onChanged: (value) => setState(() {
-                                          _contrastGuardEnabled = value;
-                                          _dirty = true;
-                                        }),
-                                      ),
-                                    ),
-                                    const SizedBox(height: 22),
-                                    Wrap(
-                                      spacing: 12,
-                                      runSpacing: 12,
-                                      children: [
-                                        Focus(
-                                          canRequestFocus: false,
-                                          onKeyEvent: _handleApplyKey,
-                                          child: FilledButton.icon(
-                                            key: const ValueKey(
-                                              'theme-studio-apply',
-                                            ),
-                                            focusNode: _applyFocusNode,
-                                            onPressed: _saving || applyBlocked
-                                                ? null
-                                                : _apply,
-                                            icon: _saving
-                                                ? const SizedBox.square(
-                                                    dimension: 18,
-                                                    child:
-                                                        CircularProgressIndicator(
-                                                          strokeWidth: 2,
-                                                        ),
-                                                  )
-                                                : const Icon(
-                                                    Icons.check_rounded,
-                                                  ),
-                                            label: LocalizedText(
-                                              _saving
-                                                  ? 'Applying…'
-                                                  : 'Apply theme',
-                                            ),
-                                          ),
+                                      Focus(
+                                        canRequestFocus: false,
+                                        onKeyEvent: _handleContrastKey,
+                                        child: _ContrastGuardCard(
+                                          enabled: _contrastGuardEnabled,
+                                          report: report,
+                                          focusNode: _contrastFocusNode,
+                                          onChanged: (value) => setState(() {
+                                            _contrastGuardEnabled = value;
+                                            _dirty = true;
+                                          }),
                                         ),
-                                        Focus(
-                                          canRequestFocus: false,
-                                          onKeyEvent: _handleResetKey,
-                                          child: OutlinedButton.icon(
-                                            key: const ValueKey(
-                                              'theme-studio-reset',
-                                            ),
-                                            focusNode: _resetFocusNode,
-                                            onPressed: _reset,
-                                            icon: const Icon(Icons.restart_alt),
-                                            label: const LocalizedText(
-                                              'Reset defaults',
-                                            ),
-                                          ),
+                                      ),
+                                      const SizedBox(height: 22),
+                                      TetoStudioActions(
+                                        key: const ValueKey(
+                                          'theme-studio-actions',
                                         ),
-                                      ],
+                                        applyKey: const ValueKey(
+                                          'theme-studio-apply',
+                                        ),
+                                        resetKey: const ValueKey(
+                                          'theme-studio-reset',
+                                        ),
+                                        applyFocusNode: _applyFocusNode,
+                                        resetFocusNode: _resetFocusNode,
+                                        onApplyKeyEvent: _handleApplyKey,
+                                        onResetKeyEvent: _handleResetKey,
+                                        applyEnabled:
+                                            _dirty && !_saving && !applyBlocked,
+                                        onApply: _saving || applyBlocked
+                                            ? null
+                                            : _apply,
+                                        onReset: _reset,
+                                        applyLabel: _saving
+                                            ? 'Applying…'
+                                            : 'Apply theme',
+                                        applyIcon: _saving
+                                            ? const SizedBox.square(
+                                                dimension: 18,
+                                                child:
+                                                    CircularProgressIndicator(
+                                                      strokeWidth: 2,
+                                                    ),
+                                              )
+                                            : null,
+                                      ),
+                                    ],
+                                  ),
+                                );
+                                final preview = _ThemePreview(palette: _draft);
+                                if (wide) {
+                                  return Row(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Expanded(child: controls),
+                                      const SizedBox(width: 18),
+                                      Expanded(
+                                        child: SizedBox(
+                                          height: constraints.maxHeight
+                                              .clamp(0, 390)
+                                              .toDouble(),
+                                          child: preview,
+                                        ),
+                                      ),
+                                    ],
+                                  );
+                                }
+                                return Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
+                                  children: [
+                                    // Keep room for options even on short,
+                                    // landscape layouts or enlarged text.
+                                    SizedBox(
+                                      height: (constraints.maxHeight * .4)
+                                          .clamp(0, 230)
+                                          .toDouble(),
+                                      child: preview,
                                     ),
+                                    const SizedBox(height: 12),
+                                    Expanded(child: controls),
                                   ],
-                                ),
-                              ),
+                                );
+                              },
                             ),
                           ),
-                        ),
-                      ],
-                    );
-                  },
+                          const SizedBox(height: 12),
+                        ],
+                      ),
+                    ),
+                  ),
                 ),
               ),
             );
           },
         ),
       ),
-    );
-  }
-}
-
-class _Header extends StatelessWidget {
-  const _Header({
-    required this.onBack,
-    required this.focusNode,
-    required this.onKeyEvent,
-  });
-
-  final VoidCallback onBack;
-  final FocusNode focusNode;
-  final FocusOnKeyEventCallback onKeyEvent;
-
-  @override
-  Widget build(BuildContext context) {
-    final palette = context.appPalette;
-    return Row(
-      children: [
-        TvFocusable(
-          onPressed: onBack,
-          focusNode: focusNode,
-          onKeyEvent: onKeyEvent,
-          borderRadius: BorderRadius.circular(12),
-          child: Container(
-            key: const ValueKey('theme-studio-back'),
-            width: 48,
-            height: 48,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: palette.surface,
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: const Icon(Icons.arrow_back_rounded),
-          ),
-        ),
-        const SizedBox(width: 14),
-        Expanded(
-          child: LocalizedText(
-            'Theme Studio',
-            style: Theme.of(context).textTheme.titleLarge,
-          ),
-        ),
-      ],
     );
   }
 }
@@ -489,36 +448,22 @@ class _ColorRolesPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colors = context.appPalette;
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: colors.surface,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: colors.primaryText.withValues(alpha: .08)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          LocalizedText(
-            'App colors',
-            style: Theme.of(context).textTheme.titleMedium,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        TetoStudioSectionTitle(context.tr('App colors')),
+        for (final role in AppThemeColorRole.values) ...[
+          _ColorRoleTile(
+            role: role,
+            color: palette.colorFor(role),
+            autofocus: role == AppThemeColorRole.background,
+            focusNode: focusNodes[role]!,
+            onKeyEvent: (_, event) => onKeyEvent(role, event),
+            onPressed: () => onEdit(role),
           ),
-          const SizedBox(height: 12),
-          for (final role in AppThemeColorRole.values) ...[
-            _ColorRoleTile(
-              role: role,
-              color: palette.colorFor(role),
-              autofocus: role == AppThemeColorRole.background,
-              focusNode: focusNodes[role]!,
-              onKeyEvent: (_, event) => onKeyEvent(role, event),
-              onPressed: () => onEdit(role),
-            ),
-            if (role != AppThemeColorRole.values.last)
-              const SizedBox(height: 9),
-          ],
+          if (role != AppThemeColorRole.values.last) const SizedBox(height: 9),
         ],
-      ),
+      ],
     );
   }
 }
@@ -548,14 +493,11 @@ class _ColorRoleTile extends StatelessWidget {
       autofocus: autofocus,
       focusNode: focusNode,
       onKeyEvent: onKeyEvent,
-      borderRadius: BorderRadius.circular(13),
+      borderRadius: BorderRadius.circular(TetoBoxStyle.radius),
       child: Container(
         key: ValueKey('theme-color-${role.name}'),
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
-        decoration: BoxDecoration(
-          color: palette.surfaceRaised,
-          borderRadius: BorderRadius.circular(13),
-        ),
+        decoration: TetoBoxStyle.decoration(palette),
         child: Row(
           children: [
             Container(
@@ -616,179 +558,207 @@ class _ThemePreview extends StatelessWidget {
   Widget build(BuildContext context) {
     return Semantics(
       label: 'Live theme preview',
-      child: Container(
+      child: TetoStudioPreviewFrame(
         key: const ValueKey('theme-live-preview'),
-        padding: const EdgeInsets.all(18),
-        decoration: BoxDecoration(
-          color: palette.background,
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: palette.focusRing, width: 2),
-          boxShadow: [
-            BoxShadow(
-              color: palette.focusGlow,
-              blurRadius: 16,
-              spreadRadius: 1,
-            ),
-          ],
-        ),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Row(
-              children: [
-                Container(
-                  width: 44,
-                  height: 44,
-                  decoration: BoxDecoration(
-                    color: palette.accent,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Icon(
-                    Icons.play_arrow_rounded,
-                    color: contrastForeground(palette.accent),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      LocalizedText(
-                        'Featured show',
-                        style: TextStyle(
-                          color: palette.primaryText,
-                          fontSize: 17,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                      LocalizedText(
-                        'Continue watching · Episode 7',
-                        style: TextStyle(
-                          color: palette.mutedText,
-                          fontSize: 12,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            Container(
-              height: 152,
-              decoration: BoxDecoration(
-                color: palette.surface,
-                borderRadius: BorderRadius.circular(14),
-              ),
-              child: Row(
-                children: [
-                  Container(
-                    width: 88,
-                    decoration: BoxDecoration(
-                      color: palette.surfaceRaised,
-                      borderRadius: const BorderRadius.horizontal(
-                        left: Radius.circular(14),
-                      ),
-                    ),
-                    child: Icon(
-                      Icons.movie_outlined,
-                      size: 34,
-                      color: palette.mutedText,
-                    ),
-                  ),
-                  Expanded(
-                    child: Padding(
-                      padding: const EdgeInsets.all(13),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          LocalizedText(
-                            'Your library',
-                            style: TextStyle(
-                              color: palette.primaryText,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                          const SizedBox(height: 6),
-                          LocalizedText(
-                            'Panels, labels and focus states update here.',
-                            style: TextStyle(
-                              color: palette.mutedText,
-                              fontSize: 12,
-                            ),
-                          ),
-                          const SizedBox(height: 10),
-                          Container(
-                            height: 5,
-                            decoration: BoxDecoration(
-                              color: palette.surfaceRaised,
-                              borderRadius: BorderRadius.circular(5),
-                            ),
-                            alignment: Alignment.centerLeft,
-                            child: FractionallySizedBox(
-                              widthFactor: .62,
-                              child: DecoratedBox(
-                                decoration: BoxDecoration(
-                                  color: palette.accentBright,
-                                  borderRadius: BorderRadius.circular(5),
-                                ),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
+            Text(
+              context.tr('Live preview'),
+              style: TextStyle(
+                color: palette.mutedText,
+                fontWeight: FontWeight.w700,
               ),
             ),
-            const SizedBox(height: 16),
-            Row(
-              children: [
-                Expanded(
-                  child: Container(
-                    height: 42,
-                    alignment: Alignment.center,
-                    decoration: BoxDecoration(
-                      color: palette.accent,
-                      borderRadius: BorderRadius.circular(11),
-                    ),
-                    child: LocalizedText(
-                      'Play',
-                      style: TextStyle(
-                        color: contrastForeground(palette.accent),
-                        fontWeight: FontWeight.w800,
-                      ),
+            const SizedBox(height: 9),
+            Expanded(
+              child: LayoutBuilder(
+                builder: (context, constraints) => ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.topCenter,
+                    child: SizedBox(
+                      // Keep a readable sample canvas before fitting it into
+                      // compact previews, rather than wrapping its fixed-height
+                      // demo cards into too many lines at phone widths.
+                      width: constraints.maxWidth.clamp(420, 560).toDouble(),
+                      child: _buildSample(context),
                     ),
                   ),
                 ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Container(
-                    height: 42,
-                    alignment: Alignment.center,
-                    decoration: BoxDecoration(
-                      color: palette.selectableSurface,
-                      borderRadius: BorderRadius.circular(11),
-                      border: Border.all(color: palette.focusRing, width: 2),
-                    ),
-                    child: LocalizedText(
-                      'Focused',
-                      style: TextStyle(
-                        color: palette.primaryText,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                ),
-              ],
+              ),
             ),
           ],
         ),
       ),
     );
   }
+
+  Widget _buildSample(BuildContext context) => Container(
+    key: const ValueKey('theme-preview-sample'),
+    padding: const EdgeInsets.all(18),
+    decoration: BoxDecoration(
+      color: palette.background,
+      borderRadius: BorderRadius.circular(18),
+      border: Border.all(color: palette.focusRing, width: 2),
+      boxShadow: [
+        BoxShadow(color: palette.focusGlow, blurRadius: 16, spreadRadius: 1),
+      ],
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(
+                color: palette.accent,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Icon(
+                Icons.play_arrow_rounded,
+                color: contrastForeground(palette.accent),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  LocalizedText(
+                    'Featured show',
+                    style: TextStyle(
+                      color: palette.primaryText,
+                      fontSize: 17,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  LocalizedText(
+                    'Continue watching · Episode 7',
+                    style: TextStyle(color: palette.mutedText, fontSize: 12),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
+        Container(
+          height: 152,
+          decoration: BoxDecoration(
+            color: palette.surface,
+            borderRadius: BorderRadius.circular(14),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 88,
+                decoration: BoxDecoration(
+                  color: palette.surfaceRaised,
+                  borderRadius: const BorderRadius.horizontal(
+                    left: Radius.circular(14),
+                  ),
+                ),
+                child: Icon(
+                  Icons.movie_outlined,
+                  size: 34,
+                  color: palette.mutedText,
+                ),
+              ),
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.all(13),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      LocalizedText(
+                        'Your library',
+                        style: TextStyle(
+                          color: palette.primaryText,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      LocalizedText(
+                        'Panels, labels and focus states update here.',
+                        style: TextStyle(
+                          color: palette.mutedText,
+                          fontSize: 12,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      Container(
+                        height: 5,
+                        decoration: BoxDecoration(
+                          color: palette.surfaceRaised,
+                          borderRadius: BorderRadius.circular(5),
+                        ),
+                        alignment: Alignment.centerLeft,
+                        child: FractionallySizedBox(
+                          widthFactor: .62,
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              color: palette.accentBright,
+                              borderRadius: BorderRadius.circular(5),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        Row(
+          children: [
+            Expanded(
+              child: Container(
+                height: 42,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: palette.accent,
+                  borderRadius: BorderRadius.circular(11),
+                ),
+                child: LocalizedText(
+                  'Play',
+                  style: TextStyle(
+                    color: contrastForeground(palette.accent),
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Container(
+                height: 42,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: palette.selectableSurface,
+                  borderRadius: BorderRadius.circular(11),
+                  border: Border.all(color: palette.focusRing, width: 2),
+                ),
+                child: LocalizedText(
+                  'Focused',
+                  style: TextStyle(
+                    color: palette.primaryText,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ],
+    ),
+  );
 }
 
 class _ContrastGuardCard extends StatelessWidget {
@@ -808,73 +778,88 @@ class _ContrastGuardCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final palette = context.appPalette;
     final warning = report.hasIssues;
-    return Material(
-      color: palette.surface,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-        side: BorderSide(
-          color: warning && enabled
-              ? const Color(0xFFFFB74D)
-              : palette.primaryText.withValues(alpha: .08),
-        ),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 10, 12, 12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            SwitchListTile(
-              key: const ValueKey('theme-contrast-guard'),
-              focusNode: focusNode,
-              contentPadding: EdgeInsets.zero,
-              title: LocalizedText(
-                'Protect readable contrast',
-                style: TextStyle(
-                  color: palette.primaryText,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              subtitle: LocalizedText(
-                'Prevents a theme from hiding text or TV focus rings.',
-                style: TextStyle(color: palette.mutedText),
-              ),
-              value: enabled,
-              onChanged: onChanged,
+    return ListenableBuilder(
+      listenable: focusNode,
+      builder: (context, _) => AnimatedContainer(
+        key: const ValueKey('theme-contrast-guard-card'),
+        duration: TetoUiMotion.duration(context, TetoUiMotion.focus),
+        curve: TetoUiMotion.curve,
+        decoration:
+            TetoBoxStyle.decoration(
+              palette,
+              focused: focusNode.hasFocus,
+            ).copyWith(
+              border: warning && enabled && !focusNode.hasFocus
+                  ? Border.all(color: const Color(0xFFFFB74D))
+                  : null,
             ),
-            if (warning) ...[
-              const SizedBox(height: 4),
-              for (final issue in report.issues)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 5),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Icon(
-                        Icons.warning_amber_rounded,
-                        size: 18,
-                        color: Color(0xFFFFB74D),
+        child: Material(
+          type: MaterialType.transparency,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 10, 12, 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Theme(
+                  data: Theme.of(context).copyWith(
+                    focusColor: Colors.transparent,
+                    hoverColor: Colors.transparent,
+                    splashColor: Colors.transparent,
+                  ),
+                  child: SwitchListTile(
+                    key: const ValueKey('theme-contrast-guard'),
+                    focusNode: focusNode,
+                    contentPadding: EdgeInsets.zero,
+                    title: LocalizedText(
+                      'Protect readable contrast',
+                      style: TextStyle(
+                        color: palette.primaryText,
+                        fontWeight: FontWeight.w700,
                       ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: LocalizedText(
-                          issue,
-                          style: TextStyle(
-                            color: palette.primaryText,
-                            fontSize: 12,
-                          ),
-                        ),
-                      ),
-                    ],
+                    ),
+                    subtitle: LocalizedText(
+                      'Prevents a theme from hiding text or TV focus rings.',
+                      style: TextStyle(color: palette.mutedText),
+                    ),
+                    value: enabled,
+                    onChanged: onChanged,
                   ),
                 ),
-              if (!enabled)
-                LocalizedText(
-                  'Low-contrast theme allowed because the safeguard is off.',
-                  style: TextStyle(color: palette.mutedText, fontSize: 12),
-                ),
-            ],
-          ],
+                if (warning) ...[
+                  const SizedBox(height: 4),
+                  for (final issue in report.issues)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 5),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Icon(
+                            Icons.warning_amber_rounded,
+                            size: 18,
+                            color: Color(0xFFFFB74D),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: LocalizedText(
+                              issue,
+                              style: TextStyle(
+                                color: palette.primaryText,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  if (!enabled)
+                    LocalizedText(
+                      'Low-contrast theme allowed because the safeguard is off.',
+                      style: TextStyle(color: palette.mutedText, fontSize: 12),
+                    ),
+                ],
+              ],
+            ),
+          ),
         ),
       ),
     );
@@ -937,7 +922,7 @@ class _ColorEditorDialogState extends State<_ColorEditorDialog> {
       Scrollable.ensureVisible(
         targetContext,
         alignment: .5,
-        duration: const Duration(milliseconds: 120),
+        duration: TetoUiMotion.duration(targetContext, TetoUiMotion.focus),
       );
     }
   }
@@ -1067,7 +1052,8 @@ class _ColorEditorDialogState extends State<_ColorEditorDialog> {
             canRequestFocus: false,
             onKeyEvent: _handleDialogKey,
             child: Dialog(
-              backgroundColor: palette.surface,
+              backgroundColor: TetoBoxStyle.fill(palette),
+              shape: TetoBoxStyle.shape(palette),
               insetPadding: const EdgeInsets.all(20),
               child: ConstrainedBox(
                 constraints: BoxConstraints(
@@ -1268,32 +1254,7 @@ class _BuiltInColorPicker extends StatefulWidget {
   final FocusNode nextFocusNode;
   final ValueChanged<Color> onChanged;
 
-  static const colors = <(String, Color)>[
-    ('Black', Color(0xFF000000)),
-    ('Charcoal', Color(0xFF101010)),
-    ('Graphite', Color(0xFF242424)),
-    ('Slate', Color(0xFF607D8B)),
-    ('Silver', Color(0xFFB0BEC5)),
-    ('White', Color(0xFFFFFFFF)),
-    ('Teto red', Color(0xFFE52B50)),
-    ('Crimson', Color(0xFFFF1744)),
-    ('Coral', Color(0xFFFF5A67)),
-    ('Orange', Color(0xFFFF7A00)),
-    ('Amber', Color(0xFFFFC107)),
-    ('Yellow', Color(0xFFFFEB3B)),
-    ('Lime', Color(0xFF8BC34A)),
-    ('Green', Color(0xFF2ECC71)),
-    ('Mint', Color(0xFF65D58A)),
-    ('Teal', Color(0xFF00BFA5)),
-    ('Cyan', Color(0xFF00BCD4)),
-    ('Sky', Color(0xFF29B6F6)),
-    ('Blue', Color(0xFF2979FF)),
-    ('Indigo', Color(0xFF536DFE)),
-    ('Violet', Color(0xFF7C4DFF)),
-    ('Purple', Color(0xFFAB47BC)),
-    ('Magenta', Color(0xFFEC407A)),
-    ('Rose', Color(0xFFFF5A8A)),
-  ];
+  static const colors = tetoColorPresets;
 
   @override
   State<_BuiltInColorPicker> createState() => _BuiltInColorPickerState();
@@ -1336,7 +1297,7 @@ class _BuiltInColorPickerState extends State<_BuiltInColorPicker> {
       Scrollable.ensureVisible(
         targetContext,
         alignment: .5,
-        duration: const Duration(milliseconds: 120),
+        duration: TetoUiMotion.duration(targetContext, TetoUiMotion.focus),
       );
     }
   }

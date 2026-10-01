@@ -2,10 +2,16 @@ import 'dart:async';
 
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/preferences/title_language_preference.dart';
+import 'package:anime_tv/core/storage/storage_providers.dart';
+import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/theme/teto_box_style.dart';
 import 'package:anime_tv/features/catalog/application/anime_title_logo_provider.dart';
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
+import 'package:anime_tv/core/widgets/network_artwork.dart';
+import 'package:anime_tv/core/widgets/teto_back_button.dart';
+import 'package:anime_tv/features/catalog/presentation/episode_browser_dialog.dart';
 import 'package:anime_tv/core/widgets/tv_text_input.dart';
 import 'package:anime_tv/features/catalog/domain/anime_title_logo.dart';
 import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
@@ -26,8 +32,662 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:go_router/go_router.dart';
 
 void main() {
+  for (final size in const [
+    Size(960, 540),
+    Size(1280, 720),
+    Size(1920, 1080),
+  ]) {
+    testWidgets('four-digit resume label stays complete on $size', (
+      tester,
+    ) async {
+      tester.view.physicalSize = size;
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      const anime = AnimeSummary(
+        id: 609,
+        title: 'Long Running Series',
+        description: 'A saved episode with a long number.',
+        episodes: 1500,
+        score: null,
+        status: 'RELEASING',
+      );
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            isTelevisionProvider.overrideWithValue(true),
+            animeDetailsProvider.overrideWith((_, _) async => anime),
+            trackingHomeProvider.overrideWith(
+              (_) async => const TrackingHomeData(
+                watching: [],
+                planToWatch: [],
+                completed: [],
+              ),
+            ),
+            latestPlaybackProvider(anime.id).overrideWith(
+              (_) async => PlaybackCheckpoint(
+                anilistMediaId: anime.id,
+                episode: 1234,
+                title: anime.title,
+                position: const Duration(minutes: 10),
+                duration: const Duration(minutes: 20),
+                updatedAt: DateTime.utc(2026, 9, 30),
+              ),
+            ),
+            settingsPreferencesProvider.overrideWith(
+              (_) => _LoadedSettingsController(),
+            ),
+          ],
+          child: const MaterialApp(home: AnimeDetailsScreen(animeId: 609)),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final label = find.text('Resume Eps 1234');
+      expect(label, findsOneWidget);
+      expect(tester.widget<Text>(label).semanticsLabel, 'Resume Episode 1234');
+      final paragraph = tester.renderObject<RenderParagraph>(
+        find.descendant(of: label, matching: find.byType(RichText)),
+      );
+      expect(paragraph.didExceedMaxLines, isFalse);
+      final buttonRect = tester.getRect(
+        find.byKey(const ValueKey('episode-action-resume')),
+      );
+      final labelRect = tester.getRect(label);
+      expect(labelRect.left, greaterThanOrEqualTo(buttonRect.left));
+      expect(labelRect.right, lessThanOrEqualTo(buttonRect.right));
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  for (final scenario in [
+    (total: 13, linked: 5, local: 13, completed: false, expected: 5),
+    (total: 13, linked: 5, local: 7, completed: true, expected: 7),
+    (total: 13, linked: 20, local: 1, completed: false, expected: 13),
+    (total: null, linked: 0, local: 4, completed: true, expected: 4),
+  ]) {
+    testWidgets(
+      'personal watched progress is independent of airing status $scenario',
+      (tester) async {
+        tester.view.physicalSize = const Size(960, 540);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        final anime = AnimeSummary(
+          id: 599,
+          title: 'Watch Progress',
+          description:
+              'Progress from linked trackers or completed local playback.',
+          episodes: scenario.total,
+          score: null,
+          status: 'FINISHED',
+        );
+        await tester.pumpWidget(
+          ProviderScope(
+            overrides: [
+              isTelevisionProvider.overrideWithValue(true),
+              animeDetailsProvider.overrideWith((_, _) async => anime),
+              trackingHomeProvider.overrideWith(
+                (_) async => const TrackingHomeData(
+                  watching: [],
+                  planToWatch: [],
+                  completed: [],
+                ),
+              ),
+              linkedTrackingProgressProvider.overrideWith(
+                (_, _) async => scenario.linked,
+              ),
+              latestPlaybackProvider(anime.id).overrideWith(
+                (_) async => PlaybackCheckpoint(
+                  anilistMediaId: anime.id,
+                  episode: scenario.local,
+                  title: anime.title,
+                  position: const Duration(minutes: 10),
+                  duration: const Duration(minutes: 20),
+                  completed: scenario.completed,
+                  updatedAt: DateTime.utc(2026, 9, 29),
+                ),
+              ),
+              settingsPreferencesProvider.overrideWith(
+                (_) => _LoadedSettingsController(),
+              ),
+            ],
+            child: const MaterialApp(home: AnimeDetailsScreen(animeId: 599)),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(find.text('Finished airing'), findsOneWidget);
+        final bar = find.byKey(
+          const ValueKey('anime-details-watched-progress-bar'),
+        );
+        if (scenario.total == null) {
+          expect(
+            find.text('Watched ${scenario.expected} episodes'),
+            findsOneWidget,
+          );
+          expect(bar, findsNothing);
+        } else {
+          expect(
+            find.text('Watched ${scenario.expected} of ${scenario.total}'),
+            findsOneWidget,
+          );
+          expect(
+            tester.widget<LinearProgressIndicator>(bar).value,
+            scenario.expected / scenario.total!,
+          );
+        }
+        expect(tester.takeException(), isNull);
+      },
+    );
+  }
+
+  testWidgets('resumable episode uses one primary action and a progress line', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1920, 1080);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    const anime = AnimeSummary(
+      id: 599,
+      title: 'Resume Layout',
+      description: 'A series with a saved episode.',
+      episodes: 13,
+      score: 8,
+      status: 'FINISHED',
+    );
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          isTelevisionProvider.overrideWithValue(true),
+          animeDetailsProvider.overrideWith((_, _) async => anime),
+          trackingHomeProvider.overrideWith(
+            (_) async => const TrackingHomeData(
+              watching: [],
+              planToWatch: [],
+              completed: [],
+            ),
+          ),
+          latestPlaybackProvider(anime.id).overrideWith(
+            (_) async => PlaybackCheckpoint(
+              anilistMediaId: anime.id,
+              episode: 13,
+              title: anime.title,
+              position: const Duration(minutes: 10),
+              duration: const Duration(minutes: 20),
+              updatedAt: DateTime.utc(2026, 9, 28),
+            ),
+          ),
+          settingsPreferencesProvider.overrideWith(
+            (_) => _LoadedSettingsController(),
+          ),
+        ],
+        child: const MaterialApp(home: AnimeDetailsScreen(animeId: 599)),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Resume Eps 13'), findsOneWidget);
+    final resumeText = tester.widget<Text>(find.text('Resume Eps 13'));
+    expect(resumeText.semanticsLabel, 'Resume Episode 13');
+    expect(resumeText.overflow, TextOverflow.visible);
+    expect(
+      tester
+          .renderObject<RenderParagraph>(
+            find.descendant(
+              of: find.text('Resume Eps 13'),
+              matching: find.byType(RichText),
+            ),
+          )
+          .didExceedMaxLines,
+      isFalse,
+    );
+    expect(find.text('Episode 13 of 13'), findsNothing);
+    expect(find.text('Play from beginning'), findsOneWidget);
+    expect(find.text('Play selected'), findsNothing);
+    expect(find.text('Status: Finished'), findsNothing);
+    expect(
+      find.byKey(const ValueKey('anime-details-finished-status')),
+      findsOneWidget,
+    );
+    expect(find.text('Finished airing'), findsOneWidget);
+    expect(find.text('Watched 0 of 13'), findsOneWidget);
+    expect(find.text('Browse all episodes'), findsOneWidget);
+    expect(
+      tester
+          .widget<LinearProgressIndicator>(
+            find.byKey(const ValueKey('episode-resume-progress')),
+          )
+          .value,
+      .5,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  for (final releaseStatus in <String?>[
+    'FINISHED',
+    'finished_airing',
+    'Finished Airing',
+    'RELEASING',
+    'NOT_YET_RELEASED',
+    null,
+  ]) {
+    testWidgets(
+      'finished badge follows catalog status $releaseStatus without watch progress',
+      (tester) async {
+        tester.view.physicalSize = const Size(1920, 1080);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        final anime = AnimeSummary(
+          id: 599,
+          title: 'Release Status',
+          description: 'An unwatched series.',
+          episodes: 13,
+          score: 8,
+          status: releaseStatus,
+        );
+        await tester.pumpWidget(
+          ProviderScope(
+            overrides: [
+              isTelevisionProvider.overrideWithValue(true),
+              animeDetailsProvider.overrideWith((_, _) async => anime),
+              trackingHomeProvider.overrideWith(
+                (_) async => const TrackingHomeData(
+                  watching: [],
+                  planToWatch: [],
+                  completed: [],
+                ),
+              ),
+              latestPlaybackProvider(anime.id).overrideWith((_) async => null),
+              settingsPreferencesProvider.overrideWith(
+                (_) => _LoadedSettingsController(),
+              ),
+            ],
+            child: const MaterialApp(home: AnimeDetailsScreen(animeId: 599)),
+          ),
+        );
+        await tester.pumpAndSettle();
+        final finished =
+            releaseStatus?.toUpperCase().startsWith('FINISHED') ?? false;
+        final badge = find.byKey(
+          const ValueKey('anime-details-finished-status'),
+        );
+        expect(badge, finished ? findsOneWidget : findsNothing);
+        if (finished) {
+          expect(find.text('Finished airing'), findsOneWidget);
+          expect(find.text('Watched 0 of 13'), findsOneWidget);
+          expect(find.text('Start watching'), findsOneWidget);
+          expect(
+            find.descendant(
+              of: badge,
+              matching: find.byType(FocusableActionDetector),
+            ),
+            findsNothing,
+          );
+        }
+        expect(tester.takeException(), isNull);
+      },
+    );
+  }
+
+  for (final status in const [
+    (raw: 'FINISHED', key: 'finished', label: 'Finished airing'),
+    (raw: 'RELEASING', key: 'airing', label: 'Airing'),
+    (raw: 'NOT_YET_RELEASED', key: 'unreleased', label: 'Unreleased'),
+  ]) {
+    for (final layout in const [
+      (size: Size(1280, 720), scale: 1.0),
+      (size: Size(1920, 1080), scale: 1.0),
+      (size: Size(1920, 1080), scale: 1.35),
+      (size: Size(390, 844), scale: 1.4),
+    ]) {
+      testWidgets(
+        '${status.label} shares the facts baseline and sizing on $layout',
+        (tester) async {
+          tester.view.physicalSize = layout.size;
+          tester.view.devicePixelRatio = 1;
+          addTearDown(tester.view.resetPhysicalSize);
+          addTearDown(tester.view.resetDevicePixelRatio);
+          final anime = AnimeSummary(
+            id: 599,
+            title: 'Aligned Media Facts',
+            description: 'All release states align with the other media facts.',
+            episodes: 12,
+            score: 8.3,
+            seasonYear: 2024,
+            durationMinutes: 24,
+            status: status.raw,
+          );
+          await tester.pumpWidget(
+            ProviderScope(
+              overrides: [
+                isTelevisionProvider.overrideWithValue(
+                  layout.size.width >= 960,
+                ),
+                animeDetailsProvider.overrideWith((_, _) async => anime),
+                trackingHomeProvider.overrideWith(
+                  (_) async => const TrackingHomeData(
+                    watching: [],
+                    planToWatch: [],
+                    completed: [],
+                  ),
+                ),
+                latestPlaybackProvider(
+                  anime.id,
+                ).overrideWith((_) async => null),
+                settingsPreferencesProvider.overrideWith(
+                  (_) => _LoadedSettingsController(),
+                ),
+              ],
+              child: MaterialApp(
+                builder: (context, child) => MediaQuery(
+                  data: MediaQuery.of(
+                    context,
+                  ).copyWith(textScaler: TextScaler.linear(layout.scale)),
+                  child: child!,
+                ),
+                home: const AnimeDetailsScreen(animeId: 599),
+              ),
+            ),
+          );
+          await tester.pumpAndSettle();
+          final statusFact = find.byKey(
+            ValueKey('anime-details-${status.key}-status'),
+          );
+          expect(statusFact, findsOneWidget);
+          final facts = find
+              .ancestor(of: statusFact, matching: find.byType(Wrap))
+              .first;
+          final wrap = tester.widget<Wrap>(facts);
+          expect(wrap.children, hasLength(4));
+          expect(wrap.crossAxisAlignment, WrapCrossAlignment.center);
+          final labels = <Finder>[
+            for (final label in ['2024', '24m', '8.3 / 10', status.label])
+              find.descendant(of: facts, matching: find.text(label)),
+          ];
+          final style = tester.widget<Text>(labels.first).style;
+          expect(style?.height, 1.25);
+          for (final label in labels) {
+            expect(label, findsOneWidget);
+            expect(tester.widget<Text>(label).style, style);
+            final item = find
+                .ancestor(of: label, matching: find.byType(Row))
+                .first;
+            final icon = find.descendant(of: item, matching: find.byType(Icon));
+            expect(
+              tester.getCenter(icon).dy,
+              closeTo(tester.getCenter(label).dy, .01),
+            );
+            final paragraph = tester.renderObject<RenderParagraph>(label);
+            expect(paragraph.didExceedMaxLines, isFalse);
+          }
+          // Each wrapped line has one text baseline, not an offset status.
+          for (var index = 1; index < labels.length; index++) {
+            final previous = labels[index - 1];
+            final current = labels[index];
+            if ((tester.getCenter(previous).dy - tester.getCenter(current).dy)
+                    .abs() <
+                1) {
+              double baseline(Finder label) {
+                final paragraph = tester.renderObject<RenderParagraph>(label);
+                final painter = TextPainter(
+                  text: paragraph.text,
+                  textDirection: paragraph.textDirection,
+                  textScaler: paragraph.textScaler,
+                  strutStyle: paragraph.strutStyle,
+                  textHeightBehavior: paragraph.textHeightBehavior,
+                )..layout(maxWidth: paragraph.size.width);
+                final value =
+                    tester.getTopLeft(label).dy +
+                    painter.computeLineMetrics().first.baseline;
+                painter.dispose();
+                return value;
+              }
+
+              expect(baseline(current), closeTo(baseline(previous), .01));
+            }
+          }
+          if (layout.size.width == 1920 && layout.scale == 1) {
+            expect(
+              tester.getCenter(labels.last).dy,
+              closeTo(tester.getCenter(labels.first).dy, .01),
+            );
+          }
+          expect(find.textContaining('Status:'), findsNothing);
+          expect(tester.takeException(), isNull);
+        },
+      );
+    }
+  }
+
+  for (final layout in const [
+    (size: Size(960, 540), scale: 1.0),
+    (size: Size(1920, 1080), scale: 1.0),
+    (size: Size(360, 800), scale: 1.0),
+    (size: Size(400, 700), scale: 2.0),
+  ]) {
+    testWidgets(
+      'More Info is a readable actionable progress-header control on $layout',
+      (tester) async {
+        tester.view.physicalSize = layout.size;
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        final semantics = tester.ensureSemantics();
+        try {
+          final anime = _moreMenuAnime();
+          final palette = AppThemePalette.fromSeeds(
+            background: const Color(0xFF071B2C),
+            surface: const Color(0xFF12364A),
+            accent: const Color(0xFF3CC8A8),
+            primaryText: const Color(0xFFF4F9FF),
+            mutedText: const Color(0xFF9BC0D1),
+          );
+          await tester.pumpWidget(
+            ProviderScope(
+              overrides: [
+                ..._moreMenuOverrides(anime),
+                isTelevisionProvider.overrideWithValue(
+                  layout.size.width >= 960,
+                ),
+                latestPlaybackProvider(
+                  anime.id,
+                ).overrideWith((_) async => null),
+              ],
+              child: MaterialApp(
+                theme: AppTheme.darkFor(palette),
+                builder: (context, child) => MediaQuery(
+                  data: MediaQuery.of(
+                    context,
+                  ).copyWith(textScaler: TextScaler.linear(layout.scale)),
+                  child: child!,
+                ),
+                home: AnimeDetailsScreen(animeId: anime.id),
+              ),
+            ),
+          );
+          await tester.pumpAndSettle();
+          final control = find.byKey(const ValueKey('anime-details-more'));
+          final progress = find.byKey(
+            const ValueKey('anime-details-watch-progress'),
+          );
+          expect(find.text('More'), findsNothing);
+          expect(find.text('More Info'), findsOneWidget);
+          expect(
+            find.descendant(of: progress, matching: control),
+            findsOneWidget,
+          );
+          expect(
+            find.descendant(
+              of: control,
+              matching: find.byIcon(Icons.info_rounded),
+            ),
+            findsOneWidget,
+          );
+          expect(tester.getSemantics(control).label, 'More Info');
+          expect(tester.getSemantics(control).flagsCollection.isButton, isTrue);
+          final buttonRect = tester.getRect(control);
+          final headerRect = tester.getRect(progress);
+          expect(buttonRect.left, greaterThanOrEqualTo(headerRect.left));
+          expect(buttonRect.top, greaterThanOrEqualTo(headerRect.top));
+          expect(buttonRect.right, lessThanOrEqualTo(headerRect.right));
+          expect(buttonRect.bottom, lessThanOrEqualTo(headerRect.bottom));
+          expect(buttonRect.right, closeTo(headerRect.right, .01));
+          final label = find.text('More Info');
+          expect(
+            tester.renderObject<RenderParagraph>(label).didExceedMaxLines,
+            isFalse,
+          );
+          if (layout.size.width == 1920 && layout.scale == 1) {
+            expect(
+              tester.getCenter(label).dy,
+              closeTo(tester.getCenter(find.text('Watched 0 of 12')).dy, .01),
+            );
+            final primary = tester
+                .widget<FocusableActionDetector>(
+                  find
+                      .descendant(
+                        of: find.byKey(const ValueKey('episode-action-resume')),
+                        matching: find.byType(FocusableActionDetector),
+                      )
+                      .first,
+                )
+                .focusNode!;
+            primary.requestFocus();
+            await tester.pumpAndSettle();
+            await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+            await tester.pumpAndSettle();
+            expect(_detailsActionFocusNode(tester, 'more').hasFocus, isTrue);
+            await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+            await tester.pumpAndSettle();
+            expect(primary.hasFocus, isTrue);
+          }
+          await _openInformationMenu(tester);
+          await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+          await tester.pumpAndSettle();
+          expect(_detailsActionFocusNode(tester, 'more').hasFocus, isTrue);
+          expect(tester.takeException(), isNull);
+        } finally {
+          semantics.dispose();
+        }
+      },
+    );
+  }
+
+  for (final size in const [Size(960, 540), Size(1920, 1080), Size(360, 800)]) {
+    testWidgets('finished status and More menu fit $size with a custom theme', (
+      tester,
+    ) async {
+      tester.view.physicalSize = size;
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final palette = AppThemePalette.fromSeeds(
+        background: const Color(0xFF071B2C),
+        surface: const Color(0xFF12364A),
+        accent: const Color(0xFF3CC8A8),
+        primaryText: const Color(0xFFF4F9FF),
+        mutedText: const Color(0xFF9BC0D1),
+      );
+      final anime = AnimeSummary(
+        id: 599,
+        title: 'Serial Experiments Lain',
+        description:
+            'A series with a saved episode and finished release status. '
+            'This description is long enough to exercise the compact television layout.',
+        episodes: 13,
+        score: 8,
+        status: 'FINISHED',
+        format: 'TV',
+        seasonYear: 1998,
+        durationMinutes: 23,
+        genres: const ['Drama', 'Mystery', 'Psychological'],
+        staff: const [AnimePerson(id: 1, name: 'Director')],
+        trailer: AnimeTrailer.tryCreate(
+          provider: 'youtube',
+          videoId: 'abcDEF_12-3',
+        ),
+      );
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            isTelevisionProvider.overrideWithValue(size.width >= 960),
+            animeDetailsProvider.overrideWith((_, _) async => anime),
+            trackingHomeProvider.overrideWith(
+              (_) async => const TrackingHomeData(
+                watching: [],
+                planToWatch: [],
+                completed: [],
+              ),
+            ),
+            latestPlaybackProvider(anime.id).overrideWith(
+              (_) async => PlaybackCheckpoint(
+                anilistMediaId: anime.id,
+                episode: 13,
+                title: anime.title,
+                position: const Duration(minutes: 10),
+                duration: const Duration(minutes: 20),
+                updatedAt: DateTime.utc(2026, 9, 28),
+              ),
+            ),
+            settingsPreferencesProvider.overrideWith(
+              (_) => _LoadedSettingsController(),
+            ),
+          ],
+          child: MaterialApp(
+            theme: AppTheme.darkFor(palette),
+            home: const AnimeDetailsScreen(animeId: 599),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final badge = find.byKey(const ValueKey('anime-details-finished-status'));
+      expect(badge, findsOneWidget);
+      final badgeIcon = tester.widget<Icon>(
+        find.descendant(of: badge, matching: find.byType(Icon)),
+      );
+      expect(badgeIcon.color, palette.accentBright);
+      _expectInformationActionsHidden();
+      await _openInformationMenu(tester);
+      final tray = find.byKey(const ValueKey('anime-details-more-menu'));
+      final informationPanel = tester.widget<Container>(tray);
+      final episodePanel = tester.widget<Container>(
+        find.byKey(const ValueKey('episode-actions-panel')),
+      );
+      expect(informationPanel.decoration, episodePanel.decoration);
+      final gradient =
+          (informationPanel.decoration! as BoxDecoration).gradient!
+              as LinearGradient;
+      expect(gradient.colors, [
+        palette.surface.withValues(alpha: .78),
+        palette.background.withValues(alpha: .66),
+      ]);
+      final trayRect = tester.getRect(tray);
+      expect(trayRect.left, greaterThanOrEqualTo(0));
+      expect(trayRect.right, lessThanOrEqualTo(size.width));
+      final actionRects = <Rect>[
+        for (final key in const [
+          ValueKey('anime-details-watch-trailer-surface'),
+          ValueKey('anime-details-cast-crew-surface'),
+          ValueKey('anime-details-download-season-surface'),
+        ])
+          tester.getRect(find.byKey(key)),
+      ];
+      for (final action in actionRects) {
+        expect(trayRect.contains(action.center), isTrue);
+      }
+      _expectVerticalInformationActions(actionRects, gap: 8);
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(_detailsActionFocusNode(tester, 'more').hasFocus, isTrue);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
   testWidgets('details shows an in-app trailer action when metadata has one', (
     tester,
   ) async {
@@ -62,6 +722,8 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    _expectInformationActionsHidden();
+    await _openInformationMenu(tester);
     expect(
       find.byKey(const ValueKey('anime-details-watch-trailer')),
       findsOneWidget,
@@ -72,7 +734,7 @@ void main() {
     );
     expect(
       find.descendant(
-        of: find.byKey(const ValueKey('anime-details-information-actions')),
+        of: find.byKey(const ValueKey('anime-details-more-menu')),
         matching: find.byKey(const ValueKey('anime-details-download-season')),
       ),
       findsOneWidget,
@@ -124,6 +786,8 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    _expectInformationActionsHidden();
+    await _openInformationMenu(tester);
     expect(
       find.byKey(const ValueKey('anime-details-download-season')),
       findsNothing,
@@ -132,6 +796,237 @@ void main() {
     expect(find.text('Cast & crew'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('More actions return to More after their destination closes', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(960, 540);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final anime = _moreMenuAnime();
+    final router = GoRouter(
+      initialLocation: '/anime/57',
+      routes: [
+        GoRoute(
+          path: '/anime/:id',
+          builder: (_, _) => const AnimeDetailsScreen(animeId: 57),
+          routes: [
+            for (final destination in ['credits', 'franchise'])
+              GoRoute(
+                path: destination,
+                builder: (_, _) => Scaffold(body: Text(destination)),
+              ),
+          ],
+        ),
+        GoRoute(
+          path: '/trailer',
+          builder: (_, _) => const Scaffold(body: Text('trailer')),
+        ),
+      ],
+    );
+    addTearDown(router.dispose);
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: _moreMenuOverrides(anime),
+        child: MaterialApp.router(routerConfig: router),
+      ),
+    );
+    await tester.pumpAndSettle();
+    for (final action in [
+      ('watch-trailer', 'trailer'),
+      ('cast-crew', 'credits'),
+      ('related-series', 'franchise'),
+    ]) {
+      await _openInformationMenu(tester);
+      _detailsActionFocusNode(tester, action.$1).requestFocus();
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+      expect(
+        find.text(action.$2),
+        findsOneWidget,
+        reason: 'route=${router.routeInformationProvider.value.uri}',
+      );
+      expect(
+        find.byKey(const ValueKey('anime-details-more-menu')),
+        findsNothing,
+      );
+      router.pop();
+      await tester.pumpAndSettle();
+      expect(
+        _detailsActionFocusNode(tester, 'more').hasFocus,
+        isTrue,
+        reason: 'after closing ${action.$1}',
+      );
+    }
+    await _openInformationMenu(tester);
+    await tester.tap(
+      find.byKey(const ValueKey('anime-details-download-season')),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('season-download-dialog')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const ValueKey('anime-details-more-menu')), findsNothing);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(_detailsActionFocusNode(tester, 'more').hasFocus, isTrue);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('More dismissals never leave the details page or leak focus', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(960, 540);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: _moreMenuOverrides(_moreMenuAnime()),
+        child: const MaterialApp(home: AnimeDetailsScreen(animeId: 57)),
+      ),
+    );
+    await tester.pumpAndSettle();
+    for (final key in [
+      LogicalKeyboardKey.arrowLeft,
+      LogicalKeyboardKey.arrowRight,
+      LogicalKeyboardKey.escape,
+      LogicalKeyboardKey.goBack,
+    ]) {
+      await _openInformationMenu(tester);
+      final physicalKey = key == LogicalKeyboardKey.goBack
+          ? PhysicalKeyboardKey.escape
+          : null;
+      await tester.sendKeyDownEvent(key, physicalKey: physicalKey);
+      await tester.sendKeyRepeatEvent(key, physicalKey: physicalKey);
+      await tester.sendKeyUpEvent(key, physicalKey: physicalKey);
+      await tester.pumpAndSettle();
+      expect(find.byType(AnimeDetailsScreen), findsOneWidget);
+      _expectInformationActionsHidden();
+      expect(
+        _detailsActionFocusNode(tester, 'more').hasFocus,
+        isTrue,
+        reason:
+            'after dismissal by $key; focus=${FocusManager.instance.primaryFocus}',
+      );
+    }
+    await _openInformationMenu(tester);
+    await tester.tapAt(const Offset(20, 20));
+    await tester.pumpAndSettle();
+    _expectInformationActionsHidden();
+    expect(_detailsActionFocusNode(tester, 'more').hasFocus, isTrue);
+    await _openInformationMenu(tester);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(_detailsActionFocusNode(tester, 'more').hasFocus, isTrue);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('held horizontal closing keys cannot move restored More focus', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(960, 540);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: _moreMenuOverrides(_moreMenuAnime()),
+        child: const MaterialApp(home: AnimeDetailsScreen(animeId: 57)),
+      ),
+    );
+    await tester.pumpAndSettle();
+    for (final key in [
+      LogicalKeyboardKey.arrowLeft,
+      LogicalKeyboardKey.arrowRight,
+    ]) {
+      await _openInformationMenu(tester);
+      await tester.sendKeyDownEvent(key);
+      await tester.pumpAndSettle();
+      expect(_detailsActionFocusNode(tester, 'more').hasFocus, isTrue);
+      await tester.sendKeyRepeatEvent(key);
+      await tester.pumpAndSettle();
+      expect(_detailsActionFocusNode(tester, 'more').hasFocus, isTrue);
+      await tester.sendKeyUpEvent(key);
+      expect(
+        find.byKey(const ValueKey('anime-details-more-menu')),
+        findsNothing,
+      );
+    }
+    expect(tester.takeException(), isNull);
+  });
+
+  for (final size in [const Size(400, 360), const Size(400, 700)]) {
+    testWidgets('large-text More menu stays within safe bounds at $size', (
+      tester,
+    ) async {
+      tester.view.physicalSize = size;
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            ..._moreMenuOverrides(_moreMenuAnime()),
+            isTelevisionProvider.overrideWithValue(false),
+          ],
+          child: MaterialApp(
+            builder: (context, child) => MediaQuery(
+              data: MediaQuery.of(context).copyWith(
+                textScaler: TextScaler.linear(2.5),
+                padding: const EdgeInsets.fromLTRB(18, 24, 18, 20),
+              ),
+              child: child!,
+            ),
+            home: const AnimeDetailsScreen(animeId: 57),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await _openInformationMenu(tester);
+      final menu = find.byKey(const ValueKey('anime-details-more-menu'));
+      expect(tester.widget<Container>(menu).clipBehavior, Clip.antiAlias);
+      final rect = tester.getRect(menu);
+      expect(rect.left, greaterThanOrEqualTo(34));
+      expect(rect.right, lessThanOrEqualTo(size.width - 34));
+      expect(rect.top, greaterThanOrEqualTo(40));
+      expect(rect.bottom, lessThanOrEqualTo(size.height - 36));
+      for (final label in [
+        'Watch trailer',
+        'Cast & crew',
+        'Related series',
+        'Download season',
+      ]) {
+        expect(
+          tester
+              .renderObject<RenderParagraph>(find.text(label))
+              .didExceedMaxLines,
+          isFalse,
+          reason: label,
+        );
+      }
+      for (var index = 0; index < 3; index++) {
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+        await tester.pump();
+      }
+      expect(
+        _detailsActionFocusNode(tester, 'download-season').hasFocus,
+        isTrue,
+      );
+      final lastRect = tester.getRect(
+        find.byKey(const ValueKey('anime-details-download-season-surface')),
+      );
+      expect(lastRect.top, greaterThanOrEqualTo(rect.top));
+      expect(lastRect.bottom, lessThanOrEqualTo(rect.bottom));
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(_detailsActionFocusNode(tester, 'more').hasFocus, isTrue);
+      expect(tester.takeException(), isNull);
+    });
+  }
 
   testWidgets('TV details uses a bounded language-matched clear logo', (
     tester,
@@ -463,24 +1358,14 @@ void main() {
     expect(warmedEpisodes, contains(1));
     warmedEpisodes.clear();
 
-    final nextControl = tester.widget<FocusableActionDetector>(
-      find
-          .descendant(
-            of: find.byKey(const ValueKey('episode-step-next')),
-            matching: find.byType(FocusableActionDetector),
-          )
-          .first,
-    );
-    nextControl.focusNode!.requestFocus();
-    await tester.pump();
-    for (var i = 0; i < 3; i += 1) {
-      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    for (var i = 2; i <= 4; i++) {
+      await _selectDetailsEpisode(tester, i);
       await tester.pump(const Duration(milliseconds: 50));
     }
 
-    expect(find.text('4 of 12'), findsOneWidget);
+    expect(find.byKey(const ValueKey('episode-manual-selector')), findsNothing);
     expect(warmedEpisodes, isEmpty);
-    await tester.pump(const Duration(milliseconds: 299));
+    await tester.pump(const Duration(milliseconds: 249));
     expect(warmedEpisodes, isEmpty);
     await tester.pump(const Duration(milliseconds: 1));
     expect(warmedEpisodes, [4]);
@@ -556,37 +1441,21 @@ void main() {
       await tester.pump();
       expect(startedEpisodes, [1]);
       expect(activeHandles, 1);
-
-      final nextControl = tester.widget<FocusableActionDetector>(
-        find
-            .descendant(
-              of: find.byKey(const ValueKey('episode-step-next')),
-              matching: find.byType(FocusableActionDetector),
-            )
-            .first,
-      );
-      nextControl.focusNode!.requestFocus();
-      await tester.pump();
-      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await _selectDetailsEpisode(tester, 2);
       await tester.pump(const Duration(milliseconds: 100));
-      expect(find.text('2 of 12'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('episode-manual-selector')),
+        findsNothing,
+      );
       expect(cancelledEpisodes, [1]);
       expect(activeHandles, 1);
-
-      final previousControl = tester.widget<FocusableActionDetector>(
-        find
-            .descendant(
-              of: find.byKey(const ValueKey('episode-step-previous')),
-              matching: find.byType(FocusableActionDetector),
-            )
-            .first,
-      );
-      previousControl.focusNode!.requestFocus();
-      await tester.pump();
-      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await _selectDetailsEpisode(tester, 1);
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 299));
-      expect(find.text('1 of 12'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('episode-manual-selector')),
+        findsNothing,
+      );
       expect(startedEpisodes, [1]);
 
       await tester.pump(const Duration(milliseconds: 1));
@@ -665,18 +1534,7 @@ void main() {
     await tester.pump();
     await tester.pump();
     expect(startedEpisodes, [1]);
-
-    final nextControl = tester.widget<FocusableActionDetector>(
-      find
-          .descendant(
-            of: find.byKey(const ValueKey('episode-step-next')),
-            matching: find.byType(FocusableActionDetector),
-          )
-          .first,
-    );
-    nextControl.focusNode!.requestFocus();
-    await tester.pump();
-    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await _selectDetailsEpisode(tester, 2);
     await tester.pump();
     expect(cancelledEpisodes, [1]);
     await tester.pump(const Duration(milliseconds: 300));
@@ -747,13 +1605,13 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Play from beginning'), findsOneWidget);
+    expect(find.text('Play from beginning'), findsNothing);
     expect(find.text('Start watching'), findsOneWidget);
-    expect(find.text('My List status'), findsOneWidget);
-    expect(find.text('1 of 24'), findsOneWidget);
-    expect(find.text('Watch trailer'), findsOneWidget);
-    expect(find.text('Cast & crew'), findsOneWidget);
-    expect(find.text('Related series'), findsOneWidget);
+    expect(find.text('My List'), findsOneWidget);
+    expect(find.text('Episode 1 of 24'), findsNothing);
+    _expectInformationActionsHidden();
+    expect(find.text('More'), findsNothing);
+    expect(find.text('More Info'), findsOneWidget);
     expect(find.text('RELATED'), findsNothing);
     expect(find.text('The Example Hero Season 2'), findsNothing);
     expect(find.text('Episodes'), findsNothing);
@@ -776,7 +1634,7 @@ void main() {
         of: find.byKey(const ValueKey('episode-step-next')),
         matching: find.byType(FocusableActionDetector),
       ),
-      findsOneWidget,
+      findsNothing,
     );
     final compactTvPoster = tester.getRect(
       find.byKey(const ValueKey('anime-details-poster')),
@@ -787,108 +1645,38 @@ void main() {
     final compactTvActions = tester.getRect(
       find.byKey(const ValueKey('episode-actions-panel')),
     );
-    final compactTvInformationTray = tester.getRect(
-      find.byKey(const ValueKey('anime-details-information-actions')),
-    );
-    final compactInformationActionRects = <Rect>[
-      for (final key in const [
-        ValueKey('anime-details-watch-trailer-surface'),
-        ValueKey('anime-details-cast-crew-surface'),
-        ValueKey('anime-details-related-series-surface'),
-        ValueKey('anime-details-download-season-surface'),
-      ])
-        tester.getRect(find.byKey(key)),
-    ];
-    expect(compactTvPoster.height / 540, closeTo(.60, .01));
+    expect(compactTvPoster.height / 540, closeTo(.66, .01));
     expect(compactTvPoster.right, lessThan(compactTvInfo.left));
     expect(compactTvInfo.right, lessThan(compactTvActions.left));
-    // A television keeps every available action in one compact visible row
-    // even when Android exposes a 960px logical canvas.
-    expect(compactTvInformationTray.size, const Size(382, 54));
-    const compactWidths = [90.0, 78.0, 90.0, 100.0];
-    for (var index = 0; index < compactInformationActionRects.length; index++) {
-      final rect = compactInformationActionRects[index];
-      expect(rect.width, closeTo(compactWidths[index], .01));
-      expect(rect.height, 42);
-      expect(rect.top, compactInformationActionRects.first.top);
-      expect(rect.left, greaterThanOrEqualTo(compactTvInformationTray.left));
-      expect(rect.right, lessThanOrEqualTo(compactTvInformationTray.right));
-      if (index > 0) {
-        expect(
-          rect.left - compactInformationActionRects[index - 1].right,
-          closeTo(4, .01),
-        );
-      }
-    }
-    final informationTray = find.byKey(
-      const ValueKey('anime-details-information-actions'),
+    final moreRect = tester.getRect(
+      find.byKey(const ValueKey('anime-details-more-surface')),
     );
-    expect(
-      find.descendant(of: informationTray, matching: find.byType(FittedBox)),
-      findsNothing,
-    );
-    expect(tester.widget<Text>(find.text('Watch trailer')).style?.fontSize, 11);
-    for (final icon in tester.widgetList<Icon>(
-      find.descendant(of: informationTray, matching: find.byType(Icon)),
-    )) {
-      expect(icon.size, 15);
-    }
-    for (final label in const [
-      'Watch trailer',
-      'Cast & crew',
-      'Related series',
-      'Download season',
-    ]) {
-      final finder = find.text(label);
-      final text = tester.widget<Text>(finder);
-      final paragraph = tester.renderObject<RenderParagraph>(finder);
-      expect(text.maxLines, 2);
-      expect(text.style?.height, 1);
-      expect(
-        paragraph.didExceedMaxLines,
-        isFalse,
-        reason:
-            '$label must remain fully visible in the compact TV row '
-            '(size=${paragraph.size}, constraints=${paragraph.constraints}, '
-            'boxes=${paragraph.getBoxesForSelection(TextSelection(baseOffset: 0, extentOffset: label.length))})',
-      );
-    }
-    final compactTrailerControl = tester.widget<FocusableActionDetector>(
-      find
-          .descendant(
-            of: find.byKey(const ValueKey('anime-details-watch-trailer')),
-            matching: find.byType(FocusableActionDetector),
-          )
-          .first,
-    );
-    compactTrailerControl.focusNode!.requestFocus();
-    await tester.pump();
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
-    await tester.pump();
-    final compactCastControl = tester.widget<FocusableActionDetector>(
-      find
-          .descendant(
-            of: find.byKey(const ValueKey('anime-details-cast-crew')),
-            matching: find.byType(FocusableActionDetector),
-          )
-          .first,
-    );
-    expect(compactCastControl.focusNode?.hasFocus, isTrue);
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
-    await tester.pump();
-    expect(compactTrailerControl.focusNode?.hasFocus, isTrue);
+    expect(moreRect.width, lessThan(compactTvActions.width));
+    expect(moreRect.height, lessThanOrEqualTo(34));
+    expect(compactTvActions.contains(moreRect.topLeft), isTrue);
+    expect(compactTvActions.contains(moreRect.bottomRight), isTrue);
     expect(
       find.descendant(
-        of: find.byKey(const ValueKey('anime-details-information-actions')),
-        matching: find.byWidgetPredicate(
-          (widget) =>
-              widget is SingleChildScrollView &&
-              widget.scrollDirection == Axis.horizontal,
-        ),
+        of: find.byKey(const ValueKey('anime-details-info')),
+        matching: find.byKey(const ValueKey('anime-details-more')),
       ),
       findsNothing,
     );
-    await tester.tap(find.text('My List status'));
+    await _openInformationMenu(tester);
+    _expectCompactInformationMenu(tester, large: true);
+    final trailerFocus = _detailsActionFocusNode(tester, 'watch-trailer');
+    expect(trailerFocus.hasFocus, isTrue);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+    await tester.pump();
+    expect(trailerFocus.hasFocus, isTrue);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pump();
+    expect(_detailsActionFocusNode(tester, 'cast-crew').hasFocus, isTrue);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+    await tester.pumpAndSettle();
+    expect(_detailsActionFocusNode(tester, 'more').hasFocus, isTrue);
+    _expectInformationActionsHidden();
+    await tester.tap(find.text('My List'));
     await tester.pumpAndSettle();
     expect(find.text('Planning'), findsOneWidget);
     expect(find.text('Watching'), findsOneWidget);
@@ -897,6 +1685,87 @@ void main() {
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
   });
+
+  for (final hasRelatedSeries in [false, true]) {
+    testWidgets('More menu stays compact on a roomy TV '
+        '(related: $hasRelatedSeries)', (tester) async {
+      tester.view.physicalSize = const Size(1280, 720);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final anime = AnimeSummary(
+        id: 54,
+        title: 'Roomy TV Details',
+        description: 'An action tray with a matching control height.',
+        episodes: 12,
+        score: 8,
+        staff: const [AnimePerson(id: 1, name: 'Director')],
+        trailer: AnimeTrailer.tryCreate(
+          provider: 'youtube',
+          videoId: 'abcDEF_12-3',
+        ),
+        relatedAnime: hasRelatedSeries
+            ? const [
+                RelatedAnime(
+                  relationType: 'SEQUEL',
+                  anime: AnimeSummary(
+                    id: 55,
+                    title: 'Roomy TV Sequel',
+                    description: '',
+                    episodes: 12,
+                    score: 8,
+                  ),
+                ),
+              ]
+            : const [],
+      );
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            isTelevisionProvider.overrideWithValue(true),
+            animeDetailsProvider.overrideWith((_, _) async => anime),
+            trackingHomeProvider.overrideWith(
+              (_) async => const TrackingHomeData(
+                watching: [],
+                planToWatch: [],
+                completed: [],
+              ),
+            ),
+          ],
+          child: const MaterialApp(home: AnimeDetailsScreen(animeId: 54)),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final referenceHeight = tester
+          .getSize(find.byKey(const ValueKey('episode-action-manage-list')))
+          .height;
+      expect(referenceHeight, 49);
+      _expectInformationActionsHidden();
+      await _openInformationMenu(tester);
+      final actionRects = <Rect>[
+        for (final key in [
+          const ValueKey('anime-details-watch-trailer-surface'),
+          const ValueKey('anime-details-cast-crew-surface'),
+          if (hasRelatedSeries)
+            const ValueKey('anime-details-related-series-surface'),
+          const ValueKey('anime-details-download-season-surface'),
+        ])
+          tester.getRect(find.byKey(key)),
+      ];
+      for (final action in actionRects) {
+        expect(action.height, greaterThanOrEqualTo(56));
+      }
+      _expectVerticalInformationActions(actionRects, gap: 8);
+      _expectCompactInformationMenu(
+        tester,
+        large: true,
+        hasRelatedSeries: hasRelatedSeries,
+      );
+      expect(tester.takeException(), isNull);
+    });
+  }
 
   testWidgets('episode action layout scales up on a full HD TV canvas', (
     tester,
@@ -909,6 +1778,8 @@ void main() {
     final anime = AnimeSummary(
       id: 1,
       title: 'Black Torch',
+      coverImageUrl: 'https://example.com/cover.jpg',
+      bannerImageUrl: 'https://example.com/banner.jpg',
       description:
           'A detailed synopsis that remains readable beside the poster and '
           'playback controls on a full resolution television layout.',
@@ -955,155 +1826,91 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('EPISODE 1 OF 24'), findsOneWidget);
+    final blurredBackdrop = find.descendant(
+      of: find.byType(ImageFiltered),
+      matching: find.byType(NetworkArtwork),
+    );
+    expect(blurredBackdrop, findsOneWidget);
+    expect(
+      tester.widget<NetworkArtwork>(blurredBackdrop).url,
+      anime.coverImageUrl,
+    );
+
+    expect(find.text('Episode 1 of 24'), findsNothing);
     expect(find.text('Start watching'), findsOneWidget);
-    expect(find.text('Play from beginning'), findsOneWidget);
-    expect(find.text('Play selected'), findsOneWidget);
-    expect(find.text('Watch trailer'), findsOneWidget);
-    expect(find.text('Cast & crew'), findsOneWidget);
-    expect(find.text('Related series'), findsOneWidget);
-    expect(find.text('Download season'), findsOneWidget);
+    expect(find.text('Play from beginning'), findsNothing);
+    expect(find.text('Play selected'), findsNothing);
+    expect(find.text('Browse all episodes'), findsOneWidget);
+    _expectInformationActionsHidden();
     expect(find.text('2026'), findsWidgets);
     expect(find.text('24m'), findsWidgets);
     expect(find.text('7.8 / 10'), findsOneWidget);
-    final trailerControl = tester.widget<FocusableActionDetector>(
-      find
-          .descendant(
-            of: find.byKey(const ValueKey('anime-details-watch-trailer')),
-            matching: find.byType(FocusableActionDetector),
-          )
-          .first,
-    );
-    trailerControl.focusNode!.requestFocus();
-    await tester.pump();
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
-    await tester.pump();
-    final castControl = tester.widget<FocusableActionDetector>(
-      find
-          .descendant(
-            of: find.byKey(const ValueKey('anime-details-cast-crew')),
-            matching: find.byType(FocusableActionDetector),
-          )
-          .first,
-    );
-    expect(castControl.focusNode?.hasFocus, isTrue);
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
-    await tester.pump();
-    final relatedControl = tester.widget<FocusableActionDetector>(
-      find
-          .descendant(
-            of: find.byKey(const ValueKey('anime-details-related-series')),
-            matching: find.byType(FocusableActionDetector),
-          )
-          .first,
-    );
-    expect(relatedControl.focusNode?.hasFocus, isTrue);
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
-    await tester.pump();
-    final downloadControl = tester.widget<FocusableActionDetector>(
-      find
-          .descendant(
-            of: find.byKey(const ValueKey('anime-details-download-season')),
-            matching: find.byType(FocusableActionDetector),
-          )
-          .first,
-    );
-    expect(downloadControl.focusNode?.hasFocus, isTrue);
-    final informationActionRects = <Rect>[
-      for (final key in const [
-        ValueKey('anime-details-watch-trailer'),
-        ValueKey('anime-details-cast-crew'),
-        ValueKey('anime-details-related-series'),
-        ValueKey('anime-details-download-season'),
-      ])
-        tester.getRect(find.byKey(key)),
-    ];
-    for (var index = 1; index < informationActionRects.length; index++) {
-      expect(
-        informationActionRects[index].top,
-        closeTo(informationActionRects.first.top, .01),
-      );
-      expect(
-        informationActionRects[index].bottom,
-        closeTo(informationActionRects.first.bottom, .01),
-      );
-      expect(
-        informationActionRects[index].left -
-            informationActionRects[index - 1].right,
-        8,
-      );
+    await _openInformationMenu(tester);
+    _expectCompactInformationMenu(tester, large: true);
+    final trailerFocus = _detailsActionFocusNode(tester, 'watch-trailer');
+    expect(trailerFocus.hasFocus, isTrue);
+    for (final id in ['cast-crew', 'related-series', 'download-season']) {
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pump();
+      expect(_detailsActionFocusNode(tester, id).hasFocus, isTrue);
     }
-    for (final rect in informationActionRects) {
-      expect(rect.height, 38);
-    }
-    expect(
-      informationActionRects.map((rect) => rect.width),
-      orderedEquals(const [132, 120, 130, 148]),
-    );
-    for (final label in const [
-      'Watch trailer',
-      'Cast & crew',
-      'Related series',
-      'Download season',
-    ]) {
-      final finder = find.text(label);
-      final text = tester.widget<Text>(finder);
-      final paragraph = tester.renderObject<RenderParagraph>(finder);
-      expect(text.maxLines, 2);
-      expect(text.style?.height, 1);
-      expect(
-        paragraph.didExceedMaxLines,
-        isFalse,
-        reason:
-            '$label must remain fully visible in the full-HD TV row '
-            '(size=${paragraph.size}, constraints=${paragraph.constraints}, '
-            'boxes=${paragraph.getBoxesForSelection(TextSelection(baseOffset: 0, extentOffset: label.length))})',
-      );
-    }
-    expect(tester.widget<Text>(find.text('Watch trailer')).style?.fontSize, 12);
-    for (final icon in tester.widgetList<Icon>(
-      find.descendant(
-        of: find.byKey(const ValueKey('anime-details-information-actions')),
-        matching: find.byType(Icon),
-      ),
-    )) {
-      expect(icon.size, 17);
-    }
-    final informationTrayRect = tester.getRect(
-      find.byKey(const ValueKey('anime-details-information-actions')),
-    );
-    expect(informationTrayRect.size, const Size(566, 50));
-    // The previous reference tray occupied 703 x 78 logical pixels. Preserve
-    // legible, unscaled content while reducing its total area to about half.
-    expect(
-      informationTrayRect.width * informationTrayRect.height,
-      lessThan(703 * 78 * .52),
-    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pump();
+    expect(_detailsActionFocusNode(tester, 'download-season').hasFocus, isTrue);
     final informationTray = tester.widget<Container>(
-      find.byKey(const ValueKey('anime-details-information-actions')),
+      find.byKey(const ValueKey('anime-details-more-menu')),
     );
-    expect(informationTray.padding, const EdgeInsets.all(5));
-    expect(
-      (informationTray.decoration! as BoxDecoration).borderRadius,
-      BorderRadius.circular(14),
+    expect(informationTray.padding, const EdgeInsets.all(12));
+    final episodePanel = tester.widget<Container>(
+      find.byKey(const ValueKey('episode-actions-panel')),
     );
+    expect(informationTray.decoration, episodePanel.decoration);
+    final housing = informationTray.decoration! as BoxDecoration;
+    expect(housing.borderRadius, BorderRadius.circular(TetoBoxStyle.radius));
+    expect(housing.border, isNotNull);
+    final housingGradient = housing.gradient! as LinearGradient;
+    expect(housingGradient.begin, Alignment.topCenter);
+    expect(housingGradient.end, Alignment.bottomCenter);
+    expect(housingGradient.colors.first.a, closeTo(.78, .01));
+    expect(housingGradient.colors.last.a, closeTo(.66, .01));
     final trailerSurface = tester.widget<Container>(
       find.byKey(const ValueKey('anime-details-watch-trailer-surface')),
     );
-    final trailerDecoration = trailerSurface.decoration! as BoxDecoration;
-    expect(trailerDecoration.color, AppColors.accent);
-    expect(trailerDecoration.borderRadius, BorderRadius.circular(10));
-    final posterCenter = tester.getCenter(
-      find.byKey(const ValueKey('anime-details-poster')),
+    expect(
+      trailerSurface.decoration,
+      TetoBoxStyle.decoration(
+        tester
+            .element(find.byKey(const ValueKey('anime-details-more-menu')))
+            .appPalette,
+      ),
     );
-    final infoCenter = tester.getCenter(
-      find.byKey(const ValueKey('anime-details-info')),
+    final stableTrailerDecoration = trailerSurface.decoration;
+    trailerFocus.requestFocus();
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<Container>(
+            find.byKey(const ValueKey('anime-details-watch-trailer-surface')),
+          )
+          .decoration,
+      stableTrailerDecoration,
+      reason: 'focus only adds the outer glow, not a new interior fill',
     );
-    final actionsCenter = tester.getCenter(
-      find.byKey(const ValueKey('episode-actions-panel')),
+    final focusGlow = tester.widget<AnimatedContainer>(
+      find
+          .descendant(
+            of: find.byKey(const ValueKey('anime-details-watch-trailer')),
+            matching: find.byType(AnimatedContainer),
+          )
+          .first,
     );
-    expect((posterCenter.dy - actionsCenter.dy).abs(), lessThan(1));
-    expect((infoCenter.dy - actionsCenter.dy).abs(), lessThan(1));
+    final glowDecoration = focusGlow.decoration! as BoxDecoration;
+    expect(glowDecoration.color, isNull);
+    expect(glowDecoration.gradient, isNull);
+    expect(glowDecoration.boxShadow, isNotEmpty);
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(_detailsActionFocusNode(tester, 'more').hasFocus, isTrue);
     final posterRect = tester.getRect(
       find.byKey(const ValueKey('anime-details-poster')),
     );
@@ -1113,7 +1920,10 @@ void main() {
     final actionsRect = tester.getRect(
       find.byKey(const ValueKey('episode-actions-panel')),
     );
-    expect(posterRect.height / 1080, closeTo(.60, .01));
+    expect(actionsRect.top, greaterThan(0));
+    expect(actionsRect.bottom, lessThan(1080));
+    expect(actionsRect.center.dy, closeTo(540, 50));
+    expect(posterRect.height / 1080, closeTo(.66, .01));
     expect(posterRect.right, lessThan(infoRect.left));
     expect(infoRect.right, lessThan(actionsRect.left));
     expect(actionsRect.right, lessThanOrEqualTo(1920));
@@ -1156,6 +1966,7 @@ void main() {
       );
       await tester.pumpAndSettle();
 
+      await _openDetailsBrowser(tester);
       await tester.tap(find.byKey(const ValueKey('episode-manual-selector')));
       await tester.pumpAndSettle();
       expect(find.byType(TvKeyboardDialog), findsOneWidget);
@@ -1176,18 +1987,26 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.byType(TvKeyboardDialog), findsNothing);
-      expect(find.text('4 of 12'), findsOneWidget);
+      expect(find.text('Episode 4 of 12'), findsOneWidget);
+
       expect(
         find.byKey(const ValueKey('episode-step-previous')),
         findsOneWidget,
       );
       expect(find.byKey(const ValueKey('episode-step-next')), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('episode-browser-card-4')));
+      await tester.pumpAndSettle();
+      expect(find.text('Play selected'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('episode-manual-selector')),
+        findsNothing,
+      );
       expect(tester.takeException(), isNull);
     },
   );
 
   testWidgets(
-    'Down on the middle episode selector browses and restores selection focus',
+    'Down reaches Browse Episodes and selection restores selector focus',
     (tester) async {
       tester.view.physicalSize = const Size(960, 540);
       tester.view.devicePixelRatio = 1;
@@ -1224,63 +2043,31 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      final selector = tester.widget<FocusableActionDetector>(
+      final browse = tester.widget<TvFocusable>(
         find
-            .descendant(
-              of: find.byKey(const ValueKey('episode-manual-selector')),
-              matching: find.byType(FocusableActionDetector),
+            .ancestor(
+              of: find.byKey(const ValueKey('episode-browser-prompt')),
+              matching: find.byType(TvFocusable),
             )
             .first,
       );
-      selector.focusNode!.requestFocus();
+      browse.focusNode!.requestFocus();
       await tester.pump();
-      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pumpAndSettle();
-
       expect(
         find.byKey(const ValueKey('episode-browser-page')),
         findsOneWidget,
       );
-      expect(
-        find.byKey(const ValueKey('episode-browser-dialog')),
-        findsNothing,
-      );
-      expect(find.byType(TvKeyboardDialog), findsNothing);
-
       await tester.tap(find.byKey(const ValueKey('episode-browser-card-4')));
       await tester.pumpAndSettle();
-      expect(find.text('4 of 12'), findsOneWidget);
-      expect(selector.focusNode!.hasFocus, isTrue);
-
-      final previous = tester.widget<FocusableActionDetector>(
-        find
-            .descendant(
-              of: find.byKey(const ValueKey('episode-step-previous')),
-              matching: find.byType(FocusableActionDetector),
-            )
-            .first,
-      );
-      previous.focusNode!.requestFocus();
-      await tester.pump();
-      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      expect(find.text('Play selected'), findsOneWidget);
+      expect(browse.focusNode!.hasFocus, isTrue);
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
       await tester.pumpAndSettle();
-      expect(
-        find.byKey(const ValueKey('episode-browser-page')),
-        findsOneWidget,
-      );
       await tester.binding.handlePopRoute();
       await tester.pumpAndSettle();
-      expect(previous.focusNode!.hasFocus, isTrue);
-      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-      await tester.pump();
-      expect(find.text('3 of 12'), findsOneWidget);
-
-      selector.focusNode!.requestFocus();
-      await tester.pump();
-      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-      await tester.pumpAndSettle();
-      expect(find.byType(TvKeyboardDialog), findsOneWidget);
-      expect(find.text('Choose episode (1–12)'), findsOneWidget);
+      expect(browse.focusNode!.hasFocus, isTrue);
       expect(tester.takeException(), isNull);
     },
   );
@@ -1324,22 +2111,71 @@ void main() {
     final selector = tester.widget<FocusableActionDetector>(
       find
           .descendant(
-            of: find.byKey(const ValueKey('episode-manual-selector')),
+            of: find
+                .ancestor(
+                  of: find.byKey(const ValueKey('episode-browser-prompt')),
+                  matching: find.byType(TvFocusable),
+                )
+                .first,
             matching: find.byType(FocusableActionDetector),
           )
           .first,
     );
     selector.focusNode!.requestFocus();
     await tester.pump();
-    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pump();
+    final browserTransition = tester.widget<AnimatedSwitcher>(
+      find.byKey(const ValueKey('episode-browser-transition')),
+    );
+    expect(browserTransition.duration, const Duration(milliseconds: 220));
+    expect(
+      find.byKey(const ValueKey('episode-browser-overlay')),
+      findsOneWidget,
+    );
+    expect(find.byType(BackdropFilter), findsNothing);
+    final background = find.byKey(
+      const ValueKey('episode-browser-artwork-blur'),
+    );
+    expect(tester.widget<ImageFiltered>(background).enabled, isTrue);
+    expect(
+      tester
+          .widget<NetworkArtwork>(
+            find.descendant(
+              of: background,
+              matching: find.byType(NetworkArtwork),
+            ),
+          )
+          .cacheWidth,
+      480,
+    );
+    await tester.pump(const Duration(milliseconds: 110));
+    final openingFade = tester.widget<FadeTransition>(
+      find
+          .ancestor(
+            of: find.byKey(const ValueKey('episode-browser-overlay')),
+            matching: find.byType(FadeTransition),
+          )
+          .first,
+    );
+    expect(openingFade.opacity.value, inExclusiveRange(0, 1));
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('episode-browser-page')), findsOneWidget);
 
     await tester.binding.handlePopRoute();
+    await tester.pump();
+    expect(
+      find.byKey(const ValueKey('episode-browser-overlay')),
+      findsOneWidget,
+    );
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('episode-browser-page')), findsNothing);
+    expect(
+      find.byKey(const ValueKey('episode-browser-artwork-blur')),
+      findsNothing,
+    );
     expect(selector.focusNode!.hasFocus, isTrue);
-    expect(find.text('1 of 12'), findsOneWidget);
+    expect(find.text('Episode 1 of 12'), findsNothing);
     expect(tester.takeException(), isNull);
   });
 
@@ -1380,6 +2216,7 @@ void main() {
       );
       await tester.pumpAndSettle();
 
+      await _openDetailsBrowser(tester);
       final selector = find.semantics.byLabel(
         'Episode 1 of 12. Choose episode number',
       );
@@ -1468,6 +2305,7 @@ void main() {
         ),
         findsOneWidget,
       );
+      await _openDetailsBrowser(tester);
       await tester.tap(find.byKey(const ValueKey('episode-manual-selector')));
       await tester.pumpAndSettle();
       await tester.tap(find.text('CLEAR'));
@@ -1475,8 +2313,10 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('tv-keyboard-key-number-3')));
       await tester.tap(find.text('DONE'));
       await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('episode-browser-card-13')));
+      await tester.pumpAndSettle();
 
-      expect(find.text('13 of 24'), findsOneWidget);
+      expect(find.text('Episode 13 of 24'), findsNothing);
       expect(find.text('Episode 13 has not aired yet.'), findsOneWidget);
       expect(find.text('Expected air date: September 8, 2099'), findsOneWidget);
       expect(
@@ -1535,20 +2375,10 @@ void main() {
       await tester.pumpAndSettle();
       expect(prefetchedEpisodes, [1]);
 
-      final nextControl = tester.widget<FocusableActionDetector>(
-        find
-            .descendant(
-              of: find.byKey(const ValueKey('episode-step-next')),
-              matching: find.byType(FocusableActionDetector),
-            )
-            .first,
-      );
-      nextControl.focusNode!.requestFocus();
-      await tester.pump();
-      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await _selectDetailsEpisode(tester, 2);
       await tester.pump(const Duration(milliseconds: 400));
 
-      expect(find.text('2 of 24'), findsOneWidget);
+      expect(find.text('Episode 2 of 24'), findsNothing);
       expect(find.text('Episode 2 has not aired yet.'), findsOneWidget);
       expect(find.text('Expected air date: September 8, 2099'), findsOneWidget);
       expect(prefetchedEpisodes, [1]);
@@ -1596,7 +2426,14 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('UNRELEASED'), findsOneWidget);
+    expect(find.text('Unreleased'), findsNWidgets(2));
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('anime-details-unreleased-status')),
+        matching: find.text('Unreleased'),
+      ),
+      findsOneWidget,
+    );
     expect(find.text('This series has not aired yet.'), findsOneWidget);
     expect(find.text('Expected premiere date: April 6, 2100'), findsOneWidget);
     expect(find.text('Start watching'), findsNothing);
@@ -1618,8 +2455,8 @@ void main() {
     }
     final backControl = tester.widget<FocusableActionDetector>(
       find
-          .ancestor(
-            of: find.text('Back'),
+          .descendant(
+            of: find.byType(TetoBackButton),
             matching: find.byType(FocusableActionDetector),
           )
           .first,
@@ -1695,8 +2532,8 @@ void main() {
         if (size.width < 800) {
           final backControl = tester.widget<FocusableActionDetector>(
             find
-                .ancestor(
-                  of: find.text('Back'),
+                .descendant(
+                  of: find.byType(TetoBackButton),
                   matching: find.byType(FocusableActionDetector),
                 )
                 .first,
@@ -1799,57 +2636,10 @@ void main() {
         await tester.pumpAndSettle();
 
         expect(find.text('Start watching'), findsOneWidget);
-        expect(find.text('Play from beginning'), findsOneWidget);
-        expect(find.text('Play selected'), findsOneWidget);
-        expect(find.text('Watch trailer'), findsOneWidget);
-        expect(find.text('Cast & crew'), findsOneWidget);
-        expect(find.text('Related series'), findsOneWidget);
-        expect(find.text('Download season'), findsOneWidget);
-        expect(find.text('EP 1 / 12'), findsOneWidget);
-        final informationActionRects = <Rect>[
-          for (final key in const [
-            ValueKey('anime-details-watch-trailer'),
-            ValueKey('anime-details-cast-crew'),
-            ValueKey('anime-details-related-series'),
-            ValueKey('anime-details-download-season'),
-          ])
-            tester.getRect(find.byKey(key)),
-        ];
-        for (var index = 1; index < informationActionRects.length; index++) {
-          expect(
-            informationActionRects[index].top,
-            closeTo(informationActionRects.first.top, .01),
-          );
-          expect(
-            informationActionRects[index].left,
-            greaterThan(informationActionRects[index - 1].right),
-          );
-        }
-        expect(
-          find.descendant(
-            of: find.byKey(const ValueKey('anime-details-information-actions')),
-            matching: find.byWidgetPredicate(
-              (widget) =>
-                  widget is SingleChildScrollView &&
-                  widget.scrollDirection == Axis.horizontal,
-            ),
-          ),
-          findsNothing,
-        );
-        final mobileInformationTray = find.byKey(
-          const ValueKey('anime-details-information-actions'),
-        );
-        expect(
-          find.descendant(
-            of: mobileInformationTray,
-            matching: find.byType(FittedBox),
-          ),
-          findsNothing,
-        );
-        expect(
-          tester.widget<Text>(find.text('Watch trailer')).style?.fontSize,
-          size.width <= 412 ? 11 : 12,
-        );
+        expect(find.text('Play from beginning'), findsNothing);
+        expect(find.text('Play selected'), findsNothing);
+        _expectInformationActionsHidden();
+        expect(find.text('Episode 1 of 12'), findsNothing);
         final posterSize = tester.getSize(
           find.byKey(const ValueKey('anime-details-poster')),
         );
@@ -1869,6 +2659,11 @@ void main() {
                 .dy,
           ),
         );
+        await _openInformationMenu(tester);
+        _expectCompactInformationMenu(tester, large: false);
+        await tester.binding.handlePopRoute();
+        await tester.pumpAndSettle();
+        expect(_detailsActionFocusNode(tester, 'more').hasFocus, isTrue);
         final browserPrompt = find.byKey(
           const ValueKey('episode-browser-prompt'),
         );
@@ -1886,6 +2681,130 @@ void main() {
         expect(tester.takeException(), isNull);
       },
     );
+  }
+}
+
+void _expectInformationActionsHidden() {
+  for (final id in [
+    'watch-trailer',
+    'cast-crew',
+    'related-series',
+    'download-season',
+  ]) {
+    expect(find.byKey(ValueKey('anime-details-$id')), findsNothing);
+  }
+  expect(
+    find.byKey(const ValueKey('anime-details-information-actions')),
+    findsNothing,
+  );
+}
+
+AnimeSummary _moreMenuAnime() => AnimeSummary(
+  id: 57,
+  title: 'Menu test',
+  description: '',
+  episodes: 12,
+  score: null,
+  staff: const [AnimePerson(id: 1, name: 'Director')],
+  trailer: AnimeTrailer.tryCreate(provider: 'youtube', videoId: 'abcDEF_12-3'),
+  relatedAnime: const [
+    RelatedAnime(
+      relationType: 'SEQUEL',
+      anime: AnimeSummary(
+        id: 58,
+        title: 'Sequel',
+        description: '',
+        episodes: 12,
+        score: null,
+      ),
+    ),
+  ],
+);
+
+List<Override> _moreMenuOverrides(AnimeSummary anime) => [
+  animeDetailsProvider.overrideWith((_, _) async => anime),
+  trackingHomeProvider.overrideWith(
+    (_) async =>
+        const TrackingHomeData(watching: [], planToWatch: [], completed: []),
+  ),
+  settingsPreferencesProvider.overrideWith((_) => _LoadedSettingsController()),
+];
+
+FocusNode _detailsActionFocusNode(WidgetTester tester, String id) => tester
+    .widget<FocusableActionDetector>(
+      find
+          .descendant(
+            of: find.byKey(ValueKey('anime-details-$id')),
+            matching: find.byType(FocusableActionDetector),
+          )
+          .first,
+    )
+    .focusNode!;
+
+Future<void> _openInformationMenu(WidgetTester tester) async {
+  final more = find.byKey(const ValueKey('anime-details-more'));
+  await tester.ensureVisible(more);
+  await tester.pumpAndSettle();
+  _detailsActionFocusNode(tester, 'more').requestFocus();
+  await tester.pump();
+  await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+  await tester.pumpAndSettle();
+  expect(find.byKey(const ValueKey('anime-details-more-menu')), findsOneWidget);
+}
+
+void _expectCompactInformationMenu(
+  WidgetTester tester, {
+  required bool large,
+  bool hasRelatedSeries = true,
+}) {
+  final menu = find.byKey(const ValueKey('anime-details-more-menu'));
+  final menuRect = tester.getRect(menu);
+  final viewport = tester.view.physicalSize / tester.view.devicePixelRatio;
+  expect(menuRect.width, closeTo(large ? 340 : 300, .01));
+  expect(menuRect.left, greaterThanOrEqualTo(16));
+  expect(menuRect.right, lessThanOrEqualTo(viewport.width - 16));
+  expect(menuRect.top, greaterThanOrEqualTo(16));
+  expect(menuRect.bottom, lessThanOrEqualTo(viewport.height - 16));
+  final rects = <Rect>[];
+  for (final action in [
+    ('Watch trailer', 'watch-trailer'),
+    ('Cast & crew', 'cast-crew'),
+    if (hasRelatedSeries) ('Related series', 'related-series'),
+    ('Download season', 'download-season'),
+  ]) {
+    final box = tester.getRect(
+      find.byKey(ValueKey('anime-details-${action.$2}-surface')),
+    );
+    rects.add(box);
+    expect(box.height, greaterThanOrEqualTo(large ? 56 : 48));
+    expect(menuRect.contains(box.topLeft), isTrue);
+    expect(menuRect.contains(box.bottomRight), isTrue);
+    final label = find.text(action.$1);
+    expect(tester.widget<Text>(label).style?.fontSize, large ? 18 : 15);
+    expect(
+      tester.renderObject<RenderParagraph>(label).didExceedMaxLines,
+      isFalse,
+    );
+  }
+  _expectVerticalInformationActions(rects, gap: 8);
+  final scrollable = tester.state<ScrollableState>(
+    find.descendant(of: menu, matching: find.byType(Scrollable)),
+  );
+  expect(scrollable.position.maxScrollExtent, 0);
+}
+
+void _expectVerticalInformationActions(
+  List<Rect> actions, {
+  required double gap,
+}) {
+  for (final action in actions) {
+    expect(action.width, greaterThan(0));
+    expect(action.height, closeTo(actions.first.height, .01));
+  }
+  for (var index = 1; index < actions.length; index++) {
+    expect(actions[index].left, actions.first.left);
+    expect(actions[index].width, actions.first.width);
+    expect(actions[index].top - actions[index - 1].bottom, closeTo(gap, .01));
   }
 }
 
@@ -1924,4 +2843,24 @@ class _StaticTitleLanguageController extends TitleLanguagePreferenceController {
 
   @override
   Future<void> load() async {}
+}
+
+Future<void> _openDetailsBrowser(WidgetTester tester) async {
+  await tester.ensureVisible(
+    find.byKey(const ValueKey('episode-browser-prompt')),
+  );
+  await tester.tap(find.byKey(const ValueKey('episode-browser-prompt')));
+  await tester.pumpAndSettle();
+}
+
+Future<void> _selectDetailsEpisode(WidgetTester tester, int episode) async {
+  await tester.ensureVisible(
+    find.byKey(const ValueKey('episode-browser-prompt')),
+  );
+  await tester.tap(find.byKey(const ValueKey('episode-browser-prompt')));
+  await tester.pump();
+  tester
+      .widget<EpisodeBrowserDialog>(find.byType(EpisodeBrowserDialog))
+      .onEpisodeSelected!(episode);
+  await tester.pump();
 }

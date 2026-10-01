@@ -6,6 +6,9 @@ import 'dart:ui' show DisplayFeature, DisplayFeatureType;
 
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/theme/teto_box_style.dart';
+import 'package:anime_tv/core/widgets/teto_back_button.dart';
+import 'package:anime_tv/core/widgets/teto_dialog.dart';
 import 'package:anime_tv/features/discord/application/discord_presence_controller.dart';
 import 'package:anime_tv/features/manga/application/manga_discord_presence.dart';
 import 'package:anime_tv/features/manga/application/manga_hub_controller.dart';
@@ -1284,11 +1287,12 @@ class _MangaReaderScreenState extends ConsumerState<MangaReaderScreen> {
 
   Future<void> _openReaderSettings() async {
     _showHud();
-    await showModalBottomSheet<void>(
+    await showTetoModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
-      backgroundColor: context.appPalette.surface,
+      backgroundColor: TetoBoxStyle.fill(context.appPalette),
+      shape: TetoBoxStyle.shape(context.appPalette),
       constraints: const BoxConstraints(maxWidth: 720),
       builder: (context) => MangaReaderSettingsSheet(
         seriesKey: _seriesKey,
@@ -1814,6 +1818,7 @@ class _ReaderChrome extends StatelessWidget {
       child: IgnorePointer(
         ignoring: !visible,
         child: AnimatedOpacity(
+          key: const ValueKey('manga-reader-hud-opacity'),
           duration: const Duration(milliseconds: 160),
           opacity: visible ? 1 : 0,
           child: Column(
@@ -1831,12 +1836,11 @@ class _ReaderChrome extends StatelessWidget {
                   bottom: false,
                   child: Row(
                     children: [
-                      IconButton(
+                      TetoBackButton(
                         key: const ValueKey('manga-reader-back'),
                         focusNode: backFocusNode,
                         tooltip: context.tr("Back to Manga"),
                         onPressed: onBack,
-                        icon: const Icon(Icons.arrow_back_rounded),
                       ),
                       const SizedBox(width: 8),
                       Expanded(

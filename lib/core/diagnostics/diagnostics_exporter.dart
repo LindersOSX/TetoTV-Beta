@@ -31,6 +31,7 @@ class DiagnosticsExporter {
         crashHistory.summaries,
         sourceDroppedOutsideWindow: crashHistory.droppedOutsideWindow,
         sourceDroppedForCapacity: crashHistory.droppedForCapacity,
+        sourceExitHistory: crashHistory.exitHistory,
       ),
       generatedAt: DateTime.now().toUtc(),
     );

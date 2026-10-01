@@ -711,6 +711,91 @@ void main() {
   );
 
   test(
+    'native output and health counters reach the diagnostic sampler',
+    () async {
+      final h = await _Harness.create();
+      await h.open();
+      h.state({
+        'metrics': {
+          'surfaceType': 'texture',
+          'androidSdk': 30,
+          'decoderName': 'OMX.MTK.VIDEO.DECODER.HEVC',
+          'codecQueueingMode': 'synchronous',
+          'codecQueueingCompatibility': true,
+          'audioUnderruns': 3,
+          'audioSinkErrors': 1,
+          'videoCodecErrors': 2,
+        },
+      });
+      final properties = <String, String?>{
+        for (final property in media3PlaybackPerformanceProperties)
+          property: await h.player.readProperty(property),
+      };
+      final metrics = playbackPerformanceMetricsFromProperties(
+        properties,
+        engine: 'media3',
+      );
+      expect(metrics, containsPair('surfaceType', 'texture'));
+      expect(metrics, containsPair('androidSdk', 30));
+      expect(metrics, containsPair('codecQueueingMode', 'synchronous'));
+      expect(metrics, containsPair('codecQueueingCompatibility', true));
+      expect(
+        metrics,
+        containsPair('decoderName', 'omx.mtk.video.decoder.hevc'),
+      );
+      expect(metrics, containsPair('audioUnderruns', 3));
+      expect(metrics, containsPair('audioSinkErrors', 1));
+      expect(metrics, containsPair('videoCodecErrors', 2));
+
+      h.state({
+        'generation': 2,
+        'metrics': {'surfaceType': 'detached'},
+      });
+      expect(
+        await h.player.readProperty('tetotv-video-surface-type'),
+        'detached',
+      );
+      expect(
+        await h.player.readProperty('tetotv-video-codec-error-count'),
+        isNull,
+      );
+      expect(await h.player.readProperty('tetotv-android-sdk'), isNull);
+      expect(await h.player.readProperty('tetotv-codec-queueing-mode'), isNull);
+      expect(
+        await h.player.readProperty('tetotv-codec-queueing-compatibility'),
+        isNull,
+      );
+    },
+  );
+
+  test(
+    'normal native adapters report their mode without a compatibility trial',
+    () async {
+      final h = await _Harness.create();
+      await h.open();
+      for (final mode in ['synchronous', 'asynchronous']) {
+        h.state({
+          'metrics': {
+            'codecQueueingMode': mode,
+            'codecQueueingCompatibility': false,
+          },
+        });
+        expect(await h.player.readProperty('tetotv-codec-queueing-mode'), mode);
+        expect(
+          await h.player.readProperty('tetotv-codec-queueing-compatibility'),
+          'no',
+        );
+        final metrics = playbackPerformanceMetricsFromProperties({
+          'tetotv-codec-queueing-mode': mode,
+          'tetotv-codec-queueing-compatibility': 'no',
+        }, engine: 'media3');
+        expect(metrics, containsPair('codecQueueingMode', mode));
+        expect(metrics, containsPair('codecQueueingCompatibility', false));
+      }
+    },
+  );
+
+  test(
     'native errors expose only safe codes, not URLs or native messages',
     () async {
       final h = await _Harness.create();

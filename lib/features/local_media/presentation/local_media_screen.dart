@@ -1,3 +1,4 @@
+import 'package:anime_tv/core/widgets/teto_dialog.dart';
 import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'dart:async';
 
@@ -5,6 +6,7 @@ import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/core/preferences/playback_audio_preference.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/widgets/teto_back_button.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/tv/tv_shelf_focus.dart';
 import 'package:anime_tv/core/widgets/teto_top_level_shell.dart';
@@ -867,9 +869,7 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
               Row(
                 children: [
                   if (!layout.usesSideNavigation) ...[
-                    _ActionButton(
-                      label: context.tr("Back"),
-                      icon: Icons.arrow_back_rounded,
+                    TetoBackButton(
                       focusNode: _backFocus,
                       onPressed: context.pop,
                     ),
@@ -1169,7 +1169,7 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
     try {
       final address = normalizeJellyfinServerUri(_addressController.text);
       if (address?.scheme == 'http') {
-        final approved = await showDialog<bool>(
+        final approved = await showTetoDialog<bool>(
           context: context,
           builder: (dialogContext) => AlertDialog(
             title: Text(context.tr("Use an unencrypted local connection?")),
@@ -1393,7 +1393,7 @@ class _LocalMediaScreenState extends ConsumerState<LocalMediaScreen> {
     try {
       final address = normalizePlexServerUri(_plexAddressController.text);
       if (address?.scheme == 'http') {
-        final approved = await showDialog<bool>(
+        final approved = await showTetoDialog<bool>(
           context: context,
           builder: (dialogContext) => AlertDialog(
             title: Text(context.tr("Use an unencrypted local connection?")),

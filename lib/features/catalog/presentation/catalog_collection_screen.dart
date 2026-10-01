@@ -1,6 +1,7 @@
 import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
-import 'package:anime_tv/core/tv/tv_focusable.dart';
+import 'package:anime_tv/core/widgets/teto_back_button.dart';
+import 'package:anime_tv/core/widgets/teto_browse_status.dart';
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
 import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
 import 'package:anime_tv/features/catalog/presentation/catalog_grid.dart';
@@ -39,14 +40,7 @@ class CatalogCollectionScreen extends ConsumerWidget {
           children: [
             Row(
               children: [
-                TvFocusable(
-                  autofocus: true,
-                  onPressed: context.pop,
-                  child: const Padding(
-                    padding: EdgeInsets.all(10),
-                    child: Icon(Icons.arrow_back_rounded),
-                  ),
-                ),
+                TetoBackButton(autofocus: true, onPressed: context.pop),
                 const SizedBox(width: 14),
                 Text(name, style: Theme.of(context).textTheme.headlineSmall),
                 const SizedBox(width: 12),
@@ -61,23 +55,33 @@ class CatalogCollectionScreen extends ConsumerWidget {
             const SizedBox(height: 14),
             Expanded(
               child: results.when(
-                loading: () => Center(
-                  child: CircularProgressIndicator(
-                    color: context.appPalette.accentBright,
+                loading: () => const TetoBrowseLoading(),
+                error: (error, _) => TetoBrowseStatus(
+                  icon: Icons.cloud_off_rounded,
+                  title: 'Could not load anime',
+                  message:
+                      'The catalog could not be reached. Please try again.',
+                  actions: TetoRetryButton(
+                    onPressed: () {
+                      if (type == CatalogCollectionType.studio) {
+                        ref.invalidate(studioAnimeProvider(id));
+                      } else {
+                        ref.invalidate(staffAnimeProvider(id));
+                      }
+                    },
                   ),
                 ),
-                error: (error, _) => Center(
-                  child: Text(
-                    context.tr("Could not load titles: {value1}", {
-                      'value1': error,
-                    }),
-                  ),
-                ),
-                data: (List<AnimeSummary> items) => CatalogGrid(
-                  items: items,
-                  titlePreference: preference,
-                  autofocus: false,
-                ),
+                data: (List<AnimeSummary> items) => items.isEmpty
+                    ? const TetoBrowseStatus(
+                        icon: Icons.video_library_outlined,
+                        title: 'No matches found',
+                        message: 'No titles are available yet.',
+                      )
+                    : CatalogGrid(
+                        items: items,
+                        titlePreference: preference,
+                        autofocus: false,
+                      ),
               ),
             ),
           ],

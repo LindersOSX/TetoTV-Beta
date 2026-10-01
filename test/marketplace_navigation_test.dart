@@ -1,5 +1,6 @@
 import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/core/tv/tv_shortcuts.dart';
+import 'package:anime_tv/core/widgets/teto_back_button.dart';
 import 'package:anime_tv/features/marketplace/application/marketplace_controller.dart';
 import 'package:anime_tv/features/marketplace/data/addon_store.dart';
 import 'package:anime_tv/features/marketplace/data/marketplace_client.dart';
@@ -38,7 +39,14 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(_focusedControl(tester, find.text('Settings')), isTrue);
+      final backFocus = find.descendant(
+        of: find.byType(TetoBackButton),
+        matching: find.byType(FocusableActionDetector),
+      );
+      expect(
+        tester.widget<FocusableActionDetector>(backFocus).focusNode?.hasFocus,
+        isTrue,
+      );
 
       await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
       await tester.pump();

@@ -3,6 +3,7 @@ import 'dart:async';
 
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/widgets/teto_back_button.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/tv/tv_shelf_focus.dart';
@@ -248,7 +249,7 @@ class _AiringCalendarScreenState extends ConsumerState<AiringCalendarScreen> {
               return Row(
                 children: [
                   if (preferences.interfaceMode == InterfaceMode.phone) ...[
-                    TvFocusable(
+                    TetoBackButton(
                       focusNode: _backFocus,
                       onKeyEvent: (_, event) => _handleHeaderKey(
                         event,
@@ -257,15 +258,6 @@ class _AiringCalendarScreenState extends ConsumerState<AiringCalendarScreen> {
                         groups: groups,
                       ),
                       onPressed: () => _returnToPreviousOrHome(context),
-                      borderRadius: BorderRadius.circular(9),
-                      focusScale: 1.02,
-                      child: const Padding(
-                        padding: EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 9,
-                        ),
-                        child: Icon(Icons.arrow_back_rounded),
-                      ),
                     ),
                     const SizedBox(width: 14),
                   ],

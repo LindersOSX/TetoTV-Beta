@@ -47,6 +47,7 @@ class DiscordRichPresenceBridgeAbiTest {
             ),
             bridge.getDeclaredMethod(
                 "onRefreshResult",
+                Long::class.javaPrimitiveType,
                 Boolean::class.javaPrimitiveType,
                 String::class.java,
                 String::class.java,
@@ -77,6 +78,11 @@ class DiscordRichPresenceBridgeAbiTest {
             assertTrue("${callback.name} must remain static for JNI", Modifier.isStatic(callback.modifiers))
             assertEquals("${callback.name} must return void for JNI", Void.TYPE, callback.returnType)
         }
+        val refresh = bridge.getDeclaredMethod(
+            "nativeRefreshToken", String::class.java, Long::class.javaPrimitiveType,
+        )
+        assertTrue("refresh request identity must cross JNI", Modifier.isNative(refresh.modifiers))
+        assertEquals(Void.TYPE, refresh.returnType)
     }
 
     @Test
@@ -114,6 +120,38 @@ class DiscordRichPresenceBridgeAbiTest {
             "discordDisconnect must release pendingConnect before native cancellation",
             clearIndex >= 0 && nativeCancelIndex > clearIndex,
         )
+        assertTrue(
+            "every native connection needs a bounded handler deadline",
+            connectBranch.contains("mainHandler.postDelayed(timeout, CONNECTION_TIMEOUT_MS)") &&
+                source.contains("CONNECTION_TIMEOUT_MS = 20_000L"),
+        )
+        val timeoutBranch = connectBranch.substringAfter("val timeout = Runnable {", "")
+            .substringBefore("connectionTimeout = timeout")
+        assertTrue(
+            "timeout must atomically clear only its own pending result before cancellation",
+            timeoutBranch.indexOf("pendingConnect.takeIf(result)") in
+                0 until timeoutBranch.indexOf("nativeDisconnect()"),
+        )
+        assertTrue(
+            "queued native statuses must not settle a newer connect generation",
+            source.contains("if (generation != connectionGeneration) return@post"),
+        )
+        val refreshBranch = source.substringAfter("\"discordRefreshToken\" -> {", "")
+            .substringBefore("\"discordCancelRefreshToken\" -> {")
+        assertTrue(
+            "refresh needs an identity-owned watchdog and request identity sent into native",
+            refreshBranch.contains("pendingRefresh.takeIf(operation)") &&
+                refreshBranch.contains("mainHandler.postDelayed(timeout, REFRESH_TIMEOUT_MS)") &&
+                refreshBranch.contains("nativeRefreshToken(refreshToken, operation.requestId)"),
+        )
+        assertTrue(
+            "late refresh callbacks must match their original request identity",
+            source.contains("pendingRefresh.takeMatching { it.requestId == requestId }"),
+        )
+        val cancelRefreshBranch = source.substringAfter("\"discordCancelRefreshToken\" -> {", "")
+            .substringBefore("\"discordConnect\" -> {")
+        assertTrue("refresh cancellation must release its pending slot", cancelRefreshBranch.contains("pendingRefresh.take()"))
+        assertTrue("refresh cancellation must not disconnect or revoke", !cancelRefreshBranch.contains("nativeDisconnect()") && !cancelRefreshBranch.contains("nativeRevoke("))
     }
 
     @Test
@@ -169,6 +207,32 @@ class DiscordRichPresenceBridgeAbiTest {
             "connect callbacks must be invalidated when a newer connect or disconnect wins",
             source.contains("g_connection_generation") &&
                 source.contains("connection_generation != g_connection_generation.load()"),
+        )
+        assertTrue(
+            "queued status must match the current SDK state and current installed token",
+            source.contains("status != g_client->GetStatus()") &&
+                source.contains("g_installed_token_connection_generation.load() != connection_generation") &&
+                source.contains("g_installed_token_connection_generation.store(connection_generation)"),
+        )
+        val readyGuard = source.substringAfter("if (status == discordpp::Client::Status::Ready &&", "")
+            .substringBefore("const bool ready =")
+        assertTrue(
+            "Ready must not depend on the one-shot manual-connect marker consumed before Connect",
+            !readyGuard.contains("g_token_ready_connection_generation"),
+        )
+        val nativeConnect = source.substringAfter("DiscordRichPresenceBridge_nativeConnect(", "")
+            .substringBefore("DiscordRichPresenceBridge_nativeRevoke(")
+        val readyFallback = nativeConnect.substringAfter("if (status == discordpp::Client::Status::Ready)", "")
+        assertTrue(
+            "successful token update on an already-ready client must unblock presence publishing",
+            readyFallback.indexOf("g_ready.store(true)") in
+                0 until readyFallback.indexOf("flush_pending_presence()"),
+        )
+        assertTrue(
+            "refresh callback ABI must carry the request ID captured by its SDK callback",
+            source.contains("(JZLjava/lang/String;Ljava/lang/String;IILjava/lang/String;Ljava/lang/String;)V") &&
+                source.contains("post([refresh_token, request_id]") &&
+                source.contains("[request_id](discordpp::ClientResult result"),
         )
         assertTrue(
             "UpdateToken must only open a websocket from the fully disconnected state",

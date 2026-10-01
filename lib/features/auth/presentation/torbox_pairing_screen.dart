@@ -3,6 +3,7 @@ import 'dart:async';
 
 import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/widgets/teto_back_button.dart';
 import 'package:anime_tv/core/widgets/copyable_code_interaction.dart';
 import 'package:anime_tv/core/widgets/copyable_qr_interaction.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
@@ -476,12 +477,7 @@ class _PairingHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     final leading = Row(
       children: [
-        _PairingAction(
-          autofocus: true,
-          icon: Icons.arrow_back_rounded,
-          label: context.tr("Back"),
-          onPressed: onBack,
-        ),
+        TetoBackButton(autofocus: true, onPressed: onBack),
         const SizedBox(width: 18),
         Expanded(
           child: Text(

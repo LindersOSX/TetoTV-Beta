@@ -1,7 +1,6 @@
-import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'dart:typed_data';
 
-import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/widgets/network_artwork.dart';
 import 'package:anime_tv/features/manga/application/manga_hub_controller.dart';
 import 'package:anime_tv/features/manga/data/manga_catalog_client.dart';
 import 'package:anime_tv/features/manga/data/manga_page_fetch_client.dart';
@@ -157,29 +156,9 @@ class _MangaArtworkSkeleton extends StatelessWidget {
   const _MangaArtworkSkeleton({super.key});
 
   @override
-  Widget build(BuildContext context) => Semantics(
-    label: context.tr("Loading manga artwork"),
-    child: SizedBox.expand(
-      key: const ValueKey('manga-artwork-loading'),
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          color: context.appPalette.surfaceRaised,
-          gradient: LinearGradient(
-            colors: <Color>[
-              context.appPalette.surfaceRaised,
-              Colors.white.withValues(alpha: .055),
-              context.appPalette.surfaceRaised,
-            ],
-            stops: const <double>[0, .52, 1],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          ),
-        ),
-        child: const Center(
-          child: Icon(Icons.image_outlined, color: Color(0xFF57575F), size: 32),
-        ),
-      ),
-    ),
+  Widget build(BuildContext context) => const SizedBox.expand(
+    key: ValueKey('manga-artwork-loading'),
+    child: ArtworkSkeleton(semanticLabel: 'Loading manga artwork'),
   );
 }
 
@@ -189,14 +168,7 @@ class _MangaArtworkFallback extends StatelessWidget {
   final IconData icon;
 
   @override
-  Widget build(BuildContext context) => ColoredBox(
-    color: context.appPalette.surfaceRaised,
-    child: SizedBox.expand(
-      child: Center(
-        child: Icon(icon, color: context.appPalette.mutedText, size: 42),
-      ),
-    ),
-  );
+  Widget build(BuildContext context) => ArtworkFallback(icon: icon);
 }
 
 bool _sameOrigin(Uri first, Uri second) =>

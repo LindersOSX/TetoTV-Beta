@@ -4,6 +4,7 @@ import 'dart:async';
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
+import 'package:anime_tv/core/widgets/teto_back_button.dart';
 import 'package:anime_tv/features/settings/application/device_setup_controller.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -42,12 +43,7 @@ class _DeviceSetupScreenState extends ConsumerState<DeviceSetupScreen> {
           children: [
             Row(
               children: [
-                _CalibrationButton(
-                  icon: Icons.arrow_back_rounded,
-                  label: 'Back',
-                  autofocus: true,
-                  onPressed: context.pop,
-                ),
+                TetoBackButton(autofocus: true, onPressed: context.pop),
                 const SizedBox(width: 16),
                 Expanded(
                   child: Column(
@@ -296,14 +292,12 @@ class _CalibrationButton extends StatelessWidget {
     required this.label,
     required this.onPressed,
     this.primary = false,
-    this.autofocus = false,
   });
 
   final IconData icon;
   final String label;
   final VoidCallback? onPressed;
   final bool primary;
-  final bool autofocus;
 
   @override
   Widget build(BuildContext context) => IgnorePointer(
@@ -311,7 +305,6 @@ class _CalibrationButton extends StatelessWidget {
     child: Opacity(
       opacity: onPressed == null ? .45 : 1,
       child: TvFocusable(
-        autofocus: autofocus,
         onPressed: onPressed ?? () {},
         borderRadius: BorderRadius.circular(8),
         child: Container(

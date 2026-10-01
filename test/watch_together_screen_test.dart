@@ -44,7 +44,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Watch Party'), findsOneWidget);
+    expect(find.text('Watch Party'), findsNWidgets(2));
     final watchNavigation = find.byKey(
       const ValueKey('main-nav-watch-together'),
     );
@@ -52,7 +52,7 @@ void main() {
     expect(
       find.descendant(
         of: watchNavigation,
-        matching: find.byIcon(Icons.person_outline_rounded),
+            matching: find.byIcon(Icons.people_outline_rounded),
       ),
       findsOneWidget,
     );
@@ -334,7 +334,7 @@ void main() {
         find.byKey(const ValueKey('main-nav-watch-together')),
         findsOneWidget,
       );
-      expect(find.byIcon(Icons.person_outline_rounded), findsOneWidget);
+      expect(find.byIcon(Icons.groups_rounded), findsOneWidget);
       expect(
         FocusManager.instance.primaryFocus?.debugLabel,
         'watch-together.create',

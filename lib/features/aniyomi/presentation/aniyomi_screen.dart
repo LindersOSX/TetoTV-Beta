@@ -1,3 +1,4 @@
+import 'package:anime_tv/core/widgets/teto_dialog.dart';
 import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'package:anime_tv/core/localization/app_language.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
@@ -95,7 +96,7 @@ class _AniyomiScreenState extends ConsumerState<AniyomiScreen> {
   Future<void> _add(AniyomiMediaKind kind) async {
     final input = TextEditingController();
     try {
-      final accepted = await showDialog<bool>(
+      final accepted = await showTetoDialog<bool>(
         context: context,
         builder: (context) => AlertDialog(
           title: Text(context.tr('Add repository')),
@@ -136,7 +137,7 @@ class _AniyomiScreenState extends ConsumerState<AniyomiScreen> {
     final inspected = await controller.inspect(extension);
     if (!mounted) return;
     controller.gateway.check(access);
-    final trusted = await showDialog<bool>(
+    final trusted = await showTetoDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: Text(context.tr('Trust this experimental extension?')),
@@ -237,7 +238,7 @@ class _AniyomiScreenState extends ConsumerState<AniyomiScreen> {
   }
 
   Future<void> _chooseLanguage(List<String> languages, String? selected) async {
-    final choice = await showDialog<_CatalogLanguageSelection>(
+    final choice = await showTetoDialog<_CatalogLanguageSelection>(
       context: context,
       builder: (dialogContext) => SimpleDialog(
         backgroundColor: dialogContext.appPalette.surface,

@@ -22,6 +22,14 @@ const _captionTextSizeKey = 'appearance_caption_text_size';
 const _thumbnailScaleKey = 'appearance_thumbnail_scale';
 const _interfaceScaleKey = 'appearance_interface_scale';
 const _contentDensityKey = 'appearance_content_density';
+const _contentDensityScaleKey = 'appearance_content_density_scale';
+const _homeLayoutCompactnessKey = 'appearance_home_layout_compactness';
+const _navigationChromeScaleKey = 'navigation_chrome_scale';
+const _expandNavigationLabelsKey = 'navigation_expand_labels_on_focus';
+const navigationLabelExpansionMigrationKey =
+    'navigation_expand_labels_default_migration_2026_10_01';
+const _reduceMotionKey = 'appearance_reduce_motion';
+const _blurEffectsKey = 'appearance_blur_effects';
 const _seekBackSecondsKey = 'player_seek_back_seconds';
 const _seekForwardSecondsKey = 'player_seek_forward_seconds';
 const _builtInKeyboardKey = 'input_use_built_in_keyboard';
@@ -444,6 +452,12 @@ class SettingsPreferences {
     this.thumbnailScale = 1,
     this.interfaceScale = 1,
     this.contentDensity = ContentDensity.standard,
+    this.contentDensityScale,
+    this.homeLayoutCompactness,
+    this.navigationChromeScale,
+    this.expandNavigationLabelsOnFocus = true,
+    this.reduceMotion = false,
+    this.blurEffectsEnabled = true,
     this.seekBackSeconds = 10,
     this.seekForwardSeconds = 10,
     // Fresh installs start with TetoTV's D-pad keyboard. First-time setup asks
@@ -524,6 +538,25 @@ class SettingsPreferences {
   final double thumbnailScale;
   final double interfaceScale;
   final ContentDensity contentDensity;
+
+  /// Continuous Display Studio values. Null preserves an older saved preset.
+  final double? contentDensityScale;
+  final double? homeLayoutCompactness;
+  final double? navigationChromeScale;
+  final bool expandNavigationLabelsOnFocus;
+  final bool reduceMotion;
+  final bool blurEffectsEnabled;
+  double get effectiveContentDensityScale =>
+      contentDensityScale ?? contentDensity.spacingScale;
+  double get effectiveHomeLayoutCompactness =>
+      homeLayoutCompactness ?? (homeLayout == HomeLayout.compact ? 1 : 0);
+  double get effectiveNavigationChromeScale =>
+      navigationChromeScale ??
+      switch (navigationChromeSize) {
+        NavigationChromeSize.small => .8,
+        NavigationChromeSize.medium => 1,
+        NavigationChromeSize.large => 1.25,
+      };
   final int seekBackSeconds;
   final int seekForwardSeconds;
   final bool useBuiltInKeyboard;
@@ -614,6 +647,12 @@ class SettingsPreferences {
     double? thumbnailScale,
     double? interfaceScale,
     ContentDensity? contentDensity,
+    double? contentDensityScale,
+    double? homeLayoutCompactness,
+    double? navigationChromeScale,
+    bool? expandNavigationLabelsOnFocus,
+    bool? reduceMotion,
+    bool? blurEffectsEnabled,
     int? seekBackSeconds,
     int? seekForwardSeconds,
     bool? useBuiltInKeyboard,
@@ -683,6 +722,13 @@ class SettingsPreferences {
     thumbnailScale: thumbnailScale ?? this.thumbnailScale,
     interfaceScale: interfaceScale ?? this.interfaceScale,
     contentDensity: contentDensity ?? this.contentDensity,
+    contentDensityScale: contentDensityScale ?? this.contentDensityScale,
+    homeLayoutCompactness: homeLayoutCompactness ?? this.homeLayoutCompactness,
+    navigationChromeScale: navigationChromeScale ?? this.navigationChromeScale,
+    expandNavigationLabelsOnFocus:
+        expandNavigationLabelsOnFocus ?? this.expandNavigationLabelsOnFocus,
+    reduceMotion: reduceMotion ?? this.reduceMotion,
+    blurEffectsEnabled: blurEffectsEnabled ?? this.blurEffectsEnabled,
     seekBackSeconds: seekBackSeconds ?? this.seekBackSeconds,
     seekForwardSeconds: seekForwardSeconds ?? this.seekForwardSeconds,
     useBuiltInKeyboard: useBuiltInKeyboard ?? this.useBuiltInKeyboard,
@@ -771,14 +817,14 @@ class SettingsPreferences {
     TopNavigationDestination.downloads =>
       offlineDownloadsEnabled && showDownloads,
     TopNavigationDestination.manga => mangaReaderEnabled,
-    // Settings is the permanent recovery path for navigation customization.
-    TopNavigationDestination.settings => true,
+    // The profile menu remains the permanent recovery path when hidden here.
+    TopNavigationDestination.settings => showSettings,
   };
 
   /// Settings is always available so every other destination can be hidden.
   bool canHideTopNavigationDestination(TopNavigationDestination destination) {
     return switch (destination) {
-      TopNavigationDestination.settings => false,
+      TopNavigationDestination.settings => true,
       _ => true,
     };
   }
@@ -1033,6 +1079,14 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
       // One-time 2.0.77 migration. Existing engine and renderer choices are
       // deliberately replaced once, then remain user-editable afterward.
       _safeRead(playerMedia3SurfaceMigration277Key),
+      _safeRead(_contentDensityScaleKey),
+      _safeRead(_homeLayoutCompactnessKey),
+      _safeRead(_navigationChromeScaleKey),
+      // Append-only: older saved preference positions must remain stable.
+      _safeRead(_expandNavigationLabelsKey),
+      _safeRead(_reduceMotionKey),
+      _safeRead(navigationLabelExpansionMigrationKey),
+      _safeRead(_blurEffectsKey),
     ]);
 
     bool canRestoreRevision(String key) {
@@ -1299,11 +1353,9 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
     if (canRestore(_showHomeKey, 36)) {
       restored = restored.copyWith(showHome: valueAt(36) != 'false');
     }
-    final repairHiddenSettings =
-        canRestore(_showSettingsKey, 37) && valueAt(37) == 'false';
-    // Settings is now the permanent recovery path. Ignore and repair a hidden
-    // value left by an older build instead of briefly hiding it at startup.
-    restored = restored.copyWith(showSettings: true);
+    if (canRestore(_showSettingsKey, 37)) {
+      restored = restored.copyWith(showSettings: valueAt(37) != 'false');
+    }
     if (canRestore(_topNavigationOrderKey, 38)) {
       restored = restored.copyWith(
         topNavigationOrder: _parseTopNavigationOrder(valueAt(38)),
@@ -1316,6 +1368,11 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
           valueAt(39),
           SettingsEntryPlacement.topNavigation,
         ),
+        // An old Profile-menu-only selection should keep its hidden rail
+        // button, but Settings is now present in the profile menu either way.
+        showSettings: valueAt(39) == SettingsEntryPlacement.profileMenu.name
+            ? false
+            : restored.showSettings,
       );
     }
     if (canRestore(_navigationChromeSizeKey, 40)) {
@@ -1326,6 +1383,34 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
           NavigationChromeSize.medium,
         ),
       );
+    }
+    // New continuous values are append-only. A missing key retains the exact
+    // legacy preset through the effective getters above.
+    if (canRestore(_contentDensityScaleKey, 67) && valueAt(67) != null) {
+      restored = restored.copyWith(
+        contentDensityScale: _parseDouble(valueAt(67), 1).clamp(.75, 1.25),
+      );
+    }
+    if (canRestore(_homeLayoutCompactnessKey, 68) && valueAt(68) != null) {
+      restored = restored.copyWith(
+        homeLayoutCompactness: _parseDouble(valueAt(68), 0).clamp(0, 1),
+      );
+    }
+    if (canRestore(_navigationChromeScaleKey, 69) && valueAt(69) != null) {
+      restored = restored.copyWith(
+        navigationChromeScale: _parseDouble(valueAt(69), 1).clamp(.8, 1.25),
+      );
+    }
+    if (canRestore(_expandNavigationLabelsKey, 70)) {
+      restored = restored.copyWith(
+        expandNavigationLabelsOnFocus: valueAt(70) != 'false',
+      );
+    }
+    if (canRestore(_reduceMotionKey, 71)) {
+      restored = restored.copyWith(reduceMotion: valueAt(71) == 'true');
+    }
+    if (canRestore(_blurEffectsKey, 73)) {
+      restored = restored.copyWith(blurEffectsEnabled: valueAt(73) != 'false');
     }
     if (canRestore(_autoPickSourceEnabledKey, 41)) {
       restored = restored.copyWith(
@@ -1520,6 +1605,14 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
             canRestoreRevision(_media3SurfaceViewEnabledKey) ? true : null,
       );
     }
+    final migrateNavigationExpansion =
+        canRestore(navigationLabelExpansionMigrationKey, 72) &&
+        valueAt(72) != 'true' &&
+        !identical(values[70], _preferenceReadFailed);
+    if (migrateNavigationExpansion &&
+        canRestoreRevision(_expandNavigationLabelsKey)) {
+      restored = restored.copyWith(expandNavigationLabelsOnFocus: true);
+    }
     if (restored.preferredPlayer == PreferredPlayer.external &&
         (!restored.externalPlayerEnabled ||
             restored.selectedExternalPlayerPackage == null)) {
@@ -1528,14 +1621,11 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
     state = restored.copyWith(loaded: true);
     _initialLoadComplete = true;
     _preloadMutations.clear();
-    if (repairHiddenSettings ||
-        repairRetiredInterfaceMode ||
+    if (repairRetiredInterfaceMode ||
         persistFreshCrashReportingDefault ||
-        migratePlayerToMedia3) {
+        migratePlayerToMedia3 ||
+        migrateNavigationExpansion) {
       await _enqueueStorage(() async {
-        if (repairHiddenSettings) {
-          await _write(_showSettingsKey, 'true');
-        }
         if (repairRetiredInterfaceMode) {
           await _write(_interfaceModeKey, InterfaceMode.automatic.name);
         }
@@ -1550,6 +1640,14 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
             await _write(_media3SurfaceViewEnabledKey, 'true');
           }
           await _write(playerMedia3SurfaceMigration277Key, 'true');
+        }
+        if (migrateNavigationExpansion) {
+          if (canRestoreRevision(_expandNavigationLabelsKey)) {
+            await _write(_expandNavigationLabelsKey, 'true');
+          }
+          // Commit the marker only after the default is persisted. Future
+          // explicit opt-outs survive reloads, restarts, and later updates.
+          await _write(navigationLabelExpansionMigrationKey, 'true');
         }
       });
     }
@@ -1644,8 +1742,51 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
   );
 
   Future<void> setContentDensity(ContentDensity value) => _update(
-    state.copyWith(contentDensity: value),
-    {_contentDensityKey: value.name},
+    state.copyWith(
+      contentDensity: value,
+      contentDensityScale: value.spacingScale,
+    ),
+    {
+      _contentDensityKey: value.name,
+      _contentDensityScaleKey: value.spacingScale.toString(),
+    },
+  );
+
+  Future<void> setContentDensityScale(double value) {
+    final scale = value.clamp(.75, 1.25);
+    return _update(state.copyWith(contentDensityScale: scale), {
+      _contentDensityScaleKey: scale.toString(),
+    });
+  }
+
+  Future<void> setHomeLayoutCompactness(double value) {
+    final compactness = value.clamp(0.0, 1.0);
+    return _update(state.copyWith(homeLayoutCompactness: compactness), {
+      _homeLayoutCompactnessKey: compactness.toString(),
+    });
+  }
+
+  Future<void> setNavigationChromeScale(double value) {
+    final scale = value.clamp(.8, 1.25);
+    return _update(state.copyWith(navigationChromeScale: scale), {
+      _navigationChromeScaleKey: scale.toString(),
+    });
+  }
+
+  Future<void> setExpandNavigationLabelsOnFocus(bool value) =>
+      _update(state.copyWith(expandNavigationLabelsOnFocus: value), {
+        _expandNavigationLabelsKey: value.toString(),
+        navigationLabelExpansionMigrationKey: 'true',
+      });
+
+  Future<void> setBlurEffectsEnabled(bool value) => _update(
+    state.copyWith(blurEffectsEnabled: value),
+    {_blurEffectsKey: value.toString()},
+  );
+
+  Future<void> setReduceMotion(bool value) => _update(
+    state.copyWith(reduceMotion: value),
+    {_reduceMotionKey: value.toString()},
   );
 
   Future<void> setShowTitleStyle(ShowTitleStyle value) => _update(
@@ -1698,8 +1839,16 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
     {_showFillerIndicatorsKey: value.toString()},
   );
 
-  Future<void> setHomeLayout(HomeLayout value) =>
-      _update(state.copyWith(homeLayout: value), {_homeLayoutKey: value.name});
+  Future<void> setHomeLayout(HomeLayout value) => _update(
+    state.copyWith(
+      homeLayout: value,
+      homeLayoutCompactness: value == HomeLayout.compact ? 1 : 0,
+    ),
+    {
+      _homeLayoutKey: value.name,
+      _homeLayoutCompactnessKey: value == HomeLayout.compact ? '1' : '0',
+    },
+  );
 
   Future<void> setShowSearch(bool value) => setTopNavigationDestinationVisible(
     TopNavigationDestination.search,
@@ -1780,6 +1929,7 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
       ),
       TopNavigationDestination.settings => state.copyWith(
         showSettings: visible,
+        settingsEntryPlacement: SettingsEntryPlacement.topNavigation,
       ),
     };
     final visibilityKey = switch (destination) {
@@ -1799,6 +1949,8 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
         : state.defaultLandingPage;
     return _update(next.copyWith(defaultLandingPage: nextLandingPage), {
       visibilityKey: visible.toString(),
+      if (destination == TopNavigationDestination.settings)
+        _settingsEntryPlacementKey: SettingsEntryPlacement.topNavigation.name,
       if (nextLandingPage != state.defaultLandingPage)
         _defaultLandingPageKey: nextLandingPage.name,
     });
@@ -1827,13 +1979,35 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
   }
 
   Future<void> setSettingsEntryPlacement(SettingsEntryPlacement value) =>
-      _update(state.copyWith(settingsEntryPlacement: value), {
-        _settingsEntryPlacementKey: value.name,
-      });
+      _update(
+        state.copyWith(
+          settingsEntryPlacement: value,
+          showSettings: value == SettingsEntryPlacement.topNavigation,
+        ),
+        {
+          _settingsEntryPlacementKey: value.name,
+          _showSettingsKey: (value == SettingsEntryPlacement.topNavigation)
+              .toString(),
+        },
+      );
 
   Future<void> setNavigationChromeSize(NavigationChromeSize value) => _update(
-    state.copyWith(navigationChromeSize: value),
-    {_navigationChromeSizeKey: value.name},
+    state.copyWith(
+      navigationChromeSize: value,
+      navigationChromeScale: switch (value) {
+        NavigationChromeSize.small => .8,
+        NavigationChromeSize.medium => 1,
+        NavigationChromeSize.large => 1.25,
+      },
+    ),
+    {
+      _navigationChromeSizeKey: value.name,
+      _navigationChromeScaleKey: switch (value) {
+        NavigationChromeSize.small => '.8',
+        NavigationChromeSize.medium => '1',
+        NavigationChromeSize.large => '1.25',
+      },
+    },
   );
 
   Future<void> setShowHero(bool value) => _update(
@@ -2184,6 +2358,10 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
       _topNavigationOrderKey,
       _settingsEntryPlacementKey,
       _navigationChromeSizeKey,
+      _contentDensityScaleKey,
+      _homeLayoutCompactnessKey,
+      _navigationChromeScaleKey,
+      _expandNavigationLabelsKey,
       _showHeroKey,
       _showPosterMetadataKey,
       _showCardSubtitlesKey,
@@ -2205,6 +2383,10 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
       topNavigationOrder: defaults.topNavigationOrder,
       settingsEntryPlacement: defaults.settingsEntryPlacement,
       navigationChromeSize: defaults.navigationChromeSize,
+      contentDensityScale: defaults.effectiveContentDensityScale,
+      homeLayoutCompactness: defaults.effectiveHomeLayoutCompactness,
+      navigationChromeScale: defaults.effectiveNavigationChromeScale,
+      expandNavigationLabelsOnFocus: defaults.expandNavigationLabelsOnFocus,
       showHero: defaults.showHero,
       showPosterMetadata: defaults.showPosterMetadata,
       showCardSubtitles: defaults.showCardSubtitles,
@@ -2238,6 +2420,12 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
       _topNavigationOrderKey,
       _settingsEntryPlacementKey,
       _navigationChromeSizeKey,
+      _contentDensityScaleKey,
+      _homeLayoutCompactnessKey,
+      _navigationChromeScaleKey,
+      _expandNavigationLabelsKey,
+      _reduceMotionKey,
+      _blurEffectsKey,
       _showHeroKey,
       _showPosterMetadataKey,
       _showCardSubtitlesKey,
@@ -2264,6 +2452,12 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
       topNavigationOrder: defaults.topNavigationOrder,
       settingsEntryPlacement: defaults.settingsEntryPlacement,
       navigationChromeSize: defaults.navigationChromeSize,
+      contentDensityScale: defaults.effectiveContentDensityScale,
+      homeLayoutCompactness: defaults.effectiveHomeLayoutCompactness,
+      navigationChromeScale: defaults.effectiveNavigationChromeScale,
+      expandNavigationLabelsOnFocus: defaults.expandNavigationLabelsOnFocus,
+      reduceMotion: defaults.reduceMotion,
+      blurEffectsEnabled: defaults.blurEffectsEnabled,
       showHero: defaults.showHero,
       showPosterMetadata: defaults.showPosterMetadata,
       showCardSubtitles: defaults.showCardSubtitles,
@@ -2292,6 +2486,12 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
       _thumbnailScaleKey,
       _interfaceScaleKey,
       _contentDensityKey,
+      _contentDensityScaleKey,
+      _homeLayoutCompactnessKey,
+      _navigationChromeScaleKey,
+      _expandNavigationLabelsKey,
+      _reduceMotionKey,
+      _blurEffectsKey,
       _interfaceModeKey,
       _seekBackSecondsKey,
       _seekForwardSecondsKey,
@@ -2315,6 +2515,12 @@ class SettingsPreferencesController extends StateNotifier<SettingsPreferences> {
       thumbnailScale: defaults.thumbnailScale,
       interfaceScale: defaults.interfaceScale,
       contentDensity: defaults.contentDensity,
+      contentDensityScale: defaults.effectiveContentDensityScale,
+      homeLayoutCompactness: defaults.effectiveHomeLayoutCompactness,
+      navigationChromeScale: defaults.effectiveNavigationChromeScale,
+      expandNavigationLabelsOnFocus: defaults.expandNavigationLabelsOnFocus,
+      reduceMotion: defaults.reduceMotion,
+      blurEffectsEnabled: defaults.blurEffectsEnabled,
       interfaceMode: defaults.interfaceMode,
       seekBackSeconds: defaults.seekBackSeconds,
       seekForwardSeconds: defaults.seekForwardSeconds,

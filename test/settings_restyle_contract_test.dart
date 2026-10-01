@@ -1,5 +1,6 @@
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/theme/teto_box_style.dart';
 import 'package:anime_tv/core/tv/tv_shortcuts.dart';
 import 'package:anime_tv/features/settings/presentation/accounts_screen.dart';
 import 'package:flutter/material.dart';
@@ -47,6 +48,72 @@ void main() {
   double verticalGap(WidgetTester tester, String upper, String lower) =>
       cardRect(tester, lower).top - cardRect(tester, upper).bottom;
 
+  testWidgets('Settings options use separate Display Studio-style boxes', (
+    tester,
+  ) async {
+    await pumpSettings(tester);
+
+    final content = settingsCard('settings-section-content-theme-display');
+    expect(tester.widget<SizedBox>(content).width, double.infinity);
+
+    Finder cardSurface(String key) => find.descendant(
+      of: find.byKey(ValueKey(key)),
+      matching: find.byWidgetPredicate(
+        (widget) =>
+            widget is AnimatedContainer &&
+            widget.constraints?.minHeight != null,
+      ),
+    );
+
+    for (final key in [
+      'open-theme-studio',
+      'open-display-studio',
+      'settings-app-language',
+    ]) {
+      final card = tester.widget<AnimatedContainer>(cardSurface(key));
+      final decoration = card.decoration! as BoxDecoration;
+      expect(
+        decoration.borderRadius,
+        BorderRadius.circular(TetoBoxStyle.radius),
+      );
+      expect(
+        (decoration.border! as Border).top.color,
+        TetoBoxStyle.outline(AppThemePalette.defaults),
+      );
+    }
+
+    expect(
+      tester.getRect(cardSurface('open-display-studio')).top -
+          tester.getRect(cardSurface('open-theme-studio')).bottom,
+      greaterThan(0),
+    );
+  });
+
+  testWidgets('language popup uses the same neutral card outline', (
+    tester,
+  ) async {
+    await pumpSettings(tester);
+    await tester.tap(find.byKey(const ValueKey('settings-app-language')));
+    await tester.pumpAndSettle();
+
+    final cards = find.descendant(
+      of: find.byType(Dialog),
+      matching: find.byWidgetPredicate((widget) {
+        if (widget is! Container || widget.decoration is! BoxDecoration) {
+          return false;
+        }
+        final decoration = widget.decoration! as BoxDecoration;
+        return decoration.borderRadius ==
+                BorderRadius.circular(TetoBoxStyle.radius) &&
+            decoration.border is Border &&
+            (decoration.border! as Border).top.color ==
+                TetoBoxStyle.outline(AppThemePalette.defaults);
+      }),
+    );
+    expect(cards, findsAtLeastNWidgets(7));
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('all five Settings tabs expose the restyled card contract', (
     tester,
   ) async {
@@ -55,11 +122,8 @@ void main() {
     const cardsByArea = <String, List<String>>{
       'appearance': [
         'appearance-theme-display-card',
-        'appearance-home-screen-card',
-        'appearance-display-options-card',
+        'appearance-language-titles-card',
         'appearance-input-feedback-card',
-        'appearance-home-shelves-card',
-        'appearance-navigation-card',
       ],
       'playback': [
         'settings-card-playback-captions',
@@ -81,6 +145,7 @@ void main() {
       'system': [
         'settings-card-system-support',
         'settings-card-system-updates',
+        'settings-card-system-experimental',
         'settings-card-system-community',
         'settings-card-system-storage',
         'settings-card-system-legal',
@@ -237,19 +302,15 @@ void main() {
           tester
               .getSize(find.byKey(const ValueKey('settings-app-language')))
               .height,
-      lessThanOrEqualTo(220),
+      lessThanOrEqualTo(390),
     );
     expect(
-      tester
-          .getSize(find.byKey(const ValueKey('appearance-navigation-card')))
-          .height,
-      lessThanOrEqualTo(220),
+      find.byKey(const ValueKey('appearance-navigation-card')),
+      findsNothing,
     );
     expect(
-      tester
-          .getSize(find.byKey(const ValueKey('appearance-home-screen-card')))
-          .height,
-      lessThanOrEqualTo(420),
+      find.byKey(const ValueKey('appearance-home-screen-card')),
+      findsNothing,
     );
 
     const representativeRows = <String, String>{
@@ -278,11 +339,8 @@ void main() {
     const cardsByArea = <String, List<String>>{
       'appearance': [
         'appearance-theme-display-card',
-        'appearance-home-screen-card',
-        'appearance-display-options-card',
+        'appearance-language-titles-card',
         'appearance-input-feedback-card',
-        'appearance-home-shelves-card',
-        'appearance-navigation-card',
       ],
       'playback': [
         'settings-card-playback-captions',
@@ -304,6 +362,7 @@ void main() {
       'system': [
         'settings-card-system-support',
         'settings-card-system-updates',
+        'settings-card-system-experimental',
         'settings-card-system-community',
         'settings-card-system-storage',
         'settings-card-system-legal',
@@ -336,7 +395,9 @@ void main() {
         expect(
           verticalGap(tester, entry.value[index - 1], entry.value[index]),
           closeTo(8, 1),
-          reason: '${entry.key} cards must use the shared TV list gap.',
+          reason:
+              '${entry.key} cards ${entry.value[index - 1]} and '
+              '${entry.value[index]} must use the shared TV list gap.',
         );
       }
     }
@@ -361,9 +422,7 @@ void main() {
     await pumpSettings(tester);
 
     const finalRows = <String, String>{
-      'appearance-theme-display-card': 'settings-appearance-show-title-style',
-      'appearance-navigation-card': 'settings-appearance-reset',
-      'appearance-home-screen-card': 'settings-appearance-continue-watching',
+      'appearance-theme-display-card': 'settings-appearance-reset',
     };
     for (final entry in finalRows.entries) {
       final card = cardRect(tester, entry.key);
@@ -377,6 +436,40 @@ void main() {
       );
     }
   });
+
+  testWidgets(
+    'Appearance has one Display Studio entry without duplicate cards',
+    (tester) async {
+      await pumpSettings(tester);
+      expect(
+        find.byKey(const ValueKey('appearance-home-screen-card')),
+        findsNothing,
+      );
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('appearance-theme-display-card')),
+          matching: find.byKey(
+            const ValueKey('settings-appearance-poster-metadata'),
+          ),
+        ),
+        findsNothing,
+      );
+
+      expect(find.byKey(const ValueKey('open-display-studio')), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('appearance-display-options-card')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const ValueKey('appearance-navigation-card')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const ValueKey('appearance-home-shelves-card')),
+        findsNothing,
+      );
+    },
+  );
 
   testWidgets('mobile Settings retain their existing control sizing', (
     tester,
@@ -414,12 +507,14 @@ void main() {
     );
 
     final theme = cardRect(tester, 'appearance-theme-display-card');
-    final navigation = cardRect(tester, 'appearance-navigation-card');
-    final home = cardRect(tester, 'appearance-home-screen-card');
-    expect((navigation.left - theme.left).abs(), lessThanOrEqualTo(.5));
-    expect((navigation.width - theme.width).abs(), lessThanOrEqualTo(.5));
-    expect(navigation.top - theme.bottom, closeTo(18, .5));
-    expect(home.top - navigation.bottom, closeTo(18, .5));
+    final language = cardRect(tester, 'appearance-language-titles-card');
+    final input = cardRect(tester, 'appearance-input-feedback-card');
+    expect((language.left - theme.left).abs(), lessThanOrEqualTo(.5));
+    expect((language.width - theme.width).abs(), lessThanOrEqualTo(.5));
+    expect(language.top - theme.bottom, closeTo(18, .5));
+    expect((input.left - theme.left).abs(), lessThanOrEqualTo(.5));
+    expect((input.width - theme.width).abs(), lessThanOrEqualTo(.5));
+    expect(input.top - language.bottom, closeTo(18, .5));
 
     await selectArea(tester, 'playback');
     expect(
@@ -443,10 +538,9 @@ void main() {
     );
 
     final theme = cardRect(tester, 'appearance-theme-display-card');
-    final home = cardRect(tester, 'appearance-home-screen-card');
-    expect((theme.top - home.top).abs(), lessThanOrEqualTo(1));
-    expect(home.left, greaterThan(theme.right));
-    expect(theme.width, lessThan(home.right - theme.left));
+    final input = cardRect(tester, 'appearance-input-feedback-card');
+    expect((theme.top - input.top).abs(), lessThanOrEqualTo(1));
+    expect(input.left, greaterThan(theme.right));
     expect(tester.takeException(), isNull);
   });
 }

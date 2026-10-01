@@ -4,6 +4,23 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class Media3SurfacePolicyTest {
+    @Test fun affectedFireTvCannotBypassExistingTextureCompatibilityAtNativeCreation() {
+        for ((manufacturer, model) in listOf("Amazon" to "AFTKRT", "amazon" to "aftkrt", "AMAZON" to "AFTKRT")) {
+            assertEquals("texture", Media3BridgePolicy.effectiveSurfaceType("surface", manufacturer, model))
+            assertEquals("texture", Media3BridgePolicy.effectiveSurfaceType("texture", manufacturer, model))
+        }
+        // No blanket Amazon, SDK, HEVC, or nearby-model override.
+        for ((manufacturer, model) in listOf("Amazon" to "AFTMM", "Amazon" to "AFTKM", "other" to "AFTKRT", "Amazon " to "AFTKRT")) {
+            assertEquals("surface", Media3BridgePolicy.effectiveSurfaceType("surface", manufacturer, model))
+            assertEquals("texture", Media3BridgePolicy.effectiveSurfaceType("texture", manufacturer, model))
+        }
+        for (invalid in listOf("", "SURFACE", "SurfaceView", "detached")) {
+            assertThrows(IllegalArgumentException::class.java) {
+                Media3BridgePolicy.effectiveSurfaceType(invalid, "Amazon", "AFTKRT")
+            }
+        }
+    }
+
     @Test fun omittedSurfaceTypeRetainsTextureViewAndOnlyExplicitSurfaceOptInChangesIt() {
         assertEquals("texture", Media3BridgePolicy.surfaceType(null))
         assertEquals("texture", Media3BridgePolicy.surfaceType("texture"))

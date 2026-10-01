@@ -1,5 +1,7 @@
+import 'package:anime_tv/core/widgets/teto_dialog.dart';
 import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/theme/teto_box_style.dart';
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/tv/tv_navigation.dart';
@@ -217,7 +219,7 @@ class _TvTextInputState extends ConsumerState<TvTextInput>
     String? value;
     widget.onEditingChanged?.call(true);
     try {
-      value = await showDialog<String>(
+      value = await showTetoDialog<String>(
         context: context,
         barrierDismissible: false,
         barrierColor: Colors.black.withValues(alpha: .20),
@@ -603,15 +605,29 @@ class TvKeyboardDialog extends StatefulWidget {
 }
 
 class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
+  static const _sizeFactor = .85;
   static const _letterRows = <List<String>>[
     ['q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p'],
-    ['a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l'],
-    ['z', 'x', 'c', 'v', 'b', 'n', 'm', '.', ','],
+    ['a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', '.'],
+    ['z', 'x', 'c', 'v', 'b', 'n', 'm', ','],
   ];
   static const _symbolRows = <List<String>>[
-    ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'],
+    ['!', '@', '#', r'$', '%', '^', '&', '*', '(', ')'],
     ['-', '_', '=', '+', '[', ']', '{', '}', r'\', '|'],
-    ['.', ',', ':', ';', '/', '?', '"', "'", '<', '>'],
+    [':', ';', '/', '?', '"', "'", '<', '>'],
+  ];
+  static const _numbers = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'];
+  static const _numberSymbols = [
+    '!',
+    '@',
+    '#',
+    r'$',
+    '%',
+    '^',
+    '&',
+    '*',
+    '(',
+    ')',
   ];
   late String _value;
   late int _cursorOffset;
@@ -723,6 +739,12 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
       text: _value,
       selection: TextSelection.collapsed(offset: _cursorOffset),
     );
+    if (widget.numericOnly) {
+      value = FilteringTextInputFormatter.digitsOnly.formatEditUpdate(
+        oldValue,
+        value,
+      );
+    }
     for (final formatter in widget.inputFormatters) {
       value = formatter.formatEditUpdate(oldValue, value);
     }
@@ -807,42 +829,36 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
       0.0,
       double.infinity,
     );
-    final fullWidth = widget.numericOnly ? 820.0 : 1160.0;
+    // A standalone pad is only three columns, not a shrunken full keyboard.
+    final fullWidth = widget.numericOnly ? 264.0 : 1160.0;
     final formerPanelWidth = fullWidth.clamp(0.0, maximumPanelWidth).toDouble();
     // Preserve the existing phone layout, but keep TV keyboards centered and
     // purposefully narrower than the panel that would previously have fit in
     // this exact viewport. This keeps the requested reduction consistent on
     // 720p/960dp TV layouts instead of applying it only to very wide screens.
-    final tvWidthFactor = widget.numericOnly ? .50 : .70;
+    final tvWidthFactor = widget.numericOnly ? 1.0 : .70;
     final reduceTvWidth = widget.reduceWidthForTelevision && !narrow;
-    final reducedNominalWidth = reduceTvWidth
-        ? fullWidth * tvWidthFactor
-        : fullWidth;
-    final panelWidth = reduceTvWidth
+    final basePanelWidth = reduceTvWidth
         ? formerPanelWidth * tvWidthFactor
         : formerPanelWidth;
-    final widthScale = (panelWidth / reducedNominalWidth).clamp(.64, 1.0);
-    final heightTarget = availableHeight < 500
-        ? (widget.numericOnly ? 720.0 : 620.0)
-        : (widget.numericOnly ? 640.0 : 525.0);
-    final heightScale = (availableHeight / heightTarget).clamp(.48, 1.0);
-    final responsiveScale = widthScale < heightScale ? widthScale : heightScale;
-    // Keep the controller keyboard in the same compact lower-screen footprint
-    // as TetoTV's original keyboard. The refreshed layout has larger nominal
-    // key metrics, so allowing a wide TV to use a 1:1 scale makes the dialog
-    // consume most of a 1080p viewport. Phones still use the fully responsive
-    // scale because they need the extra touch target size.
-    final wideTvScaleCap = widget.numericOnly ? .36 : .40;
-    final scale = !narrow && responsiveScale > wideTvScaleCap
-        ? wideTvScaleCap
-        : responsiveScale;
-    final keyHeight = (widget.numericOnly ? 64.0 : 58.0) * scale;
-    final actionHeight = (widget.numericOnly ? 68.0 : 58.0) * scale;
-    final keyGap = (widget.numericOnly ? 10.0 : 8.0) * scale;
-    final panelPadding = (widget.numericOnly ? 26.0 : 28.0) * scale;
-    final titleSize = (widget.numericOnly ? 30.0 : 28.0) * scale;
-    final inputHeight = (widget.numericOnly ? 70.0 : 62.0) * scale;
-    final inputFontSize = (widget.numericOnly ? 25.0 : 23.0) * scale;
+    final panelWidth = basePanelWidth * _sizeFactor;
+    final viewportScale = (availableHeight / 540).clamp(.70, 1.0);
+    final baseKeyGap = (narrow ? 5.0 : 7.0) * viewportScale;
+    final basePanelPadding = (narrow ? 12.0 : 16.0) * viewportScale;
+    // Derive key proportions before the common reduction so height does not
+    // shrink twice when the narrower panel also produces narrower letter keys.
+    final letterWidth =
+        (basePanelWidth - basePanelPadding * 2 - baseKeyGap * 9) / 10;
+    final scale = viewportScale * _sizeFactor;
+    final keyGap = baseKeyGap * _sizeFactor;
+    final panelPadding = basePanelPadding * _sizeFactor;
+    final keyHeight = widget.numericOnly
+        ? 48.0 * scale
+        : (narrow ? 44.0 : (letterWidth * .74).clamp(34.0, 46.0)) * scale;
+    final actionHeight = keyHeight;
+    final titleSize = 16.0 * scale;
+    final inputHeight = 42.0 * scale;
+    final inputFontSize = 18.0 * scale;
     final submitLabel = widget.title.toLowerCase().contains('search')
         ? 'Search'
         : 'Done';
@@ -850,25 +866,29 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
     Widget keyboardKey({
       required String id,
       String? label,
+      String? secondaryLabel,
       IconData? icon,
       String? semanticLabel,
       required VoidCallback onPressed,
       bool autofocus = false,
       bool primary = false,
       bool selected = false,
+      bool functionKey = false,
       double? height,
       double? fontSize,
     }) {
       return _KeyboardKey(
         key: ValueKey('tv-keyboard-key-$id'),
         label: label,
+        secondaryLabel: secondaryLabel,
         icon: icon,
         semanticLabel: semanticLabel ?? label ?? id,
         autofocus: autofocus,
         primary: primary,
         selected: selected,
+        functionKey: functionKey,
         height: height ?? keyHeight,
-        fontSize: fontSize ?? (21 * scale).clamp(12, 21),
+        fontSize: fontSize ?? (20 * scale).clamp(14, 20),
         onPressed: onPressed,
       );
     }
@@ -876,6 +896,7 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
     Widget flexKey({
       required String id,
       String? label,
+      String? secondaryLabel,
       IconData? icon,
       String? semanticLabel,
       required VoidCallback onPressed,
@@ -883,6 +904,7 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
       bool autofocus = false,
       bool primary = false,
       bool selected = false,
+      bool functionKey = false,
       double? height,
       double? fontSize,
     }) {
@@ -891,12 +913,14 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
         child: keyboardKey(
           id: id,
           label: label,
+          secondaryLabel: secondaryLabel,
           icon: icon,
           semanticLabel: semanticLabel,
           onPressed: onPressed,
           autofocus: autofocus,
           primary: primary,
           selected: selected,
+          functionKey: functionKey,
           height: height,
           fontSize: fontSize,
         ),
@@ -905,6 +929,7 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
 
     Widget textRow(
       List<String> labels, {
+      required int rowIndex,
       double leftInset = 0,
       bool autofocusFirst = false,
     }) {
@@ -914,7 +939,8 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
           children: [
             for (var index = 0; index < labels.length; index++) ...[
               flexKey(
-                id: 'text-${labels[index]}-$index',
+                // Keep the same focus control when only its glyph changes.
+                id: 'text-$rowIndex-$index',
                 label: _shift && !_symbols
                     ? labels[index].toUpperCase()
                     : labels[index],
@@ -946,171 +972,131 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
     }
 
     Widget qwertyKeyboard() {
-      final numberPadWidth = narrow ? 0.0 : panelWidth * .225;
       final thirdRow = rows[2];
-      return Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      return Column(
         children: [
-          Expanded(
-            child: Column(
-              children: [
-                textRow(rows[0], autofocusFirst: true),
-                SizedBox(height: keyGap),
-                textRow(rows[1], leftInset: 28 * scale),
-                SizedBox(height: keyGap),
-                Row(
-                  children: [
-                    flexKey(
-                      id: 'shift',
-                      icon: Icons.arrow_upward_rounded,
-                      semanticLabel: 'Shift',
-                      flex: 14,
-                      selected: _shift,
-                      onPressed: () => setState(() {
-                        if (_symbols) {
-                          _symbols = false;
-                          _shift = true;
-                        } else {
-                          _shift = !_shift;
-                        }
-                      }),
-                    ),
-                    SizedBox(width: keyGap),
-                    for (var index = 0; index < thirdRow.length; index++) ...[
-                      flexKey(
-                        id: 'text-${thirdRow[index]}-third-$index',
-                        label: _shift && !_symbols
-                            ? thirdRow[index].toUpperCase()
-                            : thirdRow[index],
-                        onPressed: () => _append(thirdRow[index]),
-                      ),
-                      if (index != thirdRow.length - 1) SizedBox(width: keyGap),
-                    ],
-                  ],
-                ),
-                SizedBox(height: keyGap),
-                Row(
-                  children: [
-                    flexKey(
-                      id: 'symbols',
-                      label: _symbols ? 'ABC' : '123?',
-                      semanticLabel: _symbols
-                          ? 'Letters keyboard'
-                          : 'Symbols keyboard',
-                      flex: 14,
-                      fontSize: (17 * scale).clamp(10, 17),
-                      selected: _symbols,
-                      onPressed: () => setState(() {
-                        _symbols = !_symbols;
-                        _shift = false;
-                      }),
-                    ),
-                    SizedBox(width: keyGap),
-                    flexKey(
-                      id: 'cursor-left',
-                      icon: Icons.arrow_left_rounded,
-                      semanticLabel: 'Cursor left',
-                      flex: 9,
-                      onPressed: () => _moveCursor(-1),
-                    ),
-                    SizedBox(width: keyGap),
-                    flexKey(
-                      id: 'cursor-right',
-                      icon: Icons.arrow_right_rounded,
-                      semanticLabel: 'Cursor right',
-                      flex: 9,
-                      onPressed: () => _moveCursor(1),
-                    ),
-                    SizedBox(width: keyGap),
-                    flexKey(
-                      id: 'space',
-                      icon: Icons.space_bar_rounded,
-                      semanticLabel: 'Space',
-                      flex: 44,
-                      onPressed: () => _append(' '),
-                    ),
-                    SizedBox(width: keyGap),
-                    flexKey(
-                      id: 'minus',
-                      label: '-',
-                      flex: 9,
-                      onPressed: () => _append('-'),
-                    ),
-                    SizedBox(width: keyGap),
-                    flexKey(
-                      id: 'underscore',
-                      label: '_',
-                      flex: 9,
-                      onPressed: () => _append('_'),
-                    ),
-                    SizedBox(width: keyGap),
-                    flexKey(
-                      id: 'number-0',
-                      label: '0',
-                      flex: 9,
-                      onPressed: () => _append('0'),
-                    ),
-                  ],
-                ),
-                if (narrow) ...[
-                  SizedBox(height: keyGap),
-                  Row(
-                    children: [
-                      flexKey(
-                        id: 'backspace',
-                        icon: Icons.backspace_outlined,
-                        semanticLabel: 'Backspace',
-                        onPressed: _backspace,
-                      ),
-                      SizedBox(width: keyGap),
-                      flexKey(
-                        id: 'submit',
-                        label: submitLabel,
-                        semanticLabel: submitLabel,
-                        primary: true,
-                        onPressed: _submit,
-                      ),
-                    ],
+          Row(
+            children: [
+              for (var index = 0; index < _numbers.length; index++) ...[
+                flexKey(
+                  id: 'number-${_numbers[index]}',
+                  label: _shift && !_symbols
+                      ? _numberSymbols[index]
+                      : _numbers[index],
+                  secondaryLabel: _shift && !_symbols
+                      ? _numbers[index]
+                      : _numberSymbols[index],
+                  functionKey: true,
+                  onPressed: () => _append(
+                    _shift && !_symbols
+                        ? _numberSymbols[index]
+                        : _numbers[index],
                   ),
-                ],
+                ),
+                if (index != _numbers.length - 1) SizedBox(width: keyGap),
               ],
-            ),
+            ],
           ),
-          if (!narrow) ...[
-            SizedBox(width: keyGap * 1.5),
-            SizedBox(
-              width: numberPadWidth,
-              child: Column(
-                children: [
-                  numericRow(const ['1', '2', '3']),
-                  SizedBox(height: keyGap),
-                  numericRow(const ['4', '5', '6']),
-                  SizedBox(height: keyGap),
-                  numericRow(const ['7', '8', '9']),
-                  SizedBox(height: keyGap),
-                  Row(
-                    children: [
-                      flexKey(
-                        id: 'backspace',
-                        icon: Icons.backspace_outlined,
-                        semanticLabel: 'Backspace',
-                        onPressed: _backspace,
-                      ),
-                      SizedBox(width: keyGap),
-                      flexKey(
-                        id: 'submit',
-                        label: submitLabel,
-                        semanticLabel: submitLabel,
-                        primary: true,
-                        fontSize: (18 * scale).clamp(11, 18),
-                        onPressed: _submit,
-                      ),
-                    ],
-                  ),
-                ],
+          SizedBox(height: keyGap),
+          textRow(rows[0], rowIndex: 0, autofocusFirst: true),
+          SizedBox(height: keyGap),
+          textRow(rows[1], rowIndex: 1),
+          SizedBox(height: keyGap),
+          Row(
+            children: [
+              flexKey(
+                id: 'shift',
+                icon: Icons.arrow_upward_rounded,
+                semanticLabel: 'Shift',
+                functionKey: true,
+                selected: _shift,
+                onPressed: () => setState(() {
+                  if (_symbols) {
+                    _symbols = false;
+                    _shift = true;
+                  } else {
+                    _shift = !_shift;
+                  }
+                }),
               ),
-            ),
-          ],
+              SizedBox(width: keyGap),
+              for (var index = 0; index < thirdRow.length; index++) ...[
+                flexKey(
+                  id: 'text-2-$index',
+                  label: _shift && !_symbols
+                      ? thirdRow[index].toUpperCase()
+                      : thirdRow[index],
+                  onPressed: () => _append(thirdRow[index]),
+                ),
+                SizedBox(width: keyGap),
+              ],
+              flexKey(
+                id: 'backspace',
+                icon: Icons.backspace_outlined,
+                semanticLabel: 'Backspace',
+                functionKey: true,
+                onPressed: _backspace,
+              ),
+            ],
+          ),
+          SizedBox(height: keyGap),
+          Row(
+            children: [
+              flexKey(
+                id: 'symbols',
+                label: _symbols ? 'ABC' : '123?',
+                semanticLabel: _symbols
+                    ? 'Letters keyboard'
+                    : 'Symbols keyboard',
+                fontSize: (14 * scale).clamp(10, 14),
+                functionKey: true,
+                selected: _symbols,
+                onPressed: () => setState(() {
+                  _symbols = !_symbols;
+                  _shift = false;
+                }),
+              ),
+              SizedBox(width: keyGap),
+              flexKey(
+                id: 'cursor-left',
+                icon: Icons.arrow_left_rounded,
+                semanticLabel: 'Cursor left',
+                onPressed: () => _moveCursor(-1),
+              ),
+              SizedBox(width: keyGap),
+              flexKey(
+                id: 'cursor-right',
+                icon: Icons.arrow_right_rounded,
+                semanticLabel: 'Cursor right',
+                onPressed: () => _moveCursor(1),
+              ),
+              SizedBox(width: keyGap),
+              flexKey(
+                id: 'space',
+                icon: Icons.space_bar_rounded,
+                semanticLabel: 'Space',
+                flex: 40,
+                onPressed: () => _append(' '),
+              ),
+              SizedBox(width: keyGap),
+              flexKey(id: 'minus', label: '-', onPressed: () => _append('-')),
+              SizedBox(width: keyGap),
+              flexKey(
+                id: 'underscore',
+                label: '_',
+                onPressed: () => _append('_'),
+              ),
+              SizedBox(width: keyGap),
+              flexKey(
+                id: 'submit',
+                icon: Icons.arrow_forward_rounded,
+                semanticLabel: submitLabel,
+                primary: true,
+                flex: 20,
+                onPressed: _submit,
+              ),
+            ],
+          ),
         ],
       );
     }
@@ -1118,11 +1104,11 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
     Widget numericKeyboard() {
       return Column(
         children: [
-          numericRow(const ['1', '2', '3']),
+          numericRow(const ['1', '2', '3'], autofocusLabel: '1'),
           SizedBox(height: keyGap),
           numericRow(const ['4', '5', '6']),
           SizedBox(height: keyGap),
-          numericRow(const ['7', '8', '9'], autofocusLabel: '7'),
+          numericRow(const ['7', '8', '9']),
           SizedBox(height: keyGap),
           Row(
             children: [
@@ -1130,6 +1116,7 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
                 id: 'backspace',
                 icon: Icons.backspace_outlined,
                 semanticLabel: 'Backspace',
+                functionKey: true,
                 onPressed: _backspace,
               ),
               SizedBox(width: keyGap),
@@ -1141,8 +1128,9 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
               SizedBox(width: keyGap),
               flexKey(
                 id: 'clear',
-                label: 'CLEAR',
-                fontSize: (18 * scale).clamp(11, 18),
+                icon: Icons.clear_all_rounded,
+                semanticLabel: 'Clear',
+                functionKey: true,
                 onPressed: _clear,
               ),
             ],
@@ -1152,17 +1140,18 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
             children: [
               flexKey(
                 id: 'cancel',
-                label: 'CANCEL',
+                label: 'Cancel',
                 height: actionHeight,
-                fontSize: (19 * scale).clamp(12, 19),
+                fontSize: (14 * scale).clamp(11, 14),
                 onPressed: () => Navigator.of(context).pop(),
               ),
               SizedBox(width: keyGap * 1.5),
               flexKey(
                 id: 'submit',
-                label: 'DONE',
+                label: 'Done',
+                flex: 20,
                 height: actionHeight,
-                fontSize: (19 * scale).clamp(12, 19),
+                fontSize: (16 * scale).clamp(12, 16),
                 primary: true,
                 onPressed: _submit,
               ),
@@ -1174,6 +1163,7 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
 
     return Dialog(
       alignment: Alignment.bottomCenter,
+      constraints: BoxConstraints(maxWidth: panelWidth),
       insetPadding: EdgeInsets.symmetric(
         horizontal: horizontalInset,
         vertical: narrow ? 10 : 12,
@@ -1192,11 +1182,8 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
                 palette.surface.withValues(alpha: .58),
                 palette.background,
               ).withValues(alpha: .97),
-              borderRadius: BorderRadius.circular(20 * scale),
-              border: Border.all(
-                color: palette.accentBright.withValues(alpha: .82),
-                width: 1.5,
-              ),
+              borderRadius: BorderRadius.circular(TetoBoxStyle.radius),
+              border: Border.all(color: TetoBoxStyle.outline(palette)),
               boxShadow: [
                 BoxShadow(
                   color: Colors.black.withValues(alpha: .72),
@@ -1209,69 +1196,63 @@ class _TvKeyboardDialogState extends State<TvKeyboardDialog> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                if (narrow)
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
                         context.tr(widget.title),
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
                           color: palette.primaryText,
                           fontSize: titleSize,
-                          fontWeight: FontWeight.w800,
-                          height: 1.08,
+                          fontWeight: FontWeight.w700,
                         ),
                       ),
-                      SizedBox(height: 7 * scale),
-                      Align(
-                        alignment: Alignment.centerRight,
-                        child: FittedBox(
-                          fit: BoxFit.scaleDown,
-                          child: Text(
-                            context.tr("REMOTE  /  CONTROLLER  /  KEYBOARD"),
-                            key: const ValueKey('tv-keyboard-input-modes'),
-                            style: TextStyle(
-                              color: palette.primaryText.withValues(alpha: .90),
-                              fontSize: (16 * scale).clamp(8, 16),
-                              fontWeight: FontWeight.w800,
-                              letterSpacing: .35,
-                            ),
-                          ),
+                    ),
+                    if (!widget.numericOnly) ...[
+                      const SizedBox(width: 8),
+                      SizedBox(
+                        width: 30 * scale,
+                        child: keyboardKey(
+                          id: 'paste',
+                          icon: Icons.content_paste_rounded,
+                          semanticLabel: 'Paste',
+                          height: 28 * scale,
+                          fontSize: 14 * scale,
+                          functionKey: true,
+                          onPressed: _paste,
                         ),
                       ),
-                    ],
-                  )
-                else
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          context.tr(widget.title),
-                          maxLines: widget.numericOnly ? 2 : 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: palette.primaryText,
-                            fontSize: titleSize,
-                            fontWeight: FontWeight.w800,
-                            height: 1.08,
-                          ),
+                      const SizedBox(width: 8),
+                      SizedBox(
+                        width: 30 * scale,
+                        child: keyboardKey(
+                          id: 'clear',
+                          icon: Icons.clear_all_rounded,
+                          semanticLabel: 'Clear',
+                          height: 28 * scale,
+                          fontSize: 14 * scale,
+                          functionKey: true,
+                          onPressed: _clear,
                         ),
                       ),
-                      SizedBox(width: 18 * scale),
-                      Text(
-                        context.tr("REMOTE  /  CONTROLLER  /  KEYBOARD"),
-                        key: const ValueKey('tv-keyboard-input-modes'),
-                        style: TextStyle(
-                          color: palette.primaryText.withValues(alpha: .90),
-                          fontSize: (16 * scale).clamp(8, 16),
-                          fontWeight: FontWeight.w800,
-                          letterSpacing: .35,
+                      const SizedBox(width: 8),
+                      SizedBox(
+                        width: 30 * scale,
+                        child: keyboardKey(
+                          id: 'cancel',
+                          icon: Icons.close_rounded,
+                          semanticLabel: 'Cancel',
+                          height: 28 * scale,
+                          fontSize: 14 * scale,
+                          functionKey: true,
+                          onPressed: () => Navigator.of(context).pop(),
                         ),
                       ),
                     ],
-                  ),
+                  ],
+                ),
                 SizedBox(height: 14 * scale),
                 Container(
                   key: const ValueKey('tv-keyboard-input'),
@@ -1389,14 +1370,17 @@ class _KeyboardKey extends StatelessWidget {
     required this.fontSize,
     required this.semanticLabel,
     this.label,
+    this.secondaryLabel,
     this.icon,
     this.autofocus = false,
     this.primary = false,
     this.selected = false,
+    this.functionKey = false,
     super.key,
   });
 
   final String? label;
+  final String? secondaryLabel;
   final IconData? icon;
   final String semanticLabel;
   final VoidCallback onPressed;
@@ -1405,29 +1389,32 @@ class _KeyboardKey extends StatelessWidget {
   final bool autofocus;
   final bool primary;
   final bool selected;
+  final bool functionKey;
 
   @override
   Widget build(BuildContext context) {
     final palette = context.appPalette;
     final radius = BorderRadius.circular((height * .18).clamp(7, 12));
-    final keyColor = primary
-        ? palette.accent
-        : selected
+    final keyColor = primary || selected
         ? Color.alphaBlend(
-            palette.accent.withValues(alpha: .42),
-            palette.surfaceRaised,
+            palette.accent.withValues(alpha: .18),
+            TetoBoxStyle.fill(palette),
           )
         : Color.alphaBlend(
-            Colors.white.withValues(alpha: .075),
-            palette.surface,
+            palette.primaryText.withValues(alpha: functionKey ? .085 : .045),
+            TetoBoxStyle.fill(palette),
           );
+    final foreground = primary || selected
+        ? palette.accentBright
+        : palette.primaryText;
     return Semantics(
       label: context.tr(semanticLabel),
       button: true,
       excludeSemantics: true,
       child: TvFocusable(
         autofocus: autofocus,
-        focusScale: 1.025,
+        focusScale: 1,
+        animateFocus: false,
         borderRadius: radius,
         onPressed: onPressed,
         child: Container(
@@ -1437,27 +1424,56 @@ class _KeyboardKey extends StatelessWidget {
             color: keyColor,
             borderRadius: radius,
             border: Border.all(
-              color: primary
-                  ? palette.accentBright.withValues(alpha: .34)
-                  : palette.primaryText.withValues(alpha: .07),
+              color: primary || selected
+                  ? palette.accentBright.withValues(alpha: .45)
+                  : TetoBoxStyle.outline(palette).withValues(alpha: .18),
             ),
           ),
-          child: icon != null
-              ? Icon(
-                  icon,
-                  size: (fontSize * 1.35).clamp(16, 30),
-                  color: palette.primaryText,
-                )
-              : Text(
-                  context.tr(label ?? ''),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: palette.primaryText,
-                    fontSize: fontSize,
-                    fontWeight: FontWeight.w700,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              Align(
+                alignment: secondaryLabel != null
+                    ? Alignment.bottomLeft
+                    : Alignment.center,
+                child: Padding(
+                  padding: secondaryLabel != null
+                      ? const EdgeInsets.only(left: 9, bottom: 5)
+                      : const EdgeInsets.symmetric(horizontal: 3),
+                  child: icon != null
+                      ? Icon(
+                          icon,
+                          size: (fontSize * 1.2).clamp(16, 28),
+                          color: foreground,
+                        )
+                      : FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: Text(
+                            context.tr(label ?? ''),
+                            maxLines: 1,
+                            style: TextStyle(
+                              color: foreground,
+                              fontSize: fontSize,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                ),
+              ),
+              if (secondaryLabel case final hint?)
+                Positioned(
+                  top: 4,
+                  right: 7,
+                  child: Text(
+                    hint,
+                    style: TextStyle(
+                      color: palette.mutedText,
+                      fontSize: (fontSize * .6).clamp(9, 13),
+                    ),
                   ),
                 ),
+            ],
+          ),
         ),
       ),
     );
@@ -1481,6 +1497,7 @@ class _AutofillChip extends StatelessWidget {
       child: TvFocusable(
         onPressed: onPressed,
         focusScale: 1.02,
+        animateFocus: false,
         borderRadius: BorderRadius.circular(7),
         child: Container(
           height: 22,

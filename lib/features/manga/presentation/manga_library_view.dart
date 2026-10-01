@@ -1,3 +1,4 @@
+import 'package:anime_tv/core/widgets/teto_dialog.dart';
 import 'dart:async';
 
 import 'package:anime_tv/core/localization/teto_localizations.dart';
@@ -246,7 +247,7 @@ class _MangaLibraryViewState extends ConsumerState<MangaLibraryView> {
     final store = ref.read(mangaStoreProvider);
     final category = TextEditingController(text: entry.category);
     var status = entry.status;
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showTetoDialog<bool>(
       context: context,
       builder: (context) => StatefulBuilder(
         builder: (context, setDialogState) => AlertDialog(

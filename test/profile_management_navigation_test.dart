@@ -68,6 +68,10 @@ void main() {
     await tester.pumpAndSettle();
     expect(menu, findsOneWidget);
 
+    final blur = find.byKey(const ValueKey('teto-modal-backdrop-blur'));
+    expect(tester.widget<BackdropFilter>(blur).enabled, isTrue);
+    expect(find.descendant(of: blur, matching: menu), findsNothing);
+
     await tester.sendKeyDownEvent(
       LogicalKeyboardKey.goBack,
       physicalKey: PhysicalKeyboardKey.escape,
@@ -81,6 +85,7 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(menu, findsNothing);
+    expect(blur, findsNothing);
     expect(find.byKey(const ValueKey('home-page')), findsOneWidget);
     expect(router.routeInformationProvider.value.uri.path, '/');
 
@@ -180,6 +185,7 @@ void main() {
               active: MainNavigationDestination.home,
               preferences: SettingsPreferences(
                 settingsEntryPlacement: SettingsEntryPlacement.profileMenu,
+                showSettings: false,
               ),
             ),
           ),

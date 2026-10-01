@@ -1,3 +1,4 @@
+import 'package:anime_tv/core/widgets/teto_dialog.dart';
 import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'dart:async';
 
@@ -5,7 +6,9 @@ import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/preferences/playback_audio_preference.dart';
 import 'package:anime_tv/core/preferences/title_language_preference.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/theme/teto_box_style.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
+import 'package:anime_tv/core/widgets/teto_back_button.dart';
 import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
 import 'package:anime_tv/features/discord/application/discord_account_link_resolver.dart';
 import 'package:anime_tv/features/discord/application/discord_presence_controller.dart';
@@ -140,7 +143,7 @@ class _InitialSetupScreenState extends ConsumerState<InitialSetupScreen> {
       context.go('/setup/start?focus=tv');
       return;
     }
-    final leave = await showDialog<bool>(
+    final leave = await showTetoDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         backgroundColor: context.appPalette.surface,
@@ -242,10 +245,8 @@ class _InitialSetupScreenState extends ConsumerState<InitialSetupScreen> {
               Row(
                 children: [
                   if (_step > 0 || widget.returnToMethodChoice)
-                    _SetupButton(
+                    TetoBackButton(
                       key: const ValueKey('setup-method-back'),
-                      label: 'Back',
-                      icon: Icons.arrow_back_rounded,
                       onPressed: _handleBack,
                     ),
                   const Spacer(),
@@ -1242,10 +1243,9 @@ class _SetupPage extends StatelessWidget {
         child: Container(
           width: double.infinity,
           padding: EdgeInsets.all(context.isCompactWidth ? 18 : 22),
-          decoration: BoxDecoration(
+          decoration: TetoBoxStyle.decoration(
+            context.appPalette,
             color: context.appPalette.surface,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: Colors.white.withValues(alpha: .08)),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1487,7 +1487,6 @@ class _SetupButton extends StatelessWidget {
     required this.onPressed,
     this.primary = false,
     this.focusNode,
-    super.key,
   });
 
   final String label;

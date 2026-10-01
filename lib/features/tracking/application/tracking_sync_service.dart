@@ -4,6 +4,9 @@ import 'dart:convert';
 import 'package:anime_tv/features/auth/application/pairing_controller.dart';
 import 'package:anime_tv/features/auth/application/tracking_token_service.dart';
 import 'package:anime_tv/features/auth/domain/tracking_provider.dart';
+import 'package:anime_tv/core/storage/tetotv_database.dart';
+import 'package:anime_tv/features/tracking/application/tracking_home_provider.dart';
+import 'package:anime_tv/features/tracking/application/my_list_controller.dart';
 import 'package:anime_tv/features/settings/application/simkl_account_controller.dart';
 import 'package:anime_tv/features/tracking/data/anilist_tracking_repository.dart';
 import 'package:anime_tv/features/tracking/data/kitsu_tracking_repository.dart';
@@ -26,6 +29,16 @@ final trackingSyncServiceProvider = Provider<TrackingSyncService>((ref) {
     ref.watch(secureStorageProvider),
     ref.watch(trackingTokenServiceProvider),
     simklSessionRegistry: ref.watch(simklAccountSessionRegistryProvider),
+    onProgressDelivered: () {
+      ref.invalidate(trackingHomeProvider);
+      ref.invalidate(linkedTrackingProgressProvider);
+      ref.invalidate(trackingListProvider);
+    },
+    statusRecorder: (details) => TetoTvDatabase.instance.recordDiagnosticEvent(
+      category: 'tracking-sync',
+      message: 'Tracker update delivery status',
+      details: details,
+    ),
   );
   ref.onDispose(service.dispose);
   return service;
@@ -49,6 +62,10 @@ typedef TrackingVerifiedProfileLookup =
 typedef TrackingTimerFactory =
     Timer Function(Duration delay, void Function() callback);
 
+/// Records delivery stages without titles, IDs, tokens, or API error text.
+typedef TrackingSyncStatusRecorder =
+    Future<void> Function(Map<String, Object?> details);
+
 class TrackingSyncService with WidgetsBindingObserver {
   TrackingSyncService(
     this._storage,
@@ -64,6 +81,8 @@ class TrackingSyncService with WidgetsBindingObserver {
     ],
     this._timerFactory = _systemTrackingTimer,
     this._observeLifecycle = true,
+    this.onProgressDelivered,
+    this.statusRecorder,
   }) : _tokenLookup = tokenService.accessToken,
        _profileLookup = tokenService.activeProfileId,
        _verifiedProfileLookup = tokenService.verifiedActiveProfileId,
@@ -84,6 +103,8 @@ class TrackingSyncService with WidgetsBindingObserver {
     List<Duration> retryDelays = const [],
     this._timerFactory = _systemTrackingTimer,
     this._observeLifecycle = false,
+    this.onProgressDelivered,
+    this.statusRecorder,
   }) : _profileLookup = profileLookup ?? _noActiveProfile,
        _verifiedProfileLookup =
            verifiedProfileLookup ?? _noVerifiedActiveProfile,
@@ -100,6 +121,31 @@ class TrackingSyncService with WidgetsBindingObserver {
   final List<Duration> _retryDelays;
   final TrackingTimerFactory _timerFactory;
   final bool _observeLifecycle;
+  final void Function()? onProgressDelivered;
+  final TrackingSyncStatusRecorder? statusRecorder;
+
+  void _recordStatus(
+    TrackingProvider provider,
+    String stage, {
+    String? reason,
+    Object? error,
+  }) {
+    final recorder = statusRecorder;
+    if (recorder == null) return;
+    unawaited(() async {
+      try {
+        final details = <String, Object?>{
+          'provider': provider.slug,
+          'stage': stage,
+        };
+        if (reason != null) details['reason'] = reason;
+        if (error != null) details['error_type'] = error.runtimeType.toString();
+        await recorder(details);
+      } catch (_) {
+        // Diagnostic storage never participates in tracking delivery.
+      }
+    }());
+  }
 
   Future<void> _outboxTail = Future<void>.value();
   Future<void> _flushTail = Future<void>.value();
@@ -111,6 +157,27 @@ class TrackingSyncService with WidgetsBindingObserver {
     required int completedEpisodes,
     int? anilistMediaId,
     int? malMediaId,
+  }) => _syncUpdate(
+    completedEpisodes: completedEpisodes,
+    anilistMediaId: anilistMediaId,
+    malMediaId: malMediaId,
+  );
+
+  /// Starting playback changes list membership, not watched-episode progress.
+  /// Use the same durable, account-scoped queue as completion updates.
+  Future<bool> syncWatching({int? anilistMediaId, int? malMediaId}) =>
+      _syncUpdate(
+        completedEpisodes: 0,
+        anilistMediaId: anilistMediaId,
+        malMediaId: malMediaId,
+        markWatching: true,
+      );
+
+  Future<bool> _syncUpdate({
+    required int completedEpisodes,
+    int? anilistMediaId,
+    int? malMediaId,
+    bool markWatching = false,
   }) async {
     final targets = <({TrackingProvider provider, int mediaId})>[
       if (anilistMediaId != null)
@@ -130,10 +197,14 @@ class TrackingSyncService with WidgetsBindingObserver {
           profileId: await _profileScope(target.provider),
           mediaId: target.mediaId,
           completedEpisodes: completedEpisodes,
+          markWatching: markWatching,
         ),
       );
     }
     await _mutateOutbox((current) => [...current, ...pending]);
+    for (final target in targets) {
+      _recordStatus(target.provider, 'queued');
+    }
 
     for (final provider in const [
       TrackingProvider.kitsu,
@@ -156,9 +227,11 @@ class TrackingSyncService with WidgetsBindingObserver {
               anilistMediaId: anilistMediaId,
               malMediaId: malMediaId,
               completedEpisodes: completedEpisodes,
+              markWatching: markWatching,
             );
             pending.add(externalPending);
             await _mutateOutbox((current) => [...current, externalPending]);
+            _recordStatus(provider, 'queued');
           }
         }
       } catch (_) {
@@ -213,25 +286,56 @@ class TrackingSyncService with WidgetsBindingObserver {
     }
 
     var retryableFailure = false;
+    var deliveredProgress = false;
     final completed = <String, int>{};
     final activeProfiles = <TrackingProvider, String?>{};
     final unavailableProfiles = <TrackingProvider>{};
 
-    for (final item in pending) {
+    // A failed start update must not arrive after a successful completion and
+    // move the title back into Watching. Deliver membership first and retain
+    // dependent progress until that account/title's start row has settled.
+    final waitingForWatching = {
+      for (final item in pending)
+        if (item.markWatching) item.identityKey,
+    };
+    final ordered = [
+      ...pending.where((item) => item.markWatching),
+      ...pending.where((item) => !item.markWatching),
+    ];
+
+    for (final item in ordered) {
+      if (!item.markWatching && waitingForWatching.contains(item.identityKey)) {
+        _recordStatus(item.provider, 'deferred');
+        continue;
+      }
       String? token;
       if (_usesExternalIds(item.provider)) {
         try {
           token = await _tokenLookup(item.provider);
-          if (token == null || token.isEmpty) continue;
+          if (token == null || token.isEmpty) {
+            _recordStatus(item.provider, 'deferred', reason: 'token_missing');
+            continue;
+          }
           final verifiedProfile = _normalizeProfileId(
             await _verifiedProfileLookup(item.provider, token),
           );
           if (verifiedProfile == null ||
               !_sameProfile(item.profileId, verifiedProfile)) {
+            _recordStatus(
+              item.provider,
+              'deferred',
+              reason: 'profile_mismatch',
+            );
             continue;
           }
-        } catch (_) {
+        } catch (error) {
           retryableFailure = true;
+          _recordStatus(
+            item.provider,
+            'deferred',
+            reason: 'session_error',
+            error: error,
+          );
           continue;
         }
       }
@@ -250,17 +354,29 @@ class TrackingSyncService with WidgetsBindingObserver {
           activeProfile = await _profileLookup(item.provider);
           activeProfiles[item.provider] = _normalizeProfileId(activeProfile);
           activeProfile = activeProfiles[item.provider];
-        } catch (_) {
+        } catch (error) {
           unavailableProfiles.add(item.provider);
           retryableFailure = true;
+          _recordStatus(
+            item.provider,
+            'deferred',
+            reason: 'profile_unavailable',
+            error: error,
+          );
           continue;
         }
       }
-      if (!_sameProfile(item.profileId, activeProfile)) continue;
+      if (!_sameProfile(item.profileId, activeProfile)) {
+        _recordStatus(item.provider, 'deferred', reason: 'profile_mismatch');
+        continue;
+      }
 
       try {
         token ??= await _tokenLookup(item.provider);
-        if (token == null || token.isEmpty) continue;
+        if (token == null || token.isEmpty) {
+          _recordStatus(item.provider, 'deferred', reason: 'token_missing');
+          continue;
+        }
 
         // A profile can be switched while MAL refreshes its access token. Read
         // the slot again before using that token and retain the queued row if
@@ -271,22 +387,60 @@ class TrackingSyncService with WidgetsBindingObserver {
               : await _profileLookup(item.provider),
         );
         if (_usesExternalIds(item.provider) && verifiedProfile == null) {
+          _recordStatus(
+            item.provider,
+            'deferred',
+            reason: 'profile_unverified',
+          );
           continue;
         }
-        if (!_sameProfile(item.profileId, verifiedProfile)) continue;
+        if (!_sameProfile(item.profileId, verifiedProfile)) {
+          _recordStatus(item.provider, 'deferred', reason: 'profile_mismatch');
+          continue;
+        }
 
         final repository = buildRepository(item.provider, token);
         final externalRepository = switch (repository) {
           ExternalIdTrackingRepository value => value,
           _ => null,
         };
-        if (_usesExternalIds(item.provider) && externalRepository != null) {
-          await externalRepository.updateProgressByIds(
+        final completionRepository = switch (repository) {
+          AutomaticCompletionTrackingRepository value => value,
+          _ => null,
+        };
+        if (!item.markWatching && completionRepository != null) {
+          await completionRepository.updateProgressAndCompletion(
             ids: TrackingMediaIds(
-              anilistId: item.anilistMediaId,
-              malId: item.malMediaId,
+              anilistId: item.provider == TrackingProvider.anilist
+                  ? item.mediaId
+                  : item.anilistMediaId,
+              malId: item.provider == TrackingProvider.myAnimeList
+                  ? item.mediaId
+                  : item.malMediaId,
             ),
             completedEpisodes: item.completedEpisodes,
+          );
+        } else if (_usesExternalIds(item.provider) &&
+            externalRepository != null) {
+          final ids = TrackingMediaIds(
+            anilistId: item.anilistMediaId,
+            malId: item.malMediaId,
+          );
+          if (item.markWatching) {
+            await externalRepository.updateStatusByIds(
+              ids: ids,
+              status: TrackingListStatus.watching,
+            );
+          } else {
+            await externalRepository.updateProgressByIds(
+              ids: ids,
+              completedEpisodes: item.completedEpisodes,
+            );
+          }
+        } else if (item.markWatching) {
+          await repository.updateStatus(
+            mediaId: item.mediaId,
+            status: TrackingListStatus.watching,
           );
         } else {
           await repository.updateProgress(
@@ -295,14 +449,29 @@ class TrackingSyncService with WidgetsBindingObserver {
           );
         }
         completed[item.outboxKey] = item.completedEpisodes;
+        if (item.markWatching) waitingForWatching.remove(item.identityKey);
+        deliveredProgress = true;
+        _recordStatus(item.provider, 'delivered');
       } on TrackingMediaMappingNotFoundException {
         // Kitsu has authoritatively reported that neither stable catalog ID
         // maps to a title. Retrying cannot change that response, so remove
         // this row instead of waking the app forever. Network/API failures
         // still take the retryable path below.
         completed[item.outboxKey] = item.completedEpisodes;
-      } catch (_) {
+        if (item.markWatching) waitingForWatching.remove(item.identityKey);
+        _recordStatus(
+          item.provider,
+          'skipped',
+          reason: 'media_mapping_missing',
+        );
+      } catch (error) {
         retryableFailure = true;
+        _recordStatus(
+          item.provider,
+          'deferred',
+          reason: 'provider_error',
+          error: error,
+        );
       }
     }
 
@@ -315,6 +484,14 @@ class TrackingSyncService with WidgetsBindingObserver {
               item,
         ],
       );
+      if (deliveredProgress) {
+        try {
+          onProgressDelivered?.call();
+        } catch (_) {
+          // A stale UI listener must not turn a delivered update into a
+          // failed sync or requeue it for a different account.
+        }
+      }
     }
 
     if (retryableFailure) {
@@ -349,11 +526,16 @@ class TrackingSyncService with WidgetsBindingObserver {
   Future<String?> _profileScope(TrackingProvider provider) async {
     try {
       return _normalizeProfileId(await _profileLookup(provider));
-    } catch (_) {
-      // Never collapse an unreadable account identity into the legacy null
-      // scope, because that could later deliver progress through another
-      // account. A later episode update can create a correctly scoped row.
-      return _unavailableProfileScope;
+    } catch (error) {
+      // A row with an unknown account can never be delivered safely. Let the
+      // playback caller retry rather than silently persisting a dead row.
+      _recordStatus(
+        provider,
+        'deferred',
+        reason: 'profile_unavailable',
+        error: error,
+      );
+      throw StateError('tracking_profile_unavailable');
     }
   }
 
@@ -487,6 +669,7 @@ class _PendingProgress {
     this.anilistMediaId,
     this.malMediaId,
     required this.completedEpisodes,
+    this.markWatching = false,
   });
 
   final TrackingProvider provider;
@@ -495,8 +678,9 @@ class _PendingProgress {
   final int? anilistMediaId;
   final int? malMediaId;
   final int completedEpisodes;
+  final bool markWatching;
 
-  String get outboxKey {
+  String get identityKey {
     final identity = _usesExternalIds(provider)
         ? anilistMediaId != null
               ? 'anilist:$anilistMediaId'
@@ -505,6 +689,8 @@ class _PendingProgress {
     return '${provider.slug}:${profileId ?? '<legacy>'}:$identity';
   }
 
+  String get outboxKey => markWatching ? '$identityKey:watching' : identityKey;
+
   static _PendingProgress? tryParse(Map<dynamic, dynamic> json) {
     final providerSlug = json['provider'];
     final mediaId = json['media_id'];
@@ -512,11 +698,13 @@ class _PendingProgress {
     final profileId = json['profile_id'];
     final anilistMediaId = json['anilist_media_id'];
     final malMediaId = json['mal_media_id'];
+    final action = json['action'];
     if (providerSlug is! String ||
         mediaId is! num ||
         mediaId.toInt() <= 0 ||
         completedEpisodes is! num ||
         completedEpisodes.toInt() < 0 ||
+        (action != null && action != 'watching') ||
         (profileId != null && profileId is! String) ||
         (anilistMediaId != null &&
             (anilistMediaId is! num || anilistMediaId.toInt() <= 0)) ||
@@ -545,6 +733,7 @@ class _PendingProgress {
       anilistMediaId: anilistMediaId is num ? anilistMediaId.toInt() : null,
       malMediaId: malMediaId is num ? malMediaId.toInt() : null,
       completedEpisodes: completedEpisodes.toInt(),
+      markWatching: action == 'watching',
     );
   }
 
@@ -555,6 +744,7 @@ class _PendingProgress {
     if (anilistMediaId != null) 'anilist_media_id': anilistMediaId,
     if (malMediaId != null) 'mal_media_id': malMediaId,
     'completed_episodes': completedEpisodes,
+    if (markWatching) 'action': 'watching',
   };
 }
 

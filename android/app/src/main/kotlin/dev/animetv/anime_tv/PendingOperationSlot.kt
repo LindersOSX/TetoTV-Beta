@@ -22,4 +22,16 @@ internal class PendingOperationSlot<T : Any> {
     fun take(): T? = synchronized(lock) {
         operation.also { operation = null }
     }
+
+    /** A stale timeout may release its own operation, never a newer retry. */
+    fun takeIf(candidate: T): T? = synchronized(lock) {
+        if (operation !== candidate) null else operation.also { operation = null }
+    }
+
+    /** Match an identity carried back from an asynchronous native callback. */
+    fun takeMatching(matches: (T) -> Boolean): T? = synchronized(lock) {
+        val current = operation
+        if (current == null || !matches(current)) null
+        else current.also { operation = null }
+    }
 }

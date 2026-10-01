@@ -462,7 +462,11 @@ void main() {
     await tester.pump(const Duration(milliseconds: 350));
     await tester.pump(const Duration(milliseconds: 180));
     expect(
-      tester.widget<AnimatedOpacity>(find.byType(AnimatedOpacity)).opacity,
+      tester
+          .widget<AnimatedOpacity>(
+            find.byKey(const ValueKey('manga-reader-hud-opacity')),
+          )
+          .opacity,
       0,
     );
   });
@@ -1071,7 +1075,11 @@ void main() {
       await tester.tapAt(Offset(size.width * .1, size.height * .5));
       await tester.pump(const Duration(milliseconds: 200));
       expect(
-        tester.widget<AnimatedOpacity>(find.byType(AnimatedOpacity)).opacity,
+        tester
+            .widget<AnimatedOpacity>(
+              find.byKey(const ValueKey('manga-reader-hud-opacity')),
+            )
+            .opacity,
         1,
       );
       expect(find.text('1 / 3'), findsOneWidget);

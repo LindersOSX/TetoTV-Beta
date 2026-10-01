@@ -1,9 +1,11 @@
+import 'package:anime_tv/core/widgets/teto_dialog.dart';
 import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/core/preferences/title_language_preference.dart';
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/layout/poster_card_geometry.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/theme/teto_box_style.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/tv/tv_shelf_focus.dart';
 import 'package:anime_tv/core/widgets/network_artwork.dart';
@@ -174,7 +176,7 @@ class _MyListScreenState extends ConsumerState<MyListScreen> {
   }
 
   Future<void> _chooseSort(MyListSort current) async {
-    final selected = await showDialog<MyListSort>(
+    final selected = await showTetoDialog<MyListSort>(
       context: context,
       barrierDismissible: true,
       builder: (context) => _SortDialog(current: current),
@@ -197,7 +199,7 @@ class _MyListScreenState extends ConsumerState<MyListScreen> {
     HomeTrackedAnime item,
     TitleLanguagePreference titlePreference,
   ) async {
-    final selected = await showDialog<_MyListSelection>(
+    final selected = await showTetoDialog<_MyListSelection>(
       context: context,
       barrierDismissible: true,
       builder: (dialogContext) => _StatusDialog(
@@ -711,13 +713,7 @@ class _SortDialog extends StatelessWidget {
       child: Container(
         width: 520,
         padding: const EdgeInsets.all(24),
-        decoration: BoxDecoration(
-          color: context.appPalette.surface,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-            color: context.appPalette.accent.withValues(alpha: .7),
-          ),
-        ),
+        decoration: TetoBoxStyle.decoration(context.appPalette),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -839,14 +835,25 @@ class _TrackedShelfState extends State<_TrackedShelf> {
   );
 
   Widget _buildShelf(BuildContext context, {required double availableWidth}) {
-    final metrics = _myListPosterMetrics(
+    final roomy = _myListPosterMetrics(
       context,
-      dense: widget.preferences.homeLayout == HomeLayout.compact,
+      dense: false,
       matchSearchDefault: widget.modernPosterSizing,
       availableWidth: availableWidth,
     );
+    final compact = _myListPosterMetrics(
+      context,
+      dense: true,
+      matchSearchDefault: widget.modernPosterSizing,
+      availableWidth: availableWidth,
+    );
+    final amount = widget.preferences.effectiveHomeLayoutCompactness;
+    final metrics = (
+      width: roomy.width + (compact.width - roomy.width) * amount,
+      height: roomy.height + (compact.height - roomy.height) * amount,
+    );
     _itemExtent = metrics.width * widget.preferences.thumbnailScale;
-    _itemSpacing = 10 * widget.preferences.contentDensity.spacingScale;
+    _itemSpacing = 10 * widget.preferences.effectiveContentDensityScale;
     return ListView.separated(
       controller: _focusController.scrollController,
       scrollDirection: Axis.horizontal,
@@ -1063,13 +1070,7 @@ class _StatusDialog extends StatelessWidget {
       child: Container(
         width: 760,
         padding: const EdgeInsets.all(28),
-        decoration: BoxDecoration(
-          color: context.appPalette.surface,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-            color: context.appPalette.accent.withValues(alpha: .55),
-          ),
-        ),
+        decoration: TetoBoxStyle.decoration(context.appPalette),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,

@@ -5,6 +5,25 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   test(
+    'starting a MAL entry writes Watching without watched count or score',
+    () async {
+      final requests = <RequestOptions>[];
+      final dio = _testDio((request) {
+        requests.add(request);
+        return _response(request, {'status': 'watching'});
+      });
+      await MyAnimeListTrackingRepository(
+        accessToken: 'unused',
+        dio: dio,
+      ).updateStatus(mediaId: 9001, status: TrackingListStatus.watching);
+      expect(requests, hasLength(1));
+      expect(requests.single.method, 'PUT');
+      expect(requests.single.uri.path, '/v2/anime/9001/my_list_status');
+      expect(requests.single.data, {'status': 'watching'});
+    },
+  );
+
+  test(
     'rejects an untrusted MAL pagination URL before sending a token',
     () async {
       final requestedUrls = <Uri>[];

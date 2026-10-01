@@ -4,6 +4,8 @@ import 'dart:async';
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/widgets/teto_back_button.dart';
+import 'package:anime_tv/core/widgets/teto_apply_button.dart';
 import 'package:anime_tv/core/widgets/copyable_code_interaction.dart';
 import 'package:anime_tv/features/discord/application/discord_presence_controller.dart';
 import 'package:anime_tv/features/settings/application/phone_setup_pairing_controller.dart';
@@ -175,12 +177,11 @@ class _Header extends StatelessWidget {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
-        IconButton.filledTonal(
+        TetoBackButton(
           key: const ValueKey('phone-setup-back'),
           autofocus: true,
           tooltip: 'Back',
           onPressed: onBack,
-          icon: const Icon(Icons.arrow_back_rounded),
         ),
         const SizedBox(width: 16),
         Expanded(
@@ -473,11 +474,11 @@ class _StatusCardState extends ConsumerState<_StatusCard> {
               label: const LocalizedText('Edit on phone'),
             ),
             const SizedBox(height: 12),
-            FilledButton.icon(
-              key: const ValueKey('phone-setup-apply'),
+            TetoApplyButton(
+              buttonKey: const ValueKey('phone-setup-apply'),
               onPressed: state.isBusy ? null : controller.applyReviewedSetup,
               icon: const Icon(Icons.verified_user_rounded),
-              label: const LocalizedText('Apply setup'),
+              label: 'Apply setup',
             ),
           ] else if (state.stage == PhoneSetupViewStage.completed) ...[
             if (shouldConnectDiscord) ...[

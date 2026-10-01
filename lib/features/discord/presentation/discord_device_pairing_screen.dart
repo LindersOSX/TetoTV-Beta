@@ -3,6 +3,7 @@ import 'dart:async';
 
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/widgets/teto_back_button.dart';
 import 'package:anime_tv/core/widgets/copyable_code_interaction.dart';
 import 'package:anime_tv/core/widgets/copyable_qr_interaction.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
@@ -107,12 +108,10 @@ class _DiscordDevicePairingScreenState
             children: [
               Row(
                 children: [
-                  _PairingAction(
+                  TetoBackButton(
                     key: const ValueKey('discord-pairing-back'),
                     autofocus: true,
                     focusNode: _backFocus,
-                    icon: Icons.arrow_back_rounded,
-                    label: context.tr("Back"),
                     onPressed: _close,
                   ),
                   const SizedBox(width: 16),
@@ -520,7 +519,6 @@ class _PairingAction extends StatelessWidget {
     required this.icon,
     required this.label,
     required this.onPressed,
-    this.autofocus = false,
     this.focusNode,
     super.key,
   });
@@ -528,12 +526,10 @@ class _PairingAction extends StatelessWidget {
   final IconData icon;
   final String label;
   final VoidCallback onPressed;
-  final bool autofocus;
   final FocusNode? focusNode;
 
   @override
   Widget build(BuildContext context) => TvFocusable(
-    autofocus: autofocus,
     focusNode: focusNode,
     onPressed: onPressed,
     borderRadius: BorderRadius.circular(10),

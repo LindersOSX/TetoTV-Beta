@@ -6,6 +6,12 @@
 -keep class org.libtorrent4j.swig.libtorrent_jni { *; }
 -keepattributes *Annotation*,Signature,InnerClasses,EnclosingMethod
 
+# Queueing diagnostics inspect the exact pinned implementation names because
+# Media3's asynchronous adapter is package-private. Preserve only these names
+# through release shrinking; do not retain unrelated Media3 classes/members.
+-keepnames class androidx.media3.exoplayer.mediacodec.SynchronousMediaCodecAdapter
+-keepnames class androidx.media3.exoplayer.mediacodec.AsynchronousMediaCodecAdapter
+
 # apksig decodes ASN.1 models using runtime annotations and reflective fields.
 # Keep only its annotation contracts and annotated models, not the verifier as a whole.
 -keep @interface com.android.apksig.internal.asn1.Asn1Class { *; }

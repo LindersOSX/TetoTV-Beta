@@ -1,5 +1,6 @@
 import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/widgets/teto_back_button.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/widgets/tv_text_input.dart';
 import 'package:anime_tv/features/settings/application/premiumize_settings_controller.dart';
@@ -50,12 +51,7 @@ class _PremiumizePairingScreenState
           children: [
             Row(
               children: [
-                _ActionButton(
-                  autofocus: true,
-                  icon: Icons.arrow_back_rounded,
-                  label: context.tr("Back"),
-                  onPressed: context.pop,
-                ),
+                TetoBackButton(autofocus: true, onPressed: context.pop),
                 const SizedBox(width: 18),
                 Text(
                   context.tr("Connect Premiumize"),

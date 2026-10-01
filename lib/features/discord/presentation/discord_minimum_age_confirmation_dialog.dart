@@ -1,3 +1,4 @@
+import 'package:anime_tv/core/widgets/teto_dialog.dart';
 import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'package:anime_tv/features/discord/domain/discord_minimum_age_confirmation.dart';
 import 'package:flutter/material.dart';
@@ -7,7 +8,7 @@ import 'package:flutter/material.dart';
 Future<DiscordMinimumAgeConfirmation?> showDiscordMinimumAgeConfirmationDialog(
   BuildContext context,
 ) {
-  return showDialog<DiscordMinimumAgeConfirmation>(
+  return showTetoDialog<DiscordMinimumAgeConfirmation>(
     context: context,
     barrierDismissible: false,
     builder: (context) => AlertDialog(

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/widgets/teto_dialog.dart';
 import 'package:anime_tv/features/player/presentation/player_control_overlay.dart';
 import 'package:anime_tv/features/player/presentation/teto_player_chrome.dart';
 import 'package:flutter/material.dart';
@@ -8,6 +9,105 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  testWidgets(
+    'player blur only covers the HUD and disables while hidden or covered',
+    (tester) async {
+      final playFocus = FocusNode();
+      addTearDown(playFocus.dispose);
+      var visible = true;
+      late StateSetter update;
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: AppTheme.dark,
+          home: StatefulBuilder(
+            builder: (context, setState) {
+              update = setState;
+              return Scaffold(
+                appBar: AppBar(
+                  actions: [
+                    TextButton(
+                      onPressed: () => showTetoDialog<void>(
+                        context: context,
+                        builder: (_) =>
+                            const AlertDialog(title: Text('Options')),
+                      ),
+                      child: const Text('Open popup'),
+                    ),
+                  ],
+                ),
+                body: Stack(
+                  children: [
+                    const Center(child: Text('Sharp captions')),
+                    TetoPlayerChrome(
+                      engineKey: 'frost',
+                      title: 'Episode',
+                      streamLabel: 'Stream',
+                      position: Duration.zero,
+                      duration: const Duration(minutes: 24),
+                      isPlaying: true,
+                      playFocusNode: playFocus,
+                      seekBackSeconds: 10,
+                      seekForwardSeconds: 10,
+                      backdropBlurEnabled: visible,
+                      onSeek: (_) {},
+                      onRewind: () {},
+                      onPlayPause: () {},
+                      onForward: () {},
+                      onAudio: () {},
+                      onSubtitles: () {},
+                      onPicture: () {},
+                      onOptions: () {},
+                      onDismiss: () {},
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final blur = find.byKey(const ValueKey('frost-player-backdrop-blur'));
+      final panel = find.byKey(const ValueKey('frost-bottom-player-chrome'));
+      final panelRect = tester.getRect(panel);
+      expect(tester.getRect(blur), panelRect);
+      expect(panelRect.height, lessThan(180));
+      expect(
+        find.descendant(of: blur, matching: find.text('Sharp captions')),
+        findsNothing,
+      );
+      expect(
+        find.ancestor(of: panel, matching: find.byType(ClipRRect)),
+        findsNothing,
+        reason:
+            'only the background is clipped; the focus glow remains free to paint',
+      );
+      update(() => visible = false);
+      await tester.pump();
+      expect(tester.widget<BackdropFilter>(blur).enabled, isFalse);
+      expect(tester.getRect(panel), panelRect);
+      update(() => visible = true);
+      await tester.pump();
+      expect(tester.widget<BackdropFilter>(blur).enabled, isTrue);
+      await tester.tap(find.text('Open popup'));
+      await tester.pumpAndSettle();
+      expect(tester.widget<BackdropFilter>(blur).enabled, isFalse);
+      expect(
+        tester
+            .widget<BackdropFilter>(
+              find.byKey(const ValueKey('teto-modal-backdrop-blur')),
+            )
+            .enabled,
+        isTrue,
+      );
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(tester.widget<BackdropFilter>(blur).enabled, isTrue);
+      expect(tester.getRect(panel), panelRect);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   testWidgets('shared player chrome keeps every feature control available', (
     tester,
   ) async {
@@ -76,6 +176,19 @@ void main() {
       );
     }
     expect(find.text('Player'), findsNothing);
+    final blur = find.byKey(const ValueKey('test-player-backdrop-blur'));
+    expect(tester.widget<BackdropFilter>(blur).enabled, isTrue);
+    expect(
+      tester.getRect(blur),
+      tester.getRect(find.byKey(const ValueKey('test-bottom-player-chrome'))),
+    );
+    expect(
+      find.descendant(
+        of: blur,
+        matching: find.byKey(const ValueKey('player-control-Pause')),
+      ),
+      findsNothing,
+    );
     expect(find.text('03:00  /  24:00'), findsOneWidget);
     expect(find.byType(LinearProgressIndicator), findsNothing);
     expect(find.byType(Slider), findsOneWidget);
@@ -1442,6 +1555,54 @@ void main() {
     expect(find.text('Skip Intro'), findsOneWidget);
   });
 
+  testWidgets(
+    'skip segment hides five seconds after fading and returns with HUD',
+    (tester) async {
+      var controlsVisible = true;
+      var interactionVersion = 0;
+      late StateSetter update;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: StatefulBuilder(
+              builder: (context, setState) {
+                update = setState;
+                return TetoSkipSegmentOverlay(
+                  label: 'Skip Intro',
+                  controlsVisible: controlsVisible,
+                  hudInteractionVersion: interactionVersion,
+                  onPressed: () {},
+                );
+              },
+            ),
+          ),
+        ),
+      );
+
+      AnimatedOpacity opacity() => tester.widget<AnimatedOpacity>(
+        find.byKey(const ValueKey('player-skip-segment-opacity')),
+      );
+      await tester.pump(playerSkipIdleTimeout + playerSkipFadeDuration);
+      expect(opacity().opacity, playerSkipIdleOpacity);
+      await tester.pump(playerSkipHiddenTimeout);
+      await tester.pump(playerSkipFadeDuration);
+      expect(opacity().opacity, 0);
+
+      update(() => interactionVersion++);
+      await tester.pump();
+      expect(opacity().opacity, 1);
+      await tester.pump(playerSkipIdleTimeout + playerSkipFadeDuration);
+      await tester.pump(playerSkipHiddenTimeout + playerSkipFadeDuration);
+      expect(opacity().opacity, 0);
+
+      update(() => controlsVisible = false);
+      await tester.pump();
+      update(() => controlsVisible = true);
+      await tester.pump();
+      expect(opacity().opacity, 1);
+    },
+  );
+
   testWidgets('skip segment interaction restores it and restarts idle fade', (
     tester,
   ) async {
@@ -1979,6 +2140,23 @@ void main() {
         expect(find.bySemanticsLabel('Sources'), findsOneWidget);
         expect(find.byTooltip('Sources'), findsOneWidget);
         expect(find.byType(SingleChildScrollView), findsOneWidget);
+        if (size.width >= 800) {
+          expect(
+            tester
+                .getRect(
+                  find.byKey(const ValueKey('phone-bottom-player-chrome')),
+                )
+                .left,
+            closeTo((size.width * .025).clamp(24.0, 48.0), .5),
+          );
+          final panel = tester.widget<DecoratedBox>(
+            find.byKey(const ValueKey('phone-bottom-player-chrome')),
+          );
+          expect(
+            (panel.decoration as BoxDecoration).borderRadius,
+            BorderRadius.circular(16),
+          );
+        }
 
         playFocus.requestFocus();
         await tester.pump();

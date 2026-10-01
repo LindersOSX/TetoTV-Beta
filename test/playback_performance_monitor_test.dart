@@ -64,6 +64,99 @@ void main() {
     );
   });
 
+  test('Media3 color and audio health telemetry stays bounded and private', () {
+    final safe = playbackPerformanceMetricsFromProperties({
+      'tetotv-color-space': '6',
+      'tetotv-color-range': '2',
+      'tetotv-color-transfer': '7',
+      'tetotv-dolby-vision': 'yes',
+      'tetotv-hdr-static-metadata': 'yes',
+      'tetotv-audio-sample-rate': '48000',
+      'tetotv-audio-channel-count': '6',
+      'tetotv-audio-underrun-count': '3',
+      'tetotv-audio-sink-error-count': '1',
+      'tetotv-video-codec-error-count': '0',
+      'track-title': 'private movie',
+    }, engine: 'media3');
+    expect(safe, containsPair('colorSpace', 6));
+    expect(safe, containsPair('colorTransfer', 7));
+    expect(safe, containsPair('dolbyVision', true));
+    expect(safe, containsPair('hdrStaticMetadata', true));
+    expect(safe, containsPair('audioUnderruns', 3));
+    expect(safe, containsPair('audioSampleRate', 48000));
+    expect(jsonEncode(safe), isNot(contains('private')));
+
+    final rejected = playbackPerformanceMetricsFromProperties({
+      'tetotv-color-space': 'https://private.example',
+      'tetotv-audio-channel-count': '999',
+      'tetotv-audio-underrun-count': '-1',
+    }, engine: 'media3');
+    expect(rejected, isEmpty);
+  });
+
+  test(
+    'Media3 queueing telemetry is fixed and does not leak arbitrary labels',
+    () {
+      for (final mode in ['synchronous', 'asynchronous']) {
+        final metrics = playbackPerformanceMetricsFromProperties({
+          'tetotv-codec-queueing-mode': mode,
+          'tetotv-codec-queueing-compatibility': 'yes',
+        }, engine: 'media3');
+        expect(metrics['codecQueueingMode'], mode);
+        expect(metrics['codecQueueingCompatibility'], true);
+      }
+      expect(
+        playbackPerformanceMetricsFromProperties({
+          'tetotv-codec-queueing-mode': 'https://private.example/token',
+          'tetotv-codec-queueing-compatibility': 'private-title',
+        }, engine: 'media3'),
+        isEmpty,
+      );
+      expect(
+        playbackPerformanceMetricsFromMpv({
+          'tetotv-codec-queueing-mode': 'synchronous',
+          'tetotv-codec-queueing-compatibility': 'yes',
+        }),
+        isEmpty,
+      );
+    },
+  );
+
+  test(
+    'Media3 output path is actual fixed telemetry, not the saved preference',
+    () {
+      for (final surface in ['surface', 'texture', 'detached']) {
+        expect(
+          playbackPerformanceMetricsFromProperties({
+            'tetotv-video-surface-type': surface,
+            'tetotv-android-sdk': '30',
+            'current-tracks/video/decoder': 'OMX.MTK.VIDEO.DECODER.HEVC',
+          }, engine: 'media3'),
+          containsPair('surfaceType', surface),
+        );
+      }
+      for (final surface in [
+        'private_movie',
+        'https://private.example',
+        'SurfaceView',
+      ]) {
+        final metrics = playbackPerformanceMetricsFromProperties({
+          'tetotv-video-surface-type': surface,
+          'tetotv-android-sdk': '999',
+          'current-tracks/video/decoder': 'OMX.MTK.VIDEO.DECODER.Private.Movie',
+        }, engine: 'media3');
+        expect(metrics, isEmpty);
+      }
+      expect(
+        playbackPerformanceMetricsFromMpv({
+          'tetotv-video-surface-type': 'texture',
+          'tetotv-android-sdk': '30',
+        }),
+        isEmpty,
+      );
+    },
+  );
+
   test(
     'parser uses a closed scalar allowlist and never returns raw secrets',
     () {

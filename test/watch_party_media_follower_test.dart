@@ -595,6 +595,20 @@ void main() {
     },
   );
 
+  test('movie follow retains the catalog movie discriminator', () {
+    const media = WatchPartyMedia(
+      kind: 'anilist',
+      title: 'A film',
+      anilistId: 1234,
+      episode: 1,
+      format: 'MOVIE',
+    );
+    final location = watchPartyCatalogFollowLocation(media);
+    expect(Uri.parse(location).queryParameters['format'], 'MOVIE');
+    expect(WatchPartyMedia.fromJson(media.toJson()).format, 'MOVIE');
+    expect(media.withoutFormat().toJson().containsKey('format'), isFalse);
+  });
+
   test('stale media revision cannot replace a newer target', () {
     final planner = WatchPartyGuestMediaFollowPlanner();
     final session = _guestSession();

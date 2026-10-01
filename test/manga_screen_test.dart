@@ -1258,10 +1258,10 @@ void main() {
       scrollable: find.descendant(
         of: find.byKey(const ValueKey('manga-sources-list')),
         matching: find.byType(Scrollable),
-      ),
+      ).first,
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.byTooltip('Remove source'), warnIfMissed: false);
+    await tester.tap(find.byTooltip('Remove source').first, warnIfMissed: false);
     await tester.pumpAndSettle();
     await tester.tap(
       find.widgetWithText(FilledButton, 'Remove'),

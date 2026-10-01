@@ -3,6 +3,44 @@ import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('account magnet history parses ready downloads', () async {
+    final dio = Dio(BaseOptions(baseUrl: 'https://alldebrid.test'))
+      ..interceptors.add(
+        InterceptorsWrapper(
+          onRequest: (options, handler) {
+            expect(options.path, '/v4.1/magnet/status');
+            handler.resolve(
+              Response<Map<String, dynamic>>(
+                requestOptions: options,
+                statusCode: 200,
+                data: const {
+                  'status': 'success',
+                  'data': {
+                    'magnets': [
+                      {
+                        'id': 42,
+                        'filename': 'Example - 02',
+                        'status': 'Ready',
+                        'statusCode': 4,
+                        'hash': 'ABCDEF1234',
+                      },
+                    ],
+                  },
+                },
+              ),
+            );
+          },
+        ),
+      );
+    final items = await AllDebridClient(
+      token: 'test',
+      dio: dio,
+    ).accountMagnets();
+    expect(items.single.filename, 'Example - 02');
+    expect(items.single.hash, 'abcdef1234');
+    expect(items.single.isReady, isTrue);
+  });
+
   test('uses Bearer auth and parses the official magnet flow', () async {
     final paths = <String>[];
     final dio = Dio(BaseOptions(baseUrl: 'https://alldebrid.test'))

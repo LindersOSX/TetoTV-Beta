@@ -15,7 +15,7 @@ Finder _keyboardText(String value) => find.descendant(
 );
 
 void main() {
-  testWidgets('search keyboard exposes the TV QWERTY and number-pad layout', (
+  testWidgets('search keyboard exposes the reference QWERTY and number row', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(1280, 720);
@@ -58,7 +58,7 @@ void main() {
     expect(find.byType(TvKeyboardDialog), findsOneWidget);
     expect(find.byType(EditableText), findsNothing);
     expect(_keyboardText('Search anime'), findsOneWidget);
-    expect(_keyboardText('REMOTE  /  CONTROLLER  /  KEYBOARD'), findsOneWidget);
+    expect(_keyboardText('REMOTE  /  CONTROLLER  /  KEYBOARD'), findsNothing);
     expect(_keyboardText('Start typing…'), findsOneWidget);
 
     for (final key in const [
@@ -101,7 +101,6 @@ void main() {
       '-',
       '_',
       '0',
-      'Search',
     ]) {
       expect(
         _keyboardText(key),
@@ -118,8 +117,8 @@ void main() {
     final keyboardRect = tester.getRect(keyboardPanel);
     expect(
       keyboardRect.width,
-      inInclusiveRange(790, 825),
-      reason: 'the wide TV QWERTY keyboard is about thirty percent narrower',
+      closeTo(812 * .85, .5),
+      reason: 'the existing TV keyboard is fifteen percent narrower',
     );
     expect(
       keyboardRect.center.dx,
@@ -128,8 +127,8 @@ void main() {
     );
     expect(
       keyboardRect.height,
-      lessThanOrEqualTo(210),
-      reason: 'the TV keyboard must retain the original compact height',
+      inInclusiveRange(330 * .85, 430 * .85),
+      reason: 'five readable rows fit in the lower TV screen area',
     );
     expect(
       keyboardRect.bottom,
@@ -137,19 +136,19 @@ void main() {
       reason: 'the compact keyboard stays anchored to the lower screen edge',
     );
 
-    // The right-side number pad keeps conventional ascending rows and stays
-    // to the right of the QWERTY keys without pinning the test to pixels.
+    // Numbers live above the letters; there is no second pad stretching
+    // the keyboard out to the right.
     expect(
-      tester.getCenter(_keyboardText('1')).dx,
-      greaterThan(tester.getCenter(_keyboardText('p')).dx),
+      tester.getCenter(_keyboardText('1')).dy,
+      lessThan(tester.getCenter(_keyboardText('q')).dy),
     );
     expect(
       tester.getCenter(_keyboardText('1')).dy,
-      lessThan(tester.getCenter(_keyboardText('4')).dy),
+      closeTo(tester.getCenter(_keyboardText('4')).dy, .5),
     );
     expect(
       tester.getCenter(_keyboardText('4')).dy,
-      lessThan(tester.getCenter(_keyboardText('7')).dy),
+      closeTo(tester.getCenter(_keyboardText('7')).dy, .5),
     );
 
     await tester.tap(_keyboardText('q'));
@@ -158,7 +157,7 @@ void main() {
     await tester.tap(_keyboardText('_'));
     await tester.tap(_keyboardText('0'));
     await tester.tap(find.bySemanticsLabel('Backspace'));
-    await tester.tap(_keyboardText('Search'));
+    await tester.tap(find.byKey(const ValueKey('tv-keyboard-key-submit')));
     await tester.pumpAndSettle();
 
     expect(controller.text, 'q1-_');
@@ -206,7 +205,7 @@ void main() {
     expect(_keyboardText('ñ'), findsNothing);
 
     await tester.tap(_keyboardText('q'));
-    await tester.tap(_keyboardText(spanish.text('Search')));
+    await tester.tap(find.byKey(const ValueKey('tv-keyboard-key-submit')));
     await tester.pumpAndSettle();
     expect(controller.text, 'q');
   });
@@ -283,7 +282,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byType(TvKeyboardDialog), findsOneWidget);
     expect(_keyboardText('Room code'), findsOneWidget);
-    expect(_keyboardText('REMOTE  /  CONTROLLER  /  KEYBOARD'), findsOneWidget);
+    expect(_keyboardText('REMOTE  /  CONTROLLER  /  KEYBOARD'), findsNothing);
     expect(_keyboardText('Start typing…'), findsOneWidget);
     expect(_keyboardText('q'), findsNothing);
     expect(_keyboardText('123?'), findsNothing);
@@ -298,9 +297,8 @@ void main() {
       '8',
       '9',
       '0',
-      'CLEAR',
-      'CANCEL',
-      'DONE',
+      'Cancel',
+      'Done',
     ]) {
       expect(
         _keyboardText(key),
@@ -315,8 +313,8 @@ void main() {
     );
     expect(
       numericPanelRect.width,
-      inInclusiveRange(400, 420),
-      reason: 'the wide TV number pad is about half its former width',
+      closeTo(264 * .85, .5),
+      reason: 'the number-only pad has a compact three-column width',
     );
     expect(
       numericPanelRect.center.dx,
@@ -325,8 +323,8 @@ void main() {
     );
     expect(
       numericPanelRect.height,
-      lessThanOrEqualTo(225),
-      reason: 'the room-code keyboard must keep the compact TV footprint',
+      inInclusiveRange(350 * .85, 420 * .85),
+      reason: 'the room-code keys stay readable, not wide flat strips',
     );
     expect(
       numericPanelRect.bottom,
@@ -360,7 +358,7 @@ void main() {
     await tester.pump();
     await tester.tap(_keyboardText('8'));
     await tester.pump();
-    await tester.tap(_keyboardText('DONE'));
+    await tester.tap(_keyboardText('Done'));
     await tester.pumpAndSettle();
     expect(controller.text, '298');
   });
@@ -479,12 +477,12 @@ void main() {
     final panel = tester.getRect(
       find.byKey(const ValueKey('tv-keyboard-panel')),
     );
-    // The former panel filled 920dp after 20dp side insets; 70% is 644dp.
-    expect(panel.width, closeTo(644, .5));
+    // Apply the new reduction to the existing 644dp TV keyboard.
+    expect(panel.width, closeTo(644 * .85, .5));
     expect(panel.center.dx, closeTo(480, .5));
   });
 
-  testWidgets('landscape phone keeps the former keyboard width', (
+  testWidgets('landscape phone also gets the proportional size reduction', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(960, 540);
@@ -516,11 +514,11 @@ void main() {
     final panel = tester.getRect(
       find.byKey(const ValueKey('tv-keyboard-panel')),
     );
-    expect(panel.width, closeTo(920, .5));
+    expect(panel.width, closeTo(920 * .85, .5));
     expect(panel.center.dx, closeTo(480, .5));
   });
 
-  testWidgets('number-pad reduction follows the former width on a 720dp TV', (
+  testWidgets('number pad keeps its compact width on a 720dp TV', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(720, 540);
@@ -555,8 +553,7 @@ void main() {
     final panel = tester.getRect(
       find.byKey(const ValueKey('tv-keyboard-panel')),
     );
-    // The former panel filled 680dp after 20dp side insets; half is 340dp.
-    expect(panel.width, closeTo(340, .5));
+    expect(panel.width, closeTo(264 * .85, .5));
     expect(panel.center.dx, closeTo(360, .5));
   });
 }

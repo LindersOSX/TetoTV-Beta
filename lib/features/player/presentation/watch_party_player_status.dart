@@ -20,8 +20,17 @@ String? watchPartyPlayerStatus(
   final connection = state.connection == WatchPartyConnection.connected
       ? ''
       : ' • ${localizations.text('RECONNECTING')}';
+  final hostWaitingForStreams =
+      state.isHost &&
+      state.snapshot?.media != null &&
+      !watchPartyAllGuestsReady(
+        participantCount: state.snapshot!.participantCount,
+        readyCount: state.snapshot!.readyCount,
+      );
   final status = state.isHost
-      ? 'HOST'
+      ? hostWaitingForStreams
+            ? 'WAITING FOR STREAMS'
+            : 'HOST'
       : switch (state.timelineCompatibility) {
           WatchPartyTimelineCompatibility.exact => 'EXACT SOURCE',
           WatchPartyTimelineCompatibility.compatible => 'SOURCE ALIGNED',

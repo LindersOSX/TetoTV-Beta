@@ -1,4 +1,5 @@
 import 'package:anime_tv/features/catalog/application/localized_anime_description_provider.dart';
+import 'package:anime_tv/features/catalog/presentation/expandable_synopsis.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -12,6 +13,7 @@ class LocalizedAnimeDescription extends ConsumerWidget {
     this.style,
     this.maxLines,
     this.overflow,
+    this.expandable = false,
     super.key,
   });
 
@@ -21,6 +23,7 @@ class LocalizedAnimeDescription extends ConsumerWidget {
   final TextStyle? style;
   final int? maxLines;
   final TextOverflow? overflow;
+  final bool expandable;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -34,8 +37,16 @@ class LocalizedAnimeDescription extends ConsumerWidget {
                 )),
               )
               .valueOrNull;
+    final description = localized ?? fallbackDescription;
+    if (expandable && maxLines != null) {
+      return ExpandableSynopsis(
+        text: description,
+        maxLines: maxLines!,
+        style: style,
+      );
+    }
     return Text(
-      localized ?? fallbackDescription,
+      description,
       style: style,
       maxLines: maxLines,
       overflow: overflow,

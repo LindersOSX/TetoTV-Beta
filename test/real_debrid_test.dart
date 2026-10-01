@@ -8,6 +8,41 @@ import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test(
+    'account torrent history retains only account-owned hash/status',
+    () async {
+      final dio = Dio(BaseOptions(baseUrl: 'https://realdebrid.test'))
+        ..interceptors.add(
+          InterceptorsWrapper(
+            onRequest: (options, handler) {
+              expect(options.path, '/torrents');
+              expect(options.queryParameters['limit'], 100);
+              handler.resolve(
+                Response<List<dynamic>>(
+                  requestOptions: options,
+                  statusCode: 200,
+                  data: const [
+                    {
+                      'id': 'torrent-1',
+                      'filename': 'Example - 02.mkv',
+                      'hash': 'ABCDEF1234',
+                      'status': 'downloaded',
+                    },
+                  ],
+                ),
+              );
+            },
+          ),
+        );
+      final items = await RealDebridClient(
+        token: 'test',
+        dio: dio,
+      ).accountTorrents();
+      expect(items.single.hash, 'abcdef1234');
+      expect(items.single.isDownloaded, isTrue);
+    },
+  );
+
   group('Real-Debrid torrent selection', () {
     test('selects the video matching the requested episode in a batch', () {
       final selected = selectEpisodeFile(const [

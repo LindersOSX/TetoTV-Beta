@@ -24,4 +24,36 @@ class PendingOperationSlotTest {
         assertTrue(slot.trySet(retryConnect))
         assertSame(retryConnect, slot.take())
     }
+
+    @Test
+    fun `old timeout cannot clear a replacement retry`() {
+        val slot = PendingOperationSlot<Any>()
+        val oldConnect = Any()
+        val retryConnect = Any()
+        assertTrue(slot.trySet(oldConnect))
+        assertSame(oldConnect, slot.takeIf(oldConnect))
+        assertTrue(slot.trySet(retryConnect))
+
+        assertNull(slot.takeIf(oldConnect))
+        assertFalse(slot.trySet(Any()))
+        assertSame(retryConnect, slot.takeIf(retryConnect))
+        assertNull(slot.take())
+    }
+
+    @Test
+    fun `late native request identity cannot settle a replacement refresh`() {
+        data class Refresh(val requestId: Long)
+        val slot = PendingOperationSlot<Refresh>()
+        val oldRefresh = Refresh(1L)
+        val retryRefresh = Refresh(2L)
+        assertTrue(slot.trySet(oldRefresh))
+        assertSame(oldRefresh, slot.takeIf(oldRefresh))
+        assertTrue(slot.trySet(retryRefresh))
+
+        assertNull(slot.takeMatching { it.requestId == oldRefresh.requestId })
+        assertNull(slot.takeIf(oldRefresh))
+        assertFalse(slot.trySet(Refresh(3L)))
+        assertSame(retryRefresh, slot.takeMatching { it.requestId == retryRefresh.requestId })
+        assertNull(slot.take())
+    }
 }

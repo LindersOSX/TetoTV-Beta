@@ -54,7 +54,9 @@ void main() {
     expect(header.style?.color, palette.primaryText);
   });
 
-  testWidgets('poster score badge uses the active accent', (tester) async {
+  testWidgets('poster score and year badges use the active accent', (
+    tester,
+  ) async {
     await tester.pumpWidget(
       MaterialApp(
         theme: AppTheme.darkFor(palette),
@@ -73,7 +75,7 @@ void main() {
             decoration.color == palette.accent;
       }),
     );
-    expect(accentBadge, findsOneWidget);
+    expect(accentBadge, findsNWidgets(2));
   });
 
   test('remaining non-player screens do not bypass Theme Studio colors', () {

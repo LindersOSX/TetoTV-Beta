@@ -19,7 +19,13 @@ abstract interface class DiscordPresencePlatform {
   Future<void> disconnect();
 }
 
-class AndroidDiscordPresencePlatform implements DiscordPresencePlatform {
+/// Optional platform cancellation affects only an outstanding token refresh.
+abstract interface class DiscordRefreshCancellationPlatform {
+  Future<void> cancelRefreshToken();
+}
+
+class AndroidDiscordPresencePlatform
+    implements DiscordPresencePlatform, DiscordRefreshCancellationPlatform {
   AndroidDiscordPresencePlatform(this._bridge);
 
   final AndroidTvBridge _bridge;
@@ -39,6 +45,9 @@ class AndroidDiscordPresencePlatform implements DiscordPresencePlatform {
   @override
   Future<DiscordTokenBundle> refreshToken(String refreshToken) =>
       _bridge.discordRefreshToken(refreshToken);
+
+  @override
+  Future<void> cancelRefreshToken() => _bridge.discordCancelRefreshToken();
 
   @override
   Future<void> connect(DiscordTokenBundle token) =>
@@ -132,9 +141,10 @@ class DiscordPresenceController extends StateNotifier<DiscordPresenceState> {
     this._platform, {
     // TV users may need to enter credentials or approve in a second app.
     this._authenticationTimeout = const Duration(minutes: 6),
-    // Device pairing has already securely stored the token before this
-    // best-effort native connection. Never leave its completion UI hanging.
+    // Every native connection is bounded, including startup and Retry. The
+    // name remains compatible with device-pairing callers and tests.
     this._deviceConnectionTimeout = const Duration(seconds: 20),
+    this._refreshTimeout = const Duration(seconds: 20),
   }) : super(const DiscordPresenceState()) {
     _eventSubscription = _platform.events.listen(_handleEvent);
     _initialization = _initialize();
@@ -155,9 +165,13 @@ class DiscordPresenceController extends StateNotifier<DiscordPresenceState> {
   final DiscordPresencePlatform _platform;
   final Duration _authenticationTimeout;
   final Duration _deviceConnectionTimeout;
+  final Duration _refreshTimeout;
   late final StreamSubscription<DiscordBridgeEvent> _eventSubscription;
   late final Future<void> _initialization;
   bool _refreshing = false;
+  bool _connecting = false;
+  bool _acceptConnectionEvents = false;
+  Future<void>? _credentialMutation;
   int _authenticationGeneration = 0;
   Timer? _authenticationTimer;
   Completer<DiscordTokenBundle>? _authenticationCompleter;
@@ -176,14 +190,18 @@ class DiscordPresenceController extends StateNotifier<DiscordPresenceState> {
         available: available,
         linked: token != null,
         enabled: enabled && token != null,
+        busy: available && token != null && enabled,
         connectionStatus: info['status'] as String? ?? 'disconnected',
         sdkVersion: info['version'] as String?,
         clearError: true,
       );
       if (!available || token == null || !enabled) return;
+      final generation = _authenticationGeneration;
       final current = await _refreshIfNeeded(token);
-      if (!mounted) return;
+      if (!_isCurrentAuthentication(generation)) return;
       await _connect(current);
+    } on _DiscordAuthenticationAbandoned {
+      return;
     } catch (error) {
       if (!mounted) return;
       state = state.copyWith(
@@ -191,6 +209,8 @@ class DiscordPresenceController extends StateNotifier<DiscordPresenceState> {
         busy: false,
         error: _friendly(error),
       );
+    } finally {
+      if (mounted) state = state.copyWith(busy: false);
     }
   }
 
@@ -200,6 +220,7 @@ class DiscordPresenceController extends StateNotifier<DiscordPresenceState> {
     if (!mounted || state.busy || !state.available) return;
     _validateMinimumAgeConfirmation(minimumAgeConfirmation);
     final generation = ++_authenticationGeneration;
+    var linkedTokenStored = false;
     state = state.copyWith(busy: true, clearError: true);
     try {
       final token = await _authenticateWithTimeout(generation);
@@ -208,9 +229,14 @@ class DiscordPresenceController extends StateNotifier<DiscordPresenceState> {
       await _storeNewToken(token, minimumAgeConfirmation);
       if (!_isCurrentAuthentication(generation)) return;
       state = state.copyWith(linked: true, enabled: true);
+      linkedTokenStored = true;
       await _connect(token);
-    } on TimeoutException {
+    } on TimeoutException catch (error) {
       if (!_isCurrentAuthentication(generation)) return;
+      if (linkedTokenStored) {
+        state = state.copyWith(error: _friendly(error));
+        return;
+      }
       await _cancelAuthenticationQuietly();
       if (!_isCurrentAuthentication(generation)) return;
       state = state.copyWith(
@@ -287,12 +313,8 @@ class DiscordPresenceController extends StateNotifier<DiscordPresenceState> {
       state = state.copyWith(linked: true, enabled: true);
       if (!state.available || !connectAfterStore) return;
       try {
-        await _connect(token).timeout(_deviceConnectionTimeout);
+        await _connect(token);
       } on TimeoutException {
-        // Future.timeout continues observing the native Future, so a late
-        // completion/error is handled. Disconnect also releases Android's
-        // pending-connect slot so Settings Retry can start a fresh attempt.
-        await _cancelTimedOutDeviceConnection();
         if (_isCurrentAuthentication(generation)) {
           state = state.copyWith(
             connectionStatus: 'disconnected',
@@ -322,12 +344,24 @@ class DiscordPresenceController extends StateNotifier<DiscordPresenceState> {
     }
   }
 
-  Future<void> _cancelTimedOutDeviceConnection() async {
+  Future<void> _cancelPendingConnection() async {
+    _acceptConnectionEvents = false;
     try {
       await _platform.disconnect().timeout(const Duration(seconds: 5));
     } catch (_) {
       // The account token is already secure and remains linked. Native status
       // events can still settle a cancellation that outlives this guard.
+    }
+  }
+
+  Future<void> _cancelPendingRefresh() async {
+    if (_platform case final DiscordRefreshCancellationPlatform platform) {
+      try {
+        await platform.cancelRefreshToken().timeout(const Duration(seconds: 5));
+      } catch (_) {
+        // The native identity-owned watchdog also releases this operation.
+        // Never revoke/delete credentials when a refresh cannot complete.
+      }
     }
   }
 
@@ -403,7 +437,9 @@ class DiscordPresenceController extends StateNotifier<DiscordPresenceState> {
 
   Future<void> _runAuthenticationCancellation() async {
     try {
-      await _platform.cancelAuthentication();
+      await _platform.cancelAuthentication().timeout(
+        const Duration(seconds: 5),
+      );
     } catch (_) {
       // Local lifecycle cleanup must complete even if Android is already
       // destroying Discord's authorization activity.
@@ -416,6 +452,7 @@ class DiscordPresenceController extends StateNotifier<DiscordPresenceState> {
     try {
       await _storage.write(key: _enabledKey, value: enabled.toString());
       if (!enabled) {
+        _acceptConnectionEvents = false;
         await _platform.disconnect();
         if (!mounted) return;
         state = state.copyWith(
@@ -428,7 +465,12 @@ class DiscordPresenceController extends StateNotifier<DiscordPresenceState> {
       if (token == null) throw StateError('Discord needs to be linked again.');
       if (!mounted) return;
       state = state.copyWith(enabled: true);
-      await _connect(await _refreshIfNeeded(token));
+      final generation = _authenticationGeneration;
+      final current = await _refreshIfNeeded(token);
+      if (!_isCurrentAuthentication(generation)) return;
+      await _connect(current);
+    } on _DiscordAuthenticationAbandoned {
+      return;
     } catch (error) {
       if (!mounted) return;
       state = state.copyWith(error: _friendly(error));
@@ -440,6 +482,8 @@ class DiscordPresenceController extends StateNotifier<DiscordPresenceState> {
   Future<void> unlinkAccount() async {
     if (state.busy) return;
     state = state.copyWith(busy: true, clearError: true);
+    _authenticationGeneration++;
+    _acceptConnectionEvents = false;
     try {
       final token = await _loadToken();
       if (token != null) {
@@ -466,11 +510,19 @@ class DiscordPresenceController extends StateNotifier<DiscordPresenceState> {
   }
 
   Future<void> retry() async {
-    final token = await _loadToken();
-    if (!state.available || !state.enabled || token == null) return;
+    if (!mounted || state.busy || !state.available || !state.enabled) return;
+    // Claim the UI operation before reading storage: two lifecycle/remote
+    // callbacks in the same turn must not both refresh and connect.
     state = state.copyWith(busy: true, clearError: true);
+    final generation = _authenticationGeneration;
     try {
-      await _connect(await _refreshIfNeeded(token, force: true));
+      final token = await _loadToken();
+      if (!mounted || token == null) return;
+      final current = await _refreshIfNeeded(token, force: true);
+      if (!_isCurrentAuthentication(generation)) return;
+      await _connect(current);
+    } on _DiscordAuthenticationAbandoned {
+      return;
     } catch (error) {
       if (mounted) state = state.copyWith(error: _friendly(error));
     } finally {
@@ -479,9 +531,46 @@ class DiscordPresenceController extends StateNotifier<DiscordPresenceState> {
   }
 
   Future<void> _connect(DiscordTokenBundle token) async {
+    if (!mounted) return;
+    if (_connecting) {
+      throw StateError('Discord is already handling another request.');
+    }
+    _connecting = true;
+    _acceptConnectionEvents = true;
     state = state.copyWith(connectionStatus: 'connecting', clearError: true);
-    await _platform.connect(token);
-    if (mounted) state = state.copyWith(connectionStatus: 'ready');
+    try {
+      try {
+        await _platform.connect(token).timeout(_deviceConnectionTimeout);
+      } on PlatformException catch (error) {
+        if (error.code != 'DISCORD_CONNECT_BUSY') rethrow;
+        // A previous native attempt can survive a Flutter lifecycle boundary.
+        // Reset only the socket operation, never revoke or clear credentials,
+        // and make at most one replacement attempt with the same token.
+        await _cancelPendingConnection();
+        if (!mounted) return;
+        _acceptConnectionEvents = true;
+        state = state.copyWith(
+          connectionStatus: 'connecting',
+          clearError: true,
+        );
+        await _platform.connect(token).timeout(_deviceConnectionTimeout);
+      }
+      if (mounted && _acceptConnectionEvents) {
+        state = state.copyWith(connectionStatus: 'ready');
+      }
+    } on TimeoutException {
+      await _cancelPendingConnection();
+      if (mounted) state = state.copyWith(connectionStatus: 'disconnected');
+      throw TimeoutException(
+        'Discord is linked, but the connection timed out. Use Retry to connect Rich Presence.',
+      );
+    } catch (_) {
+      _acceptConnectionEvents = false;
+      if (mounted) state = state.copyWith(connectionStatus: 'disconnected');
+      rethrow;
+    } finally {
+      _connecting = false;
+    }
   }
 
   Future<DiscordTokenBundle> _refreshIfNeeded(
@@ -491,15 +580,83 @@ class DiscordPresenceController extends StateNotifier<DiscordPresenceState> {
     if (!force && token.expiresAt.isAfter(DateTime.now().add(_refreshWindow))) {
       return token;
     }
-    if (_refreshing) return token;
+    if (_refreshing) {
+      throw StateError('Discord is already handling another request.');
+    }
+    final generation = _authenticationGeneration;
     _refreshing = true;
     try {
-      final refreshed = await _platform.refreshToken(token.refreshToken);
+      final refreshed = await _platform
+          .refreshToken(token.refreshToken)
+          .timeout(_refreshTimeout);
+      if (!_isCurrentAuthentication(generation)) {
+        throw const _DiscordAuthenticationAbandoned();
+      }
       _validateToken(refreshed);
-      await _storeToken(refreshed);
+      await _mutateCredentials(() async {
+        if (!_isCurrentAuthentication(generation)) {
+          throw const _DiscordAuthenticationAbandoned();
+        }
+        final saved = await _loadToken();
+        if (saved == null || !_sameToken(saved, token)) {
+          throw StateError(
+            'Discord credentials changed. Use Retry in Settings.',
+          );
+        }
+        await _storeToken(refreshed, generation: generation);
+      });
+      if (!_isCurrentAuthentication(generation)) {
+        throw const _DiscordAuthenticationAbandoned();
+      }
       return refreshed;
+    } on TimeoutException {
+      await _cancelPendingRefresh();
+      if (!_isCurrentAuthentication(generation)) {
+        throw const _DiscordAuthenticationAbandoned();
+      }
+      throw TimeoutException(
+        'Discord token refresh timed out. Your saved account is unchanged. Use Retry in Settings.',
+      );
+    } on PlatformException catch (error) {
+      if (!_isCurrentAuthentication(generation)) {
+        throw const _DiscordAuthenticationAbandoned();
+      }
+      if (error.code == 'DISCORD_REFRESH_BUSY') {
+        // Clear only the stalled refresh. Remote token refresh is never
+        // automatically repeated; the user explicitly chooses Retry.
+        await _cancelPendingRefresh();
+      }
+      rethrow;
+    } catch (_) {
+      if (!_isCurrentAuthentication(generation)) {
+        throw const _DiscordAuthenticationAbandoned();
+      }
+      rethrow;
     } finally {
       _refreshing = false;
+    }
+  }
+
+  bool _sameToken(DiscordTokenBundle left, DiscordTokenBundle right) =>
+      left.accessToken == right.accessToken &&
+      left.refreshToken == right.refreshToken &&
+      left.tokenType == right.tokenType &&
+      left.expiresAt.millisecondsSinceEpoch ==
+          right.expiresAt.millisecondsSinceEpoch &&
+      left.scopes == right.scopes;
+
+  Future<T> _mutateCredentials<T>(Future<T> Function() mutate) async {
+    final previous = _credentialMutation;
+    final completed = Completer<void>();
+    _credentialMutation = completed.future;
+    try {
+      if (previous != null) await previous;
+      return await mutate();
+    } finally {
+      completed.complete();
+      if (identical(_credentialMutation, completed.future)) {
+        _credentialMutation = null;
+      }
     }
   }
 
@@ -507,6 +664,9 @@ class DiscordPresenceController extends StateNotifier<DiscordPresenceState> {
     if (!mounted) return;
     switch (event.type) {
       case 'discordConnectionState':
+        // A canceled native future/status must not resurrect a timed-out or
+        // disabled session. The next explicit connection reopens this gate.
+        if (!_acceptConnectionEvents) return;
         final status = event.data['status'] as String? ?? 'disconnected';
         final error = (event.data['error'] as String?)?.trim();
         state = state.copyWith(
@@ -553,11 +713,19 @@ class DiscordPresenceController extends StateNotifier<DiscordPresenceState> {
     );
   }
 
-  Future<void> _storeToken(DiscordTokenBundle token) async {
+  Future<void> _storeToken(
+    DiscordTokenBundle token, {
+    required int generation,
+  }) async {
     await runSecureStorageTransaction(
       _storage,
       _credentialKeys.where((key) => key != _enabledKey),
-      () => _storeTokenUnchecked(token),
+      () {
+        if (!_isCurrentAuthentication(generation)) {
+          throw const _DiscordAuthenticationAbandoned();
+        }
+        return _storeTokenUnchecked(token);
+      },
     );
   }
 
@@ -566,13 +734,15 @@ class DiscordPresenceController extends StateNotifier<DiscordPresenceState> {
     DiscordMinimumAgeConfirmation minimumAgeConfirmation,
   ) async {
     _validateMinimumAgeConfirmation(minimumAgeConfirmation);
-    await runSecureStorageTransaction(_storage, _credentialKeys, () async {
-      await _storeTokenUnchecked(token);
-      await _storage.write(
-        key: _minimumAgeConfirmationKey,
-        value: minimumAgeConfirmation.encodeForStorage(),
-      );
-      await _storage.write(key: _enabledKey, value: 'true');
+    await _mutateCredentials(() async {
+      await runSecureStorageTransaction(_storage, _credentialKeys, () async {
+        await _storeTokenUnchecked(token);
+        await _storage.write(
+          key: _minimumAgeConfirmationKey,
+          value: minimumAgeConfirmation.encodeForStorage(),
+        );
+        await _storage.write(key: _enabledKey, value: 'true');
+      });
     });
   }
 
@@ -592,7 +762,7 @@ class DiscordPresenceController extends StateNotifier<DiscordPresenceState> {
     // faithfully recreated after rollback. Initialization is finite and safe
     // to await; user-initiated operations must finish before setup is applied.
     await _initialization;
-    if (!mounted || state.busy || _refreshing) {
+    if (!mounted || state.busy || _refreshing || _connecting) {
       throw StateError('Discord is already handling another request.');
     }
     return DiscordImportSnapshot._(
@@ -605,17 +775,18 @@ class DiscordPresenceController extends StateNotifier<DiscordPresenceState> {
 
   Future<void> restoreImportSnapshot(DiscordImportSnapshot snapshot) async {
     await _abandonAuthenticationForImport();
-    await snapshot._storageSnapshot.restore();
+    await _mutateCredentials(snapshot._storageSnapshot.restore);
     var restoredConnectionStatus = 'disconnected';
     var nativeRestoreFailed = false;
     try {
+      _acceptConnectionEvents = false;
       await _platform.disconnect();
       final token = snapshot._token;
       if (snapshot.wasConnected &&
           snapshot.state.available &&
           snapshot.state.enabled &&
           token != null) {
-        await _platform.connect(token);
+        await _connect(token);
         restoredConnectionStatus = 'ready';
       }
     } catch (_) {
@@ -651,13 +822,16 @@ class DiscordPresenceController extends StateNotifier<DiscordPresenceState> {
     if (hadPendingNativeAuthentication) {
       await _cancelAuthenticationQuietly();
     }
+    if (_refreshing) await _cancelPendingRefresh();
   }
 
   Future<void> connectImportedToken() async {
-    final token = await _loadToken();
-    if (!mounted || !state.available || !state.enabled || token == null) return;
+    if (!mounted || state.busy || !state.available || !state.enabled) return;
+    state = state.copyWith(busy: true, clearError: true);
     try {
-      await _connect(token).timeout(_deviceConnectionTimeout);
+      final token = await _loadToken();
+      if (!mounted || token == null) return;
+      await _connect(token);
     } catch (error) {
       if (mounted) {
         state = state.copyWith(
@@ -665,21 +839,17 @@ class DiscordPresenceController extends StateNotifier<DiscordPresenceState> {
           error: _friendly(error),
         );
       }
+    } finally {
+      if (mounted) state = state.copyWith(busy: false);
     }
   }
 
   Future<void> _clearToken() async {
-    for (final key in const [
-      _enabledKey,
-      _accessTokenKey,
-      _refreshTokenKey,
-      _tokenTypeKey,
-      _expiresAtKey,
-      _scopesKey,
-      _minimumAgeConfirmationKey,
-    ]) {
-      await _storage.delete(key: key);
-    }
+    await _mutateCredentials(() async {
+      for (final key in _credentialKeys) {
+        await _storage.delete(key: key);
+      }
+    });
   }
 
   void _validateToken(DiscordTokenBundle token) {
@@ -708,6 +878,9 @@ class DiscordPresenceController extends StateNotifier<DiscordPresenceState> {
 
   @override
   void dispose() {
+    _acceptConnectionEvents = false;
+    if (_connecting) unawaited(_cancelPendingConnection());
+    if (_refreshing) unawaited(_cancelPendingRefresh());
     final hadPendingNativeAuthentication =
         _nativeAuthenticationGeneration != null;
     _authenticationGeneration++;

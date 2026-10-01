@@ -93,8 +93,8 @@ class PremiumizeClient {
     );
   }
 
-  Future<List<PremiumizeTransfer>> transfers() async {
-    final body = await _get('/api/transfer/list');
+  Future<List<PremiumizeTransfer>> transfers({CancelToken? cancelToken}) async {
+    final body = await _get('/api/transfer/list', cancelToken: cancelToken);
     final values = body['transfers'];
     if (values is! List) {
       throw const PremiumizeException(
@@ -138,8 +138,13 @@ class PremiumizeClient {
   Future<Map<String, dynamic>> _get(
     String path, {
     Map<String, dynamic>? query,
+    CancelToken? cancelToken,
   }) => _request(
-    () => _dio.get<Map<String, dynamic>>(path, queryParameters: query),
+    () => _dio.get<Map<String, dynamic>>(
+      path,
+      queryParameters: query,
+      cancelToken: cancelToken,
+    ),
   );
 
   Future<Map<String, dynamic>> _post(

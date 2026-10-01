@@ -34,6 +34,8 @@ class AllDebridMagnetStatus {
     required this.statusCode,
     required this.downloaded,
     required this.size,
+    this.filename,
+    this.hash,
   });
 
   final int id;
@@ -41,6 +43,8 @@ class AllDebridMagnetStatus {
   final int statusCode;
   final int downloaded;
   final int size;
+  final String? filename;
+  final String? hash;
 
   bool get isReady => statusCode == 4;
   bool get hasFailed => statusCode >= 5;
@@ -49,6 +53,8 @@ class AllDebridMagnetStatus {
   factory AllDebridMagnetStatus.fromJson(Map<String, dynamic> json) =>
       AllDebridMagnetStatus(
         id: _asInt(json['id']),
+        filename: json['filename']?.toString(),
+        hash: json['hash']?.toString().toLowerCase(),
         status: json['status']?.toString() ?? 'Unknown',
         statusCode: _asInt(json['statusCode']),
         downloaded: _asInt(json['downloaded']),

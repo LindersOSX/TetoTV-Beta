@@ -1,6 +1,6 @@
 import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
-import 'package:anime_tv/core/tv/tv_focusable.dart';
+import 'package:anime_tv/core/widgets/teto_back_button.dart';
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
 import 'package:anime_tv/features/catalog/presentation/catalog_grid.dart';
 import 'package:anime_tv/features/settings/application/display_preferences_controller.dart';
@@ -27,14 +27,7 @@ class FranchiseScreen extends ConsumerWidget {
           children: [
             Row(
               children: [
-                TvFocusable(
-                  autofocus: true,
-                  onPressed: context.pop,
-                  child: const Padding(
-                    padding: EdgeInsets.all(10),
-                    child: Icon(Icons.arrow_back_rounded),
-                  ),
-                ),
+                TetoBackButton(autofocus: true, onPressed: context.pop),
                 const SizedBox(width: 14),
                 Text(
                   context.tr("Recommended watch order"),

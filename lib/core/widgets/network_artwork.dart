@@ -2,6 +2,7 @@ import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'dart:io';
 
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/theme/teto_ui_tokens.dart';
 import 'package:anime_tv/core/widgets/trusted_local_artwork_registry.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
@@ -36,7 +37,7 @@ class NetworkArtwork extends StatelessWidget {
   Widget build(BuildContext context) {
     final source = url;
     if (source == null || source.isEmpty) {
-      return SizedBox.expand(child: _Fallback(icon: icon));
+      return SizedBox.expand(child: ArtworkFallback(icon: icon));
     }
     final uri = Uri.tryParse(source);
     if (uri != null && TrustedLocalArtworkRegistry.instance.owns(uri)) {
@@ -47,12 +48,29 @@ class NetworkArtwork extends StatelessWidget {
           height: double.infinity,
           fit: fit,
           cacheWidth: cacheWidth ?? 800,
-          errorBuilder: (_, _, _) => _Fallback(icon: icon),
+          frameBuilder: (context, child, frame, synchronous) => synchronous
+              ? child
+              : Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    if (frame == null) const ArtworkSkeleton(),
+                    AnimatedOpacity(
+                      opacity: frame == null ? 0 : 1,
+                      duration: TetoUiMotion.duration(
+                        context,
+                        TetoUiMotion.artwork,
+                      ),
+                      curve: TetoUiMotion.curve,
+                      child: child,
+                    ),
+                  ],
+                ),
+          errorBuilder: (_, _, _) => ArtworkFallback(icon: icon),
         ),
       );
     }
     if (uri?.scheme == 'file') {
-      return SizedBox.expand(child: _Fallback(icon: icon));
+      return SizedBox.expand(child: ArtworkFallback(icon: icon));
     }
     return SizedBox.expand(
       child: CachedNetworkImage(
@@ -61,9 +79,11 @@ class NetworkArtwork extends StatelessWidget {
         height: double.infinity,
         fit: fit,
         memCacheWidth: cacheWidth ?? 800,
-        fadeInDuration: const Duration(milliseconds: 120),
+        fadeInDuration: TetoUiMotion.duration(context, TetoUiMotion.artwork),
+        fadeInCurve: TetoUiMotion.curve,
+        fadeOutDuration: Duration.zero,
         placeholder: (_, _) => const ArtworkSkeleton(),
-        errorWidget: (_, _, _) => _Fallback(icon: icon),
+        errorWidget: (_, _, _) => ArtworkFallback(icon: icon),
       ),
     );
   }
@@ -72,13 +92,15 @@ class NetworkArtwork extends StatelessWidget {
 /// A fixed-size artwork placeholder. Its parent owns the final dimensions, so
 /// poster rows never jump or stretch while an image is downloading.
 class ArtworkSkeleton extends StatelessWidget {
-  const ArtworkSkeleton({super.key});
+  const ArtworkSkeleton({this.semanticLabel = 'Loading artwork', super.key});
+
+  final String semanticLabel;
 
   @override
   Widget build(BuildContext context) {
     final palette = context.appPalette;
     return Semantics(
-      label: context.tr("Loading artwork"),
+      label: context.tr(semanticLabel),
       child: SizedBox.expand(
         child: DecoratedBox(
           decoration: BoxDecoration(
@@ -107,8 +129,8 @@ class ArtworkSkeleton extends StatelessWidget {
   }
 }
 
-class _Fallback extends StatelessWidget {
-  const _Fallback({required this.icon});
+class ArtworkFallback extends StatelessWidget {
+  const ArtworkFallback({required this.icon, super.key});
 
   final IconData icon;
 

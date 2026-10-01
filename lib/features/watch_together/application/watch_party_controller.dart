@@ -186,6 +186,11 @@ class WatchPartyController extends StateNotifier<WatchPartyState> {
   WatchPartyPlaybackPort? _playbackPort;
   WatchPartyPlaybackPort? _pendingPlaybackPort;
   WatchPartyPlaybackSample? _lastSample;
+  WatchPartyRole? _playbackAttachedRole;
+  String? _hostGateMediaKey;
+  bool _hostStartPending = false;
+  bool _hostPlaybackStarted = false;
+  bool _hostGateCommandInFlight = false;
   DateTime? _lastPublishedAt;
   int _generation = 0;
   bool _publishing = false;
@@ -225,10 +230,12 @@ class WatchPartyController extends StateNotifier<WatchPartyState> {
     state = const WatchPartyState(connection: WatchPartyConnection.connecting);
     await _sendLeaveBestEffort(previousSession);
     if (_disposed || generation != _generation) return false;
+    var requestStep = 'create';
     try {
       final requestedIdentity = _client.publicIdentity;
       final created = await _client.create();
       if (generation != _generation) return false;
+      requestStep = 'read_room';
       final snapshot = await _client.snapshot(created.session);
       if (generation != _generation) return false;
       state = state.copyWith(
@@ -253,7 +260,10 @@ class WatchPartyController extends StateNotifier<WatchPartyState> {
     } on WatchPartyClientException catch (error) {
       _recordDiagnostics('Watch Party room creation failed', {
         'event': 'room_create_failed',
-        'error_code': error.code,
+        'operation': 'room_create',
+        'step': requestStep,
+        'status': 'failed',
+        ...error.diagnosticDetails,
       });
       if (generation == _generation) {
         state = WatchPartyState(message: watchPartyFriendlyError(error));
@@ -327,7 +337,9 @@ class WatchPartyController extends StateNotifier<WatchPartyState> {
     } on WatchPartyClientException catch (error) {
       _recordDiagnostics('Watch Party room join failed', {
         'event': 'room_join_failed',
-        'error_code': error.code,
+        'operation': 'room_join',
+        'status': 'failed',
+        ...error.diagnosticDetails,
       });
       if (generation == _generation) {
         state = WatchPartyState(message: watchPartyFriendlyError(error));
@@ -399,8 +411,11 @@ class WatchPartyController extends StateNotifier<WatchPartyState> {
                     'event': 'public_identity_refresh_failed',
                     'role': session.role.name,
                     'avatar_shared': pending?.avatarUrl != null,
-                    'error_code': error.code,
+                    'operation': 'public_identity_refresh',
+                    'status': 'failed',
+                    ...error.diagnosticDetails,
                     'attempt_count': attempts,
+                    'attempt': attempts,
                   },
                 );
               }
@@ -475,6 +490,11 @@ class WatchPartyController extends StateNotifier<WatchPartyState> {
       }
       return true;
     } on WatchPartyClientException catch (error) {
+      _recordDiagnostics('Watch Party participant action failed', {
+        'operation': transfer ? 'transfer_host' : 'kick_participant',
+        'status': 'failed',
+        ...error.diagnosticDetails,
+      });
       if (!_disposed && state.session == session) {
         if (error.code == 'stale_roster' ||
             error.code == 'participant_not_found') {
@@ -510,7 +530,11 @@ class WatchPartyController extends StateNotifier<WatchPartyState> {
     }
     _pendingPlaybackPort = null;
     _playbackPort = port;
+    _playbackAttachedRole = state.session?.role;
     _lastSample = null;
+    _hostGateMediaKey = null;
+    _hostStartPending = state.isHost;
+    _hostPlaybackStarted = false;
     _resetGuestReconciliation();
     _acceptedGuestSourceKey = null;
     _acceptedGuestSourceAttachmentGeneration = -1;
@@ -528,6 +552,7 @@ class WatchPartyController extends StateNotifier<WatchPartyState> {
         state = state.copyWith(attachedMedia: sample.media);
       }
       if (state.isHost) {
+        _syncHostStartGate(allowStart: false);
         unawaited(_publishHostSample(force: false));
       } else if (state.session case final session?
           when session.role == WatchPartyRole.guest) {
@@ -618,6 +643,10 @@ class WatchPartyController extends StateNotifier<WatchPartyState> {
     _playbackSubscription = null;
     _playbackPort = null;
     _lastSample = null;
+    _playbackAttachedRole = null;
+    _hostGateMediaKey = null;
+    _hostStartPending = false;
+    _hostPlaybackStarted = false;
     _acceptedGuestSourceKey = null;
     _acceptedGuestSourceAttachmentGeneration = -1;
     _acceptedGuestAllowsDifferentSource = false;
@@ -768,6 +797,12 @@ class WatchPartyController extends StateNotifier<WatchPartyState> {
       await _acceptPolledSnapshot(session, snapshot);
     } on WatchPartyClientException catch (error) {
       if (generation != _generation) return;
+      _recordDiagnostics('Watch Party poll interrupted', {
+        'operation': 'room_poll',
+        'status': 'failed',
+        ...error.diagnosticDetails,
+        'retry_count': _consecutivePollFailures,
+      });
       if (error.code == 'party_not_found' ||
           error.code == 'invalid_party_token' ||
           error.code == 'party_token_required' ||
@@ -791,11 +826,6 @@ class WatchPartyController extends StateNotifier<WatchPartyState> {
         return;
       }
       _consecutivePollFailures = (_consecutivePollFailures + 1).clamp(0, 3);
-      _recordDiagnostics('Watch Party poll interrupted', {
-        'event': 'poll_failed',
-        'error_code': error.code,
-        'consecutive_failures': _consecutivePollFailures,
-      });
       state = state.copyWith(
         connection: WatchPartyConnection.reconnecting,
         message: watchPartyFriendlyError(error),
@@ -834,6 +864,22 @@ class WatchPartyController extends StateNotifier<WatchPartyState> {
       _guestReady = false;
       _guestReadySession = null;
       _lastPublishedAt = null;
+      _playbackAttachedRole = snapshot.role;
+      final sample = _lastSample;
+      // Promotion must take over the existing player, not treat it as a new
+      // solo-room startup. A running party may continue after its last guest
+      // leaves or is removed. Demotion invalidates any pending host command.
+      _hostGateMediaKey = snapshot.role == WatchPartyRole.host && sample != null
+          ? _watchPartyHostGateMediaKey(sample.media)
+          : null;
+      _hostPlaybackStarted =
+          snapshot.role == WatchPartyRole.host &&
+          sample?.ready == true &&
+          (sample!.playing || snapshot.playing);
+      // Do not autoplay on promotion: a guest seek may still be pending in
+      // the native decoder. Host controls unlock immediately, but no new
+      // play/pause command may overlap that previous guest command.
+      _hostStartPending = false;
       _recordDiagnostics('Watch Party role changed', {
         'event': 'role_changed',
         'role': snapshot.role.name,
@@ -860,6 +906,7 @@ class WatchPartyController extends StateNotifier<WatchPartyState> {
       });
     }
     _ingestMembershipEvents(snapshot);
+    if (snapshot.role == WatchPartyRole.host) _syncHostStartGate();
 
     if (snapshot.role == WatchPartyRole.guest) {
       final port = _playbackPort;
@@ -960,6 +1007,7 @@ class WatchPartyController extends StateNotifier<WatchPartyState> {
           timelineMismatch: false,
           timelineCompatibility: WatchPartyTimelineCompatibility.exact,
         );
+        _syncHostStartGate();
         if (publishingNewMedia) {
           _recordDiagnostics('Watch Party host media published', {
             'event': 'host_media_published',
@@ -977,7 +1025,9 @@ class WatchPartyController extends StateNotifier<WatchPartyState> {
     } on WatchPartyClientException catch (error) {
       _recordDiagnostics('Watch Party host media publish failed', {
         'event': 'host_media_publish_failed',
-        'error_code': error.code,
+        'operation': 'host_media_publish',
+        'status': 'failed',
+        ...error.diagnosticDetails,
         'new_media': publishingNewMedia,
       });
       if (error.code == 'stale_revision' || error.code == 'host_required') {
@@ -1022,6 +1072,94 @@ class WatchPartyController extends StateNotifier<WatchPartyState> {
     }
   }
 
+  /// A room being joined is not enough: each connected guest must finish
+  /// opening the current media before the host starts its clock. This also
+  /// pauses an already-running host when another guest joins mid-session.
+  void _syncHostStartGate({bool allowStart = true}) {
+    final port = _playbackPort;
+    final sample = _lastSample;
+    if (_disposed ||
+        !state.isHost ||
+        _playbackAttachedRole != WatchPartyRole.host ||
+        _guestReconciliationInFlight ||
+        port == null ||
+        sample == null) {
+      return;
+    }
+    final mediaKey = _watchPartyHostGateMediaKey(sample.media);
+    if (mediaKey != _hostGateMediaKey) {
+      _hostGateMediaKey = mediaKey;
+      _hostStartPending = true;
+      _hostPlaybackStarted = false;
+    }
+    final snapshot = state.snapshot;
+    final everyoneReady =
+        state.connection == WatchPartyConnection.connected &&
+        snapshot?.media != null &&
+        _watchPartyHostGateMediaKey(snapshot!.media!) == mediaKey &&
+        (watchPartyAllGuestsReady(
+              participantCount: snapshot.participantCount,
+              readyCount: snapshot.readyCount,
+            ) ||
+            (_hostPlaybackStarted && snapshot.participantCount == 0));
+    if (!everyoneReady) {
+      if (sample.playing) {
+        _hostStartPending = true;
+        _runHostGateCommand(port: port, mediaKey: mediaKey, play: false);
+      }
+      return;
+    }
+    if (allowStart && sample.ready && _hostStartPending) {
+      _runHostGateCommand(port: port, mediaKey: mediaKey, play: true);
+    }
+  }
+
+  void _runHostGateCommand({
+    required WatchPartyPlaybackPort port,
+    required String mediaKey,
+    required bool play,
+  }) {
+    if (_hostGateCommandInFlight) return;
+    final controllerGeneration = _generation;
+    final attachmentGeneration = _playbackAttachmentGeneration;
+    final session = state.session;
+    _hostGateCommandInFlight = true;
+    unawaited(() async {
+      try {
+        if (play) {
+          await port.play();
+          if (!_disposed &&
+              state.isHost &&
+              state.session == session &&
+              controllerGeneration == _generation &&
+              attachmentGeneration == _playbackAttachmentGeneration &&
+              identical(_playbackPort, port) &&
+              _hostGateMediaKey == mediaKey) {
+            _hostStartPending = false;
+            _hostPlaybackStarted = true;
+          }
+        } else {
+          await port.pause();
+        }
+        _recordDiagnostics('Watch Party host start gate', {
+          'event': play ? 'all_guests_ready_start' : 'waiting_for_guests_pause',
+          'state': <Map<String, Object>>[
+            {
+              'kind': 'connected_viewers',
+              'count': state.snapshot?.participantCount ?? 0,
+            },
+            {'kind': 'ready_viewers', 'count': state.snapshot?.readyCount ?? 0},
+          ],
+        });
+      } catch (_) {
+        // A player handoff may replace this port while the command is in
+        // flight. The next player sample or room poll retries safely.
+      } finally {
+        _hostGateCommandInFlight = false;
+      }
+    }());
+  }
+
   Future<void> _applyGuestSnapshot(WatchPartySnapshot snapshot) async {
     final pending = _pendingGuestSnapshot;
     if (pending == null || snapshot.revision >= pending.revision) {
@@ -1051,6 +1189,7 @@ class WatchPartyController extends StateNotifier<WatchPartyState> {
     final sample = _lastSample;
     final remoteMedia = snapshot.media;
     if (port == null ||
+        _hostGateCommandInFlight ||
         sample == null ||
         remoteMedia == null ||
         !_guestCommandContextIsCurrent(
@@ -1493,6 +1632,11 @@ class WatchPartyController extends StateNotifier<WatchPartyState> {
           state = state.copyWith(snapshot: snapshot);
         }
       } on WatchPartyClientException catch (error) {
+        _recordDiagnostics('Watch Party readiness update failed', {
+          'operation': 'guest_ready',
+          'status': 'failed',
+          ...error.diagnosticDetails,
+        });
         if (!_disposed && state.session == session) {
           state = state.copyWith(message: watchPartyFriendlyError(error));
         }
@@ -1513,6 +1657,9 @@ class WatchPartyController extends StateNotifier<WatchPartyState> {
     _guestReady = false;
     _guestReadySession = null;
     _lastPublishedAt = null;
+    _hostGateMediaKey = null;
+    _hostStartPending = false;
+    _hostPlaybackStarted = false;
     _resetGuestReconciliation();
     _resetGuestSourceAcceptance();
     _clearMembershipNotices();
@@ -1524,6 +1671,12 @@ class WatchPartyController extends StateNotifier<WatchPartyState> {
     if (session == null) return;
     try {
       await _client.leave(session);
+    } on WatchPartyClientException catch (error) {
+      _recordDiagnostics('Watch Party leave request failed', {
+        'operation': 'room_leave',
+        'status': 'failed',
+        ...error.diagnosticDetails,
+      });
     } catch (_) {
       // Local exit must not depend on room-service reachability.
     }
@@ -1552,6 +1705,7 @@ class WatchPartyController extends StateNotifier<WatchPartyState> {
     _playbackSubscription = null;
     _playbackPort = null;
     _pendingPlaybackPort = null;
+    _playbackAttachedRole = null;
     unawaited(subscription?.cancel());
     if (shouldClearGuestReady) {
       unawaited(
@@ -1575,6 +1729,17 @@ int watchPartyViewerCount(WatchPartyState state) => state.session == null
         1,
         maximumWatchPartyRosterSize,
       );
+
+/// An empty room or a guest still resolving is not ready to start playback.
+bool watchPartyAllGuestsReady({
+  required int participantCount,
+  required int readyCount,
+}) => participantCount > 0 && readyCount == participantCount;
+
+String _watchPartyHostGateMediaKey(WatchPartyMedia media) =>
+    media.kind == 'anilist'
+    ? 'anilist:${media.anilistId}:${media.episode}:${media.format ?? ''}:${media.sourceDescriptor?.sourceKey ?? ''}'
+    : 'private:${media.title}';
 
 String watchPartyAudienceLabel(int count) {
   final safeCount = count < 0 ? 0 : count;
@@ -1644,7 +1809,8 @@ bool _guestSampleMatchesRemoteMedia(
   final sameEpisode =
       local.kind == remote.kind &&
       local.anilistId == remote.anilistId &&
-      local.episode == remote.episode;
+      local.episode == remote.episode &&
+      (remote.format == null || local.format == remote.format);
   if (!sameEpisode) return false;
   final remoteDescriptor = remote.sourceDescriptor;
   if (remoteDescriptor == null) return true;

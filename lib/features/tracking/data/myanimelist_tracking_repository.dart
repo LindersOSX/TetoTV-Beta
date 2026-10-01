@@ -1,7 +1,8 @@
 import 'package:anime_tv/features/tracking/domain/tracking_repository.dart';
 import 'package:dio/dio.dart';
 
-class MyAnimeListTrackingRepository implements TrackingRepository {
+class MyAnimeListTrackingRepository
+    implements TrackingRepository, AutomaticCompletionTrackingRepository {
   MyAnimeListTrackingRepository({required String accessToken, Dio? dio})
     : _dio =
           dio ??
@@ -116,6 +117,48 @@ class MyAnimeListTrackingRepository implements TrackingRepository {
     await _dio.put<void>(
       '/anime/$mediaId/my_list_status',
       data: {'num_watched_episodes': completedEpisodes},
+      options: Options(contentType: Headers.formUrlEncodedContentType),
+    );
+  }
+
+  @override
+  Future<void> updateProgressAndCompletion({
+    required TrackingMediaIds ids,
+    required int completedEpisodes,
+  }) async {
+    final mediaId = ids.malId;
+    if (mediaId == null || mediaId <= 0 || completedEpisodes <= 0) {
+      throw ArgumentError('Automatic MAL progress needs a valid catalog ID.');
+    }
+    final response = await _dio.get<Map<String, dynamic>>(
+      '/anime/$mediaId',
+      queryParameters: const {'fields': 'my_list_status,num_episodes,status'},
+    );
+    final anime = response.data;
+    if (anime == null || anime['id'] != mediaId) {
+      throw const FormatException('MAL completion metadata did not match.');
+    }
+    final existing =
+        (anime['my_list_status']
+                as Map<String, dynamic>?)?['num_episodes_watched']
+            as int? ??
+        0;
+    final values = <String, Object?>{
+      if (completedEpisodes > existing)
+        'num_watched_episodes': completedEpisodes,
+      if (trackingSeriesIsComplete(
+        completedEpisodes: completedEpisodes,
+        totalEpisodes: anime['num_episodes'] is int
+            ? anime['num_episodes'] as int
+            : null,
+        finishedAiring: anime['status'] == 'finished_airing',
+      ))
+        'status': 'completed',
+    };
+    if (values.isEmpty) return;
+    await _dio.put<void>(
+      '/anime/$mediaId/my_list_status',
+      data: values,
       options: Options(contentType: Headers.formUrlEncodedContentType),
     );
   }

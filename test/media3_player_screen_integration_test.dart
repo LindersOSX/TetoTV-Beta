@@ -76,8 +76,8 @@ void main() {
     },
   );
 
-  test('alternate surface is captured only for Media3 at session creation', () {
-    expect(source, contains('late final bool _media3SurfaceViewEnabled;'));
+  test('Media3 surface preference has a device compatibility override', () {
+    expect(source, contains('late bool _media3SurfaceViewEnabled;'));
     expect(
       RegExp(
         r'_media3SurfaceViewEnabled\s*=\s*_usesMedia3 &&\s*ref.read\(settingsPreferencesProvider\).media3SurfaceViewEnabled',
@@ -85,6 +85,30 @@ void main() {
       isTrue,
     );
     expect(source, contains('useSurfaceView: _media3SurfaceViewEnabled'));
+    expect(
+      media3SurfaceViewForDevice(
+        requested: true,
+        manufacturer: 'Amazon',
+        model: 'AFTKRT',
+      ),
+      isFalse,
+    );
+    expect(
+      media3SurfaceViewForDevice(
+        requested: true,
+        manufacturer: 'Amazon',
+        model: 'AFTMM',
+      ),
+      isTrue,
+    );
+    expect(
+      media3SurfaceViewForDevice(
+        requested: false,
+        manufacturer: 'Amazon',
+        model: 'AFTKRT',
+      ),
+      isFalse,
+    );
     final surface = File(
       'lib/features/player/presentation/media3_video_surface.dart',
     ).readAsStringSync();
@@ -109,7 +133,9 @@ void main() {
     expect(capture, contains("_player.screenshot(format: 'image/jpeg')"));
     expect(
       source,
-      contains('if (_seekPreview case final preview? when !_usesMedia3)'),
+      matches(
+        r'if \(_seekPreview case final preview\?\s*when !_usesMedia3 && !_playbackErrorVisible\)',
+      ),
     );
     expect(
       RegExp(

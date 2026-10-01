@@ -199,6 +199,9 @@ const _counterFields = <String>{
   'decoderDroppedFrames',
   'mistimedFrames',
   'delayedFrames',
+  'audioUnderruns',
+  'audioSinkErrors',
+  'videoCodecErrors',
 };
 const _booleanFields = <String>{
   'playing',
@@ -210,6 +213,9 @@ const _booleanFields = <String>{
   'pausedForCache',
   'externalAudioFallback',
   'videoParametersAvailable',
+  'dolbyVision',
+  'hdrStaticMetadata',
+  'codecQueueingCompatibility',
 };
 const _eventDurationFields = <String>{
   'videoParametersAfterMs',
@@ -223,6 +229,10 @@ const _eventCountFields = <String>{
   'userSeekCount',
 };
 const _latestSummaryFields = <String>{
+  'surfaceType',
+  'codecQueueingMode',
+  'codecQueueingCompatibility',
+  'androidSdk',
   'codec',
   'audioCodec',
   'activeHwdec',
@@ -230,18 +240,30 @@ const _latestSummaryFields = <String>{
   'width',
   'height',
   'bitDepth',
+  'colorSpace',
+  'colorRange',
+  'colorTransfer',
+  'audioSampleRate',
+  'audioChannelCount',
   'pixelFormat',
   'sourceFps',
   'displayFps',
   'estimatedDisplayFps',
   'androidDisplayFps',
   'videoParametersAvailable',
+  'dolbyVision',
+  'hdrStaticMetadata',
   'externalAudioFallback',
   'openState',
+  ..._counterFields,
   ..._eventDurationFields,
   ..._eventCountFields,
 };
 const _metricFields = <String>{
+  'surfaceType',
+  'codecQueueingMode',
+  'codecQueueingCompatibility',
+  'androidSdk',
   'codec',
   'audioCodec',
   'activeHwdec',
@@ -249,6 +271,11 @@ const _metricFields = <String>{
   'width',
   'height',
   'bitDepth',
+  'colorSpace',
+  'colorRange',
+  'colorTransfer',
+  'audioSampleRate',
+  'audioChannelCount',
   'pixelFormat',
   'sourceFps',
   'displayFps',
@@ -265,6 +292,8 @@ const _metricFields = <String>{
   'pausedForCache',
   'externalAudioFallback',
   'videoParametersAvailable',
+  'dolbyVision',
+  'hdrStaticMetadata',
   ..._eventDurationFields,
   ..._eventCountFields,
 };
@@ -336,6 +365,16 @@ const _hwdecValues = <String>{
   'drm-copy',
 };
 const _decoderNames = <String>{
+  // Exact reviewed platform codec identifiers, not provider-controlled names
+  // or a general OMX/c2 pattern. Unknown names stay absent for privacy.
+  'omx.mtk.video.decoder.hevc',
+  'omx.mtk.video.decoder.hevc.secure',
+  'c2.android.hevc.decoder',
+  'omx.google.hevc.decoder',
+  'omx.mtk.video.decoder.avc',
+  'omx.mtk.video.decoder.avc.secure',
+  'c2.android.avc.decoder',
+  'omx.google.h264.decoder',
   ..._videoCodecs,
   'libdav1d',
   'libaom-av1',
@@ -447,9 +486,15 @@ Map<String, Object?> _sanitizeSample(Object? raw) {
     if (value != null) safe[field] = value;
   }
   for (final entry in const {
+    'androidSdk': 100,
     'width': 32768,
     'height': 32768,
     'bitDepth': 64,
+    'colorSpace': 30,
+    'colorRange': 30,
+    'colorTransfer': 30,
+    'audioSampleRate': 384000,
+    'audioChannelCount': 32,
   }.entries) {
     final value = _integer(raw[entry.key], minimum: 1, maximum: entry.value);
     if (value != null) safe[entry.key] = value;
@@ -480,6 +525,8 @@ Map<String, Object?> _sanitizeSample(Object? raw) {
     'audioCodec': _audioCodecs,
     'activeHwdec': _hwdecValues,
     'decoderName': _decoderNames,
+    'surfaceType': {'surface', 'texture', 'detached'},
+    'codecQueueingMode': {'synchronous', 'asynchronous'},
     'pixelFormat': _pixelFormats,
     'probeStatus': {'supported', 'partial', 'unavailable', 'timeout'},
     'openState': {'opening', 'opened', 'failed'},

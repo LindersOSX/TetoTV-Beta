@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/features/discord/application/discord_presence_controller.dart';
 import 'package:anime_tv/features/discord/domain/discord_minimum_age_confirmation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -676,18 +677,542 @@ void main() {
 
     expect(platform.connectCalls, 1);
   });
+
+  test('mobile connection timeout preserves the approved account', () async {
+    final platform = _FakeDiscordPlatform()
+      ..connectCompleter = Completer<void>();
+    final controller = DiscordPresenceController(
+      storage,
+      platform,
+      deviceConnectionTimeout: const Duration(milliseconds: 40),
+    );
+    addTearDown(controller.dispose);
+    await _settle();
+
+    await controller.linkAccount(confirmation);
+
+    expect(controller.state.linked, isTrue);
+    expect(controller.state.enabled, isTrue);
+    expect(controller.state.busy, isFalse);
+    expect(controller.state.connectionStatus, 'disconnected');
+    expect(controller.state.error, contains('Use Retry'));
+    expect(platform.disconnectCalls, 1);
+    expect(platform.cancelAuthenticationCalls, 0);
+    expect(platform.revokeCalls, 0);
+    expect(
+      await storage.read(key: 'discord_rich_presence_access_token'),
+      platform.token.accessToken,
+    );
+  });
+
+  test('startup connection times out and allows a fresh retry', () async {
+    final platform = _FakeDiscordPlatform()
+      ..connectCompleter = Completer<void>();
+    _seedLinkedToken(platform.token);
+    final controller = DiscordPresenceController(
+      storage,
+      platform,
+      deviceConnectionTimeout: const Duration(milliseconds: 40),
+    );
+    addTearDown(controller.dispose);
+    await _settle();
+    expect(controller.state.busy, isTrue);
+
+    await Future<void>.delayed(const Duration(milliseconds: 60));
+
+    expect(controller.state.linked, isTrue);
+    expect(controller.state.enabled, isTrue);
+    expect(controller.state.busy, isFalse);
+    expect(controller.state.connectionStatus, 'disconnected');
+    expect(controller.state.error, contains('timed out'));
+    expect(platform.disconnectCalls, 1);
+    await controller.retry();
+    expect(platform.connectCalls, 2);
+    expect(controller.state.connected, isTrue);
+    expect(platform.authenticateCalls, 0);
+    expect(platform.revokeCalls, 0);
+  });
+
+  test(
+    'retry claims busy before storage and serializes token events',
+    () async {
+      final platform = _FakeDiscordPlatform();
+      final controller = DiscordPresenceController(storage, platform);
+      addTearDown(controller.dispose);
+      await _settle();
+      await controller.linkAccount(confirmation);
+      final connection = Completer<void>();
+      platform.connectCompleter = connection;
+
+      final first = controller.retry();
+      final second = controller.retry();
+      platform.emit(const DiscordBridgeEvent('discordTokenExpiring', {}));
+      await _settle();
+
+      expect(controller.state.busy, isTrue);
+      expect(platform.refreshCalls, 1);
+      expect(platform.connectCalls, 2);
+      connection.complete();
+      await Future.wait([first, second]);
+      expect(controller.state.busy, isFalse);
+      expect(controller.state.connected, isTrue);
+    },
+  );
+
+  test(
+    'stale native busy latch is reset once without replacing the link',
+    () async {
+      final platform = _FakeDiscordPlatform()..connectBusyFailuresRemaining = 1;
+      final controller = DiscordPresenceController(storage, platform);
+      addTearDown(controller.dispose);
+      await _settle();
+
+      await controller.acceptLinkedToken(platform.deviceToken, confirmation);
+
+      expect(platform.connectCalls, 2);
+      expect(platform.disconnectCalls, 1);
+      expect(platform.authenticateCalls, 0);
+      expect(platform.refreshCalls, 0);
+      expect(platform.revokeCalls, 0);
+      expect(
+        platform.lastConnected?.accessToken,
+        platform.deviceToken.accessToken,
+      );
+      expect(controller.state.connected, isTrue);
+      expect(controller.state.error, isNull);
+      expect(
+        await storage.read(key: 'discord_rich_presence_access_token'),
+        platform.deviceToken.accessToken,
+      );
+    },
+  );
+
+  test('native busy recovery is bounded to one reset per request', () async {
+    final platform = _FakeDiscordPlatform()..connectBusyFailuresRemaining = 3;
+    final controller = DiscordPresenceController(storage, platform);
+    addTearDown(controller.dispose);
+    await _settle();
+
+    await controller.acceptLinkedToken(platform.deviceToken, confirmation);
+
+    expect(platform.connectCalls, 2);
+    expect(platform.disconnectCalls, 1);
+    expect(controller.state.linked, isTrue);
+    expect(controller.state.busy, isFalse);
+    expect(controller.state.connectionStatus, 'disconnected');
+    expect(controller.state.error, contains('already connecting'));
+  });
+
+  test(
+    'late connection completion and ready event cannot undo timeout',
+    () async {
+      final lateConnection = Completer<void>();
+      final platform = _FakeDiscordPlatform()
+        ..connectCompleter = lateConnection
+        ..disconnectCancelsConnection = false;
+      final controller = DiscordPresenceController(
+        storage,
+        platform,
+        deviceConnectionTimeout: const Duration(milliseconds: 40),
+      );
+      addTearDown(controller.dispose);
+      await _settle();
+      await controller.acceptLinkedToken(platform.deviceToken, confirmation);
+
+      lateConnection.complete();
+      platform.emit(
+        const DiscordBridgeEvent('discordConnectionState', {'status': 'ready'}),
+      );
+      await _settle();
+
+      expect(controller.state.connectionStatus, 'disconnected');
+      expect(controller.state.busy, isFalse);
+      expect(controller.state.error, contains('timed out'));
+      await controller.retry();
+      expect(controller.state.connected, isTrue);
+    },
+  );
+
+  test(
+    'import connection timeout remains retryable with saved credentials',
+    () async {
+      final platform = _FakeDiscordPlatform();
+      final controller = DiscordPresenceController(
+        storage,
+        platform,
+        deviceConnectionTimeout: const Duration(milliseconds: 40),
+      );
+      addTearDown(controller.dispose);
+      await _settle();
+      await controller.importLinkedToken(
+        platform.deviceToken,
+        confirmation,
+        connectAfterStore: false,
+      );
+      platform.connectCompleter = Completer<void>();
+
+      await controller.connectImportedToken();
+
+      expect(controller.state.linked, isTrue);
+      expect(controller.state.enabled, isTrue);
+      expect(controller.state.connectionStatus, 'disconnected');
+      expect(controller.state.error, contains('timed out'));
+      expect(platform.disconnectCalls, 1);
+      expect(platform.revokeCalls, 0);
+      expect(
+        await storage.read(key: 'discord_rich_presence_access_token'),
+        platform.deviceToken.accessToken,
+      );
+    },
+  );
+
+  test(
+    'import connect blocks snapshots and duplicate settings operations',
+    () async {
+      final platform = _FakeDiscordPlatform();
+      final controller = DiscordPresenceController(storage, platform);
+      addTearDown(controller.dispose);
+      await _settle();
+      await controller.importLinkedToken(
+        platform.deviceToken,
+        confirmation,
+        connectAfterStore: false,
+      );
+      final connection = Completer<void>();
+      platform.connectCompleter = connection;
+
+      final importing = controller.connectImportedToken();
+      await _settle();
+      expect(controller.state.busy, isTrue);
+      await expectLater(
+        controller.snapshotForImport(),
+        throwsA(isA<StateError>()),
+      );
+      await controller.retry();
+      await controller.setEnabled(false);
+      expect(platform.refreshCalls, 0);
+      expect(platform.disconnectCalls, 0);
+      expect(platform.connectCalls, 1);
+
+      connection.complete();
+      await importing;
+      expect(controller.state.busy, isFalse);
+      expect(controller.state.connected, isTrue);
+    },
+  );
+
+  test(
+    'startup refresh timeout preserves credentials and allows explicit retry',
+    () async {
+      final original = DiscordTokenBundle(
+        accessToken: 'original-access',
+        refreshToken: 'original-refresh',
+        tokenType: 1,
+        expiresAt: DateTime.now().subtract(const Duration(minutes: 1)),
+        scopes: 'openid sdk.social_layer_presence',
+      );
+      _seedLinkedToken(original);
+      final platform = _FakeDiscordPlatform()
+        ..refreshCompleter = Completer<DiscordTokenBundle>();
+      final controller = DiscordPresenceController(
+        storage,
+        platform,
+        refreshTimeout: const Duration(milliseconds: 40),
+      );
+      addTearDown(controller.dispose);
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+
+      expect(controller.state.busy, isFalse);
+      expect(controller.state.linked, isTrue);
+      expect(controller.state.enabled, isTrue);
+      expect(controller.state.error, contains('refresh timed out'));
+      expect(controller.state.error, contains('Retry'));
+      expect(platform.cancelRefreshCalls, 1);
+      expect(platform.connectCalls, 0);
+      expect(platform.disconnectCalls, 0);
+      expect(platform.revokeCalls, 0);
+      expect(
+        await storage.read(key: 'discord_rich_presence_access_token'),
+        original.accessToken,
+      );
+      expect(
+        await storage.read(key: 'discord_rich_presence_refresh_token'),
+        original.refreshToken,
+      );
+
+      await controller.retry();
+      expect(platform.refreshCalls, 2);
+      expect(platform.connectCalls, 1);
+      expect(platform.authenticateCalls, 0);
+      expect(controller.state.connected, isTrue);
+    },
+  );
+
+  test(
+    'late timed-out refresh cannot store or settle a replacement refresh',
+    () async {
+      final platform = _FakeDiscordPlatform()
+        ..cancelRefreshCompletesRequest = false;
+      final controller = DiscordPresenceController(
+        storage,
+        platform,
+        refreshTimeout: const Duration(milliseconds: 100),
+      );
+      addTearDown(controller.dispose);
+      await _settle();
+      await controller.linkAccount(confirmation);
+      final stale = Completer<DiscordTokenBundle>();
+      platform.refreshCompleter = stale;
+      await controller.retry();
+      expect(controller.state.busy, isFalse);
+      expect(platform.cancelRefreshCalls, 1);
+      expect(
+        await storage.read(key: 'discord_rich_presence_access_token'),
+        'access-token',
+      );
+
+      final replacement = Completer<DiscordTokenBundle>();
+      platform.refreshCompleter = replacement;
+      final retry = controller.retry();
+      await _settle();
+      stale.complete(platform.tokenWithAccess('stale-account-access'));
+      await _settle();
+      expect(controller.state.busy, isTrue);
+      expect(platform.connectCalls, 1);
+      expect(
+        await storage.read(key: 'discord_rich_presence_access_token'),
+        'access-token',
+      );
+
+      replacement.complete(platform.tokenWithAccess('replacement-access'));
+      await retry;
+      expect(controller.state.busy, isFalse);
+      expect(platform.connectCalls, 2);
+      expect(platform.lastConnected?.accessToken, 'replacement-access');
+      expect(
+        await storage.read(key: 'discord_rich_presence_access_token'),
+        'replacement-access',
+      );
+      expect(
+        await storage.read(key: 'discord_rich_presence_refresh_token'),
+        'refresh-replacement-access',
+      );
+    },
+  );
+
+  test(
+    'refresh result cannot overwrite changed saved account credentials',
+    () async {
+      final platform = _FakeDiscordPlatform();
+      final controller = DiscordPresenceController(storage, platform);
+      addTearDown(controller.dispose);
+      await _settle();
+      await controller.linkAccount(confirmation);
+      final refreshing = Completer<DiscordTokenBundle>();
+      platform.refreshCompleter = refreshing;
+      final retry = controller.retry();
+      await _settle();
+
+      final otherAccount = platform.tokenWithAccess('other-account-access');
+      _seedLinkedToken(otherAccount);
+      refreshing.complete(platform.tokenWithAccess('stale-account-access'));
+      await retry;
+
+      expect(controller.state.busy, isFalse);
+      expect(controller.state.error, contains('credentials changed'));
+      expect(platform.connectCalls, 1);
+      expect(
+        await storage.read(key: 'discord_rich_presence_access_token'),
+        otherAccount.accessToken,
+      );
+      expect(
+        await storage.read(key: 'discord_rich_presence_refresh_token'),
+        otherAccount.refreshToken,
+      );
+      expect(platform.revokeCalls, 0);
+    },
+  );
+
+  test(
+    'rollback cancels refresh and rejects its later wrong-generation token',
+    () async {
+      final platform = _FakeDiscordPlatform()
+        ..cancelRefreshCompletesRequest = false;
+      final controller = DiscordPresenceController(
+        storage,
+        platform,
+        refreshTimeout: const Duration(milliseconds: 100),
+      );
+      addTearDown(controller.dispose);
+      await _settle();
+      await controller.linkAccount(confirmation);
+      final snapshot = await controller.snapshotForImport();
+      final refreshing = Completer<DiscordTokenBundle>();
+      platform.refreshCompleter = refreshing;
+      final retry = controller.retry();
+      await _settle();
+
+      await controller.restoreImportSnapshot(snapshot);
+      refreshing.complete(platform.tokenWithAccess('abandoned-account-access'));
+      await retry;
+
+      expect(platform.cancelRefreshCalls, 1);
+      expect(controller.state.connected, isTrue);
+      expect(controller.state.busy, isFalse);
+      expect(controller.state.error, isNull);
+      expect(
+        await storage.read(key: 'discord_rich_presence_access_token'),
+        'access-token',
+      );
+      expect(
+        await storage.read(key: 'discord_rich_presence_refresh_token'),
+        'refresh-token',
+      );
+    },
+  );
+
+  test(
+    'disposing during refresh cancels it without storing a late token',
+    () async {
+      final platform = _FakeDiscordPlatform()
+        ..cancelRefreshCompletesRequest = false;
+      final controller = DiscordPresenceController(storage, platform);
+      await _settle();
+      await controller.linkAccount(confirmation);
+      final refreshing = Completer<DiscordTokenBundle>();
+      platform.refreshCompleter = refreshing;
+      final retry = controller.retry();
+      await _settle();
+
+      controller.dispose();
+      refreshing.complete(platform.tokenWithAccess('disposed-account-access'));
+      await retry;
+
+      expect(platform.cancelRefreshCalls, 1);
+      expect(
+        await storage.read(key: 'discord_rich_presence_access_token'),
+        'access-token',
+      );
+      expect(
+        await storage.read(key: 'discord_rich_presence_refresh_token'),
+        'refresh-token',
+      );
+      expect(platform.revokeCalls, 0);
+    },
+  );
+
+  test(
+    'rollback during refresh storage cannot connect the abandoned token',
+    () async {
+      final pausedStorage = _PausedDiscordStorage();
+      final platform = _FakeDiscordPlatform();
+      final controller = DiscordPresenceController(pausedStorage, platform);
+      addTearDown(controller.dispose);
+      await _settle();
+      await controller.linkAccount(confirmation);
+      final snapshot = await controller.snapshotForImport();
+      final refreshed = Completer<DiscordTokenBundle>();
+      platform.refreshCompleter = refreshed;
+      pausedStorage.pauseNextAccessWrite = true;
+      final retry = controller.retry();
+      await _settle();
+      refreshed.complete(platform.tokenWithAccess('abandoned-storage-access'));
+      await pausedStorage.writeStarted.future;
+
+      final rollback = controller.restoreImportSnapshot(snapshot);
+      pausedStorage.resumeWrite.complete();
+      await Future.wait([retry, rollback]);
+
+      expect(platform.connectCalls, 2);
+      expect(platform.lastConnected?.accessToken, 'access-token');
+      expect(controller.state.connected, isTrue);
+      expect(controller.state.busy, isFalse);
+      expect(controller.state.error, isNull);
+      expect(
+        pausedStorage.values['discord_rich_presence_access_token'],
+        'access-token',
+      );
+      expect(
+        pausedStorage.values['discord_rich_presence_refresh_token'],
+        'refresh-token',
+      );
+    },
+  );
+
+  test(
+    'Android refresh cancellation sends no token or account/socket action',
+    () async {
+      TestWidgetsFlutterBinding.ensureInitialized();
+      const channel = MethodChannel('dev.tetotv/android_tv');
+      final messenger =
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+      var calls = 0;
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        calls++;
+        expect(call.method, 'discordCancelRefreshToken');
+        expect(call.arguments, isNull);
+        return null;
+      });
+      addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+
+      await AndroidDiscordPresencePlatform(
+        AndroidTvBridge.instance,
+      ).cancelRefreshToken();
+
+      expect(calls, 1);
+    },
+  );
+}
+
+class _PausedDiscordStorage extends FailureInjectingSecureStorage {
+  bool pauseNextAccessWrite = false;
+  final writeStarted = Completer<void>();
+  final resumeWrite = Completer<void>();
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) {
+    if (pauseNextAccessWrite &&
+        invocation.memberName == #write &&
+        invocation.namedArguments[#key] ==
+            'discord_rich_presence_access_token') {
+      pauseNextAccessWrite = false;
+      writeStarted.complete();
+      return resumeWrite.future.then<void>((_) async {
+        await (super.noSuchMethod(invocation) as Future<void>);
+      });
+    }
+    return super.noSuchMethod(invocation);
+  }
+}
+
+void _seedLinkedToken(DiscordTokenBundle token) {
+  FlutterSecureStorage.setMockInitialValues({
+    'discord_rich_presence_enabled': 'true',
+    'discord_rich_presence_access_token': token.accessToken,
+    'discord_rich_presence_refresh_token': token.refreshToken,
+    'discord_rich_presence_token_type': token.tokenType.toString(),
+    'discord_rich_presence_expires_at': token.expiresAt.millisecondsSinceEpoch
+        .toString(),
+    'discord_rich_presence_scopes': token.scopes,
+  });
 }
 
 Future<void> _settle() async {
   await Future<void>.delayed(const Duration(milliseconds: 20));
 }
 
-class _FakeDiscordPlatform implements DiscordPresencePlatform {
+class _FakeDiscordPlatform
+    implements DiscordPresencePlatform, DiscordRefreshCancellationPlatform {
   final _events = StreamController<DiscordBridgeEvent>.broadcast();
   Completer<DiscordTokenBundle>? authenticationCompleter;
   Object? authenticationError;
+  Completer<DiscordTokenBundle>? refreshCompleter;
+  bool cancelRefreshCompletesRequest = true;
+  int cancelRefreshCalls = 0;
   Completer<void>? connectCompleter;
   int connectFailuresRemaining = 0;
+  int connectBusyFailuresRemaining = 0;
+  bool disconnectCancelsConnection = true;
   int authenticateCalls = 0;
   int cancelAuthenticationCalls = 0;
   int refreshCalls = 0;
@@ -732,6 +1257,8 @@ class _FakeDiscordPlatform implements DiscordPresencePlatform {
   @override
   Stream<DiscordBridgeEvent> get events => _events.stream;
 
+  void emit(DiscordBridgeEvent event) => _events.add(event);
+
   @override
   Future<Map<Object?, Object?>> sdkInfo() async => {
     'available': available,
@@ -757,13 +1284,35 @@ class _FakeDiscordPlatform implements DiscordPresencePlatform {
   @override
   Future<DiscordTokenBundle> refreshToken(String refreshToken) async {
     refreshCalls++;
+    if (refreshCompleter case final completer?) return completer.future;
     return token;
+  }
+
+  @override
+  Future<void> cancelRefreshToken() async {
+    cancelRefreshCalls++;
+    final pending = refreshCompleter;
+    refreshCompleter = null;
+    if (cancelRefreshCompletesRequest &&
+        pending != null &&
+        !pending.isCompleted) {
+      pending.completeError(
+        PlatformException(code: 'DISCORD_REFRESH_CANCELED'),
+      );
+    }
   }
 
   @override
   Future<void> connect(DiscordTokenBundle token) async {
     connectCalls++;
     lastConnected = token;
+    if (connectBusyFailuresRemaining > 0) {
+      connectBusyFailuresRemaining--;
+      throw PlatformException(
+        code: 'DISCORD_CONNECT_BUSY',
+        message: 'Discord is already connecting.',
+      );
+    }
     if (connectFailuresRemaining > 0) {
       connectFailuresRemaining--;
       throw StateError('connection failed');
@@ -782,7 +1331,9 @@ class _FakeDiscordPlatform implements DiscordPresencePlatform {
     disconnectCalls++;
     final pendingConnection = connectCompleter;
     connectCompleter = null;
-    if (pendingConnection != null && !pendingConnection.isCompleted) {
+    if (disconnectCancelsConnection &&
+        pendingConnection != null &&
+        !pendingConnection.isCompleted) {
       pendingConnection.completeError(StateError('connection canceled'));
     }
   }

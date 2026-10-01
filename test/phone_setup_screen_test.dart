@@ -1,4 +1,6 @@
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/widgets/teto_back_button.dart';
+import 'package:anime_tv/core/widgets/teto_apply_button.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/core/widgets/copyable_code_interaction.dart';
 import 'package:anime_tv/features/discord/application/discord_presence_controller.dart';
@@ -93,7 +95,9 @@ void main() {
     expect(statusRect.left, greaterThan(connectRect.right));
     expect(
       tester
-          .widget<IconButton>(find.byKey(const ValueKey('phone-setup-back')))
+          .widget<TetoBackButton>(
+            find.byKey(const ValueKey('phone-setup-back')),
+          )
           .autofocus,
       isTrue,
     );
@@ -211,7 +215,7 @@ void main() {
         'Set up on this device instead',
       );
       expect(tester.widget<OutlinedButton>(onDevice).onPressed, isNotNull);
-      final back = tester.widget<IconButton>(
+      final back = tester.widget<TetoBackButton>(
         find.byKey(const ValueKey('phone-setup-back')),
       );
       expect(back.onPressed, isNotNull);
@@ -320,6 +324,13 @@ void main() {
 
       expect(find.text('Review before applying'), findsOneWidget);
       expect(find.byKey(const ValueKey('phone-setup-apply')), findsOneWidget);
+      expect(
+        find.ancestor(
+          of: find.byKey(const ValueKey('phone-setup-apply')),
+          matching: find.byType(TetoApplyButton),
+        ),
+        findsOneWidget,
+      );
       expect(find.text('AniList'), findsOneWidget);
       expect(find.text('Real-Debrid'), findsOneWidget);
       expect(find.text('Discord'), findsOneWidget);

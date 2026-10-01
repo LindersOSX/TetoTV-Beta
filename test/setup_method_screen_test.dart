@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/widgets/teto_back_button.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/features/settings/application/setup_progress_controller.dart';
 import 'package:anime_tv/features/settings/presentation/language_selection_screen.dart';
@@ -37,12 +38,7 @@ void main() {
 
       void expectVisible(String key, String focus) {
         final target = find.byKey(ValueKey(key));
-        // IconButton adds unpainted touch padding around the focused Material.
-        // Verify the complete visible control, while keeping cards' full bounds.
-        final visibleTarget = key == 'setup-method-back'
-            ? find.descendant(of: target, matching: find.byType(Material)).first
-            : target;
-        final rect = tester.getRect(visibleTarget);
+        final rect = tester.getRect(target);
         expect(FocusManager.instance.primaryFocus?.debugLabel, focus);
         expect(
           rect.top,
@@ -106,7 +102,7 @@ void main() {
       await tester.pumpAndSettle();
 
       final back = find.byKey(const ValueKey('setup-method-back'));
-      final button = tester.widget<IconButton>(back);
+      final button = tester.widget<TetoBackButton>(back);
       expect(button.tooltip, 'Back');
       expect(button.focusNode?.debugLabel, 'setup-method.back');
       expect(button.onPressed, isNotNull);

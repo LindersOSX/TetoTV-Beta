@@ -53,6 +53,7 @@ class TorBoxTorrent {
     required this.downloadFinished,
     required this.cached,
     required this.files,
+    this.hash,
   });
 
   final int id;
@@ -62,6 +63,7 @@ class TorBoxTorrent {
   final bool downloadFinished;
   final bool cached;
   final List<TorBoxFile> files;
+  final String? hash;
 
   bool get isReady => (downloadFinished || cached) && files.isNotEmpty;
 
@@ -83,6 +85,9 @@ class TorBoxTorrent {
     final rawProgress = _asDouble(json['progress']);
     return TorBoxTorrent(
       id: _asInt(json['id']),
+      hash: json['hash'] is String
+          ? (json['hash'] as String).toLowerCase()
+          : null,
       name: json['name'] as String? ?? 'TorBox torrent',
       downloadState: json['download_state'] as String? ?? 'processing',
       progress: (rawProgress > 1 ? rawProgress / 100 : rawProgress).clamp(0, 1),

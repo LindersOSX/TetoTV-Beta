@@ -1,6 +1,25 @@
 /// Settings and onboarding UI translations. Storage IDs are never translated.
 const settingsTranslations = <String, Map<String, String>>{
   'es': {
+    "Appearance & language": "Aspecto e idioma",
+    "Playback & captions": "Reproducción y subtítulos",
+    "Sources & library": "Fuentes y biblioteca",
+    "Accounts & activity": "Cuentas y actividad",
+    "App & support": "Aplicación y ayuda",
+    "Language & titles": "Idioma y títulos",
+    "Experimental options": "Opciones experimentales",
+    "Colors, screen layout, and home navigation.":
+        "Colores, diseño de pantalla y navegación de inicio.",
+    "Choose the app language and how show names appear.":
+        "Elige el idioma de la app y cómo aparecen los nombres de las series.",
+    "Keyboard, navigation sounds, and click feedback.":
+        "Teclado, sonidos de navegación y respuesta al pulsar.",
+    "Review device health and control optional anonymous reporting.":
+        "Consulta el estado del dispositivo y controla los informes anónimos opcionales.",
+    "Optional unfinished features and advanced build tools.":
+        "Funciones opcionales sin terminar y herramientas avanzadas de versiones.",
+    "Run setup again or calibrate this device.":
+        "Repite la configuración o calibra este dispositivo.",
     "Current {version}{latest}": "Actual {version}{latest}",
     "Anonymous crash reports start enabled on new installs and are optional. Existing installs keep their current choice. You can turn them off here or anytime in Settings. Reports contain only the app/build, error type and time, Android version, CPU architecture, device class, and a redacted technical trace. They never include a show, episode, account, device ID, source, or URL.":
         "Los informes anónimos de fallos comienzan activados en instalaciones nuevas y son opcionales. Las instalaciones existentes conservan su elección actual. Puedes desactivarlos aquí o en cualquier momento en Ajustes. Los informes contienen solo la app/build, el tipo y la hora del error, la versión de Android, la arquitectura de CPU, la clase de dispositivo y una traza técnica censurada. Nunca incluyen una serie, episodio, cuenta, ID de dispositivo, fuente o URL.",
@@ -39,6 +58,14 @@ const settingsTranslations = <String, Map<String, String>>{
     "Full redacted report copied.": "Informe completo censurado copiado.",
     "Send diagnostic report?": "¿Enviar informe de diagnóstico?",
     "Send report": "Enviar informe",
+    "Send to support": "Enviar a soporte",
+    "Sending… Cancel": "Enviando… Cancelar",
+    "Sending was cancelled. Support may have received the report, but delivery was not confirmed.":
+        "Se canceló el envío. Es posible que soporte haya recibido el informe, pero no se confirmó la entrega.",
+    "Sending took too long, so TetoTV stopped waiting. Support may have received the report, but no confirmation arrived. You can try again.":
+        "El envío tardó demasiado y TetoTV dejó de esperar. Es posible que soporte haya recibido el informe, pero no llegó una confirmación. Puedes intentarlo de nuevo.",
+    "Could not confirm that support received this report. Check the connection and try again.":
+        "No se pudo confirmar que soporte haya recibido el informe. Comprueba la conexión e inténtalo de nuevo.",
     "The diagnostic report could not be sent. Try again shortly.":
         "No se pudo enviar el informe de diagnóstico. Inténtalo en breve.",
     "Support report": "Informe de soporte",
@@ -579,12 +606,42 @@ const settingsTranslations = <String, Map<String, String>>{
     "Settings": "Ajustes",
     "Theme & display": "Tema y pantalla",
     "Theme Studio": "Estudio de temas",
+    "Display Studio": "Estudio de pantalla",
+    "Preview size, layout, cards, and navigation before applying.":
+        "Previsualiza el tamaño, el diseño, las tarjetas y la navegación antes de aplicar los cambios.",
+    "Display settings could not be applied.":
+        "No se pudieron aplicar los ajustes de pantalla.",
+    "Size": "Tamaño",
+    "Layout & cards": "Diseño y tarjetas",
+    "Settings placement": "Ubicación de Ajustes",
+    "Use the arrows to move menu items.":
+        "Usa las flechas para mover los elementos del menú.",
+    "Choose which buttons are shown and use the arrows to move them. Settings always remains in the profile menu.":
+        "Elige qué botones se muestran y usa las flechas para moverlos. Ajustes siempre está disponible en el menú de perfil.",
+    "Move up": "Subir",
+    "Move down": "Bajar",
+    "TV": "TV",
+    "Phone": "Teléfono",
+    "Customize": "Personalizar",
+    "Preview and fine-tune interface and thumbnail size.":
+        "Previsualiza y ajusta con precisión la interfaz y las miniaturas.",
+    "Fine-tune your display": "Ajusta tu pantalla con precisión",
+    "Move a slider to preview the size. Apply when it feels right.":
+        "Mueve un control para previsualizar el tamaño. Aplica los cambios cuando te convenza.",
+    "Live preview": "Vista previa en directo",
+    "Display settings applied.": "Ajustes de pantalla aplicados.",
+    "Apply": "Aplicar",
     "Title language": "Idioma de los títulos",
     "Show title style": "Estilo del título",
     "Colors": "Colores",
     "Home screen": "Pantalla de inicio",
     "Featured hero": "Destacado principal",
     "Poster metadata": "Datos del póster",
+    "Show rating and release year on poster covers.":
+        "Mostrar la puntuación y el año en las portadas.",
+    "Choose which shelves appear and their order.":
+        "Elige qué secciones aparecen y en qué orden.",
+    "No shelves selected": "No hay secciones seleccionadas",
     "Continue watching": "Seguir viendo",
     "Display options": "Opciones de pantalla",
     "Interface scale": "Escala de la interfaz",
@@ -601,6 +658,31 @@ const settingsTranslations = <String, Map<String, String>>{
     "Navigation sounds": "Sonidos de navegación",
     "Click sounds": "Sonidos al pulsar",
     "Closed captions": "Subtítulos",
+    "Caption Studio": "Estudio de subtítulos",
+    "Default captions": "Subtítulos predeterminados",
+    "Caption background": "Fondo de subtítulos",
+    "Preview caption language, colors, and size before applying.":
+        "Previsualiza el idioma, los colores y el tamaño antes de aplicar.",
+    "Caption settings applied.": "Ajustes de subtítulos aplicados.",
+    "Caption settings could not be applied.":
+        "No se pudieron aplicar los ajustes de subtítulos.",
+    "Sample scene": "Escena de ejemplo",
+    "This is how your captions will look.": "Así se verán tus subtítulos.",
+    "White": "Blanco",
+    "Warm white": "Blanco cálido",
+    "Yellow": "Amarillo",
+    "Gold": "Dorado",
+    "Cyan": "Cian",
+    "Sky blue": "Azul cielo",
+    "Lime": "Verde lima",
+    "Pink": "Rosa",
+    "Dark": "Oscuro",
+    "Strong": "Intenso",
+    "Black": "Negro",
+    "Navy": "Azul marino",
+    "Plum": "Ciruela",
+    "Forest": "Verde bosque",
+    "Burgundy": "Burdeos",
     "Player controls": "Controles del reproductor",
     "Debrid streaming": "Streaming debrid",
     "Sources & stream order": "Fuentes y orden de streams",
@@ -736,6 +818,25 @@ const settingsTranslations = <String, Map<String, String>>{
     "Ko-fi donation link copied.": "Enlace de donación de Ko-fi copiado.",
   },
   'pt': {
+    "Appearance & language": "Aparência e idioma",
+    "Playback & captions": "Reprodução e legendas",
+    "Sources & library": "Fontes e biblioteca",
+    "Accounts & activity": "Contas e atividade",
+    "App & support": "App e suporte",
+    "Language & titles": "Idioma e títulos",
+    "Experimental options": "Opções experimentais",
+    "Colors, screen layout, and home navigation.":
+        "Cores, layout da tela e navegação inicial.",
+    "Choose the app language and how show names appear.":
+        "Escolha o idioma do app e como os nomes das séries aparecem.",
+    "Keyboard, navigation sounds, and click feedback.":
+        "Teclado, sons de navegação e resposta ao toque.",
+    "Review device health and control optional anonymous reporting.":
+        "Verifique o estado do dispositivo e controle os relatórios anônimos opcionais.",
+    "Optional unfinished features and advanced build tools.":
+        "Recursos opcionais inacabados e ferramentas avançadas de versões.",
+    "Run setup again or calibrate this device.":
+        "Refaça a configuração ou calibre este dispositivo.",
     "Current {version}{latest}": "Atual {version}{latest}",
     "Anonymous crash reports start enabled on new installs and are optional. Existing installs keep their current choice. You can turn them off here or anytime in Settings. Reports contain only the app/build, error type and time, Android version, CPU architecture, device class, and a redacted technical trace. They never include a show, episode, account, device ID, source, or URL.":
         "Os relatórios anônimos de falhas começam ativados em instalações novas e são opcionais. Instalações existentes mantêm a escolha atual. Você pode desativá-los aqui ou a qualquer momento em Configurações. Os relatórios contêm apenas app/build, tipo e horário do erro, versão do Android, arquitetura da CPU, classe do dispositivo e um rastreamento técnico anonimizado. Nunca incluem série, episódio, conta, ID do dispositivo, fonte ou URL.",
@@ -773,6 +874,14 @@ const settingsTranslations = <String, Map<String, String>>{
     "Full redacted report copied.": "Relatório completo anonimizado copiado.",
     "Send diagnostic report?": "Enviar relatório de diagnóstico?",
     "Send report": "Enviar relatório",
+    "Send to support": "Enviar ao suporte",
+    "Sending… Cancel": "Enviando… Cancelar",
+    "Sending was cancelled. Support may have received the report, but delivery was not confirmed.":
+        "O envio foi cancelado. O suporte pode ter recebido o relatório, mas a entrega não foi confirmada.",
+    "Sending took too long, so TetoTV stopped waiting. Support may have received the report, but no confirmation arrived. You can try again.":
+        "O envio demorou demais e o TetoTV parou de esperar. O suporte pode ter recebido o relatório, mas nenhuma confirmação chegou. Você pode tentar novamente.",
+    "Could not confirm that support received this report. Check the connection and try again.":
+        "Não foi possível confirmar que o suporte recebeu o relatório. Verifique a conexão e tente novamente.",
     "The diagnostic report could not be sent. Try again shortly.":
         "Não foi possível enviar o relatório de diagnóstico. Tente em instantes.",
     "Support report": "Relatório de suporte",
@@ -1308,12 +1417,42 @@ const settingsTranslations = <String, Map<String, String>>{
     "Settings": "Configurações",
     "Theme & display": "Tema e exibição",
     "Theme Studio": "Estúdio de temas",
+    "Display Studio": "Estúdio de exibição",
+    "Preview size, layout, cards, and navigation before applying.":
+        "Pré-visualize o tamanho, o layout, os cartões e a navegação antes de aplicar.",
+    "Display settings could not be applied.":
+        "Não foi possível aplicar os ajustes de exibição.",
+    "Size": "Tamanho",
+    "Layout & cards": "Layout e cartões",
+    "Settings placement": "Posição das configurações",
+    "Use the arrows to move menu items.":
+        "Use as setas para mover os itens do menu.",
+    "Choose which buttons are shown and use the arrows to move them. Settings always remains in the profile menu.":
+        "Escolha quais botões aparecem e use as setas para movê-los. Configurações permanece no menu de perfil.",
+    "Move up": "Mover para cima",
+    "Move down": "Mover para baixo",
+    "TV": "TV",
+    "Phone": "Celular",
+    "Customize": "Personalizar",
+    "Preview and fine-tune interface and thumbnail size.":
+        "Pré-visualize e ajuste com precisão a interface e as miniaturas.",
+    "Fine-tune your display": "Ajuste sua tela com precisão",
+    "Move a slider to preview the size. Apply when it feels right.":
+        "Mova um controle para pré-visualizar o tamanho. Aplique quando estiver como deseja.",
+    "Live preview": "Pré-visualização ao vivo",
+    "Display settings applied.": "Ajustes de exibição aplicados.",
+    "Apply": "Aplicar",
     "Title language": "Idioma dos títulos",
     "Show title style": "Estilo do título",
     "Colors": "Cores",
     "Home screen": "Tela inicial",
     "Featured hero": "Destaque principal",
     "Poster metadata": "Dados do pôster",
+    "Show rating and release year on poster covers.":
+        "Mostrar a nota e o ano de lançamento nas capas.",
+    "Choose which shelves appear and their order.":
+        "Escolha quais seções aparecem e a ordem delas.",
+    "No shelves selected": "Nenhuma seção selecionada",
     "Continue watching": "Continuar assistindo",
     "Display options": "Opções de exibição",
     "Interface scale": "Escala da interface",
@@ -1330,6 +1469,32 @@ const settingsTranslations = <String, Map<String, String>>{
     "Navigation sounds": "Sons de navegação",
     "Click sounds": "Sons de clique",
     "Closed captions": "Legendas",
+    "Caption Studio": "Estúdio de legendas",
+    "Default captions": "Legendas padrão",
+    "Caption background": "Fundo das legendas",
+    "Preview caption language, colors, and size before applying.":
+        "Pré-visualize idioma, cores e tamanho antes de aplicar.",
+    "Caption settings applied.": "Configurações de legendas aplicadas.",
+    "Caption settings could not be applied.":
+        "Não foi possível aplicar as configurações de legendas.",
+    "Sample scene": "Cena de exemplo",
+    "This is how your captions will look.":
+        "É assim que suas legendas aparecerão.",
+    "White": "Branco",
+    "Warm white": "Branco quente",
+    "Yellow": "Amarelo",
+    "Gold": "Dourado",
+    "Cyan": "Ciano",
+    "Sky blue": "Azul celeste",
+    "Lime": "Verde-lima",
+    "Pink": "Rosa",
+    "Dark": "Escuro",
+    "Strong": "Forte",
+    "Black": "Preto",
+    "Navy": "Azul-marinho",
+    "Plum": "Ameixa",
+    "Forest": "Verde-floresta",
+    "Burgundy": "Bordô",
     "Player controls": "Controles do player",
     "Debrid streaming": "Streaming debrid",
     "Sources & stream order": "Fontes e ordem dos streams",
@@ -1465,6 +1630,25 @@ const settingsTranslations = <String, Map<String, String>>{
     "Ko-fi donation link copied.": "Link de doação do Ko-fi copiado.",
   },
   'fr': {
+    "Appearance & language": "Apparence et langue",
+    "Playback & captions": "Lecture et sous-titres",
+    "Sources & library": "Sources et bibliothèque",
+    "Accounts & activity": "Comptes et activité",
+    "App & support": "Application et assistance",
+    "Language & titles": "Langue et titres",
+    "Experimental options": "Options expérimentales",
+    "Colors, screen layout, and home navigation.":
+        "Couleurs, disposition de l’écran et navigation d’accueil.",
+    "Choose the app language and how show names appear.":
+        "Choisissez la langue de l’application et l’affichage des titres des séries.",
+    "Keyboard, navigation sounds, and click feedback.":
+        "Clavier, sons de navigation et retour sonore des clics.",
+    "Review device health and control optional anonymous reporting.":
+        "Consultez l’état de l’appareil et gérez les rapports anonymes facultatifs.",
+    "Optional unfinished features and advanced build tools.":
+        "Fonctions facultatives inachevées et outils avancés de version.",
+    "Run setup again or calibrate this device.":
+        "Relancez la configuration ou étalonnez cet appareil.",
     "Current {version}{latest}": "Actuelle {version}{latest}",
     "Anonymous crash reports start enabled on new installs and are optional. Existing installs keep their current choice. You can turn them off here or anytime in Settings. Reports contain only the app/build, error type and time, Android version, CPU architecture, device class, and a redacted technical trace. They never include a show, episode, account, device ID, source, or URL.":
         "Les rapports de plantage anonymes sont activés au départ uniquement sur les nouvelles installations et restent facultatifs. Les installations existantes conservent leur choix actuel. Vous pouvez les désactiver ici ou à tout moment dans les paramètres. Les rapports contiennent uniquement l’appli/build, le type et l’heure de l’erreur, la version Android, l’architecture CPU, la catégorie d’appareil et une trace technique expurgée. Ils n’incluent jamais de série, épisode, compte, identifiant d’appareil, source ou URL.",
@@ -1502,6 +1686,14 @@ const settingsTranslations = <String, Map<String, String>>{
     "Full redacted report copied.": "Rapport complet expurgé copié.",
     "Send diagnostic report?": "Envoyer le rapport de diagnostic ?",
     "Send report": "Envoyer le rapport",
+    "Send to support": "Envoyer à l’assistance",
+    "Sending… Cancel": "Envoi… Annuler",
+    "Sending was cancelled. Support may have received the report, but delivery was not confirmed.":
+        "L’envoi a été annulé. L’assistance a peut-être reçu le rapport, mais sa réception n’a pas été confirmée.",
+    "Sending took too long, so TetoTV stopped waiting. Support may have received the report, but no confirmation arrived. You can try again.":
+        "L’envoi a pris trop de temps et TetoTV a cessé d’attendre. L’assistance a peut-être reçu le rapport, mais aucune confirmation n’est arrivée. Vous pouvez réessayer.",
+    "Could not confirm that support received this report. Check the connection and try again.":
+        "Impossible de confirmer que l’assistance a reçu le rapport. Vérifiez la connexion et réessayez.",
     "The diagnostic report could not be sent. Try again shortly.":
         "Le rapport de diagnostic n’a pas pu être envoyé. Réessayez bientôt.",
     "Support report": "Rapport d’assistance",
@@ -2042,12 +2234,42 @@ const settingsTranslations = <String, Map<String, String>>{
     "Settings": "Paramètres",
     "Theme & display": "Thème et affichage",
     "Theme Studio": "Atelier de thèmes",
+    "Display Studio": "Atelier d’affichage",
+    "Preview size, layout, cards, and navigation before applying.":
+        "Prévisualisez la taille, la disposition, les fiches et la navigation avant d’appliquer.",
+    "Display settings could not be applied.":
+        "Impossible d’appliquer les paramètres d’affichage.",
+    "Size": "Taille",
+    "Layout & cards": "Disposition et fiches",
+    "Settings placement": "Emplacement des paramètres",
+    "Use the arrows to move menu items.":
+        "Utilisez les flèches pour déplacer les éléments du menu.",
+    "Choose which buttons are shown and use the arrows to move them. Settings always remains in the profile menu.":
+        "Choisissez les boutons affichés et déplacez-les avec les flèches. Paramètres reste accessible dans le menu du profil.",
+    "Move up": "Monter",
+    "Move down": "Descendre",
+    "TV": "Télévision",
+    "Phone": "Téléphone",
+    "Customize": "Personnaliser",
+    "Preview and fine-tune interface and thumbnail size.":
+        "Prévisualisez et ajustez précisément l’interface et les vignettes.",
+    "Fine-tune your display": "Ajustez votre affichage",
+    "Move a slider to preview the size. Apply when it feels right.":
+        "Déplacez un curseur pour prévisualiser la taille. Appliquez quand elle vous convient.",
+    "Live preview": "Aperçu en direct",
+    "Display settings applied.": "Paramètres d’affichage appliqués.",
+    "Apply": "Appliquer",
     "Title language": "Langue des titres",
     "Show title style": "Style du titre",
     "Colors": "Couleurs",
     "Home screen": "Écran d’accueil",
     "Featured hero": "Bannière à la une",
     "Poster metadata": "Infos sur les affiches",
+    "Show rating and release year on poster covers.":
+        "Afficher la note et l’année de sortie sur les affiches.",
+    "Choose which shelves appear and their order.":
+        "Choisissez les rubriques affichées et leur ordre.",
+    "No shelves selected": "Aucune rubrique sélectionnée",
     "Continue watching": "Reprendre la lecture",
     "Display options": "Options d’affichage",
     "Interface scale": "Échelle de l’interface",
@@ -2064,6 +2286,32 @@ const settingsTranslations = <String, Map<String, String>>{
     "Navigation sounds": "Sons de navigation",
     "Click sounds": "Sons de clic",
     "Closed captions": "Sous-titres",
+    "Caption Studio": "Studio des sous-titres",
+    "Default captions": "Sous-titres par défaut",
+    "Caption background": "Fond des sous-titres",
+    "Preview caption language, colors, and size before applying.":
+        "Prévisualisez la langue, les couleurs et la taille avant d’appliquer.",
+    "Caption settings applied.": "Paramètres des sous-titres appliqués.",
+    "Caption settings could not be applied.":
+        "Impossible d’appliquer les paramètres des sous-titres.",
+    "Sample scene": "Scène d’exemple",
+    "This is how your captions will look.":
+        "Voici à quoi ressembleront vos sous-titres.",
+    "White": "Blanc",
+    "Warm white": "Blanc chaud",
+    "Yellow": "Jaune",
+    "Gold": "Doré",
+    "Cyan": "Cyan",
+    "Sky blue": "Bleu ciel",
+    "Lime": "Vert citron",
+    "Pink": "Rose",
+    "Dark": "Sombre",
+    "Strong": "Soutenu",
+    "Black": "Noir",
+    "Navy": "Bleu marine",
+    "Plum": "Prune",
+    "Forest": "Vert forêt",
+    "Burgundy": "Bordeaux",
     "Player controls": "Commandes du lecteur",
     "Debrid streaming": "Streaming debrid",
     "Sources & stream order": "Sources et ordre des flux",
@@ -2199,6 +2447,25 @@ const settingsTranslations = <String, Map<String, String>>{
     "Ko-fi donation link copied.": "Lien de don Ko-fi copié.",
   },
   'hi': {
+    "Appearance & language": "रूप और भाषा",
+    "Playback & captions": "प्लेबैक और उपशीर्षक",
+    "Sources & library": "स्रोत और लाइब्रेरी",
+    "Accounts & activity": "खाते और गतिविधि",
+    "App & support": "ऐप और सहायता",
+    "Language & titles": "भाषा और शीर्षक",
+    "Experimental options": "प्रयोगात्मक विकल्प",
+    "Colors, screen layout, and home navigation.":
+        "रंग, स्क्रीन लेआउट और होम नेविगेशन।",
+    "Choose the app language and how show names appear.":
+        "ऐप की भाषा और शो के नाम दिखने का तरीका चुनें।",
+    "Keyboard, navigation sounds, and click feedback.":
+        "कीबोर्ड, नेविगेशन ध्वनियाँ और क्लिक प्रतिक्रिया।",
+    "Review device health and control optional anonymous reporting.":
+        "डिवाइस की स्थिति देखें और वैकल्पिक गुमनाम रिपोर्टिंग नियंत्रित करें।",
+    "Optional unfinished features and advanced build tools.":
+        "वैकल्पिक अधूरी सुविधाएँ और उन्नत बिल्ड टूल।",
+    "Run setup again or calibrate this device.":
+        "सेटअप फिर से चलाएँ या इस डिवाइस को कैलिब्रेट करें।",
     "Current {version}{latest}": "मौजूदा {version}{latest}",
     "Anonymous crash reports start enabled on new installs and are optional. Existing installs keep their current choice. You can turn them off here or anytime in Settings. Reports contain only the app/build, error type and time, Android version, CPU architecture, device class, and a redacted technical trace. They never include a show, episode, account, device ID, source, or URL.":
         "नई इंस्टॉलेशन पर अनाम क्रैश रिपोर्ट शुरू में चालू रहती हैं और वैकल्पिक हैं। मौजूदा इंस्टॉलेशन अपनी वर्तमान पसंद बनाए रखती हैं। आप इन्हें यहाँ या सेटिंग्स में कभी भी बंद कर सकते हैं। रिपोर्ट में केवल ऐप/बिल्ड, त्रुटि का प्रकार और समय, Android संस्करण, CPU आर्किटेक्चर, डिवाइस श्रेणी और संवेदनशील जानकारी हटाया तकनीकी ट्रेस होता है। इनमें कभी शो, एपिसोड, खाता, डिवाइस ID, स्रोत या URL शामिल नहीं होता।",
@@ -2238,6 +2505,14 @@ const settingsTranslations = <String, Map<String, String>>{
         "संवेदनशील जानकारी हटाकर पूरी रिपोर्ट कॉपी हुई।",
     "Send diagnostic report?": "डायग्नोस्टिक रिपोर्ट भेजें?",
     "Send report": "रिपोर्ट भेजें",
+    "Send to support": "सहायता को भेजें",
+    "Sending… Cancel": "भेजा जा रहा है… रद्द करें",
+    "Sending was cancelled. Support may have received the report, but delivery was not confirmed.":
+        "भेजना रद्द कर दिया गया। सहायता को रिपोर्ट मिल गई हो सकती है, लेकिन इसकी पुष्टि नहीं हुई।",
+    "Sending took too long, so TetoTV stopped waiting. Support may have received the report, but no confirmation arrived. You can try again.":
+        "भेजने में बहुत समय लगा, इसलिए TetoTV ने इंतज़ार करना बंद कर दिया। सहायता को रिपोर्ट मिल गई हो सकती है, लेकिन पुष्टि नहीं आई। आप फिर कोशिश कर सकते हैं।",
+    "Could not confirm that support received this report. Check the connection and try again.":
+        "सहायता को रिपोर्ट मिलने की पुष्टि नहीं हो सकी। कनेक्शन जाँचें और फिर कोशिश करें।",
     "The diagnostic report could not be sent. Try again shortly.":
         "डायग्नोस्टिक रिपोर्ट नहीं भेजी जा सकी। थोड़ी देर में फिर कोशिश करें।",
     "Support report": "सहायता रिपोर्ट",
@@ -2767,12 +3042,42 @@ const settingsTranslations = <String, Map<String, String>>{
     "Settings": "सेटिंग्स",
     "Theme & display": "थीम और डिस्प्ले",
     "Theme Studio": "थीम स्टूडियो",
+    "Display Studio": "डिस्प्ले स्टूडियो",
+    "Preview size, layout, cards, and navigation before applying.":
+        "लागू करने से पहले आकार, लेआउट, कार्ड और नेविगेशन का पूर्वावलोकन करें।",
+    "Display settings could not be applied.":
+        "डिस्प्ले सेटिंग लागू नहीं हो सकीं।",
+    "Size": "आकार",
+    "Layout & cards": "लेआउट और कार्ड",
+    "Settings placement": "सेटिंग्स की जगह",
+    "Use the arrows to move menu items.":
+        "मेन्यू आइटम स्थानांतरित करने के लिए तीरों का उपयोग करें।",
+    "Choose which buttons are shown and use the arrows to move them. Settings always remains in the profile menu.":
+        "दिखाए जाने वाले बटन चुनें और उन्हें स्थानांतरित करने के लिए तीरों का उपयोग करें। सेटिंग्स प्रोफ़ाइल मेन्यू में हमेशा उपलब्ध रहती हैं।",
+    "Move up": "ऊपर ले जाएँ",
+    "Move down": "नीचे ले जाएँ",
+    "TV": "टीवी",
+    "Phone": "फ़ोन",
+    "Customize": "कस्टमाइज़ करें",
+    "Preview and fine-tune interface and thumbnail size.":
+        "इंटरफ़ेस और थंबनेल का आकार देखकर बारीकी से बदलें।",
+    "Fine-tune your display": "अपनी स्क्रीन का आकार बारीकी से बदलें",
+    "Move a slider to preview the size. Apply when it feels right.":
+        "आकार देखने के लिए स्लाइडर बदलें। सही लगने पर लागू करें।",
+    "Live preview": "लाइव पूर्वावलोकन",
+    "Display settings applied.": "डिस्प्ले सेटिंग लागू हो गई हैं।",
+    "Apply": "लागू करें",
     "Title language": "शीर्षक की भाषा",
     "Show title style": "शीर्षक शैली",
     "Colors": "रंग",
     "Home screen": "होम स्क्रीन",
     "Featured hero": "मुख्य फ़ीचर्ड बैनर",
     "Poster metadata": "पोस्टर की जानकारी",
+    "Show rating and release year on poster covers.":
+        "पोस्टर पर रेटिंग और रिलीज़ वर्ष दिखाएँ।",
+    "Choose which shelves appear and their order.":
+        "कौन-सी शेल्फ़ दिखें और उनका क्रम चुनें।",
+    "No shelves selected": "कोई शेल्फ़ नहीं चुनी गई",
     "Continue watching": "देखना जारी रखें",
     "Display options": "डिस्प्ले विकल्प",
     "Interface scale": "इंटरफ़ेस का आकार",
@@ -2789,6 +3094,31 @@ const settingsTranslations = <String, Map<String, String>>{
     "Navigation sounds": "नेविगेशन ध्वनियाँ",
     "Click sounds": "क्लिक की ध्वनियाँ",
     "Closed captions": "उपशीर्षक",
+    "Caption Studio": "उपशीर्षक स्टूडियो",
+    "Default captions": "डिफ़ॉल्ट उपशीर्षक",
+    "Caption background": "उपशीर्षक की पृष्ठभूमि",
+    "Preview caption language, colors, and size before applying.":
+        "लागू करने से पहले भाषा, रंग और आकार का पूर्वावलोकन करें।",
+    "Caption settings applied.": "उपशीर्षक सेटिंग लागू हो गईं।",
+    "Caption settings could not be applied.":
+        "उपशीर्षक सेटिंग लागू नहीं हो सकीं।",
+    "Sample scene": "नमूना दृश्य",
+    "This is how your captions will look.": "आपके उपशीर्षक ऐसे दिखेंगे।",
+    "White": "सफ़ेद",
+    "Warm white": "हल्का गर्म सफ़ेद",
+    "Yellow": "पीला",
+    "Gold": "सुनहरा",
+    "Cyan": "सियान",
+    "Sky blue": "आसमानी नीला",
+    "Lime": "हल्का हरा",
+    "Pink": "गुलाबी",
+    "Dark": "गहरा",
+    "Strong": "गाढ़ा",
+    "Black": "काला",
+    "Navy": "गहरा नीला",
+    "Plum": "बैंगनी",
+    "Forest": "वन हरा",
+    "Burgundy": "गहरा लाल",
     "Player controls": "प्लेयर नियंत्रण",
     "Debrid streaming": "Debrid स्ट्रीमिंग",
     "Sources & stream order": "स्रोत और स्ट्रीम क्रम",
@@ -2923,6 +3253,25 @@ const settingsTranslations = <String, Map<String, String>>{
     "Ko-fi donation link copied.": "Ko-fi दान लिंक कॉपी हो गया।",
   },
   'de': {
+    "Appearance & language": "Design und Sprache",
+    "Playback & captions": "Wiedergabe und Untertitel",
+    "Sources & library": "Quellen und Bibliothek",
+    "Accounts & activity": "Konten und Aktivität",
+    "App & support": "App und Hilfe",
+    "Language & titles": "Sprache und Titel",
+    "Experimental options": "Experimentelle Optionen",
+    "Colors, screen layout, and home navigation.":
+        "Farben, Bildschirmlayout und Startnavigation.",
+    "Choose the app language and how show names appear.":
+        "App-Sprache und Darstellung der Serientitel wählen.",
+    "Keyboard, navigation sounds, and click feedback.":
+        "Tastatur, Navigationstöne und Klick-Rückmeldung.",
+    "Review device health and control optional anonymous reporting.":
+        "Gerätestatus prüfen und optionale anonyme Berichte verwalten.",
+    "Optional unfinished features and advanced build tools.":
+        "Optionale unfertige Funktionen und erweiterte Build-Werkzeuge.",
+    "Run setup again or calibrate this device.":
+        "Einrichtung erneut ausführen oder dieses Gerät kalibrieren.",
     "Current {version}{latest}": "Aktuell {version}{latest}",
     "Anonymous crash reports start enabled on new installs and are optional. Existing installs keep their current choice. You can turn them off here or anytime in Settings. Reports contain only the app/build, error type and time, Android version, CPU architecture, device class, and a redacted technical trace. They never include a show, episode, account, device ID, source, or URL.":
         "Anonyme Absturzberichte sind bei neuen Installationen zunächst aktiviert und optional. Bestehende Installationen behalten ihre aktuelle Auswahl. Du kannst sie hier oder jederzeit in den Einstellungen ausschalten. Berichte enthalten nur App/Build, Fehlertyp und Zeitpunkt, Android-Version, CPU-Architektur, Geräteklasse und einen bereinigten technischen Trace. Sie enthalten niemals Serie, Folge, Konto, Geräte-ID, Quelle oder URL.",
@@ -2963,6 +3312,14 @@ const settingsTranslations = <String, Map<String, String>>{
         "Vollständiger bereinigter Bericht kopiert.",
     "Send diagnostic report?": "Diagnosebericht senden?",
     "Send report": "Bericht senden",
+    "Send to support": "An Support senden",
+    "Sending… Cancel": "Wird gesendet… Abbrechen",
+    "Sending was cancelled. Support may have received the report, but delivery was not confirmed.":
+        "Das Senden wurde abgebrochen. Der Support hat den Bericht möglicherweise erhalten, aber die Zustellung wurde nicht bestätigt.",
+    "Sending took too long, so TetoTV stopped waiting. Support may have received the report, but no confirmation arrived. You can try again.":
+        "Das Senden dauerte zu lange, daher wartet TetoTV nicht mehr. Der Support hat den Bericht möglicherweise erhalten, aber es kam keine Bestätigung. Du kannst es erneut versuchen.",
+    "Could not confirm that support received this report. Check the connection and try again.":
+        "Der Empfang beim Support konnte nicht bestätigt werden. Prüfe die Verbindung und versuche es erneut.",
     "The diagnostic report could not be sent. Try again shortly.":
         "Der Diagnosebericht konnte nicht gesendet werden. Versuche es gleich erneut.",
     "Support report": "Supportbericht",
@@ -3501,12 +3858,42 @@ const settingsTranslations = <String, Map<String, String>>{
     "Settings": "Einstellungen",
     "Theme & display": "Design und Anzeige",
     "Theme Studio": "Designstudio",
+    "Display Studio": "Anzeigestudio",
+    "Preview size, layout, cards, and navigation before applying.":
+        "Größe, Layout, Karten und Navigation vor dem Übernehmen ansehen.",
+    "Display settings could not be applied.":
+        "Anzeigeeinstellungen konnten nicht übernommen werden.",
+    "Size": "Größe",
+    "Layout & cards": "Layout und Karten",
+    "Settings placement": "Position der Einstellungen",
+    "Use the arrows to move menu items.":
+        "Mit den Pfeilen kannst du Menüeinträge verschieben.",
+    "Choose which buttons are shown and use the arrows to move them. Settings always remains in the profile menu.":
+        "Wähle sichtbare Schaltflächen und verschiebe sie mit den Pfeilen. Einstellungen bleibt immer im Profilmenü verfügbar.",
+    "Move up": "Nach oben",
+    "Move down": "Nach unten",
+    "TV": "TV",
+    "Phone": "Telefon",
+    "Customize": "Anpassen",
+    "Preview and fine-tune interface and thumbnail size.":
+        "Oberfläche und Vorschaubilder ansehen und präzise anpassen.",
+    "Fine-tune your display": "Anzeige präzise anpassen",
+    "Move a slider to preview the size. Apply when it feels right.":
+        "Regler bewegen, um die Größe anzusehen. Übernehmen, wenn sie passt.",
+    "Live preview": "Live-Vorschau",
+    "Display settings applied.": "Anzeigeeinstellungen übernommen.",
+    "Apply": "Übernehmen",
     "Title language": "Titelsprache",
     "Show title style": "Titelstil",
     "Colors": "Farben",
     "Home screen": "Startbildschirm",
     "Featured hero": "Hauptbanner",
     "Poster metadata": "Posterinformationen",
+    "Show rating and release year on poster covers.":
+        "Bewertung und Erscheinungsjahr auf Postern anzeigen.",
+    "Choose which shelves appear and their order.":
+        "Wähle aus, welche Reihen erscheinen und in welcher Reihenfolge.",
+    "No shelves selected": "Keine Reihen ausgewählt",
     "Continue watching": "Weiterschauen",
     "Display options": "Anzeigeoptionen",
     "Interface scale": "Oberflächenskalierung",
@@ -3523,6 +3910,32 @@ const settingsTranslations = <String, Map<String, String>>{
     "Navigation sounds": "Navigationstöne",
     "Click sounds": "Klicktöne",
     "Closed captions": "Untertitel",
+    "Caption Studio": "Untertitel-Studio",
+    "Default captions": "Standarduntertitel",
+    "Caption background": "Untertitelhintergrund",
+    "Preview caption language, colors, and size before applying.":
+        "Sprache, Farben und Größe vor dem Anwenden ansehen.",
+    "Caption settings applied.": "Untertiteleinstellungen angewendet.",
+    "Caption settings could not be applied.":
+        "Untertiteleinstellungen konnten nicht angewendet werden.",
+    "Sample scene": "Beispielszene",
+    "This is how your captions will look.":
+        "So werden deine Untertitel aussehen.",
+    "White": "Weiß",
+    "Warm white": "Warmweiß",
+    "Yellow": "Gelb",
+    "Gold": "Gold",
+    "Cyan": "Cyan",
+    "Sky blue": "Himmelblau",
+    "Lime": "Limettengrün",
+    "Pink": "Rosa",
+    "Dark": "Dunkel",
+    "Strong": "Kräftig",
+    "Black": "Schwarz",
+    "Navy": "Marineblau",
+    "Plum": "Pflaume",
+    "Forest": "Waldgrün",
+    "Burgundy": "Burgunderrot",
     "Player controls": "Player-Steuerung",
     "Debrid streaming": "Debrid-Streaming",
     "Sources & stream order": "Quellen und Streamreihenfolge",

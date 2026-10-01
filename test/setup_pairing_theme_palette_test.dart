@@ -1,4 +1,5 @@
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/theme/teto_box_style.dart';
 import 'package:anime_tv/core/widgets/tv_text_input.dart';
 import 'package:anime_tv/features/auth/data/torbox_device_auth_client.dart';
 import 'package:anime_tv/features/auth/presentation/torbox_pairing_screen.dart';
@@ -104,14 +105,14 @@ void main() {
     final panelDecoration = panel.decoration! as BoxDecoration;
     expect(
       panelDecoration.border!.top.color,
-      _customPalette.accentBright.withValues(alpha: .82),
+      TetoBoxStyle.outline(_customPalette),
     );
     expect(
       _paintedColors(tester),
       contains(
         Color.alphaBlend(
-          Colors.white.withValues(alpha: .075),
-          _customPalette.surface,
+          _customPalette.primaryText.withValues(alpha: .045),
+          TetoBoxStyle.fill(_customPalette),
         ),
       ),
     );

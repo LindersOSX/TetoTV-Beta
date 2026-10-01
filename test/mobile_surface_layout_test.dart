@@ -187,6 +187,12 @@ void main() {
         entry.name == 'landscape' ? 'home.header-search' : 'home.watch-now',
       );
       if (entry.name == 'landscape') {
+        final hero = tester.getRect(find.byKey(const ValueKey('home-hero')));
+        final header = tester.getRect(
+          find.byKey(const ValueKey('home-top-right-header')),
+        );
+        expect(header.top, lessThan(hero.bottom));
+        expect(header.left, greaterThan(hero.left));
         await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
         await tester.pump();
         expect(
@@ -265,12 +271,12 @@ void main() {
             findsOneWidget,
           );
           expect(
-            find.byKey(const ValueKey('appearance-navigation-card')),
+            find.byKey(const ValueKey('open-display-studio')),
             findsOneWidget,
           );
           expect(
-            find.byKey(const ValueKey('appearance-home-screen-card')),
-            findsOneWidget,
+            find.byKey(const ValueKey('appearance-home-shelves-card')),
+            findsNothing,
           );
           expect(find.text('Expand all'), findsNothing);
           expect(

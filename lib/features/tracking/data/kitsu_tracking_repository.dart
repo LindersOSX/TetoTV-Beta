@@ -5,6 +5,7 @@ class KitsuTrackingRepository
     implements
         TrackingRepository,
         ExternalIdTrackingRepository,
+        AutomaticCompletionTrackingRepository,
         RatingTrackingRepository {
   KitsuTrackingRepository({required String accessToken, Dio? dio})
     : _dio =
@@ -171,6 +172,42 @@ class KitsuTrackingRepository
     mediaId: await _resolveMediaId(ids),
     completedEpisodes: completedEpisodes,
   );
+
+  @override
+  Future<void> updateProgressAndCompletion({
+    required TrackingMediaIds ids,
+    required int completedEpisodes,
+  }) async {
+    if (completedEpisodes <= 0) {
+      throw ArgumentError.value(completedEpisodes, 'completedEpisodes');
+    }
+    final mediaId = await _resolveMediaId(ids);
+    final response = await _dio.get<Map<String, dynamic>>(
+      '/anime/$mediaId',
+      queryParameters: const {'fields[anime]': 'episodeCount,status'},
+    );
+    final anime = _map(response.data?['data']);
+    if (anime['type'] != 'anime' || _resourceId(anime) != '$mediaId') {
+      throw const FormatException('Kitsu completion metadata did not match.');
+    }
+    final attributes = _map(anime['attributes']);
+    await updateProgress(
+      mediaId: mediaId,
+      completedEpisodes: completedEpisodes,
+    );
+    if (trackingSeriesIsComplete(
+      completedEpisodes: completedEpisodes,
+      totalEpisodes: attributes['episodeCount'] is int
+          ? attributes['episodeCount'] as int
+          : null,
+      finishedAiring: attributes['status'] == 'finished',
+    )) {
+      await updateStatus(
+        mediaId: mediaId,
+        status: TrackingListStatus.completed,
+      );
+    }
+  }
 
   @override
   Future<void> updateStatus({

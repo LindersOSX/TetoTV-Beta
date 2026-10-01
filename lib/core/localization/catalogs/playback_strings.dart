@@ -11,6 +11,20 @@ const playbackTranslationRows = <String, List<String>>{
     'PARTY {code} • {status}{connection}',
   ],
   'HOST': ['ANFITRIÓN', 'ANFITRIÃO', 'HÔTE', 'होस्ट', 'HOST'],
+  'WAITING FOR STREAMS': [
+    'ESPERANDO FUENTES',
+    'AGUARDANDO STREAMS',
+    'EN ATTENTE DES FLUX',
+    'स्ट्रीम का इंतज़ार',
+    'WARTE AUF STREAMS',
+  ],
+  'Watch Party searches for streams on each device. Check this device’s torrent add-ons and debrid account, then retry.': [
+    'Watch Party busca fuentes en cada dispositivo. Comprueba los complementos de torrents y la cuenta de debrid de este dispositivo y vuelve a intentarlo.',
+    'O Watch Party busca fontes em cada dispositivo. Confira os complementos de torrent e a conta de debrid deste dispositivo e tente novamente.',
+    'Watch Party recherche des flux sur chaque appareil. Vérifiez les extensions torrent et le compte de débridage de cet appareil, puis réessayez.',
+    'Watch Party हर डिवाइस पर अलग से स्ट्रीम खोजता है। इस डिवाइस के टोरेंट ऐड-ऑन और डीब्रिड खाते की जाँच करें, फिर कोशिश करें।',
+    'Watch Party sucht auf jedem Gerät separat nach Streams. Prüfe die Torrent-Erweiterungen und das Debrid-Konto dieses Geräts und versuche es erneut.',
+  ],
   'RECONNECTING': [
     'RECONECTANDO',
     'RECONECTANDO',

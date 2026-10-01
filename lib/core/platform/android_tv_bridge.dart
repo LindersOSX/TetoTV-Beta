@@ -313,20 +313,27 @@ class LocalCrashSummaryHistory {
     required this.summaries,
     required this.droppedOutsideWindow,
     required this.droppedForCapacity,
+    this.exitHistory = const {'scan_status': 'unavailable'},
   });
 
   const LocalCrashSummaryHistory.empty()
     : summaries = const [],
       droppedOutsideWindow = 0,
-      droppedForCapacity = 0;
+      droppedForCapacity = 0,
+      exitHistory = const {'scan_status': 'unavailable'};
 
   final List<Map<String, Object?>> summaries;
   final int droppedOutsideWindow;
   final int droppedForCapacity;
 
+  /// Separate OS termination evidence, never automatically uploaded as a crash.
+  /// The explicit report builder allowlists and bounds these fields again.
+  final Map<String, Object?> exitHistory;
+
   factory LocalCrashSummaryHistory.fromMap(Map<Object?, Object?> value) {
     int count(String key) =>
         ((value[key] as num?)?.toInt() ?? 0).clamp(0, 0x7fffffff);
+    final history = value['exit_history'];
     return LocalCrashSummaryHistory(
       summaries: [
         for (final item in value['summaries'] as List? ?? const <Object?>[])
@@ -335,6 +342,9 @@ class LocalCrashSummaryHistory {
       ],
       droppedOutsideWindow: count('dropped_outside_window'),
       droppedForCapacity: count('dropped_for_capacity'),
+      exitHistory: history is Map
+          ? history.map((key, entry) => MapEntry(key.toString(), entry))
+          : const {'scan_status': 'unavailable'},
     );
   }
 }
@@ -655,6 +665,10 @@ class AndroidTvBridge {
       );
     }
     return DiscordTokenBundle.fromMap(result);
+  }
+
+  Future<void> discordCancelRefreshToken() async {
+    await _channel.invokeMethod<void>('discordCancelRefreshToken');
   }
 
   Future<void> discordConnect(DiscordTokenBundle token) async {

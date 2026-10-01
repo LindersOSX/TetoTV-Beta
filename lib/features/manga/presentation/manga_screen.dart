@@ -1,3 +1,4 @@
+import 'package:anime_tv/core/widgets/teto_dialog.dart';
 import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'package:anime_tv/features/aniyomi/application/aniyomi_controller.dart';
 import 'package:anime_tv/features/aniyomi/presentation/aniyomi_screen.dart';
@@ -6,6 +7,9 @@ import 'dart:convert';
 
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/theme/teto_box_style.dart';
+import 'package:anime_tv/core/widgets/teto_back_button.dart';
+import 'package:anime_tv/core/widgets/teto_browse_status.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/tv/tv_navigation.dart';
 import 'package:anime_tv/core/widgets/teto_top_level_shell.dart';
@@ -475,7 +479,7 @@ class _MangaScreenState extends ConsumerState<MangaScreen> {
   }
 
   Future<void> _addMangaRepository() async {
-    final input = await showDialog<String>(
+    final input = await showTetoDialog<String>(
       context: context,
       builder: (context) => const _MangaRepositoryDialog(),
     );
@@ -593,7 +597,7 @@ class _MangaScreenState extends ConsumerState<MangaScreen> {
   }
 
   Future<void> _editCredentials(StoredMangaSource source) async {
-    final draft = await showDialog<_MangaCredentialDraft>(
+    final draft = await showTetoDialog<_MangaCredentialDraft>(
       context: context,
       builder: (context) => _MangaCredentialDialog(sourceName: source.name),
     );
@@ -785,7 +789,7 @@ class _MangaScreenState extends ConsumerState<MangaScreen> {
       );
       return;
     }
-    final target = await showDialog<MangaLibraryEntry>(
+    final target = await showTetoDialog<MangaLibraryEntry>(
       context: context,
       builder: (context) => AlertDialog(
         title: Text(context.tr('Choose the new source edition')),
@@ -971,7 +975,7 @@ class _MangaScreenState extends ConsumerState<MangaScreen> {
 
   Future<void> _showPublication(MangaPublication publication) async {
     final binding = _bindAction(catalog: true);
-    await showModalBottomSheet<void>(
+    await showTetoModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
@@ -1009,7 +1013,7 @@ class _MangaScreenState extends ConsumerState<MangaScreen> {
       final inLibrary = await binding.extension.isInLibrary(title);
       binding.check();
       if (!mounted) return;
-      await showModalBottomSheet<void>(
+      await showTetoModalBottomSheet<void>(
         context: context,
         isScrollControlled: true,
         useSafeArea: true,
@@ -1229,7 +1233,7 @@ class _MangaScreenState extends ConsumerState<MangaScreen> {
           );
           binding.check();
           if (!mounted) return;
-          final local = await showDialog<MangaReaderRequest>(
+          final local = await showTetoDialog<MangaReaderRequest>(
             context: context,
             barrierDismissible: false,
             builder: (context) => _MangaAcquisitionDialog(
@@ -1421,7 +1425,7 @@ class _MangaScreenState extends ConsumerState<MangaScreen> {
     required String message,
     required String action,
   }) async =>
-      (await showDialog<bool>(
+      (await showTetoDialog<bool>(
         context: context,
         builder: (context) => AlertDialog(
           title: Text(title),
@@ -1956,8 +1960,7 @@ class _MangaBrowseView extends StatelessWidget {
                 Row(
                   children: [
                     if (state.breadcrumbs.isNotEmpty) ...[
-                      _MangaIconAction(
-                        icon: Icons.arrow_back_rounded,
+                      TetoBackButton(
                         tooltip: context.tr("Previous catalog"),
                         onPressed: onBack,
                       ),
@@ -2232,7 +2235,7 @@ class _MangaDownloadsView extends StatelessWidget {
   Widget build(BuildContext context) {
     final jobs = state.jobs;
     if (state.isInitializing && jobs.isEmpty) {
-      return const Center(child: CircularProgressIndicator());
+      return const TetoBrowseLoading();
     }
     if (jobs.isEmpty) {
       return _MangaEmptyState(
@@ -3672,8 +3675,13 @@ class _MangaPublicationSheet extends StatelessWidget {
     child: ConstrainedBox(
       constraints: const BoxConstraints(maxWidth: 880, maxHeight: 680),
       child: Material(
-        color: context.appPalette.surface,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(22)),
+        color: TetoBoxStyle.fill(context.appPalette),
+        shape: RoundedRectangleBorder(
+          borderRadius: const BorderRadius.vertical(
+            top: Radius.circular(TetoBoxStyle.radius),
+          ),
+          side: BorderSide(color: TetoBoxStyle.outline(context.appPalette)),
+        ),
         clipBehavior: Clip.antiAlias,
         child: SingleChildScrollView(
           padding: const EdgeInsets.fromLTRB(22, 18, 22, 28),
@@ -3814,56 +3822,19 @@ class _MangaEmptyState extends StatelessWidget {
   final FocusNode? focusNode;
 
   @override
-  Widget build(BuildContext context) => Center(
-    child: ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: 520),
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 70,
-              height: 70,
-              decoration: BoxDecoration(
-                color: context.appPalette.accent.withValues(alpha: .16),
-                borderRadius: BorderRadius.circular(18),
-                border: Border.all(
-                  color: context.appPalette.accent.withValues(alpha: .44),
-                ),
-              ),
-              child: Icon(
-                icon,
-                size: 34,
-                color: context.appPalette.accentBright,
-              ),
-            ),
-            const SizedBox(height: 16),
-            Text(
-              title,
-              textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.titleLarge,
-            ),
-            const SizedBox(height: 7),
-            Text(
-              message,
-              textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.bodyLarge,
-            ),
-            if (actionLabel != null && onAction != null) ...[
-              const SizedBox(height: 18),
-              _MangaActionButton(
-                icon: Icons.arrow_forward_rounded,
-                label: actionLabel!,
-                focusNode: focusNode,
-                onPressed: onAction,
-                prominent: true,
-              ),
-            ],
-          ],
-        ),
-      ),
-    ),
+  Widget build(BuildContext context) => TetoBrowseStatus(
+    icon: icon,
+    title: title,
+    message: message,
+    actions: actionLabel != null && onAction != null
+        ? _MangaActionButton(
+            icon: Icons.arrow_forward_rounded,
+            label: actionLabel!,
+            focusNode: focusNode,
+            onPressed: onAction,
+            prominent: true,
+          )
+        : null,
   );
 }
 

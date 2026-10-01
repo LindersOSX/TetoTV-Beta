@@ -239,7 +239,7 @@ void main() {
           title: 'TetoTV announcement',
           body: 'Maintenance is complete.',
           action: AppNotificationAction.none,
-          createdAtUtc: DateTime.utc(2026, 9, 2),
+          createdAtUtc: DateTime.now().toUtc(),
         ),
       ]),
     );
@@ -387,17 +387,132 @@ void main() {
     expect(detectorFor(second.id).focusNode?.hasFocus, isTrue);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets(
+    'open bell and badge expire announcements without network access',
+    (tester) async {
+      var now = DateTime.utc(2026, 10, 1, 12);
+      final announcement = _announcement(
+        'a',
+        'This notice expires while the inbox is open.',
+        createdAtUtc: now
+            .subtract(appAnnouncementInboxLifetime)
+            .add(const Duration(seconds: 1)),
+      );
+      final store = _MemoryNotificationStore([announcement]);
+      final notifications = AppNotificationController(store, clock: () => now);
+      addTearDown(() {
+        if (notifications.mounted) notifications.dispose();
+      });
+      notifications.startExpiryMaintenance();
+      await notifications.load();
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            appNotificationControllerProvider.overrideWith(
+              (_) => notifications,
+            ),
+          ],
+          child: MaterialApp(
+            theme: AppTheme.dark,
+            home: const Scaffold(body: TetoNotificationBell()),
+          ),
+        ),
+      );
+      await tester.tap(find.byType(TetoNotificationBell));
+      await tester.pumpAndSettle();
+      expect(find.text(announcement.body), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('notification-unread-badge')),
+        findsOneWidget,
+      );
+
+      now = now.add(const Duration(seconds: 1));
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pumpAndSettle();
+      expect(find.text(announcement.body), findsNothing);
+      expect(find.text('You\'re all caught up'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('notification-unread-badge')),
+        findsNothing,
+      );
+      expect((await store.load()).single.readAtUtc, now);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets('expiry pauses in background and rechecks locally on resume', (
+    tester,
+  ) async {
+    var now = DateTime.utc(2026, 10, 1, 12);
+    final announcement = _announcement(
+      'a',
+      'Expires while the TV is suspended.',
+      createdAtUtc: now
+          .subtract(appAnnouncementInboxLifetime)
+          .add(const Duration(seconds: 5)),
+    );
+    final store = _MemoryNotificationStore([announcement, _notice()]);
+    final notifications = AppNotificationController(store, clock: () => now);
+    addTearDown(() {
+      if (notifications.mounted) notifications.dispose();
+    });
+    notifications.startExpiryMaintenance();
+    await notifications.load();
+    expect(notifications.state.unreadCount, 2);
+
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    now = now.add(const Duration(seconds: 10));
+    await tester.pump(const Duration(seconds: 10));
+    expect(notifications.state.unreadCount, 2);
+
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pumpAndSettle();
+    expect(notifications.state.unreadCount, 1);
+    expect(
+      notifications.state.inboxItems.single.kind,
+      AppNotificationKind.appUpdate,
+    );
+    expect((await store.load()).first.readAtUtc, now);
+  });
+
+  testWidgets('disposing notification maintenance cancels its expiry timer', (
+    tester,
+  ) async {
+    var now = DateTime.utc(2026, 10, 1, 12);
+    final announcement = _announcement(
+      'a',
+      'No callbacks after disposal.',
+      createdAtUtc: now
+          .subtract(appAnnouncementInboxLifetime)
+          .add(const Duration(seconds: 1)),
+    );
+    final store = _MemoryNotificationStore([announcement]);
+    final notifications = AppNotificationController(store, clock: () => now);
+    notifications.startExpiryMaintenance();
+    await notifications.load();
+    notifications.dispose();
+    now = now.add(const Duration(seconds: 10));
+    await tester.pump(const Duration(seconds: 10));
+    expect((await store.load()).single.isRead, isFalse);
+    expect(tester.takeException(), isNull);
+  });
 }
 
-AppNotification _announcement(String hashCharacter, String body) =>
-    AppNotification(
-      id: 'app-announcement:${List.filled(64, hashCharacter).join()}',
-      kind: AppNotificationKind.announcement,
-      title: 'TetoTV announcement',
-      body: body,
-      action: AppNotificationAction.none,
-      createdAtUtc: DateTime.utc(2026, 9, 2),
-    );
+AppNotification _announcement(
+  String hashCharacter,
+  String body, {
+  DateTime? createdAtUtc,
+}) => AppNotification(
+  id: 'app-announcement:${List.filled(64, hashCharacter).join()}',
+  kind: AppNotificationKind.announcement,
+  title: 'TetoTV announcement',
+  body: body,
+  action: AppNotificationAction.none,
+  createdAtUtc: createdAtUtc ?? DateTime.now().toUtc(),
+);
 
 AppNotification _notice() => AppNotification(
   id: 'app-update:beta:410042',

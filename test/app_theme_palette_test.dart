@@ -1,4 +1,5 @@
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/theme/teto_box_style.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -151,12 +152,14 @@ void main() {
     final popupShape = theme.popupMenuTheme.shape! as RoundedRectangleBorder;
     final snackShape = theme.snackBarTheme.shape! as RoundedRectangleBorder;
 
-    expect(theme.popupMenuTheme.color, palette.surface);
+    expect(theme.popupMenuTheme.color, TetoBoxStyle.fill(palette));
+    expect(theme.dialogTheme.backgroundColor, TetoBoxStyle.fill(palette));
+    expect(theme.bottomSheetTheme.backgroundColor, TetoBoxStyle.fill(palette));
     expect(theme.popupMenuTheme.surfaceTintColor, Colors.transparent);
-    expect(popupShape.borderRadius, BorderRadius.circular(14));
-    expect(popupShape.side.color, palette.accent.withValues(alpha: .70));
+    expect(popupShape.borderRadius, BorderRadius.circular(16));
+    expect(popupShape.side.color, palette.mutedText.withValues(alpha: .25));
     expect(theme.snackBarTheme.behavior, SnackBarBehavior.floating);
-    expect(theme.snackBarTheme.backgroundColor, palette.surfaceRaised);
+    expect(theme.snackBarTheme.backgroundColor, TetoBoxStyle.fill(palette));
     expect(theme.snackBarTheme.actionTextColor, palette.accentBright);
     final notificationText = theme.snackBarTheme.contentTextStyle!;
     final appLabelText = theme.textTheme.labelLarge!;
@@ -164,7 +167,7 @@ void main() {
     expect(notificationText.fontSize, appLabelText.fontSize);
     expect(notificationText.fontWeight, appLabelText.fontWeight);
     expect(notificationText.letterSpacing, appLabelText.letterSpacing);
-    expect(snackShape.borderRadius, BorderRadius.circular(12));
-    expect(snackShape.side.color, palette.accent.withValues(alpha: .64));
+    expect(snackShape.borderRadius, BorderRadius.circular(TetoBoxStyle.radius));
+    expect(snackShape.side.color, TetoBoxStyle.outline(palette));
   });
 }

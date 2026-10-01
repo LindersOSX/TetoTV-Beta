@@ -1,7 +1,12 @@
 import 'package:anime_tv/core/localization/teto_localizations.dart';
+import 'package:anime_tv/core/widgets/teto_blur_scope.dart';
 import 'dart:async';
+import 'dart:ui' show ImageFilter;
 
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/theme/teto_box_style.dart';
+import 'package:anime_tv/core/theme/teto_ui_tokens.dart';
+import 'package:anime_tv/core/widgets/teto_dialog.dart';
 import 'package:anime_tv/core/notifications/app_notification.dart';
 import 'package:anime_tv/core/notifications/app_notification_controller.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
@@ -55,12 +60,44 @@ class HomeNavigationRailMetrics {
   final double actionGap;
 }
 
+HomeNavigationRailMetrics _interpolateNavigationMetrics(
+  HomeNavigationRailMetrics small,
+  HomeNavigationRailMetrics medium,
+  HomeNavigationRailMetrics large,
+  double scale,
+) {
+  final value = scale.clamp(.8, 1.25);
+  final first = value <= 1 ? small : medium;
+  final second = value <= 1 ? medium : large;
+  final amount = value <= 1 ? (value - .8) / .2 : (value - 1) / .25;
+  double between(double a, double b) => a + (b - a) * amount;
+  return HomeNavigationRailMetrics(
+    width: between(first.width, second.width),
+    actionWidth: between(first.actionWidth, second.actionWidth),
+    actionHeight: between(first.actionHeight, second.actionHeight),
+    iconSize: between(first.iconSize, second.iconSize),
+    logoSize: between(first.logoSize, second.logoSize),
+    actionGap: between(first.actionGap, second.actionGap),
+  );
+}
+
 /// Resolves all rail geometry from the persisted chrome size.
 ///
 /// The black surface wraps the logo with a small gutter based on the action
 /// spacing. It therefore changes with Small/Medium/Large but does not become
 /// disproportionately wide merely because the TV canvas is wider.
-HomeNavigationRailMetrics homeNavigationRailMetrics(NavigationChromeSize size) {
+HomeNavigationRailMetrics homeNavigationRailMetrics(
+  NavigationChromeSize size, {
+  double? scale,
+}) {
+  if (scale != null) {
+    return _interpolateNavigationMetrics(
+      homeNavigationRailMetrics(NavigationChromeSize.small),
+      homeNavigationRailMetrics(NavigationChromeSize.medium),
+      homeNavigationRailMetrics(NavigationChromeSize.large),
+      scale,
+    );
+  }
   final double actionWidth = switch (size) {
     NavigationChromeSize.small => 30,
     NavigationChromeSize.medium => 38,
@@ -101,44 +138,49 @@ HomeNavigationRailMetrics homeNavigationRailMetrics(NavigationChromeSize size) {
 double homeNavigationRailWidth(double _, NavigationChromeSize size) =>
     homeNavigationRailMetrics(size).width;
 
-/// Resolves touch-sized rail geometry for a physical phone in landscape.
-///
-/// A rotated phone has the same left-edge navigation model as television, so
-/// the Navigation & logo size preference must still be visible there. The
-/// phone-specific values keep every action at least 44 logical pixels in both
-/// dimensions instead of reusing the smaller television targets verbatim.
+/// Resolves touch-sized rail geometry for a phone or tablet in landscape.
+/// The rail uses the television layout, with larger tap targets for touch.
 HomeNavigationRailMetrics phoneLandscapeNavigationRailMetrics(
-  NavigationChromeSize size,
-) => switch (size) {
-  NavigationChromeSize.small => const HomeNavigationRailMetrics(
-    width: 52,
-    actionWidth: 44,
-    actionHeight: 44,
-    iconSize: 20,
-    logoSize: 34,
-    actionGap: 4,
-  ),
-  NavigationChromeSize.medium => const HomeNavigationRailMetrics(
-    width: 58,
-    actionWidth: 46,
-    actionHeight: 44,
-    iconSize: 22,
-    logoSize: 40,
-    actionGap: 4,
-  ),
-  NavigationChromeSize.large => const HomeNavigationRailMetrics(
-    width: 68,
-    actionWidth: 54,
-    actionHeight: 50,
-    iconSize: 26,
-    logoSize: 50,
-    actionGap: 6,
-  ),
-};
+  NavigationChromeSize size, {
+  double? scale,
+}) => scale != null
+    ? _interpolateNavigationMetrics(
+        phoneLandscapeNavigationRailMetrics(NavigationChromeSize.small),
+        phoneLandscapeNavigationRailMetrics(NavigationChromeSize.medium),
+        phoneLandscapeNavigationRailMetrics(NavigationChromeSize.large),
+        scale,
+      )
+    : switch (size) {
+        NavigationChromeSize.small => const HomeNavigationRailMetrics(
+          width: 52,
+          actionWidth: 44,
+          actionHeight: 44,
+          iconSize: 20,
+          logoSize: 34,
+          actionGap: 4,
+        ),
+        NavigationChromeSize.medium => const HomeNavigationRailMetrics(
+          width: 58,
+          actionWidth: 46,
+          actionHeight: 44,
+          iconSize: 22,
+          logoSize: 40,
+          actionGap: 4,
+        ),
+        NavigationChromeSize.large => const HomeNavigationRailMetrics(
+          width: 68,
+          actionWidth: 54,
+          actionHeight: 50,
+          iconSize: 26,
+          logoSize: 50,
+          actionGap: 6,
+        ),
+      };
 
 const double phoneBottomNavigationHeight = 64;
 
-/// Home's fixed TV rail. The existing [MainNavigationBar] remains available
+/// Home's TV rail. Its optional expanded drawer overlays the content, whose
+/// inset stays at the compact rail width. [MainNavigationBar] remains available
 /// to compact layouts and the other top-level screens, while Home can match the
 /// reference's icon-first 10-foot layout without changing those screens.
 class HomeSideNavigation extends ConsumerStatefulWidget {
@@ -174,6 +216,9 @@ class HomeSideNavigation extends ConsumerStatefulWidget {
 class _HomeSideNavigationState extends ConsumerState<HomeSideNavigation> {
   final _repeatGate = TvDirectionalRepeatGate();
   final _actionsScrollController = ScrollController();
+  bool _railHovered = false;
+  bool _railFocused = false;
+  bool _suppressedUntilLeave = false;
   bool _focusRecoveryScheduled = false;
   int _focusRevealGeneration = 0;
   final _fallbackNodes = <TopNavigationDestination, FocusNode>{
@@ -281,6 +326,9 @@ class _HomeSideNavigationState extends ConsumerState<HomeSideNavigation> {
   }
 
   void _activateDestination(TopNavigationDestination destination) {
+    if (widget.preferences.expandNavigationLabelsOnFocus) {
+      setState(() => _suppressedUntilLeave = true);
+    }
     if (destination == widget.activeDestination &&
         widget.onActivePressed != null) {
       widget.onActivePressed!();
@@ -326,6 +374,24 @@ class _HomeSideNavigationState extends ConsumerState<HomeSideNavigation> {
     });
   }
 
+  void _setRailHover(bool hovered) {
+    if (_railHovered == hovered) return;
+    setState(() {
+      _railHovered = hovered;
+      // Pointer hover gives a TV action focus. Do not let that residual focus
+      // keep the drawer open after the pointer has left its entire surface.
+      _suppressedUntilLeave = !hovered && _railFocused;
+    });
+  }
+
+  void _setRailFocus(bool focused) {
+    if (_railFocused == focused) return;
+    setState(() {
+      _railFocused = focused;
+      if (!focused && !_railHovered) _suppressedUntilLeave = false;
+    });
+  }
+
   @override
   void dispose() {
     _focusRevealGeneration++;
@@ -347,27 +413,20 @@ class _HomeSideNavigationState extends ConsumerState<HomeSideNavigation> {
     final localProfiles = ref.watch(localProfilesControllerProvider);
     final hasProfile =
         accounts.profiles.isNotEmpty || localProfiles.activeProfile != null;
-    final settingsInProfileMenu =
-        hasProfile &&
-        !accounts.isLoading &&
-        widget.preferences.settingsEntryPlacement ==
-            SettingsEntryPlacement.profileMenu;
     final experimentalOptionsEnabled = ref.watch(
       appUpdateControllerProvider.select(
         (state) => state.loaded && state.developerMode,
       ),
     );
-    final configuredDestinations =
-        runtimeTopNavigationOrder(
-              widget.preferences,
-              experimentalOptionsEnabled: experimentalOptionsEnabled,
-            )
-            .where(
-              (destination) =>
-                  destination != TopNavigationDestination.settings ||
-                  !settingsInProfileMenu,
-            )
-            .toList(growable: false);
+    final configuredDestinations = <TopNavigationDestination>[
+      ...runtimeTopNavigationOrder(
+        widget.preferences,
+        experimentalOptionsEnabled: experimentalOptionsEnabled,
+      ),
+      if ((!hasProfile || accounts.isLoading) &&
+          !widget.preferences.showSettings)
+        TopNavigationDestination.settings,
+    ];
     final showBottomSettings = configuredDestinations.contains(
       TopNavigationDestination.settings,
     );
@@ -396,84 +455,170 @@ class _HomeSideNavigationState extends ConsumerState<HomeSideNavigation> {
         : _nearestVisibleDestination();
     _recoverDetachedFocusAfterBuild();
     final metrics = widget.metrics;
+    final expanded =
+        widget.preferences.expandNavigationLabelsOnFocus &&
+        (_railHovered || _railFocused) &&
+        !_suppressedUntilLeave;
+    final expandedWidth = (metrics.width + 108).clamp(
+      metrics.width,
+      MediaQuery.sizeOf(context).width * .55,
+    );
 
-    return Container(
-      key: const ValueKey('main-navigation'),
-      width: metrics.width,
-      decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: .96),
-        border: Border(
-          right: BorderSide(color: Colors.white.withValues(alpha: .11)),
-        ),
-      ),
-      child: Column(
-        children: [
-          SizedBox(height: metrics.actionGap + 5),
-          _HomeRailWordmark(metrics: metrics),
-          SizedBox(height: metrics.actionGap + 2),
-          Expanded(
-            child: Align(
-              alignment: Alignment.topCenter,
-              child: SingleChildScrollView(
-                key: const ValueKey('home-navigation-actions-scroll'),
-                controller: _actionsScrollController,
-                padding: const EdgeInsets.symmetric(vertical: 4),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    for (final destination in regularDestinations) ...[
-                      _HomeRailAction(
-                        key: _navigationKey(destination),
-                        destination: destination,
-                        metrics: metrics,
-                        active: destination == widget.activeDestination,
-                        autofocus:
-                            widget.autofocusActive &&
-                            destination == _activeFocusDestination,
-                        focusNode: _nodeFor(destination),
-                        onKeyEvent: (_, event) =>
-                            _handleNavigationKey(destination, event),
-                        onFocused: _revealFocusedAction,
-                        onFocusChanged: widget.onFocusChanged,
-                        onPressed: () => _activateDestination(destination),
-                      ),
-                      SizedBox(height: metrics.actionGap),
-                    ],
-                  ],
-                ),
-              ),
+    return Focus(
+      canRequestFocus: false,
+      onFocusChange: _setRailFocus,
+      child: MouseRegion(
+        onEnter: (_) => _setRailHover(true),
+        onExit: (_) => _setRailHover(false),
+        child: AnimatedContainer(
+          key: const ValueKey('main-navigation'),
+          width: expanded ? expandedWidth : metrics.width,
+          duration: TetoUiMotion.duration(context, TetoUiMotion.reveal),
+          curve: TetoUiMotion.curve,
+          decoration: BoxDecoration(
+            border: Border(
+              right: BorderSide(color: Colors.white.withValues(alpha: .11)),
             ),
+            boxShadow: expanded
+                ? [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: .55),
+                      blurRadius: 24,
+                      offset: const Offset(10, 0),
+                    ),
+                  ]
+                : null,
           ),
-          if (showBottomSettings)
-            Padding(
-              key: const ValueKey('home-navigation-bottom-settings'),
-              padding: EdgeInsets.only(top: metrics.actionGap + 4, bottom: 4),
-              child: _HomeRailAction(
-                key: _navigationKey(TopNavigationDestination.settings),
-                destination: TopNavigationDestination.settings,
-                metrics: metrics,
-                active:
-                    widget.activeDestination ==
-                    TopNavigationDestination.settings,
-                autofocus:
-                    widget.autofocusActive &&
-                    _activeFocusDestination ==
-                        TopNavigationDestination.settings,
-                focusNode: _nodeFor(TopNavigationDestination.settings),
-                onKeyEvent: (_, event) => _handleNavigationKey(
-                  TopNavigationDestination.settings,
-                  event,
+          child: Stack(
+            fit: StackFit.expand,
+            clipBehavior: Clip.none,
+            children: [
+              Positioned.fill(
+                child: ClipRect(
+                  child: BackdropFilter(
+                    key: const ValueKey('main-navigation-backdrop-blur'),
+                    enabled: expanded && TetoBlurScope.enabledOf(context),
+                    filter: ImageFilter.blur(sigmaX: 4, sigmaY: 4),
+                    child: AnimatedContainer(
+                      key: const ValueKey('main-navigation-background'),
+                      duration: TetoUiMotion.duration(
+                        context,
+                        TetoUiMotion.reveal,
+                      ),
+                      curve: TetoUiMotion.curve,
+                      decoration: BoxDecoration(
+                        color: context.appPalette.background.withValues(
+                          alpha: expanded ? .75 : .96,
+                        ),
+                      ),
+                    ),
+                  ),
                 ),
-                // The fixed utility action is already fully visible and is
-                // intentionally outside the scrollable destination group.
-                onFocused: (_) {},
-                onFocusChanged: widget.onFocusChanged,
-                onPressed: () =>
-                    _activateDestination(TopNavigationDestination.settings),
               ),
-            ),
-          const SizedBox(height: 10),
-        ],
+              Column(
+                children: [
+                  SizedBox(height: metrics.actionGap + 5),
+                  _HomeRailWordmark(
+                    metrics: metrics,
+                    expanded: expanded,
+                    expandedWidth: expandedWidth,
+                  ),
+                  SizedBox(height: metrics.actionGap + 2),
+                  Expanded(
+                    child: SingleChildScrollView(
+                      key: const ValueKey('home-navigation-actions-scroll'),
+                      controller: _actionsScrollController,
+                      clipBehavior: Clip.none,
+                      padding: const EdgeInsets.symmetric(vertical: 4),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          for (final destination in regularDestinations) ...[
+                            _HomeRailAction(
+                              key: _navigationKey(destination),
+                              destination: destination,
+                              metrics: metrics,
+                              expandEnabled: widget
+                                  .preferences
+                                  .expandNavigationLabelsOnFocus,
+                              expanded: expanded,
+                              active: destination == widget.activeDestination,
+                              autofocus:
+                                  widget.autofocusActive &&
+                                  destination == _activeFocusDestination,
+                              focusNode: _nodeFor(destination),
+                              onKeyEvent: (_, event) =>
+                                  _handleNavigationKey(destination, event),
+                              onFocused: _revealFocusedAction,
+                              onFocusChanged: widget.onFocusChanged,
+                              onPressed: () =>
+                                  _activateDestination(destination),
+                            ),
+                            SizedBox(height: metrics.actionGap),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ),
+                  if (showBottomSettings)
+                    Padding(
+                      key: const ValueKey('home-navigation-bottom-settings'),
+                      padding: EdgeInsets.only(
+                        top: metrics.actionGap + 4,
+                        bottom: 4,
+                      ),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (expanded)
+                            Divider(
+                              height: metrics.actionGap + 3,
+                              indent: 14,
+                              endIndent: 14,
+                              color: Colors.white.withValues(alpha: .18),
+                            ),
+                          _HomeRailAction(
+                            key: _navigationKey(
+                              TopNavigationDestination.settings,
+                            ),
+                            destination: TopNavigationDestination.settings,
+                            metrics: metrics,
+                            expandEnabled: widget
+                                .preferences
+                                .expandNavigationLabelsOnFocus,
+                            expanded: expanded,
+                            active:
+                                widget.activeDestination ==
+                                TopNavigationDestination.settings,
+                            autofocus:
+                                widget.autofocusActive &&
+                                _activeFocusDestination ==
+                                    TopNavigationDestination.settings,
+                            focusNode: _nodeFor(
+                              TopNavigationDestination.settings,
+                            ),
+                            onKeyEvent: (_, event) => _handleNavigationKey(
+                              TopNavigationDestination.settings,
+                              event,
+                            ),
+                            // The fixed utility action is already fully visible and is
+                            // intentionally outside the scrollable destination group.
+                            onFocused: (_) {},
+                            onFocusChanged: widget.onFocusChanged,
+                            onPressed: () => _activateDestination(
+                              TopNavigationDestination.settings,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  const SizedBox(height: 10),
+                ],
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -585,27 +730,20 @@ class _PhoneBottomNavigationState extends ConsumerState<PhoneBottomNavigation> {
     final localProfiles = ref.watch(localProfilesControllerProvider);
     final hasProfile =
         accounts.profiles.isNotEmpty || localProfiles.activeProfile != null;
-    final settingsInProfileMenu =
-        hasProfile &&
-        !accounts.isLoading &&
-        widget.preferences.settingsEntryPlacement ==
-            SettingsEntryPlacement.profileMenu;
     final experimentalOptionsEnabled = ref.watch(
       appUpdateControllerProvider.select(
         (state) => state.loaded && state.developerMode,
       ),
     );
-    final destinations =
-        runtimeTopNavigationOrder(
-              widget.preferences,
-              experimentalOptionsEnabled: experimentalOptionsEnabled,
-            )
-            .where(
-              (destination) =>
-                  destination != TopNavigationDestination.settings ||
-                  !settingsInProfileMenu,
-            )
-            .toList(growable: false);
+    final destinations = <TopNavigationDestination>[
+      ...runtimeTopNavigationOrder(
+        widget.preferences,
+        experimentalOptionsEnabled: experimentalOptionsEnabled,
+      ),
+      if ((!hasProfile || accounts.isLoading) &&
+          !widget.preferences.showSettings)
+        TopNavigationDestination.settings,
+    ];
 
     return Material(
       key: const ValueKey('phone-bottom-navigation'),
@@ -782,71 +920,191 @@ Key _navigationKey(TopNavigationDestination destination) =>
       TopNavigationDestination.settings => const ValueKey('main-nav-settings'),
     };
 
+// One lightweight icon family for the TV rail, phone bar, and classic header.
+// Active state is conveyed by the navigation accent, not a different glyph.
 IconData _navigationIcon(TopNavigationDestination destination) =>
     switch (destination) {
       TopNavigationDestination.search => Icons.search_rounded,
-      TopNavigationDestination.home => Icons.home_rounded,
-      TopNavigationDestination.myList => Icons.video_library_rounded,
-      TopNavigationDestination.discover => Icons.explore_rounded,
-      TopNavigationDestination.calendar => Icons.calendar_month_rounded,
-      TopNavigationDestination.watchTogether => Icons.person_outline_rounded,
-      TopNavigationDestination.downloads => Icons.download_rounded,
-      TopNavigationDestination.manga => Icons.menu_book_rounded,
-      TopNavigationDestination.settings => Icons.settings_rounded,
+      TopNavigationDestination.home => Icons.home_outlined,
+      TopNavigationDestination.myList => Icons.bookmark_border_rounded,
+      TopNavigationDestination.discover => Icons.explore_outlined,
+      TopNavigationDestination.calendar => Icons.calendar_month_outlined,
+      TopNavigationDestination.watchTogether => Icons.people_outline_rounded,
+      TopNavigationDestination.downloads => Icons.download_outlined,
+      TopNavigationDestination.manga => Icons.menu_book_outlined,
+      TopNavigationDestination.settings => Icons.settings_outlined,
     };
 
 class _HomeRailWordmark extends StatelessWidget {
-  const _HomeRailWordmark({required this.metrics});
+  const _HomeRailWordmark({
+    required this.metrics,
+    required this.expanded,
+    required this.expandedWidth,
+  });
 
   final HomeNavigationRailMetrics metrics;
+  final bool expanded;
+  final double expandedWidth;
 
   @override
   Widget build(BuildContext context) {
+    final gutter = (metrics.width - metrics.logoSize) / 2;
+    final labelLeft = gutter + metrics.logoSize + 8;
+    // Reserve the final label width even while the drawer animates. The logo
+    // stays centered in its compact slot, and the text reveals without sliding
+    // or resizing alongside the drawer's changing width.
+    final labelWidth = (expandedWidth - 1 - labelLeft - gutter)
+        .clamp(0.0, double.infinity)
+        .toDouble();
+    // The mark's solid artwork occupies ~64% of its square slot. Font size is
+    // not visible letter height: this bold brand occupies roughly 79% of an em.
+    // Match visible artwork and letters, not their padded layout rectangles.
+    // Share any proportional width fitting with the mark itself, so labels
+    // never look shorter than the icon or become horizontally distorted.
+    final wordmarkLineHeight = metrics.logoSize * .90;
+    final wordmarkStyle = TextStyle(
+      fontSize: wordmarkLineHeight,
+      height: 1,
+      fontWeight: FontWeight.w800,
+    );
+    final wordmarkMetrics = TextPainter(
+      text: TextSpan(
+        text: 'Teto TV',
+        style: DefaultTextStyle.of(context).style.merge(wordmarkStyle),
+      ),
+      textDirection: Directionality.of(context),
+      textScaler: TextScaler.noScaling,
+    )..layout();
+    final visualScale = wordmarkMetrics.width > 0
+        ? (labelWidth / wordmarkMetrics.width).clamp(0.0, 1.0)
+        : 1.0;
+    final wordmarkNaturalHeight = wordmarkMetrics.height;
+    wordmarkMetrics.dispose();
+    // Normalize the image's transparent padding to the font's visible caps,
+    // rather than equating an em-sized text box to a square image box.
+    const markInkFraction = 988 / 1536;
+    const capitalInkFraction = .79;
+    final visualLogoSize =
+        wordmarkLineHeight * capitalInkFraction / markInkFraction * visualScale;
+    // Capitals sit above a font line's geometric center. Keep their visible
+    // center aligned optically with the mark using a small baseline offset.
+    final wordmarkOpticalOffset = wordmarkNaturalHeight * visualScale * .085;
     return Semantics(
       key: const ValueKey('main-nav-wordmark'),
       label: context.tr("Teto TV"),
       image: true,
       child: SizedBox(
-        width: metrics.logoSize,
+        width: double.infinity,
         height: metrics.logoSize,
-        child: Stack(
-          alignment: Alignment.center,
-          children: [
-            ColorFiltered(
-              colorFilter: ColorFilter.mode(
-                context.appPalette.accentBright,
-                BlendMode.srcIn,
-              ),
-              child: Image.asset(
-                'assets/branding/tetotv_in_app_mark.png',
-                width: metrics.logoSize,
-                height: metrics.logoSize,
-                fit: BoxFit.contain,
-                cacheWidth: 192,
-                filterQuality: FilterQuality.medium,
-              ),
-            ),
-            Positioned(
-              left: 0,
-              top: 0,
-              child: Offstage(
-                child: Text(
-                  context.tr("Teto"),
-                  key: ValueKey('main-nav-wordmark-teto'),
+        child: ClipRect(
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              Positioned(
+                left: gutter,
+                child: ColorFiltered(
+                  colorFilter: ColorFilter.mode(
+                    context.appPalette.accentBright,
+                    BlendMode.srcIn,
+                  ),
+                  child: SizedBox.square(
+                    key: const ValueKey('main-nav-logo-slot'),
+                    dimension: metrics.logoSize,
+                    child: Center(
+                      // Hidden lettering must not constrain the compact mark
+                      // or flatten Small/Medium/Large chrome-size updates.
+                      // Expanded branding fits both parts proportionally,
+                      // animating only inside this permanently anchored slot.
+                      child: TweenAnimationBuilder<double>(
+                        tween: Tween<double>(
+                          begin: metrics.logoSize,
+                          end: expanded ? visualLogoSize : metrics.logoSize,
+                        ),
+                        duration: TetoUiMotion.duration(
+                          context,
+                          TetoUiMotion.reveal,
+                        ),
+                        curve: TetoUiMotion.curve,
+                        builder: (_, size, _) => Image.asset(
+                          'assets/branding/tetotv_in_app_mark.png',
+                          width: size,
+                          height: size,
+                          fit: BoxFit.contain,
+                          cacheWidth: 192,
+                          filterQuality: FilterQuality.medium,
+                        ),
+                      ),
+                    ),
+                  ),
                 ),
               ),
-            ),
-            Positioned(
-              right: 0,
-              top: 0,
-              child: Offstage(
-                child: Text(
-                  context.tr("TV"),
-                  key: ValueKey('main-nav-wordmark-tv'),
+              Positioned(
+                left: labelLeft,
+                width: labelWidth,
+                top: 0,
+                bottom: 0,
+                child: IgnorePointer(
+                  child: AnimatedOpacity(
+                    key: const ValueKey('main-nav-expanded-wordmark'),
+                    opacity: expanded ? 1 : 0,
+                    duration: TetoUiMotion.duration(
+                      context,
+                      TetoUiMotion.reveal,
+                    ),
+                    curve: TetoUiMotion.curve,
+                    child: ExcludeSemantics(
+                      child: ClipRect(
+                        child: Align(
+                          alignment: Alignment.centerLeft,
+                          child: Transform.translate(
+                            offset: Offset(0, wordmarkOpticalOffset),
+                            child: SizedBox(
+                              width: labelWidth,
+                              height: wordmarkNaturalHeight * visualScale,
+                              child: FittedBox(
+                                fit: BoxFit.scaleDown,
+                                alignment: Alignment.centerLeft,
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.baseline,
+                                  textBaseline: TextBaseline.alphabetic,
+                                  children: [
+                                    Text(
+                                      'Teto',
+                                      key: const ValueKey(
+                                        'main-nav-wordmark-teto',
+                                      ),
+                                      textScaler: TextScaler.noScaling,
+                                      style: wordmarkStyle.copyWith(
+                                        color: context.appPalette.accentBright,
+                                      ),
+                                    ),
+                                    Text(
+                                      ' TV',
+                                      key: const ValueKey(
+                                        'main-nav-wordmark-tv',
+                                      ),
+                                      textScaler: TextScaler.noScaling,
+                                      style: wordmarkStyle.copyWith(
+                                        color: contrastForeground(
+                                          context.appPalette.background,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -857,6 +1115,8 @@ class _HomeRailAction extends StatelessWidget {
   const _HomeRailAction({
     required this.destination,
     required this.metrics,
+    required this.expandEnabled,
+    required this.expanded,
     required this.active,
     required this.autofocus,
     required this.focusNode,
@@ -869,6 +1129,8 @@ class _HomeRailAction extends StatelessWidget {
 
   final TopNavigationDestination destination;
   final HomeNavigationRailMetrics metrics;
+  final bool expandEnabled;
+  final bool expanded;
   final bool active;
   final bool autofocus;
   final FocusNode focusNode;
@@ -880,72 +1142,113 @@ class _HomeRailAction extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final label = context.tr(destination.displayName);
-    return Tooltip(
-      message: label,
-      child: SizedBox(
-        width: metrics.width,
-        height: metrics.actionHeight,
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            if (active)
-              IgnorePointer(
-                child: DecoratedBox(
-                  key: ValueKey('main-nav-active-${destination.name}'),
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.centerLeft,
-                      end: Alignment.centerRight,
-                      colors: [
-                        context.appPalette.accent.withValues(alpha: .34),
-                        context.appPalette.accent.withValues(alpha: .12),
-                        Colors.transparent,
-                      ],
-                      stops: const [0, .56, 1],
-                    ),
-                    border: Border(
-                      left: BorderSide(
-                        color: context.appPalette.accentBright,
-                        width: 3,
-                      ),
-                    ),
+    final palette = context.appPalette;
+    final action = SizedBox(
+      height: metrics.actionHeight,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          if (active)
+            IgnorePointer(
+              child: DecoratedBox(
+                key: ValueKey('main-nav-active-${destination.name}'),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.centerLeft,
+                    end: Alignment.centerRight,
+                    colors: [
+                      palette.accent.withValues(alpha: .34),
+                      palette.accent.withValues(alpha: .12),
+                      Colors.transparent,
+                    ],
+                    stops: const [0, .56, 1],
                   ),
-                ),
-              ),
-            Align(
-              alignment: Alignment.center,
-              child: TvFocusable(
-                autofocus: autofocus,
-                focusNode: focusNode,
-                onKeyEvent: onKeyEvent,
-                onFocusChanged: (focused) {
-                  if (focused) onFocused(context);
-                  onFocusChanged?.call(focused);
-                },
-                onPressed: onPressed,
-                borderRadius: BorderRadius.circular(8),
-                focusScale: 1.035,
-                child: Semantics(
-                  label: label,
-                  selected: active,
-                  button: true,
-                  excludeSemantics: true,
-                  child: SizedBox(
-                    width: metrics.actionWidth,
-                    height: metrics.actionHeight,
-                    child: Icon(
-                      _navigationIcon(destination),
-                      color: context.appPalette.primaryText,
-                      size: metrics.iconSize,
-                    ),
+                  border: Border(
+                    left: BorderSide(color: palette.accentBright, width: 3),
                   ),
                 ),
               ),
             ),
-          ],
-        ),
+          TvFocusable(
+            autofocus: autofocus,
+            focusNode: focusNode,
+            onKeyEvent: onKeyEvent,
+            onFocusChanged: (focused) {
+              if (focused) onFocused(context);
+              onFocusChanged?.call(focused);
+            },
+            onPressed: onPressed,
+            borderRadius: BorderRadius.circular(8),
+            focusScale: 1.015,
+            child: Semantics(
+              label: label,
+              selected: active,
+              button: true,
+              excludeSemantics: true,
+              child: LayoutBuilder(
+                builder: (context, constraints) => Row(
+                  children: [
+                    SizedBox(
+                      // Keep the icon in the same slot in both rail states.
+                      // Changing its width and translating it on expansion
+                      // made every destination appear to jump sideways.
+                      width: (metrics.width - 1)
+                          .clamp(0.0, constraints.maxWidth)
+                          .toDouble(),
+                      height: metrics.actionHeight,
+                      child: Icon(
+                        _navigationIcon(destination),
+                        color: palette.primaryText,
+                        size: metrics.iconSize,
+                      ),
+                    ),
+                    if (expandEnabled)
+                      Expanded(
+                        child: ClipRect(
+                          child: AnimatedOpacity(
+                            key: ValueKey(
+                              'main-nav-expanded-label-${destination.name}',
+                            ),
+                            opacity: expanded ? 1 : 0,
+                            duration: TetoUiMotion.duration(
+                              context,
+                              expanded
+                                  ? TetoUiMotion.reveal
+                                  : TetoUiMotion.focus,
+                            ),
+                            curve: expanded
+                                ? const Interval(
+                                    .25,
+                                    1,
+                                    curve: TetoUiMotion.curve,
+                                  )
+                                : TetoUiMotion.curve,
+                            child: Padding(
+                              padding: const EdgeInsets.only(right: 12),
+                              child: Text(
+                                label,
+                                maxLines: 1,
+                                softWrap: false,
+                                overflow: TextOverflow.fade,
+                                style: TextStyle(
+                                  color: palette.primaryText,
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: metrics.iconSize * .75,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
+    return expandEnabled ? action : Tooltip(message: label, child: action);
   }
 }
 
@@ -1134,8 +1437,6 @@ class TetoNotificationBell extends ConsumerWidget {
     final overlay =
         Overlay.of(context).context.findRenderObject() as RenderBox?;
     if (box == null || overlay == null) return;
-    final notificationState = ref.read(appNotificationControllerProvider);
-    final items = notificationState.inboxItems;
     final topLeft = box.localToGlobal(Offset.zero, ancestor: overlay);
     final menuWidth = (overlay.size.width - 24).clamp(296.0, 440.0).toDouble();
     final preferredTop = topLeft.dy + box.size.height + 8;
@@ -1153,14 +1454,13 @@ class TetoNotificationBell extends ConsumerWidget {
             )
             .toDouble();
 
-    final result = await showGeneralDialog<String>(
+    final result = await showTetoGeneralDialog<String>(
       context: context,
       barrierDismissible: true,
       barrierLabel: 'Close notifications',
       barrierColor: context.appPalette.background.withValues(alpha: .58),
-      transitionDuration: const Duration(milliseconds: 120),
+      transitionDuration: TetoUiMotion.duration(context, TetoUiMotion.popup),
       pageBuilder: (menuContext, _, _) => _NotificationMenuOverlay(
-        items: items,
         width: menuWidth,
         top: menuTop,
         right: menuRight,
@@ -1168,14 +1468,7 @@ class TetoNotificationBell extends ConsumerWidget {
             .clamp(180.0, overlay.size.height - 24)
             .toDouble(),
       ),
-      transitionBuilder: (context, animation, _, child) => FadeTransition(
-        opacity: CurvedAnimation(
-          parent: animation,
-          curve: Curves.easeOutCubic,
-          reverseCurve: Curves.easeInCubic,
-        ),
-        child: child,
-      ),
+      transitionBuilder: tetoPopupTransition,
     );
     if (!context.mounted || result == null) return;
     const dismissPrefix = 'dismiss:';
@@ -1232,7 +1525,7 @@ class TetoNotificationBell extends ConsumerWidget {
                     alignment: Alignment.center,
                     margin: const EdgeInsets.all(4),
                     decoration: BoxDecoration(
-                      color: context.appPalette.surface.withValues(alpha: .92),
+                      color: context.appPalette.surface,
                       borderRadius: BorderRadius.circular(10),
                       border: Border.all(
                         color: context.appPalette.primaryText.withValues(
@@ -1287,14 +1580,12 @@ class TetoNotificationBell extends ConsumerWidget {
 
 class _NotificationMenuOverlay extends ConsumerWidget {
   const _NotificationMenuOverlay({
-    required this.items,
     required this.width,
     required this.top,
     required this.right,
     required this.maxHeight,
   });
 
-  final List<AppNotification> items;
   final double width;
   final double top;
   final double right;
@@ -1323,6 +1614,7 @@ class _NotificationMenuOverlay extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final updateState = ref.watch(appUpdateControllerProvider);
+    final items = ref.watch(appNotificationControllerProvider).inboxItems;
     return Stack(
       children: [
         Positioned(
@@ -1926,10 +2218,6 @@ class TetoProfileSwitcher extends ConsumerWidget {
       for (final provider in TrackingProvider.values)
         ...?accounts.savedProfiles[provider],
     ];
-    final showSettings =
-        !accounts.isLoading &&
-        preferences.settingsEntryPlacement ==
-            SettingsEntryPlacement.profileMenu;
 
     return SizedBox(
       width: compactAvatar ? 52 : 190,
@@ -1942,7 +2230,7 @@ class TetoProfileSwitcher extends ConsumerWidget {
         activeProfileIds: accounts.activeProfileIds,
         activeLocalProfileId: localProfiles.activeProfileId,
         isLoading: accounts.isLoading,
-        showSettings: showSettings,
+        showSettings: true,
         focusNode: focusNode,
         onKeyEvent: onKeyEvent,
         onFocusChanged: onFocusChanged,
@@ -2043,27 +2331,19 @@ class MainNavigationBar extends ConsumerWidget {
         final showProfile =
             (primaryProfile != null || activeLocalProfile != null) &&
             width >= 700;
-        final settingsInProfileMenu =
-            showProfile &&
-            !accounts.isLoading &&
-            preferences.settingsEntryPlacement ==
-                SettingsEntryPlacement.profileMenu;
         final experimentalOptionsEnabled = ref.watch(
           appUpdateControllerProvider.select(
             (state) => state.loaded && state.developerMode,
           ),
         );
-        final visibleDestinations =
-            runtimeTopNavigationOrder(
-                  preferences,
-                  experimentalOptionsEnabled: experimentalOptionsEnabled,
-                )
-                .where(
-                  (destination) =>
-                      destination != TopNavigationDestination.settings ||
-                      !settingsInProfileMenu,
-                )
-                .toList(growable: false);
+        final visibleDestinations = <TopNavigationDestination>[
+          ...runtimeTopNavigationOrder(
+            preferences,
+            experimentalOptionsEnabled: experimentalOptionsEnabled,
+          ),
+          if ((!showProfile || accounts.isLoading) && !preferences.showSettings)
+            TopNavigationDestination.settings,
+        ];
         // Header height depends only on width, never on asynchronously loaded
         // account data, so linking/loading a tracker cannot shift the screen.
         final headerHeight = width >= 760 ? 96.0 : 62.0;
@@ -2089,6 +2369,9 @@ class MainNavigationBar extends ConsumerWidget {
                   context: context,
                   destination: visibleDestinations[index],
                   active: active,
+                  expandOnFocus:
+                      preferences.expandNavigationLabelsOnFocus &&
+                      normalTvLayout,
                   settingsCompact: width < 1200,
                   dense: width < 500,
                   autofocusActive: autofocusActive,
@@ -2125,6 +2408,7 @@ Widget _navigationAction({
   required BuildContext context,
   required TopNavigationDestination destination,
   required MainNavigationDestination active,
+  required bool expandOnFocus,
   required bool settingsCompact,
   required bool dense,
   required bool autofocusActive,
@@ -2135,17 +2419,19 @@ Widget _navigationAction({
 }) => switch (destination) {
   TopNavigationDestination.search => _NavigationAction(
     key: const ValueKey('main-nav-search'),
-    icon: Icons.search_rounded,
+    icon: _navigationIcon(TopNavigationDestination.search),
     label: context.tr("Search"),
     compact: true,
+    expandOnFocus: expandOnFocus,
     dense: dense,
     onPressed: () => context.push('/search'),
   ),
   TopNavigationDestination.home => _NavigationAction(
     key: const ValueKey('main-nav-home'),
-    icon: Icons.home_rounded,
+    icon: _navigationIcon(TopNavigationDestination.home),
     label: context.tr("Home"),
     compact: true,
+    expandOnFocus: expandOnFocus,
     dense: dense,
     active: active == MainNavigationDestination.home,
     autofocus: autofocusActive && active == MainNavigationDestination.home,
@@ -2158,9 +2444,10 @@ Widget _navigationAction({
   ),
   TopNavigationDestination.myList => _NavigationAction(
     key: const ValueKey('main-nav-my-list'),
-    icon: Icons.video_library_rounded,
+    icon: _navigationIcon(TopNavigationDestination.myList),
     label: context.tr("My List"),
     compact: false,
+    expandOnFocus: expandOnFocus,
     dense: dense,
     active: active == MainNavigationDestination.myList,
     autofocus: autofocusActive && active == MainNavigationDestination.myList,
@@ -2173,9 +2460,10 @@ Widget _navigationAction({
   ),
   TopNavigationDestination.discover => _NavigationAction(
     key: const ValueKey('main-nav-discover'),
-    icon: Icons.explore_rounded,
+    icon: _navigationIcon(TopNavigationDestination.discover),
     label: context.tr("Discover"),
     compact: true,
+    expandOnFocus: expandOnFocus,
     dense: dense,
     active: active == MainNavigationDestination.discover,
     autofocus: autofocusActive && active == MainNavigationDestination.discover,
@@ -2188,9 +2476,10 @@ Widget _navigationAction({
   ),
   TopNavigationDestination.calendar => _NavigationAction(
     key: const ValueKey('main-nav-calendar'),
-    icon: Icons.calendar_month_rounded,
+    icon: _navigationIcon(TopNavigationDestination.calendar),
     label: context.tr("Calendar"),
     compact: true,
+    expandOnFocus: expandOnFocus,
     dense: dense,
     active: active == MainNavigationDestination.calendar,
     autofocus: autofocusActive && active == MainNavigationDestination.calendar,
@@ -2203,9 +2492,10 @@ Widget _navigationAction({
   ),
   TopNavigationDestination.watchTogether => _NavigationAction(
     key: const ValueKey('main-nav-watch-together'),
-    icon: Icons.person_outline_rounded,
+    icon: _navigationIcon(TopNavigationDestination.watchTogether),
     label: context.tr("Watch Party"),
     compact: true,
+    expandOnFocus: expandOnFocus,
     dense: dense,
     active: active == MainNavigationDestination.watchTogether,
     autofocus:
@@ -2219,9 +2509,10 @@ Widget _navigationAction({
   ),
   TopNavigationDestination.downloads => _NavigationAction(
     key: const ValueKey('main-nav-downloads'),
-    icon: Icons.download_rounded,
+    icon: _navigationIcon(TopNavigationDestination.downloads),
     label: context.tr("Downloads"),
     compact: true,
+    expandOnFocus: expandOnFocus,
     dense: dense,
     active: active == MainNavigationDestination.downloads,
     autofocus: autofocusActive && active == MainNavigationDestination.downloads,
@@ -2234,9 +2525,10 @@ Widget _navigationAction({
   ),
   TopNavigationDestination.manga => _NavigationAction(
     key: const ValueKey('main-nav-manga'),
-    icon: Icons.menu_book_rounded,
+    icon: _navigationIcon(TopNavigationDestination.manga),
     label: context.tr("Manga"),
     compact: true,
+    expandOnFocus: expandOnFocus,
     dense: dense,
     active: active == MainNavigationDestination.manga,
     autofocus: autofocusActive && active == MainNavigationDestination.manga,
@@ -2249,9 +2541,10 @@ Widget _navigationAction({
   ),
   TopNavigationDestination.settings => _NavigationAction(
     key: const ValueKey('main-nav-settings'),
-    icon: Icons.settings_rounded,
+    icon: _navigationIcon(TopNavigationDestination.settings),
     label: context.tr("Settings"),
     compact: settingsCompact,
+    expandOnFocus: expandOnFocus,
     dense: dense,
     onPressed: () => context.push('/settings/accounts'),
   ),
@@ -2345,12 +2638,12 @@ class _ProfileMenuButton extends StatelessWidget {
           (overlay.size.width - menuWidth - 12).clamp(12.0, double.infinity),
         )
         .toDouble();
-    final result = await showGeneralDialog<String>(
+    final result = await showTetoGeneralDialog<String>(
       context: context,
       barrierDismissible: true,
       barrierLabel: 'Close profile menu',
       barrierColor: context.appPalette.background.withValues(alpha: .58),
-      transitionDuration: const Duration(milliseconds: 120),
+      transitionDuration: TetoUiMotion.duration(context, TetoUiMotion.popup),
       pageBuilder: (menuContext, _, _) => _ProfileMenuOverlay(
         trackerProfile: trackerProfile,
         localProfile: localProfile,
@@ -2366,14 +2659,7 @@ class _ProfileMenuButton extends StatelessWidget {
             .clamp(160.0, overlay.size.height - 24)
             .toDouble(),
       ),
-      transitionBuilder: (context, animation, _, child) => FadeTransition(
-        opacity: CurvedAnimation(
-          parent: animation,
-          curve: Curves.easeOutCubic,
-          reverseCurve: Curves.easeInCubic,
-        ),
-        child: child,
-      ),
+      transitionBuilder: tetoPopupTransition,
     );
     if (result == null) return;
     if (result == 'manage') {
@@ -2590,22 +2876,16 @@ class _ProfileMenuOverlay extends StatelessWidget {
                   color: Colors.transparent,
                   child: DecoratedBox(
                     decoration: BoxDecoration(
-                      color: context.appPalette.surface,
-                      borderRadius: BorderRadius.circular(14),
+                      color: context.appPalette.surface.withValues(alpha: .92),
+                      borderRadius: BorderRadius.circular(TetoBoxStyle.radius),
                       border: Border.all(
-                        color: context.appPalette.accent.withValues(alpha: .72),
+                        color: TetoBoxStyle.outline(context.appPalette),
                       ),
                       boxShadow: [
                         BoxShadow(
                           color: Colors.black.withValues(alpha: .58),
                           blurRadius: 24,
                           offset: const Offset(0, 10),
-                        ),
-                        BoxShadow(
-                          color: context.appPalette.focusGlow.withValues(
-                            alpha: .24,
-                          ),
-                          blurRadius: 18,
                         ),
                       ],
                     ),
@@ -2632,18 +2912,16 @@ class _ProfileMenuOverlay extends StatelessWidget {
                                   'main-nav-profile-menu-close',
                                 ),
                                 onPressed: () => Navigator.of(context).pop(),
-                                borderRadius: BorderRadius.circular(9),
+                                borderRadius: BorderRadius.circular(
+                                  TetoBoxStyle.radius,
+                                ),
                                 focusScale: 1.01,
                                 child: Container(
                                   width: 36,
                                   height: 36,
-                                  decoration: BoxDecoration(
+                                  decoration: TetoBoxStyle.decoration(
+                                    context.appPalette,
                                     color: context.appPalette.surfaceRaised,
-                                    borderRadius: BorderRadius.circular(9),
-                                    border: Border.all(
-                                      color: context.appPalette.primaryText
-                                          .withValues(alpha: .12),
-                                    ),
                                   ),
                                   child: Icon(
                                     Icons.close_rounded,
@@ -2660,13 +2938,9 @@ class _ProfileMenuOverlay extends StatelessWidget {
                               horizontal: 12,
                               vertical: 10,
                             ),
-                            decoration: BoxDecoration(
+                            decoration: TetoBoxStyle.decoration(
+                              context.appPalette,
                               color: context.appPalette.surfaceRaised,
-                              borderRadius: BorderRadius.circular(10),
-                              border: Border.all(
-                                color: context.appPalette.primaryText
-                                    .withValues(alpha: .09),
-                              ),
                             ),
                             child: _ProfileMenuStats(
                               trackerProfile: trackerProfile,
@@ -2810,7 +3084,7 @@ class _ProfileMenuActionRow extends StatelessWidget {
   Widget build(BuildContext context) => TvFocusable(
     autofocus: autofocus,
     onPressed: onPressed,
-    borderRadius: BorderRadius.circular(10),
+    borderRadius: BorderRadius.circular(TetoBoxStyle.radius),
     focusScale: 1.01,
     child: Container(
       constraints: const BoxConstraints(minHeight: 50),
@@ -2819,11 +3093,11 @@ class _ProfileMenuActionRow extends StatelessWidget {
         color: selected
             ? context.appPalette.accent.withValues(alpha: .25)
             : context.appPalette.surfaceRaised,
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(TetoBoxStyle.radius),
         border: Border.all(
           color: selected
               ? context.appPalette.accentBright.withValues(alpha: .72)
-              : context.appPalette.primaryText.withValues(alpha: .09),
+              : TetoBoxStyle.outline(context.appPalette),
         ),
       ),
       child: Row(
@@ -3158,13 +3432,14 @@ class _LocalProfileAvatar extends StatelessWidget {
 const _profileAvatarBorderRadius = BorderRadius.all(Radius.circular(10));
 const _profileTriggerBorderRadius = BorderRadius.all(Radius.circular(13));
 
-class _NavigationAction extends StatelessWidget {
+class _NavigationAction extends StatefulWidget {
   const _NavigationAction({
     required this.icon,
     required this.label,
     required this.onPressed,
     this.active = false,
     this.compact = false,
+    this.expandOnFocus = false,
     this.dense = false,
     this.autofocus = false,
     this.focusNode,
@@ -3176,18 +3451,55 @@ class _NavigationAction extends StatelessWidget {
   final VoidCallback onPressed;
   final bool active;
   final bool compact;
+  final bool expandOnFocus;
   final bool dense;
   final bool autofocus;
   final FocusNode? focusNode;
 
   @override
+  State<_NavigationAction> createState() => _NavigationActionState();
+}
+
+class _NavigationActionState extends State<_NavigationAction> {
+  bool _hovered = false;
+  bool _focused = false;
+  bool _suppressedUntilLeave = false;
+
+  void _setHover(bool hovered) => setState(() {
+    _hovered = hovered;
+    if (!hovered && !_focused) _suppressedUntilLeave = false;
+  });
+
+  void _setFocus(bool focused) {
+    if (!mounted) return;
+    setState(() {
+      _focused = focused;
+      if (!focused && !_hovered) _suppressedUntilLeave = false;
+    });
+  }
+
+  void _activate() {
+    if (widget.expandOnFocus) {
+      setState(() => _suppressedUntilLeave = true);
+    }
+    widget.onPressed();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return Tooltip(
-      message: compact ? label : '',
+    final expanded =
+        widget.compact &&
+        widget.expandOnFocus &&
+        (_hovered || _focused) &&
+        !_suppressedUntilLeave;
+    final action = MouseRegion(
+      onEnter: widget.expandOnFocus ? (_) => _setHover(true) : null,
+      onExit: widget.expandOnFocus ? (_) => _setHover(false) : null,
       child: TvFocusable(
-        autofocus: autofocus,
-        focusNode: focusNode,
-        onPressed: onPressed,
+        autofocus: widget.autofocus,
+        focusNode: widget.focusNode,
+        onFocusChanged: _setFocus,
+        onPressed: _activate,
         borderRadius: BorderRadius.circular(7),
         focusScale: 1.02,
         child: Container(
@@ -3195,16 +3507,16 @@ class _NavigationAction extends StatelessWidget {
             // Eight destinations still fit the 330px Classic Layout header.
             // Every destination remains present and focusable instead of being
             // clipped or silently hidden on compact phones.
-            horizontal: dense ? 4 : (compact ? 8 : 11),
+            horizontal: widget.dense ? 4 : (widget.compact ? 8 : 11),
             vertical: 8,
           ),
           decoration: BoxDecoration(
-            color: active
+            color: widget.active
                 ? context.appPalette.accent.withValues(alpha: .13)
                 : Colors.transparent,
             border: Border(
               bottom: BorderSide(
-                color: active
+                color: widget.active
                     ? context.appPalette.accentBright
                     : Colors.transparent,
                 width: 2,
@@ -3215,23 +3527,38 @@ class _NavigationAction extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             children: [
               Icon(
-                icon,
+                widget.icon,
                 size: 18,
-                color: active
+                color: widget.active
                     ? context.appPalette.accentBright
                     : context.appPalette.primaryText,
               ),
-              if (!compact) ...[
-                const SizedBox(width: 6),
-                LocalizedText(
-                  label,
-                  style: Theme.of(context).textTheme.labelLarge,
+              ClipRect(
+                child: AnimatedSize(
+                  duration: TetoUiMotion.duration(context, TetoUiMotion.reveal),
+                  curve: Curves.easeOutCubic,
+                  alignment: Alignment.centerLeft,
+                  child: !widget.compact || expanded
+                      ? Padding(
+                          key: ValueKey('main-nav-label-${widget.label}'),
+                          padding: const EdgeInsets.only(left: 6),
+                          child: Text(
+                            widget.label,
+                            maxLines: 1,
+                            softWrap: false,
+                            style: Theme.of(context).textTheme.labelLarge,
+                          ),
+                        )
+                      : const SizedBox.shrink(),
                 ),
-              ],
+              ),
             ],
           ),
         ),
       ),
     );
+    return widget.compact && !widget.expandOnFocus
+        ? Tooltip(message: widget.label, child: action)
+        : action;
   }
 }

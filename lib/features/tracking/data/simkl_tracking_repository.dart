@@ -10,6 +10,7 @@ class SimklTrackingRepository
     implements
         TrackingRepository,
         ExternalIdTrackingRepository,
+        AutomaticCompletionTrackingRepository,
         ResolvedStatusTrackingRepository {
   factory SimklTrackingRepository({
     required String accessToken,
@@ -123,6 +124,70 @@ class SimklTrackingRepository
         completedEpisodes: completedEpisodes,
       );
     }
+  }
+
+  @override
+  Future<void> updateProgressAndCompletion({
+    required TrackingMediaIds ids,
+    required int completedEpisodes,
+  }) async {
+    if (completedEpisodes <= 0) {
+      throw ArgumentError.value(completedEpisodes, 'completedEpisodes');
+    }
+    final session = await _session();
+    final simklIds = _simklIds(ids);
+    // Reject conflicting stable mappings before any history/status mutation.
+    await _completionRow(session, simklIds);
+    await updateProgressByIds(ids: ids, completedEpisodes: completedEpisodes);
+    final row = await _completionRow(session, simklIds);
+    if (row == null) {
+      throw StateError('SIMKL completion metadata is not available yet.');
+    }
+    final metadata = await session.client.animeCompletionMetadata(
+      SimklAnimeId(row.simklId),
+    );
+    if (trackingSeriesIsComplete(
+      completedEpisodes: completedEpisodes,
+      totalEpisodes: metadata.totalEpisodes,
+      finishedAiring: metadata.finishedAiring,
+    )) {
+      final actual = await session.setStatus(
+        ids: SimklMediaIds(simkl: row.simklId),
+        status: 'completed',
+      );
+      if (actual != 'completed') {
+        // SIMKL can normalize a request back to Watching if its catalog changed.
+        // Do not call this delivered until the service confirms Completed.
+        throw StateError('SIMKL has not confirmed Completed status.');
+      }
+    }
+  }
+
+  Future<SimklAnimeListEntry?> _completionRow(
+    SimklAccountSession session,
+    SimklMediaIds ids,
+  ) async {
+    final matches = (await session.animeLibrary())
+        .where(
+          (row) =>
+              (ids.simkl != null && ids.simkl == row.simklId) ||
+              (ids.anilist != null && ids.anilist == row.anilistId) ||
+              (ids.mal != null && ids.mal == row.malId),
+        )
+        .toList();
+    if (matches.length > 1) {
+      throw StateError('SIMKL returned ambiguous completion mappings.');
+    }
+    final row = matches.firstOrNull;
+    if (row != null &&
+        ((ids.simkl != null && ids.simkl != row.simklId) ||
+            (ids.anilist != null &&
+                row.anilistId != null &&
+                ids.anilist != row.anilistId) ||
+            (ids.mal != null && row.malId != null && ids.mal != row.malId))) {
+      throw StateError('SIMKL returned conflicting completion mappings.');
+    }
+    return row;
   }
 
   @override

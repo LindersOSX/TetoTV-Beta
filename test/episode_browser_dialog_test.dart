@@ -1,4 +1,6 @@
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/theme/teto_box_style.dart';
+import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/widgets/network_artwork.dart';
 import 'package:anime_tv/features/catalog/domain/anime_summary.dart';
 import 'package:anime_tv/features/catalog/domain/catalog_episode_metadata.dart';
@@ -9,6 +11,147 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  testWidgets('header arrows keep focus, cross pages, and clamp at the end', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1280, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.dark,
+        home: EpisodeBrowserDialog(
+          anime: const AnimeSummary(
+            id: 990,
+            title: 'Header navigation',
+            description: '',
+            episodes: 13,
+            score: null,
+          ),
+          selectedEpisode: 6,
+          totalEpisodes: 13,
+          embedded: true,
+          onEpisodeSelected: (_) {},
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final next = tester.widget<TvFocusable>(
+      find.byKey(const ValueKey('episode-step-next')),
+    );
+    next.focusNode!.requestFocus();
+    await tester.pump();
+    for (var i = 7; i <= 13; i++) {
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+      expect(find.text('Episode $i of 13'), findsOneWidget);
+      if (i < 13) expect(next.focusNode!.hasFocus, isTrue);
+    }
+    expect(
+      find.byKey(const ValueKey('episode-browser-card-13')),
+      findsOneWidget,
+    );
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'episode-browser.number',
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pumpAndSettle();
+    expect(_cardHasFocus(tester, 13), isTrue);
+    expect(tester.takeException(), isNull);
+  });
+  for (final palette in [
+    AppThemePalette.defaults,
+    AppThemePalette.fromSeeds(
+      background: const Color(0xFF0B1320),
+      surface: const Color(0xFF172535),
+      accent: const Color(0xFF00B8CC),
+      primaryText: Colors.white,
+      mutedText: const Color(0xFFACBACC),
+    ),
+  ]) {
+    testWidgets('episode carousel shares glass controls and outer-only focus '
+        '${palette.accent}', (tester) async {
+      tester.view.physicalSize = const Size(1920, 1080);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: AppTheme.darkFor(palette),
+          home: const EpisodeBrowserDialog(
+            anime: AnimeSummary(
+              id: 902,
+              title: 'Uniform carousel',
+              description: '',
+              episodes: 24,
+              score: null,
+            ),
+            selectedEpisode: 1,
+            totalEpisodes: 24,
+            isTelevision: true,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      BoxDecoration surface(String key) =>
+          tester.widget<Container>(find.byKey(ValueKey(key))).decoration!
+              as BoxDecoration;
+      expect(
+        surface('episode-browser-surface'),
+        TetoBoxStyle.translucentPanelDecoration(palette),
+      );
+      expect(
+        surface('episode-browser-header'),
+        TetoBoxStyle.translucentPanelDecoration(palette),
+      );
+      expect(
+        surface('episode-browser-pagination'),
+        TetoBoxStyle.translucentPanelDecoration(palette),
+      );
+      final resting = surface('episode-browser-card-surface-2');
+      expect(resting, TetoBoxStyle.translucentControlDecoration(palette));
+      _cardFocusNode(tester, 2).requestFocus();
+      await tester.pumpAndSettle();
+      expect(surface('episode-browser-card-surface-2'), resting);
+      final focusFrame = tester.widget<AnimatedContainer>(
+        find
+            .descendant(
+              of: find.byKey(const ValueKey('episode-browser-card-2')),
+              matching: find.byType(AnimatedContainer),
+            )
+            .first,
+      );
+      final outline = focusFrame.foregroundDecoration! as BoxDecoration;
+      expect(outline.color, Colors.transparent);
+      expect(outline.border!.top.color, palette.focusRing);
+      final glow = focusFrame.decoration! as BoxDecoration;
+      expect(glow.boxShadow!.last.color, palette.focusGlow);
+      final selectedPage = surface('episode-page-surface-1');
+      final otherPage = surface('episode-page-surface-2');
+      expect(selectedPage.gradient, otherPage.gradient);
+      expect(selectedPage.border!.top.color, palette.accentBright);
+      final pageControl = tester.widget<TvFocusable>(
+        find.descendant(
+          of: find.byKey(const ValueKey('episode-browser-page-button-0')),
+          matching: find.byType(TvFocusable),
+        ),
+      );
+      expect(
+        pageControl.borderRadius,
+        BorderRadius.circular(TetoBoxStyle.radius),
+      );
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await tester.pumpAndSettle();
+      expect(_cardHasFocus(tester, 4), isTrue);
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+      await tester.pumpAndSettle();
+      expect(_cardHasFocus(tester, 9), isTrue);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
   testWidgets('episode browser presents two columns and three rows per page', (
     tester,
   ) async {
@@ -206,6 +349,21 @@ void main() {
     expect(find.text('Asteroid Blues'), findsOneWidget);
     expect(find.text('Spike follows a dangerous bounty.'), findsOneWidget);
     expect(find.textContaining('25 min'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('episode-browser-selected-1')),
+      findsOneWidget,
+    );
+    _cardFocusNode(tester, 2).requestFocus();
+    await tester.pump();
+    expect(_cardHasFocus(tester, 2), isTrue);
+    expect(
+      find.byKey(const ValueKey('episode-browser-selected-1')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('episode-browser-selected-2')),
+      findsNothing,
+    );
     final firstArtwork = tester.widget<NetworkArtwork>(
       find.descendant(
         of: find.byKey(const ValueKey('episode-browser-card-1')),
@@ -230,7 +388,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('embedded browser opens with a restrained fade and lift', (
+  testWidgets('embedded browser uses the shared episode-page surface', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(960, 540);
@@ -258,40 +416,171 @@ void main() {
       ),
     );
 
-    final animation = tester.widget<TweenAnimationBuilder<double>>(
+    expect(
+      find.byKey(const ValueKey('episode-browser-header')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const ValueKey('episode-browser-close')), findsOneWidget);
+    expect(
       find.byKey(const ValueKey('episode-browser-open-animation')),
+      findsNothing,
     );
-    expect(animation.duration, const Duration(milliseconds: 160));
-    expect(animation.curve, Curves.easeOutCubic);
+    expect(find.byKey(const ValueKey('episode-browser-page')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 
-    final initialOpacity = tester.widget<Opacity>(
-      find.byKey(const ValueKey('episode-browser-open-opacity')),
-    );
-    final initialSlide = tester.widget<Transform>(
-      find.byKey(const ValueKey('episode-browser-open-slide')),
-    );
-    expect(initialOpacity.opacity, 0);
-    expect(initialSlide.transform.getTranslation().y, 10);
+  testWidgets('redesigned cards and paging fit a phone-sized screen', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
 
-    await tester.pump(const Duration(milliseconds: 80));
-    final midOpacity = tester.widget<Opacity>(
-      find.byKey(const ValueKey('episode-browser-open-opacity')),
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.dark,
+        home: const EpisodeBrowserDialog(
+          anime: AnimeSummary(
+            id: 910,
+            title: 'Phone Episodes',
+            description: '',
+            episodes: 12,
+            score: null,
+          ),
+          selectedEpisode: 1,
+          totalEpisodes: 12,
+        ),
+      ),
     );
-    final midSlide = tester.widget<Transform>(
-      find.byKey(const ValueKey('episode-browser-open-slide')),
-    );
-    expect(midOpacity.opacity, inExclusiveRange(0, 1));
-    expect(midSlide.transform.getTranslation().y, inExclusiveRange(0, 10));
+    await tester.pumpAndSettle();
 
-    await tester.pump(const Duration(milliseconds: 80));
-    final finalOpacity = tester.widget<Opacity>(
-      find.byKey(const ValueKey('episode-browser-open-opacity')),
+    expect(
+      find.byKey(const ValueKey('episode-browser-header')),
+      findsOneWidget,
     );
-    final finalSlide = tester.widget<Transform>(
-      find.byKey(const ValueKey('episode-browser-open-slide')),
+    expect(
+      find.byKey(const ValueKey('episode-browser-card-1')),
+      findsOneWidget,
     );
-    expect(finalOpacity.opacity, 1);
-    expect(finalSlide.transform.getTranslation().y, 0);
+    expect(
+      find.byKey(const ValueKey('episode-browser-card-3')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const ValueKey('episode-browser-card-4')), findsNothing);
+    expect(
+      find.byKey(const ValueKey('episode-browser-pagination')),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('page changes use a short directional transition', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(960, 540);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.dark,
+        home: const EpisodeBrowserDialog(
+          anime: AnimeSummary(
+            id: 909,
+            title: 'Paged Episodes',
+            description: '',
+            episodes: 12,
+            score: null,
+          ),
+          selectedEpisode: 1,
+          totalEpisodes: 12,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final switcher = tester.widget<AnimatedSwitcher>(
+      find.byKey(const ValueKey('episode-browser-page-transition')),
+    );
+    expect(switcher.duration, const Duration(milliseconds: 120));
+    await tester.tap(find.byKey(const ValueKey('episode-browser-next-page')));
+    await tester.pump();
+    expect(find.byKey(const ValueKey('episode-browser-page-0')), findsNothing);
+    expect(
+      find.byKey(const ValueKey('episode-browser-page-1')),
+      findsOneWidget,
+    );
+    expect(find.byType(GridView), findsOneWidget);
+    expect(_cardHasFocus(tester, 7), isTrue);
+    // Navigation works during the entrance, without waiting for its scale or
+    // slide to settle and without an outgoing grid competing for focus.
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pump(const Duration(milliseconds: 16));
+    expect(_cardHasFocus(tester, 9), isTrue);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    await tester.pump(const Duration(milliseconds: 16));
+    expect(_cardHasFocus(tester, 10), isTrue);
+    await tester.pump(const Duration(milliseconds: 28));
+    final incoming = tester.widget<FadeTransition>(
+      find
+          .ancestor(
+            of: find.byKey(const ValueKey('episode-browser-page-1')),
+            matching: find.byType(FadeTransition),
+          )
+          .first,
+    );
+    expect(incoming.opacity.value, inExclusiveRange(0, 1));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('episode-browser-page-0')), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('focus motion isolates artwork and uses display-sized decodes', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(960, 540);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: AppTheme.dark,
+        home: const EpisodeBrowserDialog(
+          anime: AnimeSummary(
+            id: 917,
+            title: 'Lightweight Episodes',
+            description: '',
+            episodes: 12,
+            score: null,
+          ),
+          selectedEpisode: 1,
+          totalEpisodes: 12,
+          isTelevision: true,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final content = find.byKey(
+      const ValueKey('episode-browser-card-content-2'),
+    );
+    expect(tester.widget(content), isA<RepaintBoundary>());
+    expect(
+      tester.widget(find.byKey(const ValueKey('episode-browser-artwork-2'))),
+      isA<RepaintBoundary>(),
+    );
+    final artworkFinder = find.descendant(
+      of: content,
+      matching: find.byType(NetworkArtwork),
+    );
+    final artwork = tester.widget<NetworkArtwork>(artworkFinder);
+    final renderedWidth = tester.getSize(artworkFinder).width;
+    expect(artwork.cacheWidth, greaterThanOrEqualTo(renderedWidth));
+    expect(artwork.cacheWidth, lessThan(320));
+    _cardFocusNode(tester, 2).requestFocus();
+    await tester.pump(const Duration(milliseconds: 16));
+    expect(tester.widget<NetworkArtwork>(artworkFinder), same(artwork));
     expect(tester.takeException(), isNull);
   });
 
@@ -616,7 +905,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('embedded browser exits upward from its first visible row', (
+  testWidgets('embedded browser reaches number control above the first row', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(1920, 1080);
@@ -651,7 +940,11 @@ void main() {
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
     await tester.pump();
 
-    expect(closed, isTrue);
+    expect(closed, isFalse);
+    expect(
+      FocusManager.instance.primaryFocus?.debugLabel,
+      'episode-browser.number',
+    );
     expect(tester.takeException(), isNull);
   });
 

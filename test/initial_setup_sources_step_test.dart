@@ -870,7 +870,8 @@ void _expectSourcesStep(WidgetTester tester, {required bool isTelevision}) {
   expect(find.text('Add sources with phone'), findsOneWidget);
   expect(find.text('Open Marketplace manually'), findsOneWidget);
   expect(find.text('Set up later'), findsOneWidget);
-  expect(find.text('Back'), findsOneWidget);
+  expect(find.byKey(const ValueKey('setup-method-back')), findsOneWidget);
+  expect(find.text('Back'), findsNothing);
   expect(find.text('Continue'), findsOneWidget);
 }
 

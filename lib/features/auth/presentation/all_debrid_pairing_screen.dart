@@ -3,6 +3,7 @@ import 'dart:async';
 
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/widgets/teto_back_button.dart';
 import 'package:anime_tv/core/widgets/copyable_code_interaction.dart';
 import 'package:anime_tv/core/widgets/copyable_qr_interaction.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
@@ -142,12 +143,7 @@ class _AllDebridPairingScreenState
             if (isTelevision)
               Row(
                 children: [
-                  _ActionButton(
-                    autofocus: true,
-                    icon: Icons.arrow_back_rounded,
-                    label: context.tr("Back"),
-                    onPressed: context.pop,
-                  ),
+                  TetoBackButton(autofocus: true, onPressed: context.pop),
                   const SizedBox(width: 18),
                   Text(
                     context.tr("Connect AllDebrid"),
@@ -158,11 +154,7 @@ class _AllDebridPairingScreenState
             else
               Row(
                 children: [
-                  IconButton(
-                    tooltip: context.tr("Back"),
-                    onPressed: context.pop,
-                    icon: const Icon(Icons.arrow_back_rounded),
-                  ),
+                  TetoBackButton(onPressed: context.pop),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(

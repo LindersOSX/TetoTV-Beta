@@ -2,6 +2,8 @@ import 'dart:math' as math;
 
 import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/theme/teto_box_style.dart';
+import 'package:anime_tv/core/theme/teto_ui_tokens.dart';
 import 'package:anime_tv/core/widgets/network_artwork.dart';
 import 'package:anime_tv/features/player/presentation/watch_party_player_status.dart';
 import 'package:anime_tv/features/watch_together/application/watch_party_controller.dart';
@@ -63,7 +65,12 @@ class WatchPartyMembershipNoticeOverlay extends ConsumerWidget {
                     children: [
                       for (var index = 0; index < visible.length; index++) ...[
                         if (index > 0) const SizedBox(height: 8),
-                        _WatchPartyNoticeCard(notice: visible[index]),
+                        _WatchPartyNoticeCard(
+                          key: ValueKey(
+                            'party-notice-card-${visible[index].sequence}',
+                          ),
+                          notice: visible[index],
+                        ),
                       ],
                     ],
                   ),
@@ -78,7 +85,7 @@ class WatchPartyMembershipNoticeOverlay extends ConsumerWidget {
 }
 
 class _WatchPartyNoticeCard extends StatelessWidget {
-  const _WatchPartyNoticeCard({required this.notice});
+  const _WatchPartyNoticeCard({required this.notice, super.key});
 
   final WatchPartyNotice notice;
 
@@ -91,29 +98,64 @@ class _WatchPartyNoticeCard extends StatelessWidget {
       liveRegion: true,
       excludeSemantics: true,
       label: _localizedNoticeMessage(context, notice),
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          color: const Color(0xF20B0B10),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: palette.accentBright.withValues(alpha: .82),
+      child: TweenAnimationBuilder<double>(
+        tween: Tween(begin: 0, end: 1),
+        duration: TetoUiMotion.duration(context, TetoUiMotion.popup),
+        curve: TetoUiMotion.curve,
+        builder: (context, progress, child) => Opacity(
+          key: ValueKey('party-notice-reveal-${notice.sequence}'),
+          opacity: progress,
+          child: Transform.translate(
+            offset: Offset(8 * (1 - progress), 0),
+            child: child,
           ),
-          boxShadow: const [
-            BoxShadow(
-              color: Color(0x8A000000),
-              blurRadius: 14,
-              offset: Offset(0, 5),
-            ),
-          ],
         ),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(9, 8, 12, 8),
-          child: Row(
-            children: [
-              _NoticeAvatar(notice: notice),
-              const SizedBox(width: 10),
-              Expanded(child: _NoticeCopy(notice: notice)),
-            ],
+        child: DecoratedBox(
+          key: ValueKey('party-notice-surface-${notice.sequence}'),
+          decoration:
+              TetoBoxStyle.decoration(
+                palette,
+                color: TetoBoxStyle.fill(palette).withValues(alpha: .96),
+              ).copyWith(
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: .28),
+                    blurRadius: 14,
+                    offset: const Offset(0, 5),
+                  ),
+                ],
+              ),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(10, 8, 12, 8),
+            child: Row(
+              children: [
+                Container(
+                  width: 3,
+                  height: 30,
+                  decoration: BoxDecoration(
+                    color: palette.accentBright,
+                    borderRadius: BorderRadius.circular(3),
+                  ),
+                ),
+                const SizedBox(width: 9),
+                _NoticeAvatar(notice: notice),
+                const SizedBox(width: 10),
+                Expanded(child: _NoticeCopy(notice: notice)),
+                const SizedBox(width: 8),
+                Icon(
+                  switch (notice.eventType) {
+                    WatchPartyEventType.joined =>
+                      Icons.person_add_alt_1_rounded,
+                    WatchPartyEventType.left => Icons.logout_rounded,
+                    WatchPartyEventType.kicked => Icons.person_remove_rounded,
+                    WatchPartyEventType.hostTransferred => Icons.stars_rounded,
+                    null => Icons.info_outline_rounded,
+                  },
+                  size: 18,
+                  color: palette.accentBright,
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -228,6 +270,7 @@ class _NoticeCopy extends StatelessWidget {
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           style: notificationStyle.copyWith(
+            color: palette.mutedText,
             fontSize: 12,
             fontWeight: FontWeight.w600,
             height: 1.05,

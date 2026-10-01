@@ -1,8 +1,10 @@
+import 'package:anime_tv/core/widgets/teto_dialog.dart';
 import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/theme/teto_box_style.dart';
 import 'package:anime_tv/features/manga/application/manga_preferences_controller.dart';
 import 'package:anime_tv/features/manga/application/manga_series_preferences_controller.dart';
 import 'package:flutter/material.dart';
@@ -36,7 +38,7 @@ class _MangaReaderSettingsSheetState
   }
 
   Future<void> _confirmReset() async {
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showTetoDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         scrollable: true,
@@ -793,13 +795,22 @@ class _SettingSwitch extends StatelessWidget {
   final Future<void> Function(bool)? onChanged;
 
   @override
-  Widget build(BuildContext context) => SwitchListTile.adaptive(
-    key: ValueKey('manga-settings-$id'),
-    contentPadding: const EdgeInsets.symmetric(vertical: 5),
-    title: _SettingLabel(label: label, help: help, enabled: onChanged != null),
-    value: value,
-    onChanged: onChanged == null
-        ? null
-        : (value) => unawaited(onChanged!(value)),
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(bottom: 8),
+    child: SwitchListTile.adaptive(
+      key: ValueKey('manga-settings-$id'),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 5),
+      shape: TetoBoxStyle.shape(context.appPalette),
+      tileColor: TetoBoxStyle.fill(context.appPalette),
+      title: _SettingLabel(
+        label: label,
+        help: help,
+        enabled: onChanged != null,
+      ),
+      value: value,
+      onChanged: onChanged == null
+          ? null
+          : (value) => unawaited(onChanged!(value)),
+    ),
   );
 }

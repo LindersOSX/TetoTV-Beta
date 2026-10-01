@@ -3,6 +3,9 @@ import 'dart:async';
 
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/theme/teto_box_style.dart';
+import 'package:anime_tv/core/theme/teto_ui_tokens.dart';
+import 'package:anime_tv/core/widgets/teto_back_button.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/tv/tv_navigation.dart';
 import 'package:anime_tv/features/settings/application/setup_progress_controller.dart';
@@ -225,14 +228,13 @@ class _SetupMethodScreenState extends ConsumerState<SetupMethodScreen> {
                               Focus(
                                 canRequestFocus: false,
                                 onKeyEvent: _handleBackButtonKey,
-                                child: IconButton.filledTonal(
+                                child: TetoBackButton(
                                   key: const ValueKey('setup-method-back'),
                                   focusNode: _backFocusNode,
                                   tooltip: context.tr('Back'),
                                   onPressed: _navigating
                                       ? null
                                       : _backToLanguage,
-                                  icon: const Icon(Icons.arrow_back_rounded),
                                 ),
                               ),
                               const SizedBox(width: 16),
@@ -463,7 +465,7 @@ class _SetupMethodCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final palette = context.appPalette;
-    final radius = BorderRadius.circular(compact ? 18 : 22);
+    final radius = BorderRadius.circular(TetoBoxStyle.radius);
     return Semantics(
       enabled: enabled,
       label: title,
@@ -474,7 +476,7 @@ class _SetupMethodCard extends StatelessWidget {
           excluding: !enabled,
           child: AnimatedOpacity(
             opacity: enabled ? 1 : .58,
-            duration: const Duration(milliseconds: 140),
+            duration: TetoUiMotion.reveal,
             child: TvFocusable(
               focusNode: focusNode,
               onPressed: onPressed,
@@ -484,12 +486,9 @@ class _SetupMethodCard extends StatelessWidget {
               child: Container(
                 constraints: BoxConstraints(minHeight: compact ? 158 : 214),
                 padding: const EdgeInsets.all(20),
-                decoration: BoxDecoration(
+                decoration: TetoBoxStyle.decoration(
+                  palette,
                   color: palette.surface.withValues(alpha: .96),
-                  borderRadius: radius,
-                  border: Border.all(
-                    color: palette.primaryText.withValues(alpha: .1),
-                  ),
                 ),
                 child: compact
                     ? Row(

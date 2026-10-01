@@ -1,3 +1,4 @@
+import 'package:anime_tv/core/widgets/teto_dialog.dart';
 import 'dart:async';
 
 import 'package:anime_tv/core/localization/teto_localizations.dart';
@@ -15,7 +16,7 @@ Future<void> showMangaTrackingDialog(
   required String sourceId,
   required String publicationId,
   required String title,
-}) => showDialog<void>(
+}) => showTetoDialog<void>(
   context: context,
   builder: (_) => MangaTrackingDialog(
     controller: ref.read(mangaTrackingControllerProvider),

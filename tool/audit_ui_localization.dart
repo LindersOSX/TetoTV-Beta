@@ -91,6 +91,7 @@ auditUiLocalizations() {
 const _unchangedLabels = {
   'Teto',
   'TV',
+  ' TV', // Exact trailing wordmark segment; the leading space is typography.
   'TetoTV',
   'Teto TV',
   'SIMKL',

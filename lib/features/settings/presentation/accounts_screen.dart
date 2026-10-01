@@ -1,3 +1,4 @@
+import 'package:anime_tv/core/widgets/teto_dialog.dart';
 import 'dart:async';
 
 import 'package:anime_tv/core/localization/app_language.dart';
@@ -9,10 +10,13 @@ import 'package:anime_tv/core/preferences/playback_audio_preference.dart';
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/core/storage/tetotv_database.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/theme/teto_box_style.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/tv/tv_navigation.dart';
 import 'package:anime_tv/core/tv/tv_shelf_focus.dart';
 import 'package:anime_tv/core/widgets/teto_top_level_shell.dart';
+import 'package:anime_tv/core/widgets/teto_back_button.dart';
+import 'package:anime_tv/core/widgets/teto_switch_indicator.dart';
 import 'package:anime_tv/core/widgets/tv_text_input.dart';
 import 'package:anime_tv/core/widgets/release_highlights.dart';
 import 'package:anime_tv/core/widgets/copyable_qr_interaction.dart';
@@ -33,6 +37,8 @@ import 'package:anime_tv/features/settings/application/premiumize_settings_contr
 import 'package:anime_tv/features/settings/application/torbox_settings_controller.dart';
 import 'package:anime_tv/features/settings/application/tracking_accounts_controller.dart';
 import 'package:anime_tv/features/settings/presentation/theme_studio_screen.dart';
+import 'package:anime_tv/features/settings/presentation/display_studio_screen.dart';
+import 'package:anime_tv/features/settings/presentation/caption_studio_screen.dart';
 import 'package:anime_tv/features/streaming/domain/debrid_service.dart';
 import 'package:anime_tv/features/streaming/domain/stream_ranking_preferences.dart';
 import 'package:flutter/material.dart';
@@ -65,7 +71,7 @@ extension _SettingsAreaMetadata on _SettingsArea {
 
 enum _SettingsSection {
   themeDisplay,
-  homeScreen,
+  languageTitles,
   displayOptions,
   inputFeedback,
   homeShelves,
@@ -83,6 +89,7 @@ enum _SettingsSection {
   discordRichPresence,
   deviceSupport,
   appUpdates,
+  experimentalOptions,
   community,
   storageReset,
   aboutLegal,
@@ -92,7 +99,7 @@ enum _SettingsSection {
 extension _SettingsSectionMetadata on _SettingsSection {
   _SettingsArea get area => switch (this) {
     _SettingsSection.themeDisplay ||
-    _SettingsSection.homeScreen ||
+    _SettingsSection.languageTitles ||
     _SettingsSection.displayOptions ||
     _SettingsSection.inputFeedback ||
     _SettingsSection.homeShelves ||
@@ -110,6 +117,7 @@ extension _SettingsSectionMetadata on _SettingsSection {
     _SettingsSection.discordRichPresence => _SettingsArea.accounts,
     _SettingsSection.deviceSupport ||
     _SettingsSection.appUpdates ||
+    _SettingsSection.experimentalOptions ||
     _SettingsSection.community ||
     _SettingsSection.storageReset ||
     _SettingsSection.aboutLegal ||
@@ -118,7 +126,7 @@ extension _SettingsSectionMetadata on _SettingsSection {
 
   String get slug => switch (this) {
     _SettingsSection.themeDisplay => 'theme-display',
-    _SettingsSection.homeScreen => 'home-screen',
+    _SettingsSection.languageTitles => 'language-titles',
     _SettingsSection.displayOptions => 'display-options',
     _SettingsSection.inputFeedback => 'input-feedback',
     _SettingsSection.homeShelves => 'home-shelves',
@@ -136,6 +144,7 @@ extension _SettingsSectionMetadata on _SettingsSection {
     _SettingsSection.discordRichPresence => 'discord-rich-presence',
     _SettingsSection.deviceSupport => 'device-support',
     _SettingsSection.appUpdates => 'app-updates',
+    _SettingsSection.experimentalOptions => 'experimental-options',
     _SettingsSection.community => 'community',
     _SettingsSection.storageReset => 'storage-reset',
     _SettingsSection.aboutLegal => 'about-legal',
@@ -144,7 +153,7 @@ extension _SettingsSectionMetadata on _SettingsSection {
 
   String get title => switch (this) {
     _SettingsSection.themeDisplay => 'Theme & display',
-    _SettingsSection.homeScreen => 'Home screen',
+    _SettingsSection.languageTitles => 'Language & titles',
     _SettingsSection.displayOptions => 'Display options',
     _SettingsSection.inputFeedback => 'Input & feedback',
     _SettingsSection.homeShelves => 'Home shelves',
@@ -162,6 +171,7 @@ extension _SettingsSectionMetadata on _SettingsSection {
     _SettingsSection.discordRichPresence => 'Discord Rich Presence',
     _SettingsSection.deviceSupport => 'Device & support',
     _SettingsSection.appUpdates => 'App updates',
+    _SettingsSection.experimentalOptions => 'Experimental options',
     _SettingsSection.community => 'Community',
     _SettingsSection.storageReset => 'Storage & reset',
     _SettingsSection.aboutLegal => 'About & legal',
@@ -172,17 +182,27 @@ extension _SettingsSectionMetadata on _SettingsSection {
     _SettingsSection.themeDisplay => const [
       'Theme & display',
       'Theme Studio',
-      'App language',
-      'Title language',
-      'Show title style',
+      'Display Studio',
+      'Interface scale',
+      'Thumbnail size',
+      'Content density',
+      'Layout style',
+      'Navigation size',
+      'Default landing page',
+      'Card details',
+      'Menu order',
+      'Home shelves',
+      'Reset appearance and navigation',
+      'Poster metadata',
+      'Featured hero',
       'Colors',
       'Appearance',
     ],
-    _SettingsSection.homeScreen => const [
-      'Home screen',
-      'Featured hero',
-      'Poster metadata',
-      'Continue watching',
+    _SettingsSection.languageTitles => const [
+      'Language & titles',
+      'App language',
+      'Title language',
+      'Show title style',
     ],
     _SettingsSection.displayOptions => const [
       'Display options',
@@ -227,6 +247,7 @@ extension _SettingsSectionMetadata on _SettingsSection {
     ],
     _SettingsSection.closedCaptions => const [
       'Closed captions',
+      'Caption Studio',
       'Subtitles',
       'Preferred CC',
       'Preferred subtitle language',
@@ -337,8 +358,6 @@ extension _SettingsSectionMetadata on _SettingsSection {
       'Device & support',
       'Run setup again',
       'Device calibration',
-      'Diagnostics',
-      'Experimental options',
       'Setup',
     ],
     _SettingsSection.appUpdates => const [
@@ -347,8 +366,13 @@ extension _SettingsSectionMetadata on _SettingsSection {
       'Check for updates',
       'Update channel',
       'Release history',
-      'Experimental options',
       'Downgrade',
+    ],
+    _SettingsSection.experimentalOptions => const [
+      'Experimental options',
+      'Manga reader',
+      'Aniyomi extensions',
+      'Build switching',
     ],
     _SettingsSection.community => const [
       'Community',
@@ -371,6 +395,7 @@ extension _SettingsSectionMetadata on _SettingsSection {
     ],
     _SettingsSection.privacyDiagnostics => const [
       'Privacy & diagnostics',
+      'Diagnostics',
       'Anonymous crash reports',
       'Anonymous live count',
       'Telemetry',
@@ -532,9 +557,6 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
   final _customizationFocus = FocusNode(
     debugLabel: 'accounts.customization.first',
   );
-  final _homeShelvesSectionFocus = FocusNode(
-    debugLabel: 'accounts.section.home-shelves',
-  );
   final _displaySectionFocus = FocusNode(
     debugLabel: 'accounts.section.display',
   );
@@ -549,9 +571,6 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
   );
   final _posterMetadataFocus = FocusNode(
     debugLabel: 'accounts.customization.home-content.poster-metadata',
-  );
-  final _continueWatchingFocus = FocusNode(
-    debugLabel: 'accounts.customization.home-content.continue-watching',
   );
   final _navigationSizeFocus = FocusNode(
     debugLabel: 'accounts.customization.navigation-size',
@@ -772,7 +791,11 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
 
   List<_SettingsSection> _sectionsForArea(_SettingsArea area) => [
     for (final section in _SettingsSection.values)
-      if (section.area == area) section,
+      if (section.area == area &&
+          section != _SettingsSection.displayOptions &&
+          section != _SettingsSection.homeShelves &&
+          section != _SettingsSection.navigation)
+        section,
   ];
 
   bool get _allActiveSettingsSectionsExpanded =>
@@ -832,6 +855,11 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     final queryWords = query.split(' ').where((word) => word.isNotEmpty);
     final matches = <_SettingsSearchMatch>[];
     for (final section in _SettingsSection.values) {
+      if (section == _SettingsSection.displayOptions ||
+          section == _SettingsSection.homeShelves ||
+          section == _SettingsSection.navigation) {
+        continue;
+      }
       _SettingsSearchMatch? best;
       for (final label in section.searchLabels) {
         if (!_settingsSearchLabelIsAvailable(section, label)) continue;
@@ -941,18 +969,13 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     requestWhenMounted(2);
   }
 
-  FocusNode? get _firstHomeShelfFocusNode {
-    final shelves = ref.read(homeShelfOrderProvider);
-    return shelves.isEmpty ? null : _shelfFocusNodes[shelves.first];
-  }
-
   FocusNode? _firstFocusNodeForSection(_SettingsSection section) =>
       switch (section) {
         _SettingsSection.themeDisplay => _customizationFocus,
-        _SettingsSection.homeScreen => _featuredHomeContentFocus,
+        _SettingsSection.languageTitles => _interfaceLanguageFocus,
         _SettingsSection.displayOptions => _displaySectionFocus,
         _SettingsSection.inputFeedback => _inputFeedbackSectionFocus,
-        _SettingsSection.homeShelves => _firstHomeShelfFocusNode,
+        _SettingsSection.homeShelves => null,
         _SettingsSection.navigation => _navigationSizeFocus,
         _SettingsSection.closedCaptions => _preferredCaptionsFocus,
         _SettingsSection.playerControls => _playerControlsSectionFocus,
@@ -967,6 +990,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
         _SettingsSection.discordRichPresence => _discordPresenceFocus,
         _SettingsSection.deviceSupport => _setupFocus,
         _SettingsSection.appUpdates => _automaticUpdatesFocus,
+        _SettingsSection.experimentalOptions => _experimentalFeaturesFocus,
         _SettingsSection.community => _discordQrFocus,
         _SettingsSection.storageReset => _clearCacheFocus,
         _SettingsSection.aboutLegal => _privacyFocus,
@@ -1029,18 +1053,13 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       TrackingProvider.simkl => <FocusNode?>[_simklFocus],
     };
     return switch (section) {
-      _SettingsSection.themeDisplay => _showTitleStyleFocus,
-      _SettingsSection.homeScreen => _continueWatchingFocus,
+      _SettingsSection.themeDisplay => _customizationResetFocus,
+      _SettingsSection.languageTitles => _showTitleStyleFocus,
       _SettingsSection.displayOptions => _cardDetailsFocus,
       _SettingsSection.inputFeedback => _clickSoundsFocus,
-      _SettingsSection.homeShelves => lastMounted(
-        ref
-            .read(homeShelfOrderProvider)
-            .reversed
-            .map((shelf) => _shelfFocusNodes[shelf]),
-      ),
+      _SettingsSection.homeShelves => null,
       _SettingsSection.navigation => _customizationResetFocus,
-      _SettingsSection.closedCaptions => _captionTextSizeFocus,
+      _SettingsSection.closedCaptions => _preferredCaptionsFocus,
       _SettingsSection.playerControls => _fillerIndicatorsFocus,
       _SettingsSection.debridStreaming => lastMounted(selectedDebridNodes),
       _SettingsSection.sourcesStreamOrder => _webQualityFocus,
@@ -1065,13 +1084,14 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
         _discordDisconnectFocus,
         _discordPresenceFocus,
       ]),
-      _SettingsSection.deviceSupport => _experimentalFeaturesFocus,
+      _SettingsSection.deviceSupport => _calibrationFocus,
       _SettingsSection.appUpdates => lastMounted([
         _releaseHistoryFocus,
         _updateChannelFocus,
         _checkUpdatesFocus,
         _automaticUpdatesFocus,
       ]),
+      _SettingsSection.experimentalOptions => _experimentalFeaturesFocus,
       _SettingsSection.community => lastMounted([
         _donateFocus,
         _donationQrFocus,
@@ -1080,10 +1100,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       ]),
       _SettingsSection.storageReset => _resetAppFocus,
       _SettingsSection.aboutLegal => _legalFocus,
-      _SettingsSection.privacyDiagnostics => lastMounted([
-        _anonymousUsageCountFocus,
-        _anonymousCrashReportingFocus,
-      ]),
+      _SettingsSection.privacyDiagnostics => _diagnosticsFocus,
     };
   }
 
@@ -1095,22 +1112,28 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     }
     return switch (label) {
       'theme studio' || 'colors' || 'appearance' => _customizationFocus,
+      'display studio' ||
+      'featured hero' ||
+      'interface scale' ||
+      'thumbnail size' ||
+      'content density' ||
+      'layout style' ||
+      'navigation size' ||
+      'default landing page' ||
+      'card details' ||
+      'menu order' ||
+      'home shelves' => _featuredHomeContentFocus,
       'title language' => _titleLanguageFocus,
       'app language' => _interfaceLanguageFocus,
       'show title style' => _showTitleStyleFocus,
-      'featured hero' => _featuredHomeContentFocus,
-      'poster metadata' => _posterMetadataFocus,
-      'continue watching' =>
-        match.section == _SettingsSection.homeShelves
-            ? _shelfFocusNodes[HomeShelf.tracking]
-            : _continueWatchingFocus,
-      'watch history' => _shelfFocusNodes[HomeShelf.history],
-      'recently released' => _shelfFocusNodes[HomeShelf.recentlyReleased],
-      'trending now' => _shelfFocusNodes[HomeShelf.trending],
-      'plan to watch' => _shelfFocusNodes[HomeShelf.planned],
-      'airing soon' => _shelfFocusNodes[HomeShelf.airing],
-      'recently completed' => _shelfFocusNodes[HomeShelf.completed],
-      'card details' => _cardDetailsFocus,
+      'poster metadata' => _featuredHomeContentFocus,
+      'continue watching' ||
+      'watch history' ||
+      'recently released' ||
+      'trending now' ||
+      'plan to watch' ||
+      'airing soon' ||
+      'recently completed' => sectionHeader,
       'on screen keyboard' ||
       'built in keyboard' ||
       'device keyboard' => _inputFeedbackSectionFocus,
@@ -1126,18 +1149,19 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
             ? _watchTogetherFocus
             : _menuOrderFocus,
       'manga reader' => _mangaReaderFocus,
-      'navigation size' => _navigationSizeFocus,
-      'menu order' || 'settings placement' => _menuOrderFocus,
+      'settings placement' => _featuredHomeContentFocus,
       'reset appearance and navigation' => _customizationResetFocus,
       'preferred cc' ||
+      'caption studio' ||
       'caption default' ||
       'captions on' ||
       'captions off' => _preferredCaptionsFocus,
       'preferred subtitle language' ||
       'default cc language' ||
-      'caption language' => _preferredCaptionLanguageFocus,
-      'text color' => _captionTextColorFocus,
-      'text size' => _captionTextSizeFocus,
+      'caption language' ||
+      'text color' ||
+      'caption background' ||
+      'text size' => _preferredCaptionsFocus,
       'default player' => _playerControlsSectionFocus,
       'media3 surfaceview' ||
       'surfaceview' ||
@@ -1185,9 +1209,11 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       'diagnostics' => _diagnosticsFocus,
       'automatic updates' => _automaticUpdatesFocus,
       'check for updates' => _checkUpdatesFocus,
-      'update channel' ||
+      'update channel' || 'downgrade' => _updateChannelFocus,
+      'experimental options' ||
       'experimental features' ||
-      'downgrade' => _updateChannelFocus,
+      'aniyomi extensions' ||
+      'build switching' => _experimentalFeaturesFocus,
       'release history' => _releaseHistoryFocus,
       'tetotv discord' || 'support' => _discordFocus,
       'donate' => _donateFocus,
@@ -1250,7 +1276,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     )();
     if (!mounted) return;
     if (!capability.supported) {
-      await showDialog<void>(
+      await showTetoDialog<void>(
         context: context,
         builder: (dialogContext) => AlertDialog(
           icon: const Icon(Icons.devices_other_rounded),
@@ -1271,7 +1297,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       if (mounted) _directTorrentFocus.requestFocus();
       return;
     }
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showTetoDialog<bool>(
       context: context,
       barrierDismissible: false,
       builder: (dialogContext) => AlertDialog(
@@ -1355,13 +1381,11 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     _watchTogetherFocus.dispose();
     _mangaReaderFocus.dispose();
     _customizationFocus.dispose();
-    _homeShelvesSectionFocus.dispose();
     _displaySectionFocus.dispose();
     _cardDetailsFocus.dispose();
     _homeNavigationSectionFocus.dispose();
     _featuredHomeContentFocus.dispose();
     _posterMetadataFocus.dispose();
-    _continueWatchingFocus.dispose();
     _navigationSizeFocus.dispose();
     _menuOrderFocus.dispose();
     _inputFeedbackSectionFocus.dispose();
@@ -1501,11 +1525,6 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       TrackingProvider.simkl => _simklFocus,
     };
     FocusNode? target;
-    final shelfNodes = [
-      for (final shelf in ref.read(homeShelfOrderProvider))
-        _shelfFocusNodes[shelf]!,
-    ];
-    final shelfIndex = current == null ? -1 : shelfNodes.indexOf(current);
     final topNavigationNodes = [
       for (final destination in preferences.topNavigationOrder.where(
         (destination) =>
@@ -1559,7 +1578,6 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     final leftEdgeNodes = <FocusNode>{
       areaNodes.first,
       ...activeSectionNodes,
-      _homeShelvesSectionFocus,
       _displaySectionFocus,
       _cardDetailsFocus,
       _homeNavigationSectionFocus,
@@ -1574,7 +1592,6 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       _playerControlsSectionFocus,
       _media3SurfaceViewFocus,
       _customizationResetFocus,
-      ...shelfNodes,
       _customizationFocus,
       _interfaceLanguageFocus,
       _titleLanguageFocus,
@@ -1631,8 +1648,6 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     if (tvListLayout) {
       leftEdgeNodes.addAll({
         _featuredHomeContentFocus,
-        _posterMetadataFocus,
-        _continueWatchingFocus,
         _webStreamsFocus,
         _directTorrentFocus,
         _dubEpisodeNotificationsFocus,
@@ -1730,29 +1745,10 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
             : null;
         if (target == null) return KeyEventResult.handled;
       }
-    } else if (shelfIndex >= 0) {
-      if (key == LogicalKeyboardKey.arrowUp) {
-        if (shelfIndex > 0) {
-          target = shelfNodes[shelfIndex - 1];
-        } else {
-          target = tvListLayout
-              ? _settingsSectionFocusNodes[_SettingsSection.homeShelves]
-              : _continueWatchingFocus;
-        }
-      }
-      if (key == LogicalKeyboardKey.arrowDown) {
-        if (shelfIndex < shelfNodes.length - 1) {
-          target = shelfNodes[shelfIndex + 1];
-        } else if (tvListLayout) {
-          target = _settingsSectionFocusNodes[_SettingsSection.navigation];
-        } else {
-          return KeyEventResult.handled;
-        }
-      }
     }
 
-    if (areaIndex >= 0 || activeSectionIndex >= 0 || shelfIndex >= 0) {
-      // Settings-area and Home-shelf navigation were handled above.
+    if (areaIndex >= 0 || activeSectionIndex >= 0) {
+      // Settings-area and section navigation were handled above.
     } else if (tvListLayout &&
         key == LogicalKeyboardKey.arrowDown &&
         lastContentSectionIndex >= 0) {
@@ -1769,17 +1765,17 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
         target = _customizationFocus;
       }
       if (key == LogicalKeyboardKey.arrowUp) {
-        target = tvListLayout
-            ? _showTitleStyleFocus
-            : _areaFocusNodes[_SettingsArea.appearance];
+        target = _customizationFocus;
       }
       if (key == LogicalKeyboardKey.arrowDown) {
-        target = _posterMetadataFocus;
+        target = tvListLayout
+            ? _customizationResetFocus
+            : _interfaceLanguageFocus;
       }
     } else if (topNavigationIndex >= 0) {
       if (key == LogicalKeyboardKey.arrowUp) {
         target = topNavigationIndex == 0
-            ? _featuredHomeContentFocus
+            ? _posterMetadataFocus
             : topNavigationNodes[topNavigationIndex - 1];
       }
       if (key == LogicalKeyboardKey.arrowDown) {
@@ -1787,27 +1783,16 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
             ? _inputFeedbackSectionFocus
             : topNavigationNodes[topNavigationIndex + 1];
       }
-    } else if (current == _homeShelvesSectionFocus) {
-      if (key == LogicalKeyboardKey.arrowUp) {
-        target = _areaFocusNodes[_SettingsArea.appearance];
-      }
-      if (key == LogicalKeyboardKey.arrowDown) {
-        target = focusNodeIsMounted(shelfNodes.first)
-            ? shelfNodes.first
-            : _displaySectionFocus;
-      }
     } else if (current == _displaySectionFocus) {
       if (_activeArea == _SettingsArea.appearance) {
         if (key == LogicalKeyboardKey.arrowUp) {
           target = tvListLayout
-              ? _continueWatchingFocus
+              ? _showTitleStyleFocus
               : _customizationResetFocus;
         }
       } else {
         if (key == LogicalKeyboardKey.arrowUp) {
-          target = focusNodeIsMounted(shelfNodes.last)
-              ? shelfNodes.last
-              : _homeShelvesSectionFocus;
+          target = _settingsSectionFocusNodes[_SettingsSection.homeShelves];
         }
         if (key == LogicalKeyboardKey.arrowDown) {
           target = focusNodeIsMounted(_customizationFocus)
@@ -1834,17 +1819,21 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
         target = _featuredHomeContentFocus;
       }
       if (key == LogicalKeyboardKey.arrowDown) {
-        target = _interfaceLanguageFocus;
+        target = _featuredHomeContentFocus;
       }
     } else if (current == _interfaceLanguageFocus) {
-      if (key == LogicalKeyboardKey.arrowUp) target = _customizationFocus;
+      if (key == LogicalKeyboardKey.arrowUp) {
+        target = tvListLayout
+            ? _settingsSectionFocusNodes[_SettingsSection.languageTitles]
+            : _featuredHomeContentFocus;
+      }
       if (key == LogicalKeyboardKey.arrowDown) target = _titleLanguageFocus;
     } else if (current == _titleLanguageFocus) {
       if (key == LogicalKeyboardKey.arrowUp) {
         target = _interfaceLanguageFocus;
       }
       if (key == LogicalKeyboardKey.arrowRight && !tvListLayout) {
-        target = _posterMetadataFocus;
+        target = _settingsSectionFocusNodes[_SettingsSection.homeShelves];
       }
       if (key == LogicalKeyboardKey.arrowDown) {
         target = _showTitleStyleFocus;
@@ -1854,19 +1843,21 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
         target = _titleLanguageFocus;
       }
       if (key == LogicalKeyboardKey.arrowRight && !tvListLayout) {
-        target = _continueWatchingFocus;
+        target = _settingsSectionFocusNodes[_SettingsSection.homeShelves];
       }
       if (key == LogicalKeyboardKey.arrowDown) {
         target = tvListLayout
-            ? _featuredHomeContentFocus
-            : _navigationSizeFocus;
+            ? _settingsSectionFocusNodes[_SettingsSection.inputFeedback]
+            : _customizationResetFocus;
       }
     } else if (current == _navigationSizeFocus) {
       if (key == LogicalKeyboardKey.arrowUp) {
-        target = tvListLayout ? shelfNodes.last : _showTitleStyleFocus;
+        target = tvListLayout
+            ? _settingsSectionFocusNodes[_SettingsSection.homeShelves]
+            : _showTitleStyleFocus;
       }
       if (key == LogicalKeyboardKey.arrowRight && !tvListLayout) {
-        target = _continueWatchingFocus;
+        target = _settingsSectionFocusNodes[_SettingsSection.homeShelves];
       }
       if (key == LogicalKeyboardKey.arrowDown) {
         target = _menuOrderFocus;
@@ -1876,30 +1867,20 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
         target = _navigationSizeFocus;
       }
       if (key == LogicalKeyboardKey.arrowRight && !tvListLayout) {
-        target = _continueWatchingFocus;
+        target = _settingsSectionFocusNodes[_SettingsSection.homeShelves];
       }
       if (key == LogicalKeyboardKey.arrowDown) {
         target = _customizationResetFocus;
       }
     } else if (current == _posterMetadataFocus) {
       if (key == LogicalKeyboardKey.arrowLeft && !tvListLayout) {
-        target = _titleLanguageFocus;
+        target = _featuredHomeContentFocus;
       }
       if (key == LogicalKeyboardKey.arrowUp) {
         target = _featuredHomeContentFocus;
       }
       if (key == LogicalKeyboardKey.arrowDown) {
-        target = _continueWatchingFocus;
-      }
-    } else if (current == _continueWatchingFocus) {
-      if (key == LogicalKeyboardKey.arrowLeft && !tvListLayout) {
-        target = _showTitleStyleFocus;
-      }
-      if (key == LogicalKeyboardKey.arrowUp) {
-        target = _posterMetadataFocus;
-      }
-      if (key == LogicalKeyboardKey.arrowDown) {
-        target = tvListLayout ? _displaySectionFocus : shelfNodes.first;
+        target = _interfaceLanguageFocus;
       }
     } else if (current == _homeNavigationSectionFocus) {
       if (key == LogicalKeyboardKey.arrowUp &&
@@ -1917,7 +1898,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     } else if (current == _inputFeedbackSectionFocus) {
       if (_activeArea == _SettingsArea.appearance && tvListLayout) {
         if (key == LogicalKeyboardKey.arrowUp) {
-          target = _cardDetailsFocus;
+          target = _customizationResetFocus;
         }
       } else if (_activeArea != _SettingsArea.appearance) {
         if (key == LogicalKeyboardKey.arrowUp &&
@@ -1935,7 +1916,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       }
     } else if (current == _clickSoundsFocus) {
       if (key == LogicalKeyboardKey.arrowDown && tvListLayout) {
-        target = shelfNodes.first;
+        return KeyEventResult.handled;
       }
     } else if (current == _closedCaptionsSectionFocus) {
       if (key == LogicalKeyboardKey.arrowUp) {
@@ -1956,7 +1937,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
             : _closedCaptionsSectionFocus;
       }
       if (key == LogicalKeyboardKey.arrowDown) {
-        target = _preferredCaptionLanguageFocus;
+        target = _playerControlsSectionFocus;
       }
     } else if (current == _preferredCaptionLanguageFocus) {
       if (key == LogicalKeyboardKey.arrowUp) {
@@ -1976,7 +1957,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     } else if (current == _playerControlsSectionFocus) {
       if (key == LogicalKeyboardKey.arrowUp) {
         if (tvListLayout && _activeArea == _SettingsArea.playback) {
-          target = _captionTextSizeFocus;
+          target = _preferredCaptionsFocus;
         } else if (!_expandedCustomizationSections.contains(
           _CustomizationSection.closedCaptions,
         )) {
@@ -1988,16 +1969,17 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     } else if (current == _customizationResetFocus) {
       if (key == LogicalKeyboardKey.arrowUp) {
         target = _activeArea == _SettingsArea.appearance
-            ? _menuOrderFocus
+            ? tvListLayout
+                  ? _featuredHomeContentFocus
+                  : _showTitleStyleFocus
             : _inputFeedbackSectionFocus;
       }
-      if (key == LogicalKeyboardKey.arrowRight &&
-          !tvListLayout &&
-          _activeArea == _SettingsArea.appearance) {
-        target = _continueWatchingFocus;
-      }
       if (key == LogicalKeyboardKey.arrowDown) {
-        return KeyEventResult.handled;
+        target = _activeArea == _SettingsArea.appearance
+            ? tvListLayout
+                  ? _settingsSectionFocusNodes[_SettingsSection.languageTitles]
+                  : _inputFeedbackSectionFocus
+            : null;
       }
     } else if (current == _debridProviderFocus) {
       if (key == LogicalKeyboardKey.arrowUp) {
@@ -2332,27 +2314,25 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
         target = _diagnosticsFocus;
       }
       if (key == LogicalKeyboardKey.arrowDown) {
-        target = tvListLayout ? _diagnosticsFocus : _automaticUpdatesFocus;
+        target = _automaticUpdatesFocus;
       }
     } else if (current == _diagnosticsFocus) {
       if (key == LogicalKeyboardKey.arrowUp) {
-        target = tvListLayout
-            ? _calibrationFocus
-            : _areaFocusNodes[_SettingsArea.system];
+        target = focusNodeIsMounted(_anonymousUsageCountFocus)
+            ? _anonymousUsageCountFocus
+            : _anonymousCrashReportingFocus;
       }
       if (key == LogicalKeyboardKey.arrowLeft && !tvListLayout) {
         target = _calibrationFocus;
       }
       if (key == LogicalKeyboardKey.arrowDown) {
-        target = _experimentalFeaturesFocus;
+        return KeyEventResult.handled;
       }
     } else if (current == _experimentalFeaturesFocus) {
-      if (key == LogicalKeyboardKey.arrowUp) target = _diagnosticsFocus;
-      if (key == LogicalKeyboardKey.arrowDown) target = _automaticUpdatesFocus;
+      if (key == LogicalKeyboardKey.arrowUp) target = _releaseHistoryFocus;
+      if (key == LogicalKeyboardKey.arrowDown) target = _discordQrFocus;
     } else if (current == _automaticUpdatesFocus) {
-      if (key == LogicalKeyboardKey.arrowUp) {
-        target = _experimentalFeaturesFocus;
-      }
+      if (key == LogicalKeyboardKey.arrowUp) target = _calibrationFocus;
       if (key == LogicalKeyboardKey.arrowRight && !tvListLayout) {
         target = _checkUpdatesFocus;
       }
@@ -2373,7 +2353,9 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       if (key == LogicalKeyboardKey.arrowDown) target = _releaseHistoryFocus;
     } else if (current == _releaseHistoryFocus) {
       if (key == LogicalKeyboardKey.arrowUp) target = _updateChannelFocus;
-      if (key == LogicalKeyboardKey.arrowDown) target = _discordQrFocus;
+      if (key == LogicalKeyboardKey.arrowDown) {
+        target = tvListLayout ? _experimentalFeaturesFocus : _discordQrFocus;
+      }
     } else if (current == _discordPresenceFocus) {
       if (key == LogicalKeyboardKey.arrowUp) {
         target = tvListLayout
@@ -2408,9 +2390,9 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       }
     } else if (current == _discordQrFocus) {
       if (key == LogicalKeyboardKey.arrowUp) {
-        target = ref.read(appUpdateControllerProvider).developerMode
-            ? _releaseHistoryFocus
-            : _checkUpdatesFocus;
+        target = tvListLayout
+            ? _experimentalFeaturesFocus
+            : _releaseHistoryFocus;
       }
       if (key == LogicalKeyboardKey.arrowRight ||
           key == LogicalKeyboardKey.arrowDown) {
@@ -2478,7 +2460,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
         if (focusNodeIsMounted(_anonymousUsageCountFocus)) {
           target = _anonymousUsageCountFocus;
         } else {
-          return KeyEventResult.handled;
+          target = _diagnosticsFocus;
         }
       }
     } else if (current == _anonymousUsageCountFocus) {
@@ -2486,7 +2468,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
         target = _anonymousCrashReportingFocus;
       }
       if (key == LogicalKeyboardKey.arrowDown) {
-        return KeyEventResult.handled;
+        target = _diagnosticsFocus;
       }
     }
 
@@ -2580,7 +2562,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
   }
 
   Future<void> _openMenuOrderDialog() async {
-    await showDialog<void>(
+    await showTetoDialog<void>(
       context: context,
       builder: (dialogContext) => Dialog(
         backgroundColor: Colors.transparent,
@@ -2592,13 +2574,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
             return Container(
               width: tvScale ? 470 : 620,
               padding: EdgeInsets.all(tvScale ? 9 : 18),
-              decoration: BoxDecoration(
-                color: context.appPalette.surface,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                  color: context.appPalette.accent.withValues(alpha: .7),
-                ),
-              ),
+              decoration: TetoBoxStyle.decoration(context.appPalette),
               child: ConstrainedBox(
                 constraints: BoxConstraints(
                   maxHeight: MediaQuery.sizeOf(context).height * .78,
@@ -2654,6 +2630,96 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     if (mounted) _menuOrderFocus.requestFocus();
   }
 
+  Future<void> _openHomeShelvesDialog() async {
+    await showTetoDialog<void>(
+      context: context,
+      builder: (dialogContext) => Dialog(
+        backgroundColor: Colors.transparent,
+        child: Consumer(
+          builder: (context, ref, _) {
+            final enabled = ref.watch(homeShelfPreferencesProvider);
+            final order = ref.watch(homeShelfOrderProvider);
+            final tvScale = _usesTvSettingsScale(context);
+            return Container(
+              width: tvScale ? 500 : 620,
+              padding: EdgeInsets.all(tvScale ? 10 : 18),
+              decoration: TetoBoxStyle.decoration(context.appPalette),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxHeight: MediaQuery.sizeOf(context).height * .78,
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: LocalizedText(
+                            'Home shelves',
+                            style: Theme.of(context).textTheme.titleLarge
+                                ?.copyWith(fontWeight: FontWeight.w800),
+                          ),
+                        ),
+                        IconButton(
+                          tooltip: 'Close',
+                          onPressed: () => Navigator.of(dialogContext).pop(),
+                          icon: const Icon(Icons.close_rounded),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    LocalizedText(
+                      'Choose what appears on Home and move favorites toward the top.',
+                      style: TextStyle(color: context.appPalette.mutedText),
+                    ),
+                    SizedBox(height: tvScale ? 8 : 14),
+                    Flexible(
+                      child: SingleChildScrollView(
+                        child: Column(
+                          children: [
+                            for (
+                              var index = 0;
+                              index < order.length;
+                              index++
+                            ) ...[
+                              _HomeShelfRow(
+                                index: index,
+                                total: order.length,
+                                shelf: order[index],
+                                enabled: enabled.contains(order[index]),
+                                focusNode: _shelfFocusNodes[order[index]]!,
+                                autofocus: index == 0,
+                                onToggle: () => ref
+                                    .read(homeShelfPreferencesProvider.notifier)
+                                    .toggle(order[index]),
+                                onMoveUp: () => ref
+                                    .read(homeShelfOrderProvider.notifier)
+                                    .move(order[index], -1),
+                                onMoveDown: () => ref
+                                    .read(homeShelfOrderProvider.notifier)
+                                    .move(order[index], 1),
+                              ),
+                              if (index != order.length - 1)
+                                const SizedBox(height: 6),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        ),
+      ),
+    );
+    if (mounted) {
+      _settingsSectionFocusNodes[_SettingsSection.homeShelves]?.requestFocus();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final debrid = ref.watch(realDebridSettingsControllerProvider);
@@ -2664,8 +2730,6 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
     final simkl = ref.watch(simklAccountControllerProvider);
     final localProfiles = ref.watch(localProfilesControllerProvider);
     final titlePreference = ref.watch(titleLanguagePreferenceProvider);
-    final homeShelves = ref.watch(homeShelfPreferencesProvider);
-    final homeShelfOrder = ref.watch(homeShelfOrderProvider);
     final appUpdate = ref.watch(appUpdateControllerProvider);
     final discordPresence = ref.watch(discordPresenceControllerProvider);
     final preferences = ref.watch(settingsPreferencesProvider);
@@ -2711,6 +2775,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       displaySectionFocusNode: _displaySectionFocus,
       homeNavigationSectionFocusNode: _homeNavigationSectionFocus,
       featuredHomeContentFocusNode: _featuredHomeContentFocus,
+      posterMetadataFocusNode: _posterMetadataFocus,
       topNavigationRowFocusNodes: _topNavigationRowFocusNodes,
       inputFeedbackSectionFocusNode: _inputFeedbackSectionFocus,
       closedCaptionsSectionFocusNode: _closedCaptionsSectionFocus,
@@ -2954,7 +3019,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
       key: const ValueKey('settings-card-system-privacy-diagnostics'),
       section: _SettingsSection.privacyDiagnostics,
       subtitle:
-          'Control optional privacy-safe reporting and Beta activity signals.',
+          'Review device health and control optional anonymous reporting.',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -2985,6 +3050,15 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                   .read(settingsPreferencesProvider.notifier)
                   .setAnonymousUsageCountEnabled,
             ),
+          _AppearanceActionRow(
+            label: 'Diagnostics',
+            subtitle:
+                'Review system health and export troubleshooting details.',
+            icon: Icons.monitor_heart_rounded,
+            focusNode: _diagnosticsFocus,
+            showDivider: true,
+            onPressed: () => context.push('/settings/diagnostics'),
+          ),
           Padding(
             padding: EdgeInsets.symmetric(
               horizontal: _usesTvSettingsScale(context) ? 10 : 13,
@@ -3005,6 +3079,37 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
             ),
           ),
         ],
+      ),
+    );
+
+    Widget experimentalOptionsCard() => settingsSectionCard(
+      key: const ValueKey('settings-card-system-experimental'),
+      section: _SettingsSection.experimentalOptions,
+      subtitle: 'Optional unfinished features and advanced build tools.',
+      child: _AppearanceToggleRow(
+        key: const ValueKey('settings-experimental-features-toggle'),
+        label: 'Experimental options',
+        subtitle: appUpdate.developerMode
+            ? 'Enabled. Experimental options may be unfinished or unstable.'
+            : 'Turn on to access the manga reader, Aniyomi extensions, and build-switching tools. These options may be unstable.',
+        icon: Icons.science_outlined,
+        value: appUpdate.developerMode,
+        focusNode: _experimentalFeaturesFocus,
+        onChanged: (enabled) async {
+          await ref
+              .read(appUpdateControllerProvider.notifier)
+              .setDeveloperMode(enabled);
+          if (!context.mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: LocalizedText(
+                enabled
+                    ? 'Experimental options enabled. Manga, Aniyomi, and build-switching tools are available.'
+                    : 'Experimental options disabled. Standard features remain available.',
+              ),
+            ),
+          );
+        },
       ),
     );
 
@@ -3088,9 +3193,8 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                 builder: (context, constraints) => Row(
                   children: [
                     if (preferences.interfaceMode == InterfaceMode.phone) ...[
-                      _TvIconButton(
+                      TetoBackButton(
                         focusNode: _backFocus,
-                        icon: Icons.arrow_back_rounded,
                         onPressed: () => _returnToPreviousOrHome(context),
                       ),
                       SizedBox(width: constraints.maxWidth < 620 ? 12 : 18),
@@ -3151,7 +3255,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                         if (!layout.usesTvRail) ...[
                           const _SectionHeader(
                             icon: Icons.palette_rounded,
-                            title: 'APPEARANCE',
+                            title: 'Appearance & language',
                             subtitle:
                                 'Personalize TetoTV, the Home screen, navigation, and feedback.',
                           ),
@@ -3161,8 +3265,6 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                           usesTvListLayout: layout.usesTvRail,
                           preferences: preferences,
                           titlePreference: titlePreference,
-                          homeShelves: homeShelves,
-                          homeShelfOrder: homeShelfOrder,
                           controller: ref.read(
                             settingsPreferencesProvider.notifier,
                           ),
@@ -3175,29 +3277,22 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                           resetFocusNode: _customizationResetFocus,
                           featuredFocusNode: _featuredHomeContentFocus,
                           posterMetadataFocusNode: _posterMetadataFocus,
-                          continueWatchingFocusNode: _continueWatchingFocus,
                           displayOptionsFirstFocusNode: _displaySectionFocus,
                           cardDetailsFocusNode: _cardDetailsFocus,
                           inputFeedbackFirstFocusNode:
                               _inputFeedbackSectionFocus,
                           clickSoundsFocusNode: _clickSoundsFocus,
-                          shelfFocusNodes: _shelfFocusNodes,
                           expandedSections: _expandedSettingsSections,
                           sectionFocusNodes: _settingsSectionFocusNodes,
                           onSectionExpandedChanged: _setSettingsSectionExpanded,
                           onOpenThemeStudio: () =>
                               context.push(ThemeStudioScreen.routePath),
                           onOpenMenuOrder: _openMenuOrderDialog,
+                          onOpenHomeShelves: _openHomeShelvesDialog,
                           onTitleLanguageChanged: (preference) => ref
                               .read(titleLanguagePreferenceProvider.notifier)
                               .setPreference(preference),
                           onReset: resetAppearance,
-                          onShelfToggle: (shelf) => ref
-                              .read(homeShelfPreferencesProvider.notifier)
-                              .toggle(shelf),
-                          onShelfMove: (shelf, offset) => ref
-                              .read(homeShelfOrderProvider.notifier)
-                              .move(shelf, offset),
                         ),
                         SizedBox(height: layout.usesTvRail ? 5 : 10),
                       ],
@@ -3205,7 +3300,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                         if (!layout.usesTvRail) ...[
                           const _SectionHeader(
                             icon: Icons.play_circle_rounded,
-                            title: 'PLAYBACK',
+                            title: 'Playback & captions',
                             subtitle:
                                 'Tune captions, player behavior, audio, skipping, and seeking.',
                           ),
@@ -3220,9 +3315,16 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                             section: _SettingsSection.closedCaptions,
                             subtitle:
                                 'Style subtitles for comfortable viewing on every screen.',
-                            child: customizationPanel(const {
-                              _CustomizationSection.closedCaptions,
-                            }, showReset: false),
+                            child: _AppearanceActionRow(
+                              key: const ValueKey('open-caption-studio'),
+                              label: 'Caption Studio',
+                              subtitle:
+                                  'Preview caption language, colors, and size before applying.',
+                              icon: Icons.closed_caption_rounded,
+                              focusNode: _preferredCaptionsFocus,
+                              onPressed: () =>
+                                  context.push(CaptionStudioScreen.routePath),
+                            ),
                           ),
                           right: settingsSectionCard(
                             key: const ValueKey(
@@ -3242,7 +3344,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                         if (!layout.usesTvRail) ...[
                           const _SectionHeader(
                             icon: Icons.hub_rounded,
-                            title: 'SERVICES',
+                            title: 'Sources & library',
                             subtitle:
                                 'Connect providers and choose how episode sources are found.',
                           ),
@@ -3555,7 +3657,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                         if (!layout.usesTvRail) ...[
                           const _SectionHeader(
                             icon: Icons.sync_alt_rounded,
-                            title: 'ACCOUNTS',
+                            title: 'Accounts & activity',
                             subtitle:
                                 'Profiles, anime tracking, notifications, and linked services.',
                           ),
@@ -3837,7 +3939,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                         if (!layout.usesTvRail) ...[
                           const _SectionHeader(
                             icon: Icons.settings_rounded,
-                            title: 'SYSTEM',
+                            title: 'App & support',
                             subtitle:
                                 'Manage this device, updates, diagnostics, privacy, storage, and legal information.',
                           ),
@@ -3853,7 +3955,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                                 ),
                                 section: _SettingsSection.deviceSupport,
                                 subtitle:
-                                    'Setup, device compatibility, calibration, and diagnostics.',
+                                    'Run setup again or calibrate this device.',
                                 child: Column(
                                   children: [
                                     _AppearanceActionRow(
@@ -3872,52 +3974,9 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                                           'Adjust display fit, input, and playback compatibility.',
                                       icon: Icons.tune_rounded,
                                       focusNode: _calibrationFocus,
-                                      showDivider: true,
                                       onPressed: () => context.push(
                                         '/settings/device-setup',
                                       ),
-                                    ),
-                                    _AppearanceActionRow(
-                                      label: 'Diagnostics',
-                                      subtitle:
-                                          'Review system health and export troubleshooting details.',
-                                      icon: Icons.monitor_heart_rounded,
-                                      focusNode: _diagnosticsFocus,
-                                      showDivider: true,
-                                      onPressed: () =>
-                                          context.push('/settings/diagnostics'),
-                                    ),
-                                    _AppearanceToggleRow(
-                                      key: const ValueKey(
-                                        'settings-experimental-features-toggle',
-                                      ),
-                                      label: 'Experimental options',
-                                      subtitle: appUpdate.developerMode
-                                          ? 'Enabled. Experimental options may be unfinished or unstable.'
-                                          : 'Turn on to access the manga reader, Aniyomi extensions, and build-switching tools. These options may be unstable.',
-                                      icon: Icons.science_outlined,
-                                      value: appUpdate.developerMode,
-                                      focusNode: _experimentalFeaturesFocus,
-                                      onChanged: (enabled) async {
-                                        await ref
-                                            .read(
-                                              appUpdateControllerProvider
-                                                  .notifier,
-                                            )
-                                            .setDeveloperMode(enabled);
-                                        if (!context.mounted) return;
-                                        ScaffoldMessenger.of(
-                                          context,
-                                        ).showSnackBar(
-                                          SnackBar(
-                                            content: LocalizedText(
-                                              enabled
-                                                  ? 'Experimental options enabled. Manga, Aniyomi, and build-switching tools are available.'
-                                                  : 'Experimental options disabled. Standard features remain available.',
-                                            ),
-                                          ),
-                                        );
-                                      },
                                     ),
                                   ],
                                 ),
@@ -3999,6 +4058,7 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                                   ],
                                 ),
                               ),
+                              if (layout.usesTvRail) experimentalOptionsCard(),
                               if (layout.usesTvRail) communityCard(),
                               if (layout.usesTvRail) storageAndResetCard(),
                               if (layout.usesTvRail) legalNoticesCard(),
@@ -4021,6 +4081,8 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                           right: Column(
                             crossAxisAlignment: CrossAxisAlignment.stretch,
                             children: [
+                              experimentalOptionsCard(),
+                              const SizedBox(height: 12),
                               storageAndResetCard(),
                               const SizedBox(height: 12),
                               legalNoticesCard(),
@@ -4061,13 +4123,7 @@ class _SettingsAreaTabs extends StatelessWidget {
 
     Widget tab(_SettingsArea area, {required bool compact}) {
       final active = area == selected;
-      final label = switch (area) {
-        _SettingsArea.appearance => 'Appearance',
-        _SettingsArea.playback => 'Playback',
-        _SettingsArea.services => 'Services',
-        _SettingsArea.accounts => 'Accounts',
-        _SettingsArea.system => 'System',
-      };
+      final label = area.label;
       return TvFocusable(
         key: ValueKey('settings-area-${area.name}'),
         focusNode: focusNodes[area],
@@ -4087,6 +4143,18 @@ class _SettingsAreaTabs extends StatelessWidget {
             vertical: compact ? 10 : (tvScale ? 4 : 10),
           ),
           decoration: BoxDecoration(
+            gradient: active
+                ? LinearGradient(
+                    begin: Alignment.bottomCenter,
+                    end: Alignment.topCenter,
+                    colors: [
+                      context.appPalette.accent.withValues(alpha: .34),
+                      context.appPalette.accent.withValues(alpha: .12),
+                      Colors.transparent,
+                    ],
+                    stops: const [0, .56, 1],
+                  )
+                : null,
             border: Border(
               bottom: BorderSide(
                 color: active
@@ -4762,15 +4830,11 @@ class _SettingsCardFrame extends StatelessWidget {
           ),
         ],
         SizedBox(height: tvScale ? 5 : 10),
-        DecoratedBox(
+        SizedBox(
+          width: double.infinity,
           key: section == null
               ? null
               : ValueKey('settings-section-content-${section!.slug}'),
-          decoration: BoxDecoration(
-            color: context.appPalette.surface.withValues(alpha: .35),
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: _settingsBorderColor(context, .14)),
-          ),
           child: _SettingsCardScope(child: child),
         ),
       ],
@@ -4860,8 +4924,6 @@ class _AppearanceSettingsLayout extends StatelessWidget {
     required this.usesTvListLayout,
     required this.preferences,
     required this.titlePreference,
-    required this.homeShelves,
-    required this.homeShelfOrder,
     required this.controller,
     required this.themeStudioFocusNode,
     required this.interfaceLanguageFocusNode,
@@ -4872,28 +4934,23 @@ class _AppearanceSettingsLayout extends StatelessWidget {
     required this.resetFocusNode,
     required this.featuredFocusNode,
     required this.posterMetadataFocusNode,
-    required this.continueWatchingFocusNode,
     required this.displayOptionsFirstFocusNode,
     required this.cardDetailsFocusNode,
     required this.inputFeedbackFirstFocusNode,
     required this.clickSoundsFocusNode,
-    required this.shelfFocusNodes,
     required this.expandedSections,
     required this.sectionFocusNodes,
     required this.onSectionExpandedChanged,
     required this.onOpenThemeStudio,
     required this.onOpenMenuOrder,
+    required this.onOpenHomeShelves,
     required this.onTitleLanguageChanged,
     required this.onReset,
-    required this.onShelfToggle,
-    required this.onShelfMove,
   });
 
   final bool usesTvListLayout;
   final SettingsPreferences preferences;
   final TitleLanguagePreference titlePreference;
-  final Set<HomeShelf> homeShelves;
-  final List<HomeShelf> homeShelfOrder;
   final SettingsPreferencesController controller;
   final FocusNode themeStudioFocusNode;
   final FocusNode interfaceLanguageFocusNode;
@@ -4904,22 +4961,19 @@ class _AppearanceSettingsLayout extends StatelessWidget {
   final FocusNode resetFocusNode;
   final FocusNode featuredFocusNode;
   final FocusNode posterMetadataFocusNode;
-  final FocusNode continueWatchingFocusNode;
   final FocusNode displayOptionsFirstFocusNode;
   final FocusNode cardDetailsFocusNode;
   final FocusNode inputFeedbackFirstFocusNode;
   final FocusNode clickSoundsFocusNode;
-  final Map<HomeShelf, FocusNode> shelfFocusNodes;
   final Set<_SettingsSection> expandedSections;
   final Map<_SettingsSection, FocusNode> sectionFocusNodes;
   final void Function(_SettingsSection section, bool expanded)
   onSectionExpandedChanged;
   final VoidCallback onOpenThemeStudio;
   final VoidCallback onOpenMenuOrder;
+  final VoidCallback onOpenHomeShelves;
   final ValueChanged<TitleLanguagePreference> onTitleLanguageChanged;
   final VoidCallback onReset;
-  final ValueChanged<HomeShelf> onShelfToggle;
-  final void Function(HomeShelf shelf, int offset) onShelfMove;
 
   @override
   Widget build(BuildContext context) {
@@ -4951,6 +5005,7 @@ class _AppearanceSettingsLayout extends StatelessWidget {
       key: const ValueKey('appearance-theme-display-card'),
       section: _SettingsSection.themeDisplay,
       title: 'Theme & display',
+      subtitle: 'Colors, screen layout, and home navigation.',
       collapsible: usesTvListLayout,
       expanded: expandedSections.contains(_SettingsSection.themeDisplay),
       focusNode: sectionFocusNodes[_SettingsSection.themeDisplay],
@@ -4969,6 +5024,39 @@ class _AppearanceSettingsLayout extends StatelessWidget {
           showDivider: true,
           onPressed: onOpenThemeStudio,
         ),
+        _AppearanceActionRow(
+          key: const ValueKey('open-display-studio'),
+          label: 'Display Studio',
+          subtitle:
+              'Preview size, layout, cards, and navigation before applying.',
+          icon: Icons.tune_rounded,
+          focusNode: featuredFocusNode,
+          showDivider: true,
+          onPressed: () => context.push(DisplayStudioScreen.routePath),
+        ),
+        _AppearanceActionRow(
+          key: const ValueKey('settings-appearance-reset'),
+          label: 'Reset appearance and navigation',
+          icon: Icons.refresh_rounded,
+          focusNode: resetFocusNode,
+          showChevron: false,
+          destructive: true,
+          onPressed: onReset,
+        ),
+      ],
+    );
+
+    final languageAndTitles = _AppearanceCard(
+      key: const ValueKey('appearance-language-titles-card'),
+      section: _SettingsSection.languageTitles,
+      title: 'Language & titles',
+      subtitle: 'Choose the app language and how show names appear.',
+      collapsible: usesTvListLayout,
+      expanded: expandedSections.contains(_SettingsSection.languageTitles),
+      focusNode: sectionFocusNodes[_SettingsSection.languageTitles],
+      onExpandedChanged: (expanded) =>
+          onSectionExpandedChanged(_SettingsSection.languageTitles, expanded),
+      children: [
         _AppearanceSelectionRow<AppLanguage>(
           key: const ValueKey('settings-app-language'),
           label: 'App language',
@@ -5020,202 +5108,11 @@ class _AppearanceSettingsLayout extends StatelessWidget {
       ],
     );
 
-    final navigation = _AppearanceCard(
-      key: const ValueKey('appearance-navigation-card'),
-      section: _SettingsSection.navigation,
-      title: 'Navigation',
-      collapsible: usesTvListLayout,
-      expanded: expandedSections.contains(_SettingsSection.navigation),
-      focusNode: sectionFocusNodes[_SettingsSection.navigation],
-      onExpandedChanged: (expanded) =>
-          onSectionExpandedChanged(_SettingsSection.navigation, expanded),
-      children: [
-        _AppearanceSelectionRow<NavigationChromeSize>(
-          key: const ValueKey('settings-appearance-navigation-size'),
-          label: 'Navigation size',
-          icon: Icons.open_with_rounded,
-          value: preferences.navigationChromeSize,
-          valueLabel: preferences.navigationChromeSize.displayName,
-          focusNode: navigationSizeFocusNode,
-          options: [
-            for (final size in NavigationChromeSize.values)
-              _SettingsOption(value: size, label: size.displayName),
-          ],
-          onSelected: controller.setNavigationChromeSize,
-          showDivider: true,
-        ),
-        _AppearanceActionRow(
-          key: const ValueKey('settings-appearance-menu-order'),
-          label: 'Menu order',
-          value: 'Customize',
-          icon: Icons.menu_rounded,
-          focusNode: menuOrderFocusNode,
-          showDivider: true,
-          onPressed: onOpenMenuOrder,
-        ),
-        _AppearanceActionRow(
-          key: const ValueKey('settings-appearance-reset'),
-          label: 'Reset appearance and navigation',
-          icon: Icons.refresh_rounded,
-          focusNode: resetFocusNode,
-          showChevron: false,
-          destructive: true,
-          onPressed: onReset,
-        ),
-      ],
-    );
-
-    final homeScreen = _AppearanceCard(
-      key: const ValueKey('appearance-home-screen-card'),
-      section: _SettingsSection.homeScreen,
-      title: 'Home screen',
-      collapsible: usesTvListLayout,
-      expanded: expandedSections.contains(_SettingsSection.homeScreen),
-      focusNode: sectionFocusNodes[_SettingsSection.homeScreen],
-      onExpandedChanged: (expanded) =>
-          onSectionExpandedChanged(_SettingsSection.homeScreen, expanded),
-      children: [
-        _AppearanceToggleRow(
-          key: const ValueKey('settings-appearance-featured-hero'),
-          label: 'Featured hero',
-          icon: Icons.star_border_rounded,
-          value: preferences.showHero,
-          focusNode: featuredFocusNode,
-          showDivider: true,
-          onChanged: controller.setShowHero,
-        ),
-        _AppearanceToggleRow(
-          key: const ValueKey('settings-appearance-poster-metadata'),
-          label: 'Poster metadata',
-          icon: Icons.info_outline_rounded,
-          value: preferences.showPosterMetadata,
-          focusNode: posterMetadataFocusNode,
-          showDivider: true,
-          onChanged: controller.setShowPosterMetadata,
-        ),
-        _AppearanceToggleRow(
-          key: const ValueKey('settings-appearance-continue-watching'),
-          label: 'Continue watching',
-          icon: Icons.history_rounded,
-          value: homeShelves.contains(HomeShelf.tracking),
-          focusNode: continueWatchingFocusNode,
-          onChanged: (_) => onShelfToggle(HomeShelf.tracking),
-        ),
-      ],
-    );
-
-    final displayOptions = _AppearanceCard(
-      key: const ValueKey('appearance-display-options-card'),
-      section: _SettingsSection.displayOptions,
-      title: 'Display options',
-      collapsible: usesTvListLayout,
-      expanded: expandedSections.contains(_SettingsSection.displayOptions),
-      focusNode: sectionFocusNodes[_SettingsSection.displayOptions],
-      onExpandedChanged: (expanded) =>
-          onSectionExpandedChanged(_SettingsSection.displayOptions, expanded),
-      children: [
-        _AppearanceSelectionRow<double>(
-          label: 'Interface scale',
-          icon: Icons.zoom_out_map_rounded,
-          value: preferences.interfaceScale,
-          valueLabel: '${(preferences.interfaceScale * 100).round()}%',
-          focusNode: displayOptionsFirstFocusNode,
-          options: [
-            for (final option in const [
-              (.8, '80%'),
-              (.9, '90%'),
-              (1.0, '100%'),
-              (1.1, '110%'),
-              (1.2, '120%'),
-            ])
-              _SettingsOption(value: option.$1, label: option.$2),
-          ],
-          showDivider: true,
-          onSelected: controller.setInterfaceScale,
-        ),
-        _AppearanceSelectionRow<ContentDensity>(
-          label: 'Content density',
-          icon: Icons.view_compact_alt_rounded,
-          value: preferences.contentDensity,
-          valueLabel: preferences.contentDensity.displayName,
-          options: [
-            for (final density in ContentDensity.values)
-              _SettingsOption(value: density, label: density.displayName),
-          ],
-          showDivider: true,
-          onSelected: controller.setContentDensity,
-        ),
-        _AppearanceSelectionRow<double>(
-          label: 'Thumbnail size',
-          icon: Icons.photo_size_select_large_rounded,
-          value: preferences.thumbnailScale,
-          valueLabel: switch (preferences.thumbnailScale) {
-            <= .9 => 'Small',
-            >= 1.1 => 'Large',
-            _ => 'Medium',
-          },
-          options: [
-            for (final option in const [
-              (.85, 'Small'),
-              (1.0, 'Medium'),
-              (1.15, 'Large'),
-            ])
-              _SettingsOption(value: option.$1, label: option.$2),
-          ],
-          showDivider: true,
-          onSelected: controller.setThumbnailScale,
-        ),
-        _AppearanceSelectionRow<HomeLayout>(
-          label: 'Layout style',
-          icon: Icons.dashboard_customize_rounded,
-          value: preferences.homeLayout,
-          valueLabel: preferences.homeLayout.displayName,
-          options: [
-            for (final layout in HomeLayout.values)
-              _SettingsOption(value: layout, label: layout.displayName),
-          ],
-          showDivider: true,
-          onSelected: controller.setHomeLayout,
-        ),
-        _AppearanceSelectionRow<LandingPage>(
-          label: 'Default landing page',
-          icon: Icons.home_work_outlined,
-          value: preferences.defaultLandingPage,
-          valueLabel: preferences.defaultLandingPage.displayName,
-          options: [
-            for (final page in LandingPage.values.where(
-              (page) => switch (page) {
-                LandingPage.home => true,
-                LandingPage.search => preferences.showSearch,
-                LandingPage.myList => preferences.showMyList,
-                LandingPage.discover => preferences.showDiscover,
-                LandingPage.calendar => preferences.showCalendar,
-              },
-            ))
-              _SettingsOption(
-                value: page,
-                label: page.displayName,
-                detail: page.route,
-              ),
-          ],
-          showDivider: true,
-          onSelected: controller.setDefaultLandingPage,
-        ),
-        _AppearanceToggleRow(
-          label: 'Card details',
-          subtitle: 'Show supporting text beneath posters and media cards.',
-          icon: Icons.subtitles_outlined,
-          value: preferences.showCardSubtitles,
-          focusNode: cardDetailsFocusNode,
-          onChanged: controller.setShowCardSubtitles,
-        ),
-      ],
-    );
-
     final inputAndFeedback = _AppearanceCard(
       key: const ValueKey('appearance-input-feedback-card'),
       section: _SettingsSection.inputFeedback,
       title: 'Input & feedback',
+      subtitle: 'Keyboard, navigation sounds, and click feedback.',
       collapsible: usesTvListLayout,
       expanded: expandedSections.contains(_SettingsSection.inputFeedback),
       focusNode: sectionFocusNodes[_SettingsSection.inputFeedback],
@@ -5254,44 +5151,9 @@ class _AppearanceSettingsLayout extends StatelessWidget {
       ],
     );
 
-    final homeShelvesPanel = _AppearanceCard(
-      key: const ValueKey('appearance-home-shelves-card'),
-      section: _SettingsSection.homeShelves,
-      title: 'Home shelves',
-      subtitle:
-          'Choose what appears on Home and move favorites toward the top.',
-      collapsible: usesTvListLayout,
-      expanded: expandedSections.contains(_SettingsSection.homeShelves),
-      focusNode: sectionFocusNodes[_SettingsSection.homeShelves],
-      onExpandedChanged: (expanded) =>
-          onSectionExpandedChanged(_SettingsSection.homeShelves, expanded),
-      children: [
-        for (var index = 0; index < homeShelfOrder.length; index++) ...[
-          _HomeShelfRow(
-            index: index,
-            total: homeShelfOrder.length,
-            shelf: homeShelfOrder[index],
-            enabled: homeShelves.contains(homeShelfOrder[index]),
-            focusNode: shelfFocusNodes[homeShelfOrder[index]]!,
-            onToggle: () => onShelfToggle(homeShelfOrder[index]),
-            onMoveUp: () => onShelfMove(homeShelfOrder[index], -1),
-            onMoveDown: () => onShelfMove(homeShelfOrder[index], 1),
-          ),
-          if (index != homeShelfOrder.length - 1) const SizedBox(height: 6),
-        ],
-      ],
-    );
-
     if (usesTvListLayout) {
       return _SettingsCardLane(
-        children: [
-          themeAndDisplay,
-          homeScreen,
-          displayOptions,
-          inputAndFeedback,
-          homeShelvesPanel,
-          navigation,
-        ],
+        children: [themeAndDisplay, languageAndTitles, inputAndFeedback],
       );
     }
 
@@ -5304,24 +5166,16 @@ class _AppearanceSettingsLayout extends StatelessWidget {
           gap: 20,
           left: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [themeAndDisplay, const SizedBox(height: 18), navigation],
-          ),
-          right: homeScreen,
-        ),
-        const SizedBox(height: 12),
-        _SettingsResponsiveColumns(
-          leftFlex: 51,
-          rightFlex: 49,
-          gap: 20,
-          left: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              displayOptions,
-              const SizedBox(height: 12),
-              inputAndFeedback,
+              themeAndDisplay,
+              const SizedBox(height: 18),
+              languageAndTitles,
             ],
           ),
-          right: homeShelvesPanel,
+          right: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [inputAndFeedback],
+          ),
         ),
       ],
     );
@@ -5430,7 +5284,7 @@ class _AppearanceActionRowState extends State<_AppearanceActionRow> {
       // The TV focus ring and glow render outside the option bounds. Keep a
       // small lane around every row so the selected outline remains visually
       // separate from the options immediately above and below it.
-      padding: EdgeInsets.symmetric(vertical: tvScale ? 3 : 0),
+      padding: EdgeInsets.symmetric(vertical: widget.showDivider ? 5 : 4),
       child: TvFocusable(
         focusNode: widget.focusNode,
         autofocus: widget.autofocus,
@@ -5439,7 +5293,7 @@ class _AppearanceActionRowState extends State<_AppearanceActionRow> {
         },
         onPressed: widget.onPressed,
         focusScale: 1.005,
-        borderRadius: BorderRadius.circular(7),
+        borderRadius: BorderRadius.circular(TetoBoxStyle.radius),
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 100),
           constraints: BoxConstraints(minHeight: tvScale ? 48 : 64),
@@ -5447,16 +5301,7 @@ class _AppearanceActionRowState extends State<_AppearanceActionRow> {
             horizontal: tvScale ? 10 : 13,
             vertical: tvScale ? 5 : 11,
           ),
-          decoration: BoxDecoration(
-            color: context.appPalette.surface,
-            border: Border(
-              bottom: BorderSide(
-                color: widget.showDivider
-                    ? _settingsBorderColor(context, .14)
-                    : Colors.transparent,
-              ),
-            ),
-          ),
+          decoration: TetoBoxStyle.decoration(context.appPalette),
           child: Row(
             children: [
               Icon(
@@ -5656,33 +5501,7 @@ class _AppearanceToggleRow extends StatelessWidget {
       focusNode: focusNode,
       showDivider: showDivider,
       showChevron: false,
-      trailing: AnimatedContainer(
-        duration: const Duration(milliseconds: 130),
-        width: tvScale ? 36 : 48,
-        height: tvScale ? 20 : 26,
-        padding: EdgeInsets.all(tvScale ? 2 : 3),
-        decoration: BoxDecoration(
-          color: value
-              ? context.appPalette.accentBright
-              : context.appPalette.surfaceRaised,
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: _settingsBorderColor(context, .18)),
-        ),
-        child: AnimatedAlign(
-          duration: const Duration(milliseconds: 130),
-          alignment: value ? Alignment.centerRight : Alignment.centerLeft,
-          child: Container(
-            width: tvScale ? 16 : 20,
-            height: tvScale ? 16 : 20,
-            decoration: BoxDecoration(
-              color: value
-                  ? context.appPalette.primaryText
-                  : context.appPalette.mutedText,
-              shape: BoxShape.circle,
-            ),
-          ),
-        ),
-      ),
+      trailing: TetoSwitchIndicator(value: value, compact: tvScale),
       onPressed: () => onChanged(!value),
     );
   }
@@ -5711,7 +5530,7 @@ Future<T?> _showSettingsSelectionDialog<T>({
   required String label,
   required T value,
   required List<_SettingsOption<T>> options,
-}) => showDialog<T>(
+}) => showTetoDialog<T>(
   context: context,
   barrierDismissible: true,
   builder: (context) =>
@@ -5812,13 +5631,7 @@ class _SettingsSelectionDialogState<T>
       child: Container(
         width: tvScale ? 430 : 560,
         padding: EdgeInsets.all(tvScale ? 11 : 22),
-        decoration: BoxDecoration(
-          color: context.appPalette.surface,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-            color: context.appPalette.accent.withValues(alpha: .7),
-          ),
-        ),
+        decoration: TetoBoxStyle.decoration(context.appPalette),
         child: ConstrainedBox(
           constraints: BoxConstraints(
             maxHeight: MediaQuery.sizeOf(context).height * .78,
@@ -5880,11 +5693,14 @@ class _SettingsSelectionDialogState<T>
           horizontal: tvScale ? 9 : 16,
           vertical: tvScale ? 6 : 13,
         ),
-        decoration: BoxDecoration(
+        decoration: TetoBoxStyle.decoration(
+          context.appPalette,
           color: option.value == widget.value
-              ? context.appPalette.accent.withValues(alpha: .28)
-              : context.appPalette.surfaceRaised,
-          borderRadius: BorderRadius.circular(9),
+              ? Color.alphaBlend(
+                  context.appPalette.accent.withValues(alpha: .05),
+                  TetoBoxStyle.fill(context.appPalette),
+                )
+              : null,
         ),
         child: Row(
           children: [
@@ -5935,7 +5751,7 @@ class _SettingsSelectionDialogState<T>
       onPressed: option.enabled
           ? () => Navigator.of(context).pop(option.value)
           : () {},
-      borderRadius: BorderRadius.circular(9),
+      borderRadius: BorderRadius.circular(TetoBoxStyle.radius),
       child: optionContent,
     );
     if (canFocus) return optionControl;
@@ -6025,6 +5841,7 @@ class _CustomizationPanel extends StatelessWidget {
     required this.displaySectionFocusNode,
     required this.homeNavigationSectionFocusNode,
     required this.featuredHomeContentFocusNode,
+    required this.posterMetadataFocusNode,
     required this.topNavigationRowFocusNodes,
     required this.inputFeedbackSectionFocusNode,
     required this.closedCaptionsSectionFocusNode,
@@ -6060,6 +5877,7 @@ class _CustomizationPanel extends StatelessWidget {
   final FocusNode displaySectionFocusNode;
   final FocusNode homeNavigationSectionFocusNode;
   final FocusNode featuredHomeContentFocusNode;
+  final FocusNode posterMetadataFocusNode;
   final Map<TopNavigationDestination, FocusNode> topNavigationRowFocusNodes;
   final FocusNode inputFeedbackSectionFocusNode;
   final FocusNode closedCaptionsSectionFocusNode;
@@ -6118,6 +5936,26 @@ class _CustomizationPanel extends StatelessWidget {
                   focusNode: firstFocusNode,
                   onPressed: onOpenThemeStudio,
                 ),
+                _SettingsNavigationRow(
+                  key: const ValueKey('open-display-studio'),
+                  label: 'Display Studio',
+                  detail:
+                      'Preview size, layout, cards, and navigation before applying.',
+                  icon: Icons.tune_rounded,
+                  focusNode: featuredHomeContentFocusNode,
+                  onPressed: () => context.push(DisplayStudioScreen.routePath),
+                ),
+                _PreferenceRow(
+                  label: 'Poster metadata',
+                  children: [
+                    toggle(
+                      label: 'Poster badges',
+                      value: preferences.showPosterMetadata,
+                      focusNode: posterMetadataFocusNode,
+                      onChanged: controller.setShowPosterMetadata,
+                    ),
+                  ],
+                ),
                 _PreferenceRow(
                   label: 'Navigation & logo size',
                   children: [
@@ -6131,24 +5969,6 @@ class _CustomizationPanel extends StatelessWidget {
                   ],
                 ),
                 _PreferenceRow(
-                  label: 'Interface scale',
-                  children: [
-                    for (final option in const [
-                      (.8, '80%'),
-                      (.9, '90%'),
-                      (1.0, '100%'),
-                      (1.1, '110%'),
-                      (1.2, '120%'),
-                    ])
-                      _PreferenceChip(
-                        label: option.$2,
-                        selected: preferences.interfaceScale == option.$1,
-                        onPressed: () =>
-                            controller.setInterfaceScale(option.$1),
-                      ),
-                  ],
-                ),
-                _PreferenceRow(
                   label: 'Content density',
                   children: [
                     for (final density in ContentDensity.values)
@@ -6156,22 +5976,6 @@ class _CustomizationPanel extends StatelessWidget {
                         label: density.displayName,
                         selected: preferences.contentDensity == density,
                         onPressed: () => controller.setContentDensity(density),
-                      ),
-                  ],
-                ),
-                _PreferenceRow(
-                  label: 'Thumbnail size',
-                  children: [
-                    for (final option in const [
-                      (.85, 'Small'),
-                      (1.0, 'Medium'),
-                      (1.15, 'Large'),
-                    ])
-                      _PreferenceChip(
-                        label: option.$2,
-                        selected: preferences.thumbnailScale == option.$1,
-                        onPressed: () =>
-                            controller.setThumbnailScale(option.$1),
                       ),
                   ],
                 ),
@@ -6260,19 +6064,8 @@ class _CustomizationPanel extends StatelessWidget {
                   showDivider: true,
                 ),
                 _PreferenceRow(
-                  label: 'Home content',
+                  label: 'Card details',
                   children: [
-                    toggle(
-                      label: 'Featured',
-                      value: preferences.showHero,
-                      focusNode: featuredHomeContentFocusNode,
-                      onChanged: controller.setShowHero,
-                    ),
-                    toggle(
-                      label: 'Poster badges',
-                      value: preferences.showPosterMetadata,
-                      onChanged: controller.setShowPosterMetadata,
-                    ),
                     toggle(
                       label: 'Card details',
                       value: preferences.showCardSubtitles,
@@ -8337,6 +8130,7 @@ class _HomeShelfRow extends StatelessWidget {
     required this.shelf,
     required this.enabled,
     required this.focusNode,
+    this.autofocus = false,
     required this.onToggle,
     required this.onMoveUp,
     required this.onMoveDown,
@@ -8347,6 +8141,7 @@ class _HomeShelfRow extends StatelessWidget {
   final HomeShelf shelf;
   final bool enabled;
   final FocusNode focusNode;
+  final bool autofocus;
   final VoidCallback onToggle;
   final VoidCallback onMoveUp;
   final VoidCallback onMoveDown;
@@ -8372,6 +8167,7 @@ class _HomeShelfRow extends StatelessWidget {
         Expanded(
           child: TvFocusable(
             focusNode: focusNode,
+            autofocus: autofocus,
             onPressed: onToggle,
             focusScale: 1.005,
             borderRadius: BorderRadius.circular(8),
@@ -9533,7 +9329,7 @@ class _LocalProfilesPanel extends StatelessWidget {
   final LocalProfilesState state;
   final FocusNode focusNode;
 
-  Future<void> _openManager(BuildContext context) => showDialog<void>(
+  Future<void> _openManager(BuildContext context) => showTetoDialog<void>(
     context: context,
     barrierColor: const Color(0xD9000000),
     builder: (_) => const _LocalProfilesDialog(),
@@ -9713,7 +9509,7 @@ class _LocalProfilesDialogState extends ConsumerState<_LocalProfilesDialog> {
     final deletedIndex = profilesBeforeDelete.indexWhere(
       (candidate) => candidate.id == profile.id,
     );
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showTetoDialog<bool>(
       context: context,
       barrierColor: const Color(0xCC000000),
       builder: (context) => AlertDialog(
@@ -9771,13 +9567,7 @@ class _LocalProfilesDialogState extends ConsumerState<_LocalProfilesDialog> {
             maxHeight: MediaQuery.sizeOf(context).height * .86,
           ),
           child: DecoratedBox(
-            decoration: BoxDecoration(
-              color: context.appPalette.surface,
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(
-                color: context.appPalette.accent.withValues(alpha: .55),
-              ),
-            ),
+            decoration: TetoBoxStyle.decoration(context.appPalette),
             child: SingleChildScrollView(
               padding: EdgeInsets.all(_usesTvSettingsScale(context) ? 10 : 20),
               child: Column(
@@ -9786,10 +9576,9 @@ class _LocalProfilesDialogState extends ConsumerState<_LocalProfilesDialog> {
                 children: [
                   Row(
                     children: [
-                      _TvIconButton(
+                      TetoBackButton(
                         key: const ValueKey('local-profiles-back'),
                         focusNode: _backFocus,
-                        icon: Icons.arrow_back_rounded,
                         onPressed: () => Navigator.of(context).pop(),
                       ),
                       SizedBox(width: _usesTvSettingsScale(context) ? 6 : 10),
@@ -10294,35 +10083,11 @@ class _Panel extends StatelessWidget {
             ? (_usesTvSettingsScale(context) ? 6 : 12)
             : (_usesTvSettingsScale(context) ? 8 : 14),
       ),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            inset
-                ? context.appPalette.surfaceRaised
-                : context.appPalette.surface,
-            Color.alphaBlend(
-              context.appPalette.accent.withValues(alpha: inset ? .04 : .025),
-              inset
-                  ? context.appPalette.surfaceRaised
-                  : context.appPalette.surface,
-            ),
-          ],
-        ),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(
-          color: _settingsBorderColor(context, inset ? .14 : .18),
-        ),
-        boxShadow: inset
-            ? const []
-            : [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: .22),
-                  blurRadius: _usesTvSettingsScale(context) ? 9 : 18,
-                  offset: Offset(0, _usesTvSettingsScale(context) ? 4 : 8),
-                ),
-              ],
+      decoration: TetoBoxStyle.decoration(
+        context.appPalette,
+        color: inset
+            ? context.appPalette.surfaceRaised
+            : context.appPalette.surface,
       ),
       child: child,
     );
@@ -10391,13 +10156,13 @@ class _StorageResetPanelState extends State<_StorageResetPanel> {
 
   Future<void> _confirmReset() async {
     if (_clearingCache || _resetting) return;
-    final firstConfirmed = await showDialog<bool>(
+    final firstConfirmed = await showTetoDialog<bool>(
       context: context,
       barrierDismissible: true,
       builder: (_) => const _ResetWarningDialog(),
     );
     if (firstConfirmed != true || !mounted) return;
-    final finalConfirmed = await showDialog<bool>(
+    final finalConfirmed = await showTetoDialog<bool>(
       context: context,
       barrierDismissible: false,
       builder: (_) => const _ResetFinalDialog(),
@@ -10486,7 +10251,7 @@ class _ResetWarningDialog extends StatelessWidget {
         key: const ValueKey('reset-warning-cancel'),
         autofocus: true,
         label: 'Keep my data',
-        icon: Icons.arrow_back_rounded,
+        icon: Icons.close_rounded,
         onPressed: () => Navigator.of(context).pop(false),
       ),
       _DialogAction(
@@ -10549,11 +10314,7 @@ class _ResetDialogFrame extends StatelessWidget {
     child: Container(
       width: _usesTvSettingsScale(context) ? 460 : 620,
       padding: EdgeInsets.all(_usesTvSettingsScale(context) ? 11 : 22),
-      decoration: BoxDecoration(
-        color: context.appPalette.surface,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: context.appPalette.accentBright, width: 2),
-      ),
+      decoration: TetoBoxStyle.decoration(context.appPalette),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -10832,33 +10593,6 @@ void _returnToPreviousOrHome(BuildContext context) {
     return;
   }
   context.go('/');
-}
-
-class _TvIconButton extends StatelessWidget {
-  const _TvIconButton({
-    required this.icon,
-    required this.onPressed,
-    this.focusNode,
-    super.key,
-  });
-
-  final IconData icon;
-  final VoidCallback onPressed;
-  final FocusNode? focusNode;
-
-  @override
-  Widget build(BuildContext context) => TvFocusable(
-    focusNode: focusNode,
-    onPressed: onPressed,
-    borderRadius: BorderRadius.circular(10),
-    child: ColoredBox(
-      color: context.appPalette.surface,
-      child: Padding(
-        padding: EdgeInsets.all(_usesTvSettingsScale(context) ? 6 : 10),
-        child: Icon(icon, size: _usesTvSettingsScale(context) ? 17 : 20),
-      ),
-    ),
-  );
 }
 
 class _TvTextButton extends StatelessWidget {

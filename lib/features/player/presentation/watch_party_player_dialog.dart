@@ -1,7 +1,9 @@
+import 'package:anime_tv/core/widgets/teto_dialog.dart';
 import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'dart:async';
 
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/theme/teto_box_style.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/features/player/presentation/watch_party_player_status.dart';
 import 'package:anime_tv/features/watch_together/application/watch_party_controller.dart';
@@ -12,7 +14,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 Future<void> showWatchPartyPlayerDialog(BuildContext context) =>
-    showDialog<void>(
+    showTetoDialog<void>(
       context: context,
       barrierColor: const Color(0xDD000000),
       builder: (_) => const WatchPartyPlayerDialog(),
@@ -168,7 +170,7 @@ class _WatchPartyPlayerDialogState
 
   Future<void> _leaveRoom(WatchPartyRole role) async {
     if (_leaving) return;
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showTetoDialog<bool>(
       context: context,
       barrierColor: const Color(0xCC000000),
       builder: (_) => _ConfirmLeaveRoomDialog(role: role),
@@ -211,7 +213,7 @@ class _WatchPartyPlayerDialogState
 
   Future<void> _manageParticipant(WatchPartyParticipant participant) async {
     if (_managingParticipant || participant.participantId == null) return;
-    final action = await showDialog<_ParticipantManagementAction>(
+    final action = await showTetoDialog<_ParticipantManagementAction>(
       context: context,
       barrierColor: const Color(0xCC000000),
       builder: (_) => _ManageParticipantDialog(participant: participant),
@@ -276,8 +278,8 @@ class _WatchPartyPlayerDialogState
           key: const ValueKey('player-watch-party-panel'),
           decoration: BoxDecoration(
             color: palette.surface.withValues(alpha: .98),
-            borderRadius: BorderRadius.circular(18),
-            border: Border.all(color: palette.accent.withValues(alpha: .72)),
+            borderRadius: BorderRadius.circular(TetoBoxStyle.radius),
+            border: Border.all(color: TetoBoxStyle.outline(palette)),
             boxShadow: [
               BoxShadow(
                 color: palette.background.withValues(alpha: .78),
@@ -648,9 +650,9 @@ class _CompactParticipantPreview extends StatelessWidget {
     return Container(
       key: const ValueKey('player-watch-party-participants'),
       padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
+      decoration: TetoBoxStyle.decoration(
+        palette,
         color: palette.background.withValues(alpha: .55),
-        borderRadius: BorderRadius.circular(10),
       ),
       child: Wrap(
         spacing: 8,
@@ -870,25 +872,29 @@ class _DialogAction extends StatelessWidget {
   final bool autofocus;
 
   @override
-  Widget build(BuildContext context) => TvFocusable(
-    focusNode: focusNode,
-    autofocus: autofocus,
-    onPressed: onPressed,
-    borderRadius: BorderRadius.circular(10),
-    child: Container(
-      padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 11),
-      decoration: BoxDecoration(
-        color: context.appPalette.selectableSurface,
-        borderRadius: BorderRadius.circular(10),
+  Widget build(BuildContext context) {
+    final palette = context.appPalette;
+    return TvFocusable(
+      focusNode: focusNode,
+      autofocus: autofocus,
+      onPressed: onPressed,
+      borderRadius: BorderRadius.circular(TetoBoxStyle.radius),
+      focusScale: 1.02,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 11),
+        decoration: TetoBoxStyle.decoration(
+          palette,
+          color: palette.selectableSurface,
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 19),
+            const SizedBox(width: 8),
+            Text(label, style: const TextStyle(fontWeight: FontWeight.w800)),
+          ],
+        ),
       ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 19),
-          const SizedBox(width: 8),
-          Text(label, style: const TextStyle(fontWeight: FontWeight.w800)),
-        ],
-      ),
-    ),
-  );
+    );
+  }
 }

@@ -1,13 +1,21 @@
+import 'package:anime_tv/core/widgets/teto_dialog.dart';
+import 'package:anime_tv/core/widgets/teto_blur_scope.dart';
 import 'dart:async';
+import 'dart:ui';
 
 import 'package:anime_tv/core/layout/adaptive_layout.dart';
 import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'package:anime_tv/core/preferences/title_language_preference.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/widgets/teto_back_button.dart';
+import 'package:anime_tv/core/widgets/teto_artwork_scrim.dart';
+import 'package:anime_tv/core/widgets/teto_browse_status.dart';
+import 'package:anime_tv/core/theme/teto_box_style.dart';
+import 'package:anime_tv/core/theme/teto_ui_tokens.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/widgets/network_artwork.dart';
 import 'package:anime_tv/core/widgets/poster_metadata_overlay.dart';
-import 'package:anime_tv/core/widgets/tv_text_input.dart';
+import 'package:anime_tv/core/widgets/teto_switch_indicator.dart';
 import 'package:anime_tv/core/storage/storage_providers.dart';
 import 'package:anime_tv/features/catalog/application/catalog_providers.dart';
 import 'package:anime_tv/features/catalog/application/filler_episode_providers.dart';
@@ -18,6 +26,7 @@ import 'package:anime_tv/features/catalog/domain/episode_airing_availability.dar
 import 'package:anime_tv/features/catalog/domain/filler_episode_lookup.dart';
 import 'package:anime_tv/features/catalog/presentation/anime_title_logo_view.dart';
 import 'package:anime_tv/features/catalog/presentation/episode_browser_dialog.dart';
+import 'package:anime_tv/features/catalog/presentation/episode_panel_icon.dart';
 import 'package:anime_tv/features/catalog/presentation/localized_anime_description.dart';
 import 'package:anime_tv/features/catalog/presentation/localized_episode_airing.dart';
 import 'package:anime_tv/features/downloads/application/season_download_controller.dart';
@@ -67,11 +76,7 @@ class AnimeDetailsScreen extends ConsumerWidget {
     final details = ref.watch(animeDetailsProvider(animeId));
     return Scaffold(
       body: details.when(
-        loading: () => Center(
-          child: CircularProgressIndicator(
-            color: context.appPalette.secondaryAccent,
-          ),
-        ),
+        loading: () => const TetoBrowseLoading(),
         error: (error, _) => _DetailsError(
           message: error.toString(),
           onBack: context.pop,
@@ -112,12 +117,8 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
   final FocusNode _skipFillerFocusNode = FocusNode(
     debugLabel: 'episode.skip-filler',
   );
-  final FocusNode _previousEpisodeFocusNode = FocusNode(
-    debugLabel: 'episode.previous',
-  );
-  final FocusNode _nextEpisodeFocusNode = FocusNode(debugLabel: 'episode.next');
-  final FocusNode _episodePickerFocusNode = FocusNode(
-    debugLabel: 'episode.manual-picker',
+  final FocusNode _browseEpisodesFocusNode = FocusNode(
+    debugLabel: 'episode.browse',
   );
   final FocusNode _backFocusNode = FocusNode(debugLabel: 'anime-details.back');
   Timer? _prefetchDebounce;
@@ -134,9 +135,7 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
     _cancelActivePrefetch();
     _watchPartyFocusNode.dispose();
     _skipFillerFocusNode.dispose();
-    _previousEpisodeFocusNode.dispose();
-    _nextEpisodeFocusNode.dispose();
-    _episodePickerFocusNode.dispose();
+    _browseEpisodesFocusNode.dispose();
     _backFocusNode.dispose();
     super.dispose();
   }
@@ -240,6 +239,18 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
         );
     final releaseCheckAt = DateTime.now();
     final statusText = _animeDetailsStatusText(context, anime, releaseCheckAt);
+    final posterAiringStatus = animeAiringStatusLabel(anime.status);
+    final hasFinishedAiring = posterAiringStatus == 'FINISHED';
+    final hasAiringSchedule =
+        anime.nextAiringAt != null &&
+        localizedNextEpisodeCountdown(context, anime, now: releaseCheckAt) !=
+            null;
+    // Known release states live with the year/runtime/rating. Keep a separate
+    // line only for additional airing dates or an unrecognized catalog state.
+    final displayedStatusText =
+        posterAiringStatus == null || (!hasFinishedAiring && hasAiringSchedule)
+        ? statusText
+        : null;
     final selectedAvailability = episodeAiringAvailability(
       anime: anime,
       episode: selectedEpisode,
@@ -278,8 +289,32 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
               ? 'Cancel season download'
               : 'View downloads'
         : 'Download season';
+    final onFranchise = anime.relatedAnime.isEmpty
+        ? null
+        : () => context.push('/anime/${anime.id}/franchise');
+    final onCredits =
+        anime.studios.isEmpty && anime.staff.isEmpty && anime.characters.isEmpty
+        ? null
+        : () => context.push('/anime/${anime.id}/credits');
+    final onTrailer = anime.trailer == null
+        ? null
+        : () => context.push(
+            TrailerPlayerScreen.routePath,
+            extra: TrailerPlaybackRequest(
+              title: anime.displayTitle(titlePreference),
+              trailer: anime.trailer!,
+            ),
+          );
+    final hasInformationActions = <VoidCallback?>[
+      onTrailer,
+      onCredits,
+      onFranchise,
+      onDownloadSeason,
+    ].any((action) => action != null);
     _EpisodeActions episodeActions({
       required bool autofocusPrimary,
+      required double availableInfoWidth,
+      required bool largeInformation,
     }) => _EpisodeActions(
       selectedAvailability: selectedAvailability,
       resumeAvailability: resumeAvailability,
@@ -288,8 +323,21 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
       titlePreference: titlePreference,
       resumeEpisode: targetEpisode,
       totalEpisodes: knownEpisodes,
+      watchedEpisodes: progress,
+      catalogEpisodeCount: anime.episodes,
+      informationAction: hasInformationActions
+          ? _InformationActions(
+              onTrailer: onTrailer,
+              onFranchise: onFranchise,
+              onCredits: onCredits,
+              onDownloadSeason: onDownloadSeason,
+              downloadSeasonLabel: downloadSeasonLabel,
+              availableWidth: availableInfoWidth,
+              large: largeInformation,
+            )
+          : null,
       hasProgress: progress > 0 || localResume,
-      resumePosition: localResume ? localPlayback.position : null,
+      resumeProgress: localResume ? localPlayback.progress : null,
       resumeIsFiller:
           canShowFillerIndicators &&
           fillerIndicatorLookup!.isConfirmedFiller(targetEpisode),
@@ -297,21 +345,6 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
           canShowFillerIndicators &&
           fillerIndicatorLookup!.isConfirmedFiller(selectedEpisode),
       guestInWatchParty: guestInWatchParty,
-      onDecrease: !guestInWatchParty && !isUnreleased && selectedEpisode > 1
-          ? () => setState(() => _selectedEpisode = selectedEpisode - 1)
-          : null,
-      onIncrease:
-          !guestInWatchParty && !isUnreleased && selectedEpisode < knownEpisodes
-          ? () => setState(() => _selectedEpisode = selectedEpisode + 1)
-          : null,
-      onSelectEpisode: !guestInWatchParty && !isUnreleased
-          ? () => unawaited(
-              _showEpisodeNumberPicker(
-                selectedEpisode: selectedEpisode,
-                totalEpisodes: knownEpisodes,
-              ),
-            )
-          : null,
       onBrowseEpisodes: !guestInWatchParty && !isUnreleased
           ? () => _openEpisodeBrowser(
               selectedEpisode: selectedEpisode,
@@ -355,9 +388,7 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
       watchPartyStarting: _startingWatchParty || watchParty.isBusy,
       watchPartyFocusNode: _watchPartyFocusNode,
       skipFillerFocusNode: _skipFillerFocusNode,
-      previousEpisodeFocusNode: _previousEpisodeFocusNode,
-      episodePickerFocusNode: _episodePickerFocusNode,
-      nextEpisodeFocusNode: _nextEpisodeFocusNode,
+      browseEpisodesFocusNode: _browseEpisodesFocusNode,
       showWatchPartyAction: settings.showWatchTogether,
       onWatchPartyPressed: watchParty.session?.role == WatchPartyRole.guest
           ? () => unawaited(
@@ -371,89 +402,18 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
           ? () => unawaited(_startWatchParty())
           : null,
     );
-    final onFranchise = anime.relatedAnime.isEmpty
-        ? null
-        : () => context.push('/anime/${anime.id}/franchise');
-    final onCredits =
-        anime.studios.isEmpty && anime.staff.isEmpty && anime.characters.isEmpty
-        ? null
-        : () => context.push('/anime/${anime.id}/credits');
-    final onTrailer = anime.trailer == null
-        ? null
-        : () => context.push(
-            TrailerPlayerScreen.routePath,
-            extra: TrailerPlaybackRequest(
-              title: anime.displayTitle(titlePreference),
-              trailer: anime.trailer!,
-            ),
-          );
-    final hasInformationActions =
-        onTrailer != null ||
-        onFranchise != null ||
-        onCredits != null ||
-        onDownloadSeason != null;
-    if (_episodeBrowserOpen) {
-      return PopScope(
-        canPop: false,
-        onPopInvokedWithResult: (didPop, _) {
-          if (!didPop) _closeEpisodeBrowser();
-        },
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            NetworkArtwork(
-              url: anime.bannerImageUrl ?? anime.coverImageUrl,
-              cacheWidth: 1000,
-            ),
-            const DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  colors: [
-                    Color(0xF5000000),
-                    Color(0xB8000000),
-                    Color(0xFA000000),
-                  ],
-                  stops: [0, .52, 1],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
-              ),
-            ),
-            SafeArea(
-              minimum: context.responsiveScreenPadding,
-              child: EpisodeBrowserDialog(
-                anime: anime,
-                selectedEpisode: selectedEpisode,
-                totalEpisodes: knownEpisodes,
-                isTelevision: isTelevision,
-                embedded: true,
-                episodeMetadataFuture: _episodeBrowserMetadataFuture,
-                onClose: _closeEpisodeBrowser,
-                onEpisodeSelected: (episode) =>
-                    _closeEpisodeBrowser(selectedEpisode: episode),
-              ),
-            ),
-          ],
-        ),
-      );
-    }
-    return Stack(
+    final detailsContent = Stack(
       fit: StackFit.expand,
       children: [
-        NetworkArtwork(
-          url: anime.bannerImageUrl ?? anime.coverImageUrl,
-          cacheWidth: 1000,
-        ),
-        const DecoratedBox(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              colors: [Color(0xF5000000), Color(0xB8000000), Color(0xFA000000)],
-              stops: [0, .52, 1],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-            ),
+        ImageFiltered(
+          enabled: TetoBlurScope.enabledOf(context),
+          imageFilter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
+          child: NetworkArtwork(
+            url: anime.coverImageUrl ?? anime.bannerImageUrl,
+            cacheWidth: 1200,
           ),
         ),
+        const TetoArtworkScrim(),
         SafeArea(
           minimum: context.responsiveScreenPadding,
           child: LayoutBuilder(
@@ -477,12 +437,6 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
                           onPressed: context.pop,
                           autofocus: true,
                           focusNode: _backFocusNode,
-                        ),
-                        const Spacer(),
-                        _EpisodeCounterBadge(
-                          selectedEpisode: selectedEpisode,
-                          totalEpisodes: knownEpisodes,
-                          compact: true,
                         ),
                       ],
                     ),
@@ -508,10 +462,8 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
                                           url: anime.coverImageUrl,
                                           cacheWidth: 240,
                                         ),
-                                        if (animeAiringStatusLabel(
-                                              anime.status,
-                                            ) !=
-                                            null)
+                                        if (posterAiringStatus != null &&
+                                            !hasFinishedAiring)
                                           Positioned(
                                             left: 7,
                                             top: 7,
@@ -549,7 +501,8 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
                                           context,
                                         ).textTheme.headlineSmall,
                                       ),
-                                      if (statusText case final status?) ...[
+                                      if (displayedStatusText
+                                          case final status?) ...[
                                         const SizedBox(height: 9),
                                         Text(
                                           context.tr("Status: {value1}", {
@@ -579,22 +532,15 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
                                   ? context.tr("No synopsis is available.")
                                   : anime.description,
                               style: Theme.of(context).textTheme.bodyMedium,
+                              maxLines: 5,
+                              expandable: true,
                             ),
                             const SizedBox(height: 18),
-                            episodeActions(autofocusPrimary: false),
-                            if (hasInformationActions) ...[
-                              const SizedBox(height: 12),
-                              _InformationActions(
-                                onTrailer: onTrailer,
-                                onFranchise: onFranchise,
-                                onCredits: onCredits,
-                                onDownloadSeason: onDownloadSeason,
-                                downloadSeasonLabel: downloadSeasonLabel,
-                                television: isTelevision,
-                                large: isTelevision,
-                                availableWidth: constraints.maxWidth,
-                              ),
-                            ],
+                            episodeActions(
+                              autofocusPrimary: false,
+                              availableInfoWidth: constraints.maxWidth,
+                              largeInformation: isTelevision,
+                            ),
                           ],
                         ),
                       ),
@@ -607,11 +553,11 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
               final columnGap = wide ? 48.0 : (spacious ? 30.0 : 20.0);
               // On a television the poster is the visual anchor for this
               // screen. Deriving it from the canvas height keeps it close to
-              // 60% of the visible TV image at both 1080p and smaller 16:9
+              // 66% of the visible TV image at both 1080p and smaller 16:9
               // resolutions instead of shrinking it at logical resolutions
               // reported by some TV devices.
               final targetPosterWidth =
-                  MediaQuery.sizeOf(context).height * .60 / 1.5;
+                  MediaQuery.sizeOf(context).height * .66 / 1.5;
               final actionWidth = wide
                   ? (constraints.maxWidth * .29).clamp(500.0, 560.0).toDouble()
                   : spacious
@@ -633,11 +579,11 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
               final posterWidth = targetPosterWidth
                   .clamp(minimumPosterWidth, maximumPosterWidth)
                   .toDouble();
-              final informationWidth =
-                  constraints.maxWidth -
-                  posterWidth -
-                  actionWidth -
-                  columnGap * 2;
+              final detailsTopInset =
+                  constraints.maxHeight *
+                  (constraints.maxHeight < 620 ? .04 : (wide ? .10 : .08));
+              final contentHeight =
+                  constraints.maxHeight - 48 - (wide ? 28 : 10);
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -648,173 +594,185 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
                         autofocus: isUnreleased,
                         focusNode: _backFocusNode,
                       ),
-                      const Spacer(),
-                      _EpisodeCounterBadge(
-                        selectedEpisode: selectedEpisode,
-                        totalEpisodes: knownEpisodes,
-                        large: wide,
-                      ),
                     ],
                   ),
-                  SizedBox(height: wide ? 38 : 14),
+                  SizedBox(height: wide ? 28 : 10),
                   Expanded(
-                    child: Center(
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.center,
-                        children: [
-                          SizedBox(
-                            key: const ValueKey('anime-details-poster'),
-                            width: posterWidth,
-                            child: AspectRatio(
-                              aspectRatio: 2 / 3,
-                              child: DecoratedBox(
-                                decoration: BoxDecoration(
-                                  borderRadius: BorderRadius.circular(20),
-                                  border: Border.all(
-                                    color: Colors.white.withValues(alpha: .2),
+                    child: Align(
+                      alignment: Alignment.topCenter,
+                      child: Padding(
+                        padding: EdgeInsets.only(top: 0),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Padding(
+                              padding: EdgeInsets.only(top: detailsTopInset),
+                              child: SizedBox(
+                                key: const ValueKey('anime-details-poster'),
+                                width: posterWidth,
+                                child: AspectRatio(
+                                  aspectRatio: 2 / 3,
+                                  child: DecoratedBox(
+                                    decoration: BoxDecoration(
+                                      borderRadius: BorderRadius.circular(20),
+                                      border: Border.all(
+                                        color: Colors.white.withValues(
+                                          alpha: .2,
+                                        ),
+                                      ),
+                                    ),
+                                    child: ClipRRect(
+                                      borderRadius: BorderRadius.circular(19),
+                                      child: Stack(
+                                        fit: StackFit.expand,
+                                        children: [
+                                          NetworkArtwork(
+                                            url: anime.coverImageUrl,
+                                            cacheWidth: wide
+                                                ? 680
+                                                : (spacious ? 540 : 360),
+                                          ),
+                                          if (posterAiringStatus != null &&
+                                              !hasFinishedAiring)
+                                            Positioned(
+                                              left: wide ? 18 : 9,
+                                              top: wide ? 18 : 9,
+                                              child: PosterAiringStatusBadge(
+                                                status: anime.status,
+                                              ),
+                                            ),
+                                        ],
+                                      ),
+                                    ),
                                   ),
                                 ),
-                                child: ClipRRect(
-                                  borderRadius: BorderRadius.circular(19),
-                                  child: Stack(
-                                    fit: StackFit.expand,
+                              ),
+                            ),
+                            SizedBox(width: columnGap),
+                            Expanded(
+                              child: Padding(
+                                padding: EdgeInsets.only(top: detailsTopInset),
+                                child: Align(
+                                  alignment: Alignment.topLeft,
+                                  child: Column(
+                                    key: const ValueKey('anime-details-info'),
+                                    mainAxisSize: MainAxisSize.min,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
                                     children: [
-                                      NetworkArtwork(
-                                        url: anime.coverImageUrl,
-                                        cacheWidth: wide
-                                            ? 680
-                                            : (spacious ? 540 : 360),
+                                      AnimeTitleLogoView(
+                                        aniListId: anime.id,
+                                        fallbackTitle: displayTitle,
+                                        maxWidth: constraints.maxWidth,
+                                        maxHeight: wide
+                                            ? 108
+                                            : (spacious ? 88 : 72),
+                                        logoContextLabel: franchiseContext,
+                                        logoContextStyle: TextStyle(
+                                          color:
+                                              context.appPalette.accentBright,
+                                          fontSize: wide ? 16 : 13,
+                                          fontWeight: FontWeight.w900,
+                                          letterSpacing: 1,
+                                        ),
+                                        logoContextMaxLines: 1,
+                                        textStyle: Theme.of(context)
+                                            .textTheme
+                                            .displaySmall
+                                            ?.copyWith(
+                                              fontSize: wide
+                                                  ? 58
+                                                  : (spacious ? 44 : 34),
+                                              height: 1,
+                                              fontWeight: FontWeight.w900,
+                                            ),
                                       ),
-                                      if (animeAiringStatusLabel(
-                                            anime.status,
-                                          ) !=
-                                          null)
-                                        Positioned(
-                                          left: wide ? 18 : 9,
-                                          top: wide ? 18 : 9,
-                                          child: PosterAiringStatusBadge(
-                                            status: anime.status,
+                                      SizedBox(
+                                        height: constraints.maxHeight < 620
+                                            ? 12
+                                            : 20,
+                                      ),
+                                      _MetadataRow(anime: anime),
+                                      SizedBox(height: wide ? 18 : 14),
+                                      _MediaFactsRow(anime: anime),
+                                      SizedBox(
+                                        height: wide
+                                            ? 24
+                                            : (constraints.maxHeight < 620
+                                                  ? 14
+                                                  : 20),
+                                      ),
+                                      Flexible(
+                                        child: LocalizedAnimeDescription(
+                                          aniListId: anime.id,
+                                          language:
+                                              settings.interfaceLanguage.code,
+                                          fallbackDescription:
+                                              anime.description.isEmpty
+                                              ? context.tr(
+                                                  "No synopsis is available.",
+                                                )
+                                              : anime.description,
+                                          maxLines: wide
+                                              ? 8
+                                              : (spacious ? 7 : 5),
+                                          expandable: true,
+                                          style: Theme.of(context)
+                                              .textTheme
+                                              .bodyLarge
+                                              ?.copyWith(
+                                                color: context
+                                                    .appPalette
+                                                    .primaryText,
+                                                fontSize: wide ? 18 : 13,
+                                                height: 1.48,
+                                              ),
+                                        ),
+                                      ),
+                                      if (displayedStatusText
+                                          case final status?) ...[
+                                        SizedBox(height: wide ? 20 : 10),
+                                        Text(
+                                          context.tr("Status: {value1}", {
+                                            'value1': status,
+                                          }),
+                                          style: TextStyle(
+                                            color:
+                                                context.appPalette.accentBright,
+                                            fontSize: wide ? 17 : 13,
+                                            fontWeight: FontWeight.w800,
                                           ),
                                         ),
-                                      if (anime.score != null ||
-                                          anime.seasonYear != null ||
-                                          anime.durationMinutes != null)
-                                        Positioned(
-                                          left: wide ? 18 : 9,
-                                          right: wide ? 18 : 9,
-                                          bottom: wide ? 18 : 9,
-                                          child: PosterMetadataOverlay(
-                                            score: anime.score,
-                                            releaseYear: anime.seasonYear,
-                                            durationMinutes:
-                                                anime.durationMinutes,
-                                          ),
-                                        ),
+                                      ],
                                     ],
                                   ),
                                 ),
                               ),
                             ),
-                          ),
-                          SizedBox(width: columnGap),
-                          Expanded(
-                            child: Align(
-                              alignment: Alignment.centerLeft,
-                              child: Column(
-                                key: const ValueKey('anime-details-info'),
-                                mainAxisSize: MainAxisSize.min,
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  AnimeTitleLogoView(
-                                    aniListId: anime.id,
-                                    fallbackTitle: displayTitle,
-                                    maxWidth: constraints.maxWidth,
-                                    maxHeight: wide
-                                        ? 108
-                                        : (spacious ? 88 : 72),
-                                    logoContextLabel: franchiseContext,
-                                    logoContextStyle: TextStyle(
-                                      color: context.appPalette.accentBright,
-                                      fontSize: wide ? 16 : 13,
-                                      fontWeight: FontWeight.w900,
-                                      letterSpacing: 1,
+                            SizedBox(width: columnGap),
+                            SizedBox(
+                              width: actionWidth,
+                              height: contentHeight,
+                              child: Padding(
+                                padding: EdgeInsets.only(
+                                  bottom: 48 + (wide ? 28 : 10),
+                                ),
+                                child: Align(
+                                  alignment: Alignment.center,
+                                  child: SingleChildScrollView(
+                                    primary: false,
+                                    clipBehavior: Clip.none,
+                                    child: episodeActions(
+                                      autofocusPrimary: true,
+                                      availableInfoWidth: actionWidth,
+                                      largeInformation: wide || isTelevision,
                                     ),
-                                    logoContextMaxLines: 1,
-                                    textStyle: Theme.of(context)
-                                        .textTheme
-                                        .displaySmall
-                                        ?.copyWith(
-                                          fontSize: wide
-                                              ? 58
-                                              : (spacious ? 44 : 34),
-                                          height: 1,
-                                          fontWeight: FontWeight.w900,
-                                        ),
                                   ),
-                                  SizedBox(height: wide ? 20 : 10),
-                                  _MetadataRow(anime: anime),
-                                  SizedBox(height: wide ? 18 : 10),
-                                  _MediaFactsRow(anime: anime),
-                                  SizedBox(height: wide ? 24 : 12),
-                                  LocalizedAnimeDescription(
-                                    aniListId: anime.id,
-                                    language: settings.interfaceLanguage.code,
-                                    fallbackDescription:
-                                        anime.description.isEmpty
-                                        ? context.tr(
-                                            "No synopsis is available.",
-                                          )
-                                        : anime.description,
-                                    maxLines: wide ? 8 : (spacious ? 7 : 5),
-                                    overflow: TextOverflow.ellipsis,
-                                    style: Theme.of(context).textTheme.bodyLarge
-                                        ?.copyWith(
-                                          color: context.appPalette.primaryText,
-                                          fontSize: wide ? 18 : 15,
-                                          height: 1.48,
-                                        ),
-                                  ),
-                                  if (statusText case final status?) ...[
-                                    SizedBox(height: wide ? 20 : 10),
-                                    Text(
-                                      context.tr("Status: {value1}", {
-                                        'value1': status,
-                                      }),
-                                      style: TextStyle(
-                                        color: context.appPalette.accentBright,
-                                        fontSize: wide ? 17 : 13,
-                                        fontWeight: FontWeight.w800,
-                                      ),
-                                    ),
-                                  ],
-                                  if (hasInformationActions) ...[
-                                    SizedBox(height: wide ? 22 : 6),
-                                    _InformationActions(
-                                      onTrailer: onTrailer,
-                                      onFranchise: onFranchise,
-                                      onCredits: onCredits,
-                                      onDownloadSeason: onDownloadSeason,
-                                      downloadSeasonLabel: downloadSeasonLabel,
-                                      television: isTelevision,
-                                      availableWidth: informationWidth,
-                                      // Android televisions do not all expose
-                                      // the same logical canvas. Keep the
-                                      // 10-foot action styling on TV even when
-                                      // a 4K panel reports fewer than 1500
-                                      // logical pixels after interface scaling.
-                                      large: wide || isTelevision,
-                                    ),
-                                  ],
-                                ],
+                                ),
                               ),
                             ),
-                          ),
-                          SizedBox(width: columnGap),
-                          SizedBox(
-                            width: actionWidth,
-                            child: episodeActions(autofocusPrimary: true),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
                     ),
                   ),
@@ -824,6 +782,121 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
           ),
         ),
       ],
+    );
+    final animationsDisabled = MediaQuery.disableAnimationsOf(context);
+    return PopScope(
+      canPop: !_episodeBrowserOpen,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && _episodeBrowserOpen) _closeEpisodeBrowser();
+      },
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          ExcludeFocus(
+            excluding: _episodeBrowserOpen,
+            child: IgnorePointer(
+              ignoring: _episodeBrowserOpen,
+              child: Offstage(
+                offstage: _episodeBrowserOpen,
+                child: TickerMode(
+                  enabled: !_episodeBrowserOpen,
+                  child: detailsContent,
+                ),
+              ),
+            ),
+          ),
+          Positioned.fill(
+            child: ExcludeFocus(
+              excluding: !_episodeBrowserOpen,
+              child: IgnorePointer(
+                ignoring: !_episodeBrowserOpen,
+                child: AnimatedSwitcher(
+                  key: const ValueKey('episode-browser-transition'),
+                  duration: animationsDisabled
+                      ? Duration.zero
+                      : const Duration(milliseconds: 220),
+                  reverseDuration: animationsDisabled
+                      ? Duration.zero
+                      : const Duration(milliseconds: 180),
+                  switchInCurve: Curves.easeOutCubic,
+                  switchOutCurve: Curves.easeInCubic,
+                  layoutBuilder: (currentChild, previousChildren) => Stack(
+                    fit: StackFit.expand,
+                    children: [...previousChildren, ?currentChild],
+                  ),
+                  transitionBuilder: (child, animation) => FadeTransition(
+                    opacity: animation,
+                    child: SlideTransition(
+                      position: Tween<Offset>(
+                        begin: const Offset(0, .025),
+                        end: Offset.zero,
+                      ).animate(animation),
+                      child: child,
+                    ),
+                  ),
+                  child: _episodeBrowserOpen
+                      ? Stack(
+                          key: const ValueKey('episode-browser-overlay'),
+                          fit: StackFit.expand,
+                          children: [
+                            // Blur only a small cached artwork layer, never the live
+                            // details controls underneath this full-screen browser.
+                            RepaintBoundary(
+                              key: const ValueKey('episode-browser-backdrop'),
+                              child: Stack(
+                                fit: StackFit.expand,
+                                children: [
+                                  ImageFiltered(
+                                    key: const ValueKey(
+                                      'episode-browser-artwork-blur',
+                                    ),
+                                    enabled: TetoBlurScope.enabledOf(context),
+                                    imageFilter: ImageFilter.blur(
+                                      sigmaX: 2,
+                                      sigmaY: 2,
+                                    ),
+                                    child: NetworkArtwork(
+                                      url:
+                                          anime.coverImageUrl ??
+                                          anime.bannerImageUrl,
+                                      cacheWidth: 480,
+                                    ),
+                                  ),
+                                  ColoredBox(
+                                    color: context.appPalette.background
+                                        .withValues(alpha: .92),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            SafeArea(
+                              minimum: context.responsiveScreenPadding,
+                              child: EpisodeBrowserDialog(
+                                anime: anime,
+                                selectedEpisode: selectedEpisode,
+                                totalEpisodes: knownEpisodes,
+                                isTelevision: isTelevision,
+                                embedded: true,
+                                episodeMetadataFuture:
+                                    _episodeBrowserMetadataFuture,
+                                onClose: _closeEpisodeBrowser,
+                                onEpisodeSelected: (episode) =>
+                                    _closeEpisodeBrowser(
+                                      selectedEpisode: episode,
+                                    ),
+                              ),
+                            ),
+                          ],
+                        )
+                      : const SizedBox.expand(
+                          key: ValueKey('episode-browser-overlay-closed'),
+                        ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -925,65 +998,12 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
     }
   }
 
-  Future<void> _showEpisodeNumberPicker({
-    required int selectedEpisode,
-    required int totalEpisodes,
-  }) async {
-    final restoreFocus = _episodePickerFocusNode.hasFocus;
-    final value = await showDialog<String>(
-      context: context,
-      barrierDismissible: false,
-      barrierColor: Colors.black.withValues(alpha: .20),
-      builder: (_) => TvKeyboardDialog(
-        title: 'Choose episode (1–$totalEpisodes)',
-        initialValue: '$selectedEpisode',
-        numericOnly: true,
-        maxLength: totalEpisodes.toString().length,
-        reduceWidthForTelevision: ref.read(isTelevisionProvider),
-        inputFormatters: <TextInputFormatter>[
-          FilteringTextInputFormatter.digitsOnly,
-        ],
-        validator: (input) {
-          final episode = int.tryParse(input.trim());
-          if (episode == null || episode < 1 || episode > totalEpisodes) {
-            return 'Enter an episode from 1 to $totalEpisodes.';
-          }
-          return null;
-        },
-      ),
-    );
-    if (!mounted) return;
-    if (restoreFocus) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted && _episodePickerFocusNode.canRequestFocus) {
-          _episodePickerFocusNode.requestFocus();
-        }
-      });
-    }
-    if (value == null) return;
-    final episode = int.tryParse(value.trim());
-    if (episode == null || episode < 1 || episode > totalEpisodes) return;
-    if (_selectedEpisode != episode) {
-      setState(() => _selectedEpisode = episode);
-    }
-  }
-
   void _openEpisodeBrowser({
     required int selectedEpisode,
     required int totalEpisodes,
   }) {
     if (_episodeBrowserOpen) return;
-    for (final node in <FocusNode>[
-      _previousEpisodeFocusNode,
-      _episodePickerFocusNode,
-      _nextEpisodeFocusNode,
-    ]) {
-      if (node.hasFocus) {
-        _episodeBrowserRestoreFocusNode = node;
-        break;
-      }
-    }
-    _episodeBrowserRestoreFocusNode ??= _episodePickerFocusNode;
+    _episodeBrowserRestoreFocusNode = _browseEpisodesFocusNode;
     _episodeBrowserMetadataFuture = ref
         .read(catalogClientProvider)
         .episodeMetadata(anime.id);
@@ -1035,9 +1055,7 @@ class _DetailsContentState extends ConsumerState<_DetailsContent> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       for (final node in <FocusNode>[
-        _nextEpisodeFocusNode,
-        _episodePickerFocusNode,
-        _previousEpisodeFocusNode,
+        _browseEpisodesFocusNode,
         _skipFillerFocusNode,
         _backFocusNode,
       ]) {
@@ -1348,52 +1366,6 @@ class _MetadataRow extends StatelessWidget {
   }
 }
 
-class _EpisodeCounterBadge extends StatelessWidget {
-  const _EpisodeCounterBadge({
-    required this.selectedEpisode,
-    required this.totalEpisodes,
-    this.large = false,
-    this.compact = false,
-  });
-
-  final int selectedEpisode;
-  final int totalEpisodes;
-  final bool large;
-  final bool compact;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: EdgeInsets.symmetric(
-        horizontal: large ? 20 : (compact ? 10 : 14),
-        vertical: large ? 11 : (compact ? 7 : 8),
-      ),
-      decoration: BoxDecoration(
-        color: const Color(0xD9111111),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: Colors.white.withValues(alpha: .16)),
-      ),
-      child: Text(
-        compact
-            ? context.tr("EP {value1} / {value2}", {
-                'value1': selectedEpisode,
-                'value2': totalEpisodes,
-              })
-            : context.tr("EPISODE {value1} OF {value2}", {
-                'value1': selectedEpisode,
-                'value2': totalEpisodes,
-              }),
-        style: TextStyle(
-          color: context.appPalette.primaryText,
-          fontSize: large ? 15 : (compact ? 10 : 12),
-          fontWeight: FontWeight.w700,
-          letterSpacing: 1.1,
-        ),
-      ),
-    );
-  }
-}
-
 class _MediaFactsRow extends StatelessWidget {
   const _MediaFactsRow({required this.anime});
 
@@ -1403,9 +1375,11 @@ class _MediaFactsRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final width = MediaQuery.sizeOf(context).width;
     final large = width >= 1500;
+    final releaseStatus = animeAiringStatusLabel(anime.status);
     return Wrap(
       spacing: large ? 22 : 14,
       runSpacing: 8,
+      crossAxisAlignment: WrapCrossAlignment.center,
       children: [
         if (anime.seasonYear case final year?)
           _MediaFact(
@@ -1426,7 +1400,42 @@ class _MediaFactsRow extends StatelessWidget {
             large: large,
             accent: true,
           ),
+        if (releaseStatus != null)
+          _ReleaseStatusFact(status: releaseStatus, large: large),
       ],
+    );
+  }
+}
+
+/// Catalog release status, styled to align with the other media facts.
+class _ReleaseStatusFact extends StatelessWidget {
+  const _ReleaseStatusFact({required this.status, required this.large});
+
+  final String status;
+  final bool large;
+
+  @override
+  Widget build(BuildContext context) {
+    final (label, icon) = switch (status) {
+      'AIRING' => ('Airing', Icons.sensors_rounded),
+      'UNRELEASED' => ('Unreleased', Icons.schedule_rounded),
+      _ => ('Finished airing', Icons.check_circle_outline_rounded),
+    };
+    return Semantics(
+      label: context.tr(
+        status == 'FINISHED' ? 'Series has finished airing' : label,
+      ),
+      child: ExcludeSemantics(
+        child: KeyedSubtree(
+          key: ValueKey('anime-details-${status.toLowerCase()}-status'),
+          child: _MediaFact(
+            icon: icon,
+            label: label,
+            large: large,
+            accent: true,
+          ),
+        ),
+      ),
     );
   }
 }
@@ -1463,6 +1472,7 @@ class _MediaFact extends StatelessWidget {
             color: context.appPalette.primaryText,
             fontSize: large ? 17 : 13,
             fontWeight: FontWeight.w700,
+            height: 1.25,
           ),
         ),
       ],
@@ -1470,14 +1480,13 @@ class _MediaFact extends StatelessWidget {
   }
 }
 
-class _InformationActions extends StatelessWidget {
+class _InformationActions extends StatefulWidget {
   const _InformationActions({
     required this.onTrailer,
     required this.onFranchise,
     required this.onCredits,
     required this.onDownloadSeason,
     required this.downloadSeasonLabel,
-    required this.television,
     required this.availableWidth,
     this.large = false,
   });
@@ -1487,258 +1496,560 @@ class _InformationActions extends StatelessWidget {
   final VoidCallback? onCredits;
   final VoidCallback? onDownloadSeason;
   final String downloadSeasonLabel;
-  final bool television;
   final double availableWidth;
+
+  double preferredButtonWidth(BuildContext context) =>
+      _informationButtonSize(context, large: large).width;
   final bool large;
 
   @override
-  Widget build(BuildContext context) {
-    final actions =
-        <
-          ({
-            Key? key,
-            Key? surfaceKey,
-            String label,
-            IconData icon,
-            VoidCallback onPressed,
-            bool primary,
-            double preferredWidth,
-            double compactWidth,
-          })
-        >[
-          if (onTrailer != null)
-            (
-              key: const ValueKey('anime-details-watch-trailer'),
-              surfaceKey: const ValueKey('anime-details-watch-trailer-surface'),
-              label: 'Watch trailer',
-              icon: Icons.play_arrow_rounded,
-              onPressed: onTrailer!,
-              primary: true,
-              preferredWidth: large ? 132 : 110,
-              compactWidth: large || television ? 90 : 74,
-            ),
-          if (onCredits != null)
-            (
-              key: const ValueKey('anime-details-cast-crew'),
-              surfaceKey: const ValueKey('anime-details-cast-crew-surface'),
-              label: 'Cast & crew',
-              icon: Icons.groups_rounded,
-              onPressed: onCredits!,
-              primary: false,
-              preferredWidth: large ? 120 : 98,
-              compactWidth: large || television ? 78 : 62,
-            ),
-          if (onFranchise != null)
-            (
-              key: const ValueKey('anime-details-related-series'),
-              surfaceKey: const ValueKey(
-                'anime-details-related-series-surface',
-              ),
-              label: 'Related series',
-              icon: Icons.account_tree_rounded,
-              onPressed: onFranchise!,
-              primary: false,
-              preferredWidth: large ? 130 : 112,
-              compactWidth: large || television ? 90 : 72,
-            ),
-          if (onDownloadSeason != null)
-            (
-              key: const ValueKey('anime-details-download-season'),
-              surfaceKey: const ValueKey(
-                'anime-details-download-season-surface',
-              ),
-              label: downloadSeasonLabel == 'Cancel season download'
-                  ? 'Cancel download'
-                  : downloadSeasonLabel,
-              icon: Icons.download_for_offline_rounded,
-              onPressed: onDownloadSeason!,
-              primary: false,
-              preferredWidth: large ? 148 : 132,
-              compactWidth: large || television ? 100 : 90,
-            ),
-        ];
-    final spacing = large ? 8.0 : 6.0;
-    final panelPadding = large
-        ? const EdgeInsets.all(5)
-        : const EdgeInsets.all(4);
-    final preferredButtonsWidth = actions.fold<double>(
-      0,
-      (total, action) => total + action.preferredWidth,
-    );
-    final preferredStripWidth =
-        preferredButtonsWidth + spacing * (actions.length - 1);
+  State<_InformationActions> createState() => _InformationActionsState();
+}
 
-    return FocusTraversalGroup(
-      policy: ReadingOrderTraversalPolicy(),
-      child: Container(
-        key: const ValueKey('anime-details-information-actions'),
-        padding: panelPadding,
-        decoration: BoxDecoration(
-          color: const Color(0xC9111111),
-          borderRadius: BorderRadius.circular(large ? 14 : 12),
-          border: Border.all(color: Colors.white.withValues(alpha: .16)),
-        ),
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            // Keep the four controls near half of the former tray footprint
-            // without scaling their contents. A constrained canvas stacks each
-            // icon above its full, two-line label and gives every action the
-            // same readable width instead of clipping or scrolling the row.
-            final constraintWidth = constraints.hasBoundedWidth
-                ? constraints.maxWidth
-                : preferredStripWidth;
-            final boundedWidth = (availableWidth - panelPadding.horizontal)
-                .clamp(0.0, constraintWidth)
-                .clamp(0.0, preferredStripWidth)
-                .toDouble();
-            final compact = boundedWidth < preferredStripWidth;
-            final compactSpacing = 4.0;
-            final compactButtonsWidth = actions.fold<double>(
-              0,
-              (total, action) => total + action.compactWidth,
-            );
-            final compactPreferredWidth =
-                compactButtonsWidth + compactSpacing * (actions.length - 1);
-            final stripWidth = compact
-                ? compactPreferredWidth.clamp(0.0, boundedWidth).toDouble()
-                : preferredStripWidth;
-            return SizedBox(
-              width: stripWidth,
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  for (var index = 0; index < actions.length; index++) ...[
-                    if (index > 0)
-                      SizedBox(width: compact ? compactSpacing : spacing),
-                    if (compact)
-                      Expanded(
-                        flex: (actions[index].compactWidth * 10).round(),
-                        child: _InformationButton(
-                          key: actions[index].key,
-                          surfaceKey: actions[index].surfaceKey,
-                          label: actions[index].label,
-                          icon: actions[index].icon,
-                          onPressed: actions[index].onPressed,
-                          primary: actions[index].primary,
-                          large: large,
-                          compact: true,
-                        ),
-                      )
-                    else
-                      SizedBox(
-                        width: actions[index].preferredWidth,
-                        child: _InformationButton(
-                          key: actions[index].key,
-                          surfaceKey: actions[index].surfaceKey,
-                          label: actions[index].label,
-                          icon: actions[index].icon,
-                          onPressed: actions[index].onPressed,
-                          primary: actions[index].primary,
-                          large: large,
+TextStyle _informationButtonTextStyle(
+  BuildContext context, {
+  required bool large,
+}) => Theme.of(context).textTheme.labelLarge!.copyWith(
+  color: context.appPalette.primaryText,
+  fontSize: large ? 14 : 12,
+  fontWeight: FontWeight.w700,
+  height: 1.2,
+);
+
+Size _informationButtonSize(
+  BuildContext context, {
+  required bool large,
+  double maxWidth = double.infinity,
+}) {
+  final iconSize = large ? 18.0 : 16.0;
+  final fixedWidth = iconSize + 8 + 24 + 2;
+  final painter = TextPainter(
+    text: TextSpan(
+      text: context.tr('More Info'),
+      style: _informationButtonTextStyle(context, large: large),
+    ),
+    textDirection: Directionality.of(context),
+    textScaler: MediaQuery.textScalerOf(context),
+  )..layout(maxWidth: (maxWidth - fixedWidth).clamp(1.0, double.infinity));
+  final size = Size(
+    (painter.width + fixedWidth).clamp(0.0, maxWidth),
+    (painter.height + 12).clamp(large ? 34.0 : 30.0, double.infinity),
+  );
+  painter.dispose();
+  return size;
+}
+
+typedef _InformationAction = ({
+  String id,
+  String label,
+  IconData icon,
+  VoidCallback onPressed,
+});
+
+class _InformationActionsState extends State<_InformationActions> {
+  final GlobalKey _anchorKey = GlobalKey();
+  final FocusNode _moreFocusNode = FocusNode(debugLabel: 'anime-details.more');
+  bool _menuOpen = false;
+  LogicalKeyboardKey? _dismissalKey;
+
+  @override
+  void dispose() {
+    _moreFocusNode.dispose();
+    super.dispose();
+  }
+
+  List<_InformationAction> get _actions => [
+    if (widget.onTrailer != null)
+      (
+        id: 'watch-trailer',
+        label: 'Watch trailer',
+        icon: Icons.play_arrow_rounded,
+        onPressed: widget.onTrailer!,
+      ),
+    if (widget.onCredits != null)
+      (
+        id: 'cast-crew',
+        label: 'Cast & crew',
+        icon: Icons.people_outline_rounded,
+        onPressed: widget.onCredits!,
+      ),
+    if (widget.onFranchise != null)
+      (
+        id: 'related-series',
+        label: 'Related series',
+        icon: Icons.account_tree_outlined,
+        onPressed: widget.onFranchise!,
+      ),
+    if (widget.onDownloadSeason != null)
+      (
+        id: 'download-season',
+        label: widget.downloadSeasonLabel == 'Cancel season download'
+            ? 'Cancel download'
+            : widget.downloadSeasonLabel,
+        icon: Icons.download_rounded,
+        onPressed: widget.onDownloadSeason!,
+      ),
+  ];
+
+  Future<void> _openMenu() async {
+    if (_menuOpen) return;
+    _dismissalKey = null;
+    final anchor = _anchorKey.currentContext?.findRenderObject() as RenderBox?;
+    final overlay =
+        Navigator.of(
+              context,
+              rootNavigator: true,
+            ).overlay?.context.findRenderObject()
+            as RenderBox?;
+    final actions = _actions;
+    if (anchor == null || overlay == null || actions.isEmpty) return;
+    final anchorRect =
+        anchor.localToGlobal(Offset.zero, ancestor: overlay) & anchor.size;
+    setState(() => _menuOpen = true);
+    final selected = await showTetoGeneralDialog<int>(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: context.tr('Close more options'),
+      barrierColor: context.appPalette.background.withValues(alpha: .24),
+      transitionDuration: TetoUiMotion.duration(context, TetoUiMotion.popup),
+      pageBuilder: (_, _, _) => _InformationMenu(
+        actions: actions,
+        anchor: anchorRect,
+        large: widget.large,
+        onDismissKey: (key) => _dismissalKey = key,
+      ),
+      transitionBuilder: (context, animation, secondaryAnimation, child) {
+        if (TetoUiMotion.reduced(context)) return child;
+        final progress = animation.drive(CurveTween(curve: TetoUiMotion.curve));
+        return FadeTransition(
+          opacity: progress,
+          child: SlideTransition(
+            position: Tween<Offset>(
+              begin: const Offset(0, -.025),
+              end: Offset.zero,
+            ).animate(progress),
+            child: child,
+          ),
+        );
+      },
+    );
+    if (!mounted) return;
+    setState(() => _menuOpen = false);
+    _moreFocusNode.requestFocus();
+    if (selected != null && selected >= 0 && selected < actions.length) {
+      // Commit the restored focus before another route takes its focus snapshot.
+      // Returning from credits, trailers, or downloads then lands back on More.
+      await WidgetsBinding.instance.endOfFrame;
+      if (!mounted) return;
+      actions[selected].onPressed();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = context.appPalette;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final maxWidth = constraints.maxWidth.clamp(0.0, widget.availableWidth);
+        final size = _informationButtonSize(
+          context,
+          large: widget.large,
+          maxWidth: maxWidth,
+        );
+        return SizedBox(
+          key: _anchorKey,
+          width: size.width,
+          child: Semantics(
+            expanded: _menuOpen,
+            child: TvFocusable(
+              key: const ValueKey('anime-details-more'),
+              focusNode: _moreFocusNode,
+              onKeyEvent: (_, event) {
+                if (event.logicalKey != _dismissalKey) {
+                  return KeyEventResult.ignored;
+                }
+                // The held closing key belongs to the popup, not the control
+                // underneath it. A fresh press after release still navigates.
+                if (event is KeyRepeatEvent) return KeyEventResult.handled;
+                _dismissalKey = null;
+                return event is KeyUpEvent
+                    ? KeyEventResult.handled
+                    : KeyEventResult.ignored;
+              },
+              onPressed: () => unawaited(_openMenu()),
+              focusScale: 1,
+              child: Container(
+                key: const ValueKey('anime-details-more-surface'),
+                height: size.height,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                decoration: TetoBoxStyle.decoration(palette),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      Icons.info_rounded,
+                      size: widget.large ? 18 : 16,
+                      color: palette.accentBright,
+                    ),
+                    const SizedBox(width: 8),
+                    Flexible(
+                      child: Text(
+                        context.tr('More Info'),
+                        style: _informationButtonTextStyle(
+                          context,
+                          large: widget.large,
                         ),
                       ),
+                    ),
                   ],
-                ],
+                ),
               ),
-            );
-          },
-        ),
-      ),
+            ),
+          ),
+        );
+      },
     );
   }
 }
 
-class _InformationButton extends StatelessWidget {
-  const _InformationButton({
-    super.key,
-    required this.label,
-    required this.icon,
-    required this.onPressed,
+class _InformationMenu extends StatefulWidget {
+  const _InformationMenu({
+    required this.actions,
+    required this.anchor,
     required this.large,
-    required this.surfaceKey,
-    this.primary = false,
-    this.compact = false,
+    required this.onDismissKey,
   });
 
-  final String label;
-  final IconData icon;
-  final VoidCallback onPressed;
+  final List<_InformationAction> actions;
+  final Rect anchor;
   final bool large;
-  final bool primary;
-  final bool compact;
-  final Key? surfaceKey;
+  final ValueChanged<LogicalKeyboardKey?> onDismissKey;
+
+  @override
+  State<_InformationMenu> createState() => _InformationMenuState();
+}
+
+class _InformationMenuState extends State<_InformationMenu> {
+  bool _closing = false;
+  LogicalKeyboardKey? _closingKey;
+  late final List<FocusNode> _nodes = [
+    for (final action in widget.actions)
+      FocusNode(debugLabel: 'anime-details.more.${action.id}'),
+  ];
+
+  @override
+  void dispose() {
+    for (final node in _nodes) {
+      node.dispose();
+    }
+    super.dispose();
+  }
+
+  void _close([int? selected]) {
+    if (_closing || ModalRoute.of(context)?.isCurrent != true) return;
+    _closing = true;
+    Navigator.of(context).pop(selected);
+  }
+
+  KeyEventResult _handleKey(int index, KeyEvent event) {
+    if (event is KeyUpEvent && event.logicalKey == _closingKey) {
+      widget.onDismissKey(null);
+      return KeyEventResult.handled;
+    }
+    if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
+      return KeyEventResult.ignored;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.escape ||
+        event.logicalKey == LogicalKeyboardKey.goBack ||
+        event.logicalKey == LogicalKeyboardKey.arrowLeft ||
+        event.logicalKey == LogicalKeyboardKey.arrowRight) {
+      _closingKey = event.logicalKey;
+      widget.onDismissKey(_closingKey);
+      _close();
+      return KeyEventResult.handled;
+    }
+    if (_closing) {
+      return KeyEventResult.handled;
+    }
+    final direction = event.logicalKey == LogicalKeyboardKey.arrowDown
+        ? 1
+        : event.logicalKey == LogicalKeyboardKey.arrowUp
+        ? -1
+        : 0;
+    if (direction == 0) return KeyEventResult.ignored;
+    final next = (index + direction).clamp(0, _nodes.length - 1);
+    _nodes[next].requestFocus();
+    final nodeContext = _nodes[next].context;
+    if (nodeContext != null) {
+      Scrollable.ensureVisible(nodeContext, duration: Duration.zero);
+    }
+    return KeyEventResult.handled;
+  }
 
   @override
   Widget build(BuildContext context) {
-    return TvFocusable(
-      onPressed: onPressed,
-      focusScale: 1.02,
-      borderRadius: BorderRadius.circular(10),
-      onFocusChanged: (focused) {
-        if (!focused) return;
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (!context.mounted) return;
-          Scrollable.ensureVisible(
-            context,
-            duration: const Duration(milliseconds: 120),
-            curve: Curves.easeOutCubic,
-            alignmentPolicy: ScrollPositionAlignmentPolicy.keepVisibleAtEnd,
-          );
-        });
-      },
-      child: Container(
-        key: surfaceKey,
-        height: compact ? (large ? 42 : 40) : (large ? 38 : 36),
-        alignment: Alignment.center,
-        padding: EdgeInsets.symmetric(
-          horizontal: compact ? (large ? 4 : 3) : (large ? 10 : 8),
-        ),
-        decoration: BoxDecoration(
-          color: primary ? context.appPalette.accent : const Color(0xEE171717),
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: Colors.white.withValues(alpha: .15)),
-        ),
-        child: compact
-            ? Column(
-                children: [
-                  Icon(icon, size: 15),
-                  const SizedBox(height: 1),
-                  Expanded(
-                    child: Center(
-                      child: Text(
-                        context.tr(label),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(
-                          fontSize: 11,
-                          height: 1,
-                          fontWeight: FontWeight.w700,
+    final palette = context.appPalette;
+    final fontSize = widget.large ? 18.0 : 15.0;
+    final textStyle = Theme.of(context).textTheme.bodyMedium!.copyWith(
+      color: palette.primaryText,
+      fontSize: fontSize,
+      fontWeight: FontWeight.w700,
+    );
+    final padding = MediaQuery.paddingOf(context);
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final safeLeft = padding.left + 16;
+        final safeTop = padding.top + 16;
+        final safeRight = constraints.maxWidth - padding.right - 16;
+        final safeBottom = constraints.maxHeight - padding.bottom - 16;
+        final width = (widget.large ? 340.0 : 300.0).clamp(
+          0.0,
+          (safeRight - safeLeft).clamp(0.0, double.infinity),
+        );
+        var rowHeight = widget.large ? 56.0 : 48.0;
+        // Keep readable labels on accessibility text sizes without enlarging
+        // the popup beyond the safe viewport. The list scrolls when necessary.
+        final labelWidth = (width - 24 - 24 - 14 - 8 - (widget.large ? 46 : 42))
+            .clamp(1.0, double.infinity);
+        for (final action in widget.actions) {
+          final painter = TextPainter(
+            text: TextSpan(text: context.tr(action.label), style: textStyle),
+            textDirection: Directionality.of(context),
+            textScaler: MediaQuery.textScalerOf(context),
+          )..layout(maxWidth: labelWidth);
+          if (painter.height + 24 > rowHeight) {
+            rowHeight = painter.height + 24;
+          }
+          painter.dispose();
+        }
+        final availableHeight = (safeBottom - safeTop).clamp(
+          0.0,
+          double.infinity,
+        );
+        final height =
+            (rowHeight * widget.actions.length +
+                    (widget.actions.length - 1) * 8 +
+                    26)
+                .clamp(0.0, availableHeight);
+        final left = widget.anchor.left.clamp(
+          safeLeft,
+          (safeRight - width).clamp(safeLeft, double.infinity),
+        );
+        final preferredTop = widget.anchor.bottom + 8;
+        // Anchor beneath More when possible, otherwise lift the same compact
+        // overlay inside the safe screen bounds without moving page content.
+        final top = preferredTop.clamp(
+          safeTop,
+          (safeBottom - height).clamp(safeTop, double.infinity),
+        );
+        return Stack(
+          children: [
+            Positioned(
+              left: left,
+              top: top,
+              width: width,
+              height: height,
+              child: Semantics(
+                scopesRoute: true,
+                namesRoute: true,
+                explicitChildNodes: true,
+                label: context.tr('More options'),
+                child: Material(
+                  color: Colors.transparent,
+                  child: Container(
+                    key: const ValueKey('anime-details-more-menu'),
+                    padding: const EdgeInsets.all(12),
+                    decoration: _episodePanelDecoration(palette),
+                    // Let focused rows glow into the panel padding, while
+                    // keeping scrolled-off rows inside the rounded housing.
+                    clipBehavior: Clip.antiAlias,
+                    child: FocusTraversalGroup(
+                      policy: OrderedTraversalPolicy(),
+                      child: SingleChildScrollView(
+                        clipBehavior: Clip.none,
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            for (
+                              var index = 0;
+                              index < widget.actions.length;
+                              index++
+                            ) ...[
+                              if (index > 0) const SizedBox(height: 8),
+                              FocusTraversalOrder(
+                                order: NumericFocusOrder(index.toDouble()),
+                                child: TvFocusable(
+                                  key: ValueKey(
+                                    'anime-details-${widget.actions[index].id}',
+                                  ),
+                                  focusNode: _nodes[index],
+                                  autofocus: index == 0,
+                                  focusScale: 1,
+                                  onKeyEvent: (_, event) =>
+                                      _handleKey(index, event),
+                                  onPressed: () => _close(index),
+                                  child: Container(
+                                    key: ValueKey(
+                                      'anime-details-${widget.actions[index].id}-surface',
+                                    ),
+                                    height: rowHeight,
+                                    // Opaque row interiors keep the shared
+                                    // outer glow from tinting their contents.
+                                    decoration: TetoBoxStyle.decoration(
+                                      palette,
+                                    ),
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 12,
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        Icon(
+                                          widget.actions[index].icon,
+                                          size: widget.large ? 24 : 22,
+                                          color: palette.primaryText,
+                                        ),
+                                        const SizedBox(width: 14),
+                                        Expanded(
+                                          child: Text(
+                                            context.tr(
+                                              widget.actions[index].label,
+                                            ),
+                                            style: textStyle,
+                                          ),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Icon(
+                                          Icons.chevron_right_rounded,
+                                          size: widget.large ? 22 : 20,
+                                          color: palette.mutedText,
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ],
                         ),
                       ),
                     ),
                   ),
-                ],
-              )
-            : Row(
-                children: [
-                  Icon(icon, size: large ? 17 : 16),
-                  const SizedBox(width: 5),
-                  Expanded(
-                    child: Text(
-                      context.tr(label),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 12,
-                        height: 1,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                ],
+                ),
               ),
-      ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+// This screen sits over artwork, so its cards let the backdrop show through.
+// Keep the text, icons and outer TV focus treatment at full opacity.
+BoxDecoration _episodePanelDecoration(AppThemePalette palette) =>
+    TetoBoxStyle.translucentPanelDecoration(palette);
+
+double _episodeSecondaryActionHeight(BuildContext context) {
+  final size = MediaQuery.sizeOf(context);
+  return size.width >= 1500 ? 68 : (size.height >= 620 ? 49 : 42);
+}
+
+BoxDecoration _episodeControlDecoration(AppThemePalette palette) =>
+    TetoBoxStyle.translucentControlDecoration(palette);
+
+class _PersonalWatchProgress extends StatelessWidget {
+  const _PersonalWatchProgress({
+    required this.watchedEpisodes,
+    required this.totalEpisodes,
+    required this.large,
+    this.informationAction,
+  });
+
+  final int watchedEpisodes;
+  final int? totalEpisodes;
+  final bool large;
+  final _InformationActions? informationAction;
+
+  @override
+  Widget build(BuildContext context) {
+    final total = totalEpisodes != null && totalEpisodes! > 0
+        ? totalEpisodes
+        : null;
+    final watched = total == null
+        ? (watchedEpisodes < 0 ? 0 : watchedEpisodes)
+        : watchedEpisodes.clamp(0, total);
+    final label = total == null
+        ? context.tr('Watched {value1} episodes', {'value1': watched})
+        : context.tr('Watched {value1} of {value2}', {
+            'value1': watched,
+            'value2': total,
+          });
+    final palette = context.appPalette;
+    final labelStyle = Theme.of(context).textTheme.labelLarge!.copyWith(
+      color: palette.mutedText,
+      fontSize: large ? 13 : 11,
+      fontWeight: FontWeight.w600,
+    );
+    final progressLabel = Semantics(
+      label: label,
+      child: ExcludeSemantics(child: Text(label, style: labelStyle)),
+    );
+    return Column(
+      key: const ValueKey('anime-details-watch-progress'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (informationAction case final action?)
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final painter = TextPainter(
+                text: TextSpan(text: label, style: labelStyle),
+                textDirection: Directionality.of(context),
+                textScaler: MediaQuery.textScalerOf(context),
+              )..layout();
+              final fits =
+                  painter.width + 12 + action.preferredButtonWidth(context) <=
+                  constraints.maxWidth;
+              painter.dispose();
+              if (!fits) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    progressLabel,
+                    const SizedBox(height: 6),
+                    Align(
+                      alignment: AlignmentDirectional.centerEnd,
+                      child: action,
+                    ),
+                  ],
+                );
+              }
+              return Row(
+                children: [
+                  Expanded(child: progressLabel),
+                  const SizedBox(width: 12),
+                  action,
+                ],
+              );
+            },
+          )
+        else
+          progressLabel,
+        if (total != null) ...[
+          const SizedBox(height: 5),
+          ExcludeSemantics(
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(99),
+              child: LinearProgressIndicator(
+                key: const ValueKey('anime-details-watched-progress-bar'),
+                value: watched / total,
+                minHeight: 3,
+                backgroundColor: palette.mutedText.withValues(alpha: .16),
+                color: palette.accentBright,
+              ),
+            ),
+          ),
+        ],
+      ],
     );
   }
 }
@@ -1753,14 +2064,14 @@ class _EpisodeActions extends StatelessWidget {
     required this.resumeEpisode,
     required this.totalEpisodes,
     required this.isTelevision,
+    required this.watchedEpisodes,
+    required this.catalogEpisodeCount,
+    required this.informationAction,
     required this.hasProgress,
     required this.guestInWatchParty,
-    required this.resumePosition,
+    required this.resumeProgress,
     required this.resumeIsFiller,
     required this.selectedIsFiller,
-    required this.onDecrease,
-    required this.onIncrease,
-    required this.onSelectEpisode,
     required this.onBrowseEpisodes,
     required this.onPlayFromBeginning,
     required this.onResume,
@@ -1772,9 +2083,7 @@ class _EpisodeActions extends StatelessWidget {
     required this.watchPartyStarting,
     required this.watchPartyFocusNode,
     required this.skipFillerFocusNode,
-    required this.previousEpisodeFocusNode,
-    required this.episodePickerFocusNode,
-    required this.nextEpisodeFocusNode,
+    required this.browseEpisodesFocusNode,
     required this.showWatchPartyAction,
     required this.onWatchPartyPressed,
   });
@@ -1786,15 +2095,15 @@ class _EpisodeActions extends StatelessWidget {
   final TitleLanguagePreference titlePreference;
   final int resumeEpisode;
   final int totalEpisodes;
+  final int watchedEpisodes;
+  final int? catalogEpisodeCount;
+  final _InformationActions? informationAction;
   final bool isTelevision;
   final bool hasProgress;
   final bool guestInWatchParty;
-  final Duration? resumePosition;
+  final double? resumeProgress;
   final bool resumeIsFiller;
   final bool selectedIsFiller;
-  final VoidCallback? onDecrease;
-  final VoidCallback? onIncrease;
-  final VoidCallback? onSelectEpisode;
   final VoidCallback? onBrowseEpisodes;
   final VoidCallback? onPlayFromBeginning;
   final VoidCallback? onResume;
@@ -1806,27 +2115,29 @@ class _EpisodeActions extends StatelessWidget {
   final bool watchPartyStarting;
   final FocusNode watchPartyFocusNode;
   final FocusNode skipFillerFocusNode;
-  final FocusNode previousEpisodeFocusNode;
-  final FocusNode episodePickerFocusNode;
-  final FocusNode nextEpisodeFocusNode;
+  final FocusNode browseEpisodesFocusNode;
   final bool showWatchPartyAction;
   final VoidCallback? onWatchPartyPressed;
 
   @override
   Widget build(BuildContext context) {
     final large = MediaQuery.sizeOf(context).width >= 1500;
+    final roomy = MediaQuery.sizeOf(context).height >= 620;
     return Container(
       key: const ValueKey('episode-actions-panel'),
       width: double.infinity,
-      padding: EdgeInsets.all(large ? 22 : 8),
-      decoration: BoxDecoration(
-        color: const Color(0xF5111111),
-        borderRadius: BorderRadius.circular(large ? 20 : 14),
-        border: Border.all(color: Colors.white.withValues(alpha: .18)),
-      ),
+      padding: EdgeInsets.all(large ? 16 : (roomy ? 9 : 8)),
+      decoration: _episodePanelDecoration(context.appPalette),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
+          _PersonalWatchProgress(
+            watchedEpisodes: watchedEpisodes,
+            totalEpisodes: catalogEpisodeCount,
+            large: large,
+            informationAction: informationAction,
+          ),
+          SizedBox(height: large ? 12 : 8),
           if (!guestInWatchParty) ...[
             if (resumeAvailability.isAvailable ||
                 selectedAvailability.isAvailable) ...[
@@ -1837,57 +2148,86 @@ class _EpisodeActions extends StatelessWidget {
                         context,
                         resumeAvailability,
                       )
-                    : resumePosition == null
-                    ? (hasProgress ? 'Resume' : 'Start watching')
-                    : 'Resume at ${_formatDuration(resumePosition!)}',
-                trailing: resumeAvailability.isAvailable
-                    ? 'EP-$resumeEpisode'
+                    : hasProgress
+                    ? context.tr('Resume Eps {value1}', {
+                        'value1': resumeEpisode,
+                      })
+                    : 'Start watching',
+                semanticsLabel: resumeAvailability.isAvailable && hasProgress
+                    ? context.tr('Resume Episode {value1}', {
+                        'value1': resumeEpisode,
+                      })
+                    : null,
+                trailing: resumeAvailability.isAvailable && hasProgress
+                    ? context.tr('{value1} of {value2}', {
+                        'value1': resumeEpisode,
+                        'value2': totalEpisodes,
+                      })
                     : null,
                 badge: resumeIsFiller ? 'FILLER' : null,
-                icon: Icons.play_arrow_rounded,
+                progress: resumeProgress,
+                icon: EpisodePanelGlyph.play,
                 primary: true,
                 autofocus: resumeAvailability.isAvailable && autofocusPrimary,
                 onPressed: onResume,
                 large: large,
               ),
-              SizedBox(height: large ? 14 : 6),
+              SizedBox(height: large ? 14 : (roomy ? 8 : 6)),
             ],
             if (!selectedAvailability.isAvailable) ...[
               _EpisodeAiringNotice(
                 availability: selectedAvailability,
                 large: large,
               ),
-              SizedBox(height: large ? 14 : 6),
+              SizedBox(height: large ? 14 : (roomy ? 8 : 6)),
             ] else ...[
-              _EpisodeActionButton(
-                key: const ValueKey('episode-action-restart'),
-                label: 'Play from beginning',
-                icon: Icons.replay_rounded,
-                onPressed: onPlayFromBeginning,
-                large: large,
-              ),
-              SizedBox(height: large ? 14 : 6),
-              _EpisodeActionButton(
-                key: const ValueKey('episode-action-selected'),
-                label: 'Play selected',
-                trailing: 'EP-$selectedEpisode',
-                badge: selectedIsFiller ? 'FILLER' : null,
-                icon: Icons.skip_next_rounded,
-                onPressed: onPlaySelected,
-                large: large,
-              ),
-              SizedBox(height: large ? 14 : 6),
+              if (hasProgress) ...[
+                _EpisodeActionButton(
+                  key: const ValueKey('episode-action-restart'),
+                  label: 'Play from beginning',
+                  icon: EpisodePanelGlyph.replay,
+                  onPressed: onPlayFromBeginning,
+                  large: large,
+                ),
+                SizedBox(height: large ? 14 : (roomy ? 8 : 6)),
+              ],
+              if (selectedEpisode != resumeEpisode ||
+                  !resumeAvailability.isAvailable) ...[
+                _EpisodeActionButton(
+                  key: const ValueKey('episode-action-selected'),
+                  label: 'Play selected',
+                  trailing: 'EP-$selectedEpisode',
+                  badge: selectedIsFiller ? 'FILLER' : null,
+                  icon: EpisodePanelGlyph.skip,
+                  onPressed: onPlaySelected,
+                  large: large,
+                ),
+                SizedBox(height: large ? 14 : (roomy ? 8 : 6)),
+              ],
             ],
           ],
+          if (onBrowseEpisodes != null) ...[
+            SizedBox(height: large ? 14 : (roomy ? 8 : 6)),
+            _EpisodeBrowserPrompt(
+              isTelevision: isTelevision,
+              large: large,
+              onPressed: onBrowseEpisodes!,
+              focusNode: browseEpisodesFocusNode,
+            ),
+          ],
+          Divider(
+            color: TetoBoxStyle.outline(context.appPalette),
+            height: large ? 32 : (roomy ? 22 : 18),
+          ),
           _EpisodeActionButton(
             key: const ValueKey('episode-action-manage-list'),
-            label: 'My List status',
-            icon: Icons.playlist_add_check_rounded,
-            trailingIcon: Icons.arrow_drop_down_rounded,
+            label: 'My List',
+            icon: EpisodePanelGlyph.add,
+            trailingIcon: EpisodePanelGlyph.next,
             onPressed: onManageList,
             large: large,
           ),
-          SizedBox(height: large ? 14 : 6),
+          SizedBox(height: large ? 14 : (roomy ? 8 : 6)),
           _EpisodeToggleButton(
             key: const ValueKey('episode-action-skip-filler'),
             value: skipFillerEpisodes,
@@ -1895,11 +2235,7 @@ class _EpisodeActions extends StatelessWidget {
             focusNode: skipFillerFocusNode,
             onExitDown: watchPartyState.session?.role == WatchPartyRole.host
                 ? () {
-                    for (final node in <FocusNode>[
-                      nextEpisodeFocusNode,
-                      episodePickerFocusNode,
-                      previousEpisodeFocusNode,
-                    ]) {
+                    for (final node in <FocusNode>[browseEpisodesFocusNode]) {
                       if (node.context != null && node.canRequestFocus) {
                         node.requestFocus();
                         return;
@@ -1910,7 +2246,7 @@ class _EpisodeActions extends StatelessWidget {
             large: large,
           ),
           if (showWatchPartyAction) ...[
-            SizedBox(height: large ? 14 : 6),
+            SizedBox(height: large ? 14 : (roomy ? 8 : 6)),
             _EpisodeWatchPartyAction(
               key: const ValueKey('episode-action-watch-together'),
               state: watchPartyState,
@@ -1920,67 +2256,6 @@ class _EpisodeActions extends StatelessWidget {
               fallbackEpisode: selectedEpisode,
               titlePreference: titlePreference,
               large: large,
-            ),
-          ],
-          SizedBox(height: large ? 22 : 7),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: Text(
-              context.tr("EPISODE"),
-              style: TextStyle(
-                color: context.appPalette.mutedText,
-                fontSize: large ? 13 : 10,
-                fontWeight: FontWeight.w800,
-                letterSpacing: 1.1,
-              ),
-            ),
-          ),
-          SizedBox(height: large ? 10 : 5),
-          Container(
-            height: large ? 68 : 44,
-            decoration: BoxDecoration(
-              color: const Color(0xFF191919),
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: Colors.white.withValues(alpha: .14)),
-            ),
-            child: Row(
-              children: [
-                _EpisodeStepButton(
-                  key: const ValueKey('episode-step-previous'),
-                  icon: Icons.remove_rounded,
-                  label: 'Previous episode',
-                  onPressed: onDecrease,
-                  onBrowseEpisodes: onBrowseEpisodes,
-                  focusNode: previousEpisodeFocusNode,
-                ),
-                Expanded(
-                  child: _EpisodeSelectionButton(
-                    key: const ValueKey('episode-manual-selector'),
-                    selectedEpisode: selectedEpisode,
-                    totalEpisodes: totalEpisodes,
-                    onPressed: onSelectEpisode,
-                    onBrowseEpisodes: onBrowseEpisodes,
-                    focusNode: episodePickerFocusNode,
-                    large: large,
-                  ),
-                ),
-                _EpisodeStepButton(
-                  key: const ValueKey('episode-step-next'),
-                  icon: Icons.add_rounded,
-                  label: 'Next episode',
-                  onPressed: onIncrease,
-                  onBrowseEpisodes: onBrowseEpisodes,
-                  focusNode: nextEpisodeFocusNode,
-                ),
-              ],
-            ),
-          ),
-          if (onBrowseEpisodes != null) ...[
-            SizedBox(height: large ? 12 : 6),
-            _EpisodeBrowserPrompt(
-              isTelevision: isTelevision,
-              large: large,
-              onPressed: onBrowseEpisodes!,
             ),
           ],
         ],
@@ -1994,20 +2269,22 @@ class _EpisodeBrowserPrompt extends StatelessWidget {
     required this.isTelevision,
     required this.large,
     required this.onPressed,
+    required this.focusNode,
   });
 
   final bool isTelevision;
   final bool large;
   final VoidCallback onPressed;
+  final FocusNode focusNode;
 
   @override
   Widget build(BuildContext context) {
     final palette = context.appPalette;
-    final label = isTelevision
-        ? context.tr('Press ↓ to browse all episodes')
+    final gestureHint = isTelevision
+        ? context.tr('Browse all episodes')
         : context.tr('Swipe up or tap to browse all episodes');
     return Semantics(
-      label: label,
+      label: gestureHint,
       button: true,
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
@@ -2016,41 +2293,40 @@ class _EpisodeBrowserPrompt extends StatelessWidget {
         },
         child: TvFocusable(
           onPressed: onPressed,
+          focusNode: focusNode,
           focusScale: 1.018,
-          borderRadius: BorderRadius.circular(10),
+          borderRadius: BorderRadius.circular(TetoBoxStyle.radius),
           child: Container(
             key: const ValueKey('episode-browser-prompt'),
-            height: large ? 54 : 38,
-            padding: EdgeInsets.symmetric(horizontal: large ? 16 : 10),
-            decoration: BoxDecoration(
-              color: palette.accent.withValues(alpha: .12),
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(
-                color: palette.accentBright.withValues(alpha: .46),
-              ),
-            ),
+            height: large
+                ? 68
+                : (MediaQuery.sizeOf(context).height >= 620 ? 50 : 44),
+            padding: EdgeInsets.symmetric(horizontal: large ? 22 : 13),
+            decoration: _episodeControlDecoration(palette),
             child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Icon(
-                  isTelevision
-                      ? Icons.keyboard_arrow_down_rounded
-                      : Icons.swipe_up_alt_rounded,
-                  color: palette.accentBright,
-                  size: large ? 23 : 18,
+                EpisodePanelIcon(
+                  glyph: EpisodePanelGlyph.browse,
+                  color: palette.primaryText,
+                  size: large ? 27 : 19,
                 ),
-                SizedBox(width: large ? 10 : 6),
-                Flexible(
+                SizedBox(width: large ? 16 : 8),
+                Expanded(
                   child: Text(
-                    label,
+                    context.tr('Browse all episodes'),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                       color: palette.primaryText,
-                      fontSize: large ? 14 : 11,
+                      fontSize: large ? 18 : 14,
                       fontWeight: FontWeight.w800,
                     ),
                   ),
+                ),
+                EpisodePanelIcon(
+                  glyph: EpisodePanelGlyph.next,
+                  color: palette.mutedText,
+                  size: large ? 25 : 19,
                 ),
               ],
             ),
@@ -2217,9 +2493,9 @@ class _EpisodeWatchPartyAction extends StatelessWidget {
         ? 'Starting Watch Party room'
         : 'Start Watch Party';
     final content = Container(
-      height: large ? 76 : 42,
+      height: large ? 76 : (MediaQuery.sizeOf(context).height >= 620 ? 49 : 42),
       padding: EdgeInsets.symmetric(horizontal: large ? 22 : 13),
-      color: const Color(0xFF1B1B1B),
+      decoration: _episodeControlDecoration(context.appPalette),
       child: LayoutBuilder(
         builder: (context, constraints) {
           final iconWidth = large ? 29.0 : 19.0;
@@ -2247,10 +2523,8 @@ class _EpisodeWatchPartyAction extends StatelessWidget {
                   child: const CircularProgressIndicator(strokeWidth: 2.5),
                 )
               else
-                Icon(
-                  active
-                      ? Icons.groups_rounded
-                      : Icons.person_add_alt_1_rounded,
+                EpisodePanelIcon(
+                  glyph: EpisodePanelGlyph.people,
                   size: large ? 29 : 19,
                   color: active
                       ? context.appPalette.accentBright
@@ -2351,6 +2625,12 @@ class _EpisodeWatchPartyAction extends StatelessWidget {
                     ),
                   ),
                 ),
+              if (!active && !starting)
+                EpisodePanelIcon(
+                  glyph: EpisodePanelGlyph.next,
+                  size: large ? 25 : 19,
+                  color: context.appPalette.mutedText,
+                ),
             ],
           );
         },
@@ -2375,7 +2655,7 @@ class _EpisodeWatchPartyAction extends StatelessWidget {
               focusNode: focusNode,
               onPressed: enabled ? onPressed! : () {},
               focusScale: 1.025,
-              borderRadius: BorderRadius.circular(10),
+              borderRadius: BorderRadius.circular(TetoBoxStyle.radius),
               child: Opacity(opacity: starting ? .72 : 1, child: content),
             )
           : Opacity(opacity: starting ? .72 : .42, child: content),
@@ -2558,12 +2838,16 @@ class _EpisodeToggleButton extends StatelessWidget {
   Widget build(BuildContext context) {
     final enabled = onPressed != null;
     final content = Container(
-      height: large ? 76 : 42,
+      height: large ? 76 : (MediaQuery.sizeOf(context).height >= 620 ? 49 : 42),
       padding: EdgeInsets.symmetric(horizontal: large ? 22 : 13),
-      color: const Color(0xFF1B1B1B),
+      decoration: _episodeControlDecoration(context.appPalette),
       child: Row(
         children: [
-          Icon(Icons.fast_forward_rounded, size: large ? 29 : 19),
+          EpisodePanelIcon(
+            glyph: EpisodePanelGlyph.skip,
+            size: large ? 29 : 19,
+            color: context.appPalette.primaryText,
+          ),
           SizedBox(width: large ? 16 : 8),
           Expanded(
             child: Text(
@@ -2577,24 +2861,7 @@ class _EpisodeToggleButton extends StatelessWidget {
               ),
             ),
           ),
-          Text(
-            value ? context.tr("ON") : context.tr("OFF"),
-            style: TextStyle(
-              color: value
-                  ? context.appPalette.accentBright
-                  : context.appPalette.mutedText,
-              fontSize: large ? 14 : 11,
-              fontWeight: FontWeight.w900,
-            ),
-          ),
-          SizedBox(width: large ? 12 : 7),
-          Icon(
-            value ? Icons.toggle_on_rounded : Icons.toggle_off_rounded,
-            color: value
-                ? context.appPalette.accentBright
-                : context.appPalette.mutedText,
-            size: large ? 36 : 27,
-          ),
+          TetoSwitchIndicator(value: value, compact: !large),
         ],
       ),
     );
@@ -2616,7 +2883,7 @@ class _EpisodeToggleButton extends StatelessWidget {
                 return KeyEventResult.ignored;
               },
               focusScale: 1.025,
-              borderRadius: BorderRadius.circular(10),
+              borderRadius: BorderRadius.circular(TetoBoxStyle.radius),
               onPressed: onPressed!,
               child: content,
             )
@@ -2631,19 +2898,23 @@ class _EpisodeActionButton extends StatelessWidget {
     required this.label,
     required this.icon,
     required this.onPressed,
+    this.semanticsLabel,
     this.trailing,
     this.badge,
     this.trailingIcon,
+    this.progress,
     this.primary = false,
     this.autofocus = false,
     this.large = false,
   });
 
   final String label;
+  final String? semanticsLabel;
   final String? trailing;
   final String? badge;
-  final IconData? trailingIcon;
-  final IconData icon;
+  final EpisodePanelGlyph? trailingIcon;
+  final double? progress;
+  final EpisodePanelGlyph icon;
   final VoidCallback? onPressed;
   final bool primary;
   final bool autofocus;
@@ -2652,61 +2923,119 @@ class _EpisodeActionButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final enabled = onPressed != null;
+    final palette = context.appPalette;
+    final showProgress = primary && progress != null && progress! > 0;
+    final labelText = Text(
+      context.tr(label),
+      semanticsLabel: semanticsLabel,
+      maxLines: 1,
+      softWrap: false,
+      overflow: primary ? TextOverflow.visible : TextOverflow.ellipsis,
+      style: TextStyle(
+        color: palette.primaryText,
+        fontSize: large ? 18 : 14,
+        fontWeight: FontWeight.w800,
+      ),
+    );
     final content = Container(
-      height: large ? 76 : 42,
+      height: primary
+          ? (large ? 82 : (MediaQuery.sizeOf(context).height >= 620 ? 55 : 48))
+          : _episodeSecondaryActionHeight(context),
       padding: EdgeInsets.symmetric(horizontal: large ? 22 : 13),
-      color: primary ? context.appPalette.accent : const Color(0xFF1B1B1B),
-      child: Row(
+      decoration: primary
+          ? BoxDecoration(
+              gradient: LinearGradient(
+                colors: [
+                  palette.accent,
+                  Color.alphaBlend(
+                    Colors.black.withValues(alpha: .16),
+                    palette.accent,
+                  ),
+                ],
+              ),
+              borderRadius: BorderRadius.circular(TetoBoxStyle.radius),
+              border: Border.all(color: TetoBoxStyle.outline(palette)),
+            )
+          : _episodeControlDecoration(palette),
+      child: Stack(
+        fit: StackFit.expand,
         children: [
-          Icon(icon, size: large ? 29 : 19),
-          SizedBox(width: large ? 16 : 8),
-          Expanded(
-            child: Text(
-              context.tr(label),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                color: context.appPalette.primaryText,
-                fontSize: large ? 18 : 14,
-                fontWeight: FontWeight.w800,
+          Row(
+            children: [
+              EpisodePanelIcon(
+                glyph: icon,
+                size: large ? 29 : 19,
+                color: palette.primaryText,
               ),
-            ),
+              SizedBox(width: large ? 16 : 8),
+              Expanded(
+                child: primary
+                    ? FittedBox(
+                        fit: BoxFit.scaleDown,
+                        alignment: Alignment.centerLeft,
+                        child: labelText,
+                      )
+                    : labelText,
+              ),
+              if (badge case final value?) ...[
+                Container(
+                  margin: EdgeInsets.only(right: large ? 12 : 7),
+                  padding: EdgeInsets.symmetric(
+                    horizontal: large ? 9 : 6,
+                    vertical: large ? 5 : 3,
+                  ),
+                  decoration: BoxDecoration(
+                    color: palette.accent.withValues(alpha: .24),
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: Text(
+                    value,
+                    style: TextStyle(
+                      color: palette.accentBright,
+                      fontSize: large ? 11 : 9,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: .7,
+                    ),
+                  ),
+                ),
+              ],
+              if (trailing case final value?)
+                Text(
+                  value,
+                  style: TextStyle(
+                    color: palette.primaryText.withValues(alpha: .8),
+                    fontSize: large ? 14 : 11,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              if (trailingIcon case final value?) ...[
+                if (trailing != null) SizedBox(width: large ? 10 : 6),
+                EpisodePanelIcon(
+                  glyph: value,
+                  size: large ? 25 : 19,
+                  color: palette.mutedText,
+                ),
+              ],
+            ],
           ),
-          if (badge case final value?) ...[
-            Container(
-              margin: EdgeInsets.only(right: large ? 12 : 7),
-              padding: EdgeInsets.symmetric(
-                horizontal: large ? 9 : 6,
-                vertical: large ? 5 : 3,
-              ),
-              decoration: BoxDecoration(
-                color: context.appPalette.accent.withValues(alpha: .24),
-                borderRadius: BorderRadius.circular(999),
-              ),
-              child: Text(
-                value,
-                style: TextStyle(
-                  color: context.appPalette.accentBright,
-                  fontSize: large ? 11 : 9,
-                  fontWeight: FontWeight.w900,
-                  letterSpacing: .7,
+          if (showProgress)
+            Positioned(
+              left: large ? 68 : 40,
+              right: large ? 22 : 13,
+              bottom: large ? 9 : 4,
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(99),
+                child: LinearProgressIndicator(
+                  key: const ValueKey('episode-resume-progress'),
+                  value: progress!.clamp(0.0, 1.0),
+                  minHeight: large ? 3 : 2,
+                  backgroundColor: palette.primaryText.withValues(alpha: .25),
+                  valueColor: AlwaysStoppedAnimation<Color>(
+                    palette.primaryText,
+                  ),
                 ),
               ),
             ),
-          ],
-          if (trailing case final value?)
-            Text(
-              value,
-              style: TextStyle(
-                color: Colors.white70,
-                fontSize: large ? 14 : 11,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
-          if (trailingIcon case final value?) ...[
-            if (trailing != null) SizedBox(width: large ? 10 : 6),
-            Icon(value, size: large ? 25 : 19, color: Colors.white70),
-          ],
         ],
       ),
     );
@@ -2720,158 +3049,9 @@ class _EpisodeActionButton extends StatelessWidget {
     return TvFocusable(
       autofocus: autofocus,
       focusScale: 1.025,
-      borderRadius: BorderRadius.circular(10),
+      borderRadius: BorderRadius.circular(TetoBoxStyle.radius),
       onPressed: onPressed!,
       child: content,
-    );
-  }
-}
-
-class _EpisodeSelectionButton extends StatelessWidget {
-  const _EpisodeSelectionButton({
-    super.key,
-    required this.selectedEpisode,
-    required this.totalEpisodes,
-    required this.onPressed,
-    required this.onBrowseEpisodes,
-    required this.focusNode,
-    required this.large,
-  });
-
-  final int selectedEpisode;
-  final int totalEpisodes;
-  final VoidCallback? onPressed;
-  final VoidCallback? onBrowseEpisodes;
-  final FocusNode focusNode;
-  final bool large;
-
-  @override
-  Widget build(BuildContext context) {
-    final enabled = onPressed != null;
-    final content = Container(
-      height: large ? 58 : 38,
-      alignment: Alignment.center,
-      padding: const EdgeInsets.symmetric(horizontal: 8),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Flexible(
-            child: Text(
-              context.tr("{value1} of {value2}", {
-                'value1': selectedEpisode,
-                'value2': totalEpisodes,
-              }),
-              textAlign: TextAlign.center,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontWeight: FontWeight.w900,
-                fontSize: large ? 16 : 13,
-              ),
-            ),
-          ),
-          if (enabled) ...[
-            const SizedBox(width: 6),
-            Icon(
-              Icons.edit_rounded,
-              size: large ? 18 : 14,
-              color: context.appPalette.mutedText,
-            ),
-          ],
-        ],
-      ),
-    );
-    if (!enabled) {
-      return Semantics(
-        label: context.tr("Episode {value1} of {value2}", {
-          'value1': selectedEpisode,
-          'value2': totalEpisodes,
-        }),
-        button: true,
-        enabled: false,
-        child: content,
-      );
-    }
-    return Semantics(
-      label: context.tr("Episode {value1} of {value2}. Choose episode number", {
-        'value1': selectedEpisode,
-        'value2': totalEpisodes,
-      }),
-      button: true,
-      enabled: true,
-      onTap: onPressed,
-      excludeSemantics: true,
-      child: TvFocusable(
-        focusNode: focusNode,
-        focusScale: 1.025,
-        borderRadius: BorderRadius.circular(9),
-        onPressed: onPressed!,
-        onKeyEvent: (_, event) {
-          if (onBrowseEpisodes == null ||
-              event is! KeyDownEvent ||
-              event.logicalKey != LogicalKeyboardKey.arrowDown) {
-            return KeyEventResult.ignored;
-          }
-          onBrowseEpisodes!();
-          return KeyEventResult.handled;
-        },
-        child: content,
-      ),
-    );
-  }
-}
-
-class _EpisodeStepButton extends StatelessWidget {
-  const _EpisodeStepButton({
-    super.key,
-    required this.icon,
-    required this.label,
-    required this.onPressed,
-    required this.onBrowseEpisodes,
-    required this.focusNode,
-  });
-
-  final IconData icon;
-  final String label;
-  final VoidCallback? onPressed;
-  final VoidCallback? onBrowseEpisodes;
-  final FocusNode focusNode;
-
-  @override
-  Widget build(BuildContext context) {
-    final content = SizedBox(
-      width: 48,
-      height: 48,
-      child: Icon(icon, size: 22),
-    );
-    if (onPressed == null) {
-      return Semantics(
-        label: label,
-        button: true,
-        enabled: false,
-        child: Opacity(opacity: .32, child: content),
-      );
-    }
-    return Semantics(
-      label: label,
-      button: true,
-      enabled: true,
-      child: TvFocusable(
-        focusNode: focusNode,
-        focusScale: 1.04,
-        borderRadius: BorderRadius.circular(9),
-        onPressed: onPressed!,
-        onKeyEvent: (_, event) {
-          if (onBrowseEpisodes == null ||
-              event is! KeyDownEvent ||
-              event.logicalKey != LogicalKeyboardKey.arrowDown) {
-            return KeyEventResult.ignored;
-          }
-          onBrowseEpisodes!();
-          return KeyEventResult.handled;
-        },
-        child: content,
-      ),
     );
   }
 }
@@ -2889,28 +3069,10 @@ class _DetailsBack extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Align(
-      alignment: Alignment.centerLeft,
-      child: TvFocusable(
-        autofocus: autofocus,
-        focusNode: focusNode,
-        onPressed: onPressed,
-        borderRadius: BorderRadius.circular(10),
-        child: ColoredBox(
-          color: Color(0xCC111111),
-          child: Padding(
-            padding: EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.arrow_back_rounded, size: 20),
-                SizedBox(width: 8),
-                Text(context.tr("Back")),
-              ],
-            ),
-          ),
-        ),
-      ),
+    return TetoBackButton(
+      autofocus: autofocus,
+      focusNode: focusNode,
+      onPressed: onPressed,
     );
   }
 }
@@ -2935,56 +3097,17 @@ class _DetailsError extends StatelessWidget {
         children: [
           _DetailsBack(onPressed: onBack, autofocus: true),
           Expanded(
-            child: Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    Icons.cloud_off_rounded,
-                    size: 66,
-                    color: context.appPalette.mutedText,
-                  ),
-                  const SizedBox(height: 16),
-                  Text(
-                    context.tr("Could not load anime"),
-                    style: Theme.of(context).textTheme.headlineSmall,
-                  ),
-                  const SizedBox(height: 8),
-                  Text(message, style: Theme.of(context).textTheme.bodyMedium),
-                  const SizedBox(height: 20),
-                  TvFocusable(
-                    onPressed: onRetry,
-                    child: ColoredBox(
-                      color: context.appPalette.primaryText,
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 18,
-                          vertical: 11,
-                        ),
-                        child: Text(
-                          context.tr("Retry"),
-                          style: TextStyle(
-                            color: context.appPalette.background,
-                            fontWeight: FontWeight.w800,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
+            child: TetoBrowseStatus(
+              icon: Icons.cloud_off_rounded,
+              title: 'Could not load anime',
+              message: message,
+              actions: TetoRetryButton(onPressed: onRetry),
             ),
           ),
         ],
       ),
     );
   }
-}
-
-String _formatDuration(Duration value) {
-  final minutes = value.inMinutes;
-  final seconds = value.inSeconds.remainder(60).toString().padLeft(2, '0');
-  return '$minutes:$seconds';
 }
 
 void _openEpisode(

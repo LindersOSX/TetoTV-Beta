@@ -1,3 +1,6 @@
+import 'dart:collection';
+import 'dart:convert';
+
 import 'package:anime_tv/features/watch_together/domain/watch_party_models.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
@@ -7,11 +10,22 @@ class WatchPartyClientException implements Exception {
     this.code, {
     this.retryAfter,
     this.statusCode,
+    this.transportType,
   });
 
   final String code;
   final Duration? retryAfter;
   final int? statusCode;
+  // Keep only the closed Dio category, never its request, message, or cause.
+  final DioExceptionType? transportType;
+
+  /// These established diagnostic keys survive the database/report privacy
+  /// allowlist. Unexpected server strings never become diagnostic content.
+  Map<String, Object> get diagnosticDetails => {
+    'reason_code': _knownWatchPartyErrorCode(code) ?? 'unknown_error',
+    'phase': ?transportType?.name,
+    'code': ?_safeHttpStatus(statusCode),
+  };
 
   @override
   String toString() => code;
@@ -77,8 +91,10 @@ class WatchPartyClient {
       '/v1/watch-parties/health',
       authenticated: false,
     );
-    final protocol = (response['protocol'] as num?)?.toInt() ?? 0;
-    return response['status'] == 'ok' && protocol >= 1 && protocol <= 5;
+    return _parseResponse(response, () {
+      final protocol = (response['protocol'] as num?)?.toInt() ?? 0;
+      return response['status'] == 'ok' && protocol >= 1 && protocol <= 5;
+    });
   }
 
   Future<WatchPartyCreated> create() async {
@@ -104,28 +120,30 @@ class WatchPartyClient {
         data: const <String, Object>{},
       );
     }
-    final roomCode = _roomCode(value['room_code']);
-    final token = _token(value['host_token']);
-    final expiresAt = _date(value['expires_at']);
-    final watchPath = value['watch_url'] as String? ?? '/watch?room=$roomCode';
-    final advertisedWatchUri = _baseUri.resolve(watchPath);
-    if (advertisedWatchUri.origin != _baseUri.origin ||
-        advertisedWatchUri.scheme != 'https') {
-      throw const WatchPartyClientException('invalid_response');
-    }
-    // The room capability belongs only in the Authorization header. Build the
-    // public share URL locally so an accidental query value in a broker
-    // response can never enter a QR code, clipboard, or native player HUD.
-    final watchUri = _baseUri.resolve('/watch?room=$roomCode');
-    return WatchPartyCreated(
-      session: WatchPartySession(
-        roomCode: roomCode,
-        token: token,
-        role: WatchPartyRole.host,
-        expiresAt: expiresAt,
-        watchUrl: watchUri,
-      ),
-    );
+    return _parseResponse(value, () {
+      final roomCode = _roomCode(value['room_code']);
+      final token = _token(value['host_token']);
+      final expiresAt = _date(value['expires_at']);
+      final watchPath =
+          value['watch_url'] as String? ?? '/watch?room=$roomCode';
+      final advertisedWatchUri = _baseUri.resolve(watchPath);
+      if (advertisedWatchUri.origin != _baseUri.origin ||
+          advertisedWatchUri.scheme != 'https') {
+        throw const WatchPartyClientException('invalid_response');
+      }
+      // The room capability belongs only in the Authorization header. Build
+      // the share URL locally so broker query data never reaches a QR code.
+      final watchUri = _baseUri.resolve('/watch?room=$roomCode');
+      return WatchPartyCreated(
+        session: WatchPartySession(
+          roomCode: roomCode,
+          token: token,
+          role: WatchPartyRole.host,
+          expiresAt: expiresAt,
+          watchUrl: watchUri,
+        ),
+      );
+    });
   }
 
   Future<WatchPartyJoined> join(String rawCode) async {
@@ -154,20 +172,22 @@ class WatchPartyClient {
         data: <String, Object>{'room_code': roomCode},
       );
     }
-    final token = _token(value['participant_token']);
-    final expiresAt = _date(value['expires_at']);
-    final snapshotValue = _map(value['state']);
-    final snapshot = _snapshotForRoom(snapshotValue, roomCode);
-    return WatchPartyJoined(
-      session: WatchPartySession(
-        roomCode: roomCode,
-        token: token,
-        role: WatchPartyRole.guest,
-        expiresAt: expiresAt,
-        watchUrl: _baseUri.resolve('/watch?room=$roomCode'),
-      ),
-      snapshot: snapshot,
-    );
+    return _parseResponse(value, () {
+      final token = _token(value['participant_token']);
+      final expiresAt = _date(value['expires_at']);
+      final snapshotValue = _map(value['state']);
+      final snapshot = _snapshotForRoom(snapshotValue, roomCode);
+      return WatchPartyJoined(
+        session: WatchPartySession(
+          roomCode: roomCode,
+          token: token,
+          role: WatchPartyRole.guest,
+          expiresAt: expiresAt,
+          watchUrl: _baseUri.resolve('/watch?room=$roomCode'),
+        ),
+        snapshot: snapshot,
+      );
+    });
   }
 
   Future<WatchPartySnapshot> snapshot(WatchPartySession session) async =>
@@ -224,7 +244,7 @@ class WatchPartyClient {
       },
     );
 
-    final mediaCandidates = <WatchPartyMedia?>[
+    final compatibilityCandidates = <WatchPartyMedia?>[
       media,
       if (media?.titleNative != null) media?.withoutNativeTitle(),
       if (media?.timelineProfile != null) media?.withoutTimelineProfile(),
@@ -237,6 +257,12 @@ class WatchPartyClient {
             ?.withoutNativeTitle()
             .withoutSourceDescriptor()
             .withoutTimelineProfile(),
+    ];
+    final mediaCandidates = <WatchPartyMedia?>[
+      for (final candidate in compatibilityCandidates) ...[
+        candidate,
+        if (candidate?.format != null) candidate?.withoutFormat(),
+      ],
     ];
     var includeForceResync = forceResync;
     WatchPartyClientException? lastError;
@@ -340,43 +366,75 @@ class WatchPartyClient {
     }
     Response<Object?> response;
     try {
-      response = await _dio.request<Object?>(
+      response = await _dio.request<dynamic>(
         path,
         data: data,
         options: Options(
           method: method,
+          // Decode here so malformed successful JSON keeps its HTTP status
+          // and cannot be mistaken for a DNS/socket failure by Dio's decoder.
+          responseType: ResponseType.plain,
           headers: token == null
               ? null
               : <String, String>{'Authorization': 'Bearer $token'},
         ),
       );
     } on DioException catch (error) {
+      final status = _safeHttpStatus(error.response?.statusCode);
+      if (error.type == DioExceptionType.badResponse && status != null) {
+        throw _httpResponseError(
+          status: status,
+          data: error.response?.data,
+          headers: error.response?.headers,
+          transportType: error.type,
+        );
+      }
+      if (error.error is FormatException) {
+        throw WatchPartyClientException(
+          'invalid_response',
+          statusCode: status,
+          transportType: error.type,
+        );
+      }
       if (error.type == DioExceptionType.connectionTimeout ||
           error.type == DioExceptionType.sendTimeout ||
-          error.type == DioExceptionType.receiveTimeout) {
-        throw const WatchPartyClientException('timeout');
+          error.type == DioExceptionType.receiveTimeout ||
+          error.type == DioExceptionType.transformTimeout) {
+        throw WatchPartyClientException(
+          'timeout',
+          statusCode: status,
+          transportType: error.type,
+        );
       }
-      throw const WatchPartyClientException('network_unavailable');
+      throw WatchPartyClientException(
+        'network_unavailable',
+        statusCode: status,
+        transportType: error.type,
+      );
+    } on FormatException {
+      throw const WatchPartyClientException('invalid_response');
     }
     final status = response.statusCode ?? 0;
     if (allowNoContent && status == 204) return const {};
-    final value = _mapOrNull(response.data);
     if (status < 200 || status >= 300) {
-      final retrySeconds = int.tryParse(
-        response.headers.value('retry-after') ?? '',
+      throw _httpResponseError(
+        status: status,
+        data: response.data,
+        headers: response.headers,
       );
+    }
+    try {
+      final value = _decodeResponseMap(response.data);
+      if (value == null) {
+        throw const FormatException('Expected a JSON object.');
+      }
+      return _WatchPartyResponse(value, _safeHttpStatus(status));
+    } on FormatException {
       throw WatchPartyClientException(
-        value?['error'] as String? ?? 'server_error',
-        retryAfter: retrySeconds == null
-            ? null
-            : Duration(seconds: retrySeconds),
-        statusCode: status,
+        'invalid_response',
+        statusCode: _safeHttpStatus(status),
       );
     }
-    if (value == null) {
-      throw const WatchPartyClientException('invalid_response');
-    }
-    return value;
   }
 }
 
@@ -416,7 +474,7 @@ Map<String, Object?>? _mapOrNull(Object? value) => value is Map
 WatchPartySnapshot _snapshotForRoom(
   Map<String, Object?> value,
   String expectedRoomCode,
-) {
+) => _parseResponse(value, () {
   final role = value['role'];
   if (role != 'host' && role != 'guest') {
     throw const WatchPartyClientException('invalid_response');
@@ -426,7 +484,93 @@ WatchPartySnapshot _snapshotForRoom(
     throw const WatchPartyClientException('invalid_response');
   }
   return snapshot;
+});
+
+/// HTTP metadata travels with the response map only inside this client.
+class _WatchPartyResponse extends MapView<String, Object?> {
+  _WatchPartyResponse(super.map, this.statusCode);
+
+  final int? statusCode;
 }
+
+T _parseResponse<T>(Map<String, Object?> response, T Function() parse) {
+  final status = response is _WatchPartyResponse ? response.statusCode : null;
+  try {
+    return parse();
+  } on WatchPartyClientException catch (error) {
+    if (error.code != 'invalid_response' || error.statusCode != null) rethrow;
+    throw WatchPartyClientException('invalid_response', statusCode: status);
+  } on FormatException {
+    throw WatchPartyClientException('invalid_response', statusCode: status);
+  } on TypeError {
+    throw WatchPartyClientException('invalid_response', statusCode: status);
+  } on ArgumentError {
+    throw WatchPartyClientException('invalid_response', statusCode: status);
+  }
+}
+
+Map<String, Object?>? _decodeResponseMap(Object? data) =>
+    _mapOrNull(data is String ? jsonDecode(data) : data);
+
+WatchPartyClientException _httpResponseError({
+  required int status,
+  required Object? data,
+  Headers? headers,
+  DioExceptionType? transportType,
+}) {
+  Map<String, Object?>? value;
+  try {
+    value = _decodeResponseMap(data);
+  } on FormatException {
+    // An HTML/proxy error is still an HTTP failure, not a network outage.
+  }
+  final retrySeconds = int.tryParse(headers?.value('retry-after') ?? '');
+  return WatchPartyClientException(
+    _knownWatchPartyErrorCode(value?['error']) ?? 'server_error',
+    retryAfter: retrySeconds == null || retrySeconds < 0
+        ? null
+        : Duration(seconds: retrySeconds.clamp(0, 86400)),
+    statusCode: _safeHttpStatus(status),
+    transportType: transportType,
+  );
+}
+
+int? _safeHttpStatus(int? status) =>
+    status != null && status >= 100 && status <= 599 ? status : null;
+
+String? _knownWatchPartyErrorCode(Object? value) =>
+    value is String && _watchPartyErrorCodes.contains(value) ? value : null;
+
+const _watchPartyErrorCodes = <String>{
+  'invalid_room_code',
+  'party_not_found',
+  'party_full',
+  'party_capacity_reached',
+  'invalid_party_token',
+  'party_token_required',
+  'removed_from_party',
+  'stale_roster',
+  'participant_not_found',
+  'host_required',
+  'guest_required',
+  'method_not_allowed',
+  'not_found',
+  'rate_limited',
+  'expected_json',
+  'payload_too_large',
+  'invalid_json',
+  'invalid_payload',
+  'invalid_state',
+  'invalid_media',
+  'invalid_ready_state',
+  'invalid_public_identity',
+  'invalid_roster_action',
+  'stale_revision',
+  'timeout',
+  'network_unavailable',
+  'invalid_response',
+  'server_error',
+};
 
 String _roomCode(Object? value) {
   final normalized = normalizeWatchPartyCode(value as String? ?? '');

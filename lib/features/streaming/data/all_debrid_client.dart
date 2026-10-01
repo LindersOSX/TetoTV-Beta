@@ -83,6 +83,27 @@ class AllDebridClient {
     return AllDebridMagnetStatus.fromJson(Map<String, dynamic>.from(raw));
   }
 
+  Future<List<AllDebridMagnetStatus>> accountMagnets({
+    CancelToken? cancelToken,
+  }) async {
+    final data = await _post(
+      '/v4.1/magnet/status',
+      const {},
+      cancelToken: cancelToken,
+    );
+    final magnets = data['magnets'];
+    if (magnets is! List) {
+      throw const AllDebridException(
+        'AllDebrid returned an invalid magnet list.',
+      );
+    }
+    return List.unmodifiable([
+      for (final value in magnets)
+        if (value is Map)
+          AllDebridMagnetStatus.fromJson(Map<String, dynamic>.from(value)),
+    ]);
+  }
+
   Future<void> deleteMagnet(int id) async {
     await _post('/v4/magnet/delete', {'id': id});
   }
@@ -140,11 +161,13 @@ class AllDebridClient {
 
   Future<Map<String, dynamic>> _post(
     String path,
-    Map<String, dynamic> fields,
-  ) => _request(
+    Map<String, dynamic> fields, {
+    CancelToken? cancelToken,
+  }) => _request(
     () => _dio.post<Map<String, dynamic>>(
       path,
       data: fields,
+      cancelToken: cancelToken,
       options: Options(contentType: Headers.formUrlEncodedContentType),
     ),
   );

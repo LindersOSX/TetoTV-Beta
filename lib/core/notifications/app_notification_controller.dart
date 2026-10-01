@@ -28,6 +28,7 @@ final appNotificationControllerProvider =
         AppNotificationStore(ref.watch(tetoTvDatabaseProvider)),
         announcementApi: announcementClient,
       );
+      controller.startExpiryMaintenance();
       unawaited(controller.load());
       AppNotificationRefreshScheduler? refreshScheduler;
       if (announcementClient != null) {
@@ -231,7 +232,8 @@ class AppNotificationRefreshScheduler with WidgetsBindingObserver {
   }
 }
 
-class AppNotificationController extends StateNotifier<AppNotificationState> {
+class AppNotificationController extends StateNotifier<AppNotificationState>
+    with WidgetsBindingObserver {
   AppNotificationController(
     this._store, {
     this.announcementApi,
@@ -242,6 +244,32 @@ class AppNotificationController extends StateNotifier<AppNotificationState> {
   final AppAnnouncementApi? announcementApi;
   final AppNotificationClock _clock;
   Future<void> _pendingMutation = Future.value();
+  Timer? _expiryTimer;
+  bool _expiryMaintenanceStarted = false;
+  bool _foreground = false;
+
+  /// The provider owns this local-only maintenance. It runs independently of
+  /// remote polling, pauses with the app and rechecks overdue items on resume.
+  void startExpiryMaintenance() {
+    if (!mounted || _expiryMaintenanceStarted) return;
+    _expiryMaintenanceStarted = true;
+    WidgetsBinding.instance.addObserver(this);
+    final lifecycle = WidgetsBinding.instance.lifecycleState;
+    _foreground = lifecycle == null || lifecycle == AppLifecycleState.resumed;
+    _scheduleExpiry();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (!mounted || !_expiryMaintenanceStarted) return;
+    _foreground = state == AppLifecycleState.resumed;
+    if (_foreground) {
+      unawaited(load());
+    } else {
+      _expiryTimer?.cancel();
+      _expiryTimer = null;
+    }
+  }
 
   Future<void> load() => _enqueue(() async {
     await _reload();
@@ -309,9 +337,61 @@ class AppNotificationController extends StateNotifier<AppNotificationState> {
   });
 
   Future<void> _reload() async {
-    final items = await _store.load();
+    final stored = await _store.load();
+    if (!mounted) return;
+    final now = _clock().toUtc();
+    final items = <AppNotification>[];
+    for (final item in stored) {
+      final deadline = item.autoDismissAtUtc;
+      if (!item.isRead && deadline != null && !deadline.isAfter(now)) {
+        // Keep the existing dismissal tombstone instead of deleting the row:
+        // remote refresh must not resurrect an expired announcement.
+        await _store.markRead(item.id, now);
+        items.add(item.copyWith(readAtUtc: now));
+      } else {
+        items.add(item);
+      }
+    }
     if (!mounted) return;
     state = state.copyWith(loaded: true, items: items, clearError: true);
+    _scheduleExpiry();
+  }
+
+  void _scheduleExpiry() {
+    _expiryTimer?.cancel();
+    _expiryTimer = null;
+    if (!mounted || !_expiryMaintenanceStarted || !_foreground) return;
+    DateTime? earliest;
+    for (final item in state.inboxItems) {
+      final deadline = item.autoDismissAtUtc;
+      if (deadline != null &&
+          (earliest == null || deadline.isBefore(earliest))) {
+        earliest = deadline;
+      }
+    }
+    if (earliest == null) return;
+    final remaining = earliest.difference(_clock().toUtc());
+    // A failed local write or clock correction must not create a busy loop.
+    final delay = remaining > Duration.zero
+        ? remaining
+        : const Duration(minutes: 1);
+    _expiryTimer = Timer(delay, () {
+      _expiryTimer = null;
+      unawaited(
+        _enqueue(_reload, exposeError: false).whenComplete(() {
+          if (mounted) _scheduleExpiry();
+        }),
+      );
+    });
+  }
+
+  @override
+  void dispose() {
+    _expiryTimer?.cancel();
+    if (_expiryMaintenanceStarted) {
+      WidgetsBinding.instance.removeObserver(this);
+    }
+    super.dispose();
   }
 
   Future<void> _enqueue(
@@ -319,6 +399,7 @@ class AppNotificationController extends StateNotifier<AppNotificationState> {
     bool exposeError = true,
   }) {
     final next = _pendingMutation.then((_) async {
+      if (!mounted) return;
       try {
         await operation();
       } catch (_) {

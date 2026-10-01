@@ -80,7 +80,7 @@ void main() {
       palette.background,
     );
     final emptyMessage = tester.widget<Text>(
-      find.text('No anime matched these filters.'),
+      find.text('Adjust the filters or reset them to browse again.'),
     );
     expect(emptyMessage.style?.color, palette.mutedText);
   });

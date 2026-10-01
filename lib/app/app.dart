@@ -1,4 +1,5 @@
 import 'package:anime_tv/app/router.dart';
+import 'package:anime_tv/core/widgets/teto_blur_scope.dart';
 import 'package:anime_tv/features/aniyomi/application/aniyomi_controller.dart';
 import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'package:anime_tv/features/settings/presentation/language_selection_screen.dart';
@@ -105,7 +106,10 @@ class TetoTvApp extends ConsumerWidget {
             );
 
             return InterfaceScaleViewport(
-              mediaQuery: mq,
+              mediaQuery: mq.copyWith(
+                disableAnimations:
+                    mq.disableAnimations || preferences.reduceMotion,
+              ),
               scale: scale,
               child: UiDiagnosticScope(
                 routeInformation: appRouter.routeInformationProvider,
@@ -114,7 +118,10 @@ class TetoTvApp extends ConsumerWidget {
                 languageCode: preferences.interfaceLanguage.code,
                 playerEngine: preferences.preferredPlayer.name,
                 media3SurfaceView: preferences.media3SurfaceViewEnabled,
-                child: content,
+                child: TetoBlurScope(
+                  enabled: preferences.blurEffectsEnabled,
+                  child: content,
+                ),
               ),
             );
           },

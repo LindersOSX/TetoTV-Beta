@@ -3,6 +3,7 @@ import 'dart:async';
 
 import 'package:anime_tv/core/platform/android_tv_bridge.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/widgets/teto_back_button.dart';
 import 'package:anime_tv/features/catalog/domain/anime_trailer.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -120,10 +121,8 @@ class _TrailerPlayerScreenState extends State<TrailerPlayerScreen> {
                         icon: const Icon(Icons.replay_rounded),
                         label: Text(context.tr("Try again")),
                       ),
-                      OutlinedButton.icon(
+                      TetoBackButton(
                         onPressed: () => Navigator.of(context).maybePop(),
-                        icon: const Icon(Icons.arrow_back_rounded),
-                        label: Text(context.tr("Back")),
                       ),
                     ],
                   ),

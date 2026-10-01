@@ -117,6 +117,27 @@ class TorBoxClient {
     return TorBoxTorrent.fromJson(item);
   }
 
+  Future<List<TorBoxTorrent>> accountTorrents({
+    int limit = 100,
+    int offset = 0,
+    CancelToken? cancelToken,
+  }) async {
+    final body = await _get(
+      '/torrents/mylist',
+      query: {'limit': limit.clamp(1, 1000), if (offset > 0) 'offset': offset},
+      cancelToken: cancelToken,
+    );
+    final data = body['data'];
+    if (data == null) return const [];
+    if (data is! List) {
+      throw const TorBoxException('TorBox returned an invalid torrent list.');
+    }
+    return List.unmodifiable([
+      for (final value in data)
+        if (value is Map<String, dynamic>) TorBoxTorrent.fromJson(value),
+    ]);
+  }
+
   Future<Uri> requestDownloadLink({
     required int torrentId,
     required int fileId,
@@ -155,9 +176,14 @@ class TorBoxClient {
   Future<Map<String, dynamic>> _get(
     String path, {
     Map<String, dynamic>? query,
+    CancelToken? cancelToken,
   }) {
     return _request(
-      () => _dio.get<Map<String, dynamic>>(path, queryParameters: query),
+      () => _dio.get<Map<String, dynamic>>(
+        path,
+        queryParameters: query,
+        cancelToken: cancelToken,
+      ),
     );
   }
 

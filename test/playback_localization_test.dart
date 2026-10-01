@@ -152,6 +152,33 @@ void main() {
       );
       expect(reconnecting, contains(locale.text('HOST')));
       expect(reconnecting, contains(locale.text('RECONNECTING')));
+      final now = DateTime.utc(2026, 9, 23);
+      final waiting = watchPartyPlayerStatus(
+        WatchPartyState(
+          session: session.withRole(WatchPartyRole.host),
+          connection: WatchPartyConnection.connected,
+          snapshot: WatchPartySnapshot(
+            roomCode: session.roomCode,
+            role: WatchPartyRole.host,
+            revision: 1,
+            media: const WatchPartyMedia(
+              kind: 'anilist',
+              title: 'Example',
+              anilistId: 1,
+              episode: 1,
+            ),
+            playing: false,
+            position: Duration.zero,
+            effectiveAt: now,
+            serverTime: now,
+            participantCount: 1,
+            readyCount: 0,
+            expiresAt: now.add(const Duration(hours: 6)),
+          ),
+        ),
+        localizations: locale,
+      );
+      expect(waiting, contains(locale.text('WAITING FOR STREAMS')));
       expect(
         watchPartyPlayerStatus(const WatchPartyState(), localizations: locale),
         isNull,

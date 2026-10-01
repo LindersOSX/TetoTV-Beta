@@ -1,6 +1,8 @@
 import 'dart:async';
 
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/theme/teto_box_style.dart';
+import 'package:anime_tv/core/theme/teto_ui_tokens.dart';
 import 'package:anime_tv/core/tv/interaction_sound_scope.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -14,9 +16,13 @@ class TvFocusable extends StatefulWidget {
     required this.child,
     required this.onPressed,
     this.autofocus = false,
-    this.borderRadius = const BorderRadius.all(Radius.circular(14)),
-    this.focusScale = 1.045,
+    this.borderRadius = const BorderRadius.all(
+      Radius.circular(TetoBoxStyle.radius),
+    ),
+    this.focusScale = 1.015,
+    this.animateFocus = true,
     this.showFocusContrastKeyline = true,
+    this.showFocusRing = true,
     this.enabled = true,
     this.focusNode,
     this.onFocusChanged,
@@ -31,11 +37,16 @@ class TvFocusable extends StatefulWidget {
   final BorderRadius borderRadius;
   final double focusScale;
 
+  /// Dense input grids can paint focus immediately without scaling or tweening.
+  /// Ordinary app controls retain the shared focus animation by default.
+  final bool animateFocus;
+
   /// Keeps the dark contrast keyline used around ordinary TV controls.
   ///
   /// Artwork-led controls such as the profile avatar can disable it so their
   /// theme-colored ring flows directly into the focus glow.
   final bool showFocusContrastKeyline;
+  final bool showFocusRing;
 
   /// Whether activation, pointer feedback, and actionable semantics are on.
   ///
@@ -105,10 +116,6 @@ class _TvFocusableState extends State<TvFocusable> {
     if (customResult == KeyEventResult.handled) {
       return KeyEventResult.handled;
     }
-    // Controls without a secondary/hold action use Flutter's standard
-    // ActivateIntent. Keeping their Enter event unconsumed also lets parent
-    // keyboard/dialog handlers observe physical Enter.
-    if (widget.onLongPress == null) return KeyEventResult.ignored;
     final isActivationKey =
         event.logicalKey == LogicalKeyboardKey.select ||
         event.logicalKey == LogicalKeyboardKey.enter ||
@@ -116,6 +123,14 @@ class _TvFocusableState extends State<TvFocusable> {
         event.logicalKey == LogicalKeyboardKey.gameButtonA ||
         _remotePressPhysicalKey == event.physicalKey;
     if (!isActivationKey) {
+      return KeyEventResult.ignored;
+    }
+    // Press-only controls still use Flutter's standard ActivateIntent. Their
+    // key event must bubble to Shortcuts, but the visual press can track the
+    // same remote down/up pair without changing when activation fires.
+    if (widget.onLongPress == null) {
+      if (widget.enabled && event is KeyDownEvent) _handlePress(true);
+      if (event is KeyUpEvent) _handlePress(false);
       return KeyEventResult.ignored;
     }
     if (event is KeyDownEvent) {
@@ -130,6 +145,7 @@ class _TvFocusableState extends State<TvFocusable> {
       }
       _clearRemotePressState();
       _remotePressPhysicalKey = event.physicalKey;
+      _handlePress(true);
       _holdTimer = Timer(_remoteHoldThreshold, () => _holdEligible = true);
       return KeyEventResult.handled;
     }
@@ -156,6 +172,7 @@ class _TvFocusableState extends State<TvFocusable> {
     final longPress = _holdEligibleAtRelease;
     _clearRemotePressState();
     if (!mounted) return;
+    _handlePress(false);
     _activate(
       longPress && widget.onLongPress != null
           ? widget.onLongPress
@@ -176,6 +193,7 @@ class _TvFocusableState extends State<TvFocusable> {
   void _handleFocus(bool focused) {
     if (!focused) {
       _clearRemotePressState();
+      _pressed = false;
     }
     setState(() => _focused = focused);
     widget.onFocusChanged?.call(focused);
@@ -209,7 +227,10 @@ class _TvFocusableState extends State<TvFocusable> {
   @override
   Widget build(BuildContext context) {
     final palette = context.appPalette;
+    final reduceMotion = !widget.animateFocus || TetoUiMotion.reduced(context);
+    final focusDuration = reduceMotion ? Duration.zero : TetoUiMotion.focus;
     final highlighted = _focused || _hovered || _pressed;
+    final focusRingVisible = highlighted && widget.showFocusRing;
     return Semantics(
       button: true,
       enabled: widget.enabled,
@@ -260,14 +281,19 @@ class _TvFocusableState extends State<TvFocusable> {
                     ? null
                     : () => _activate(widget.onLongPress),
                 child: AnimatedScale(
-                  scale: highlighted ? widget.focusScale : 1,
-                  duration: const Duration(milliseconds: 80),
-                  curve: Curves.easeOutCubic,
+                  scale: reduceMotion
+                      ? 1
+                      : _pressed
+                      ? .985
+                      : (focusRingVisible ? widget.focusScale : 1),
+                  duration: focusDuration,
+                  curve: TetoUiMotion.curve,
                   child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 80),
+                    duration: focusDuration,
+                    curve: TetoUiMotion.curve,
                     decoration: BoxDecoration(
                       borderRadius: widget.borderRadius,
-                      boxShadow: highlighted
+                      boxShadow: focusRingVisible
                           ? [
                               if (widget.showFocusContrastKeyline)
                                 // The dark outer keyline keeps the focus ring
@@ -279,16 +305,19 @@ class _TvFocusableState extends State<TvFocusable> {
                                 ),
                               BoxShadow(
                                 color: palette.focusGlow,
-                                blurRadius: 11,
-                                spreadRadius: 2,
+                                blurRadius: _pressed ? 5 : 11,
+                                spreadRadius: _pressed ? 0 : 2,
                               ),
                             ]
                           : const [],
                     ),
                     foregroundDecoration: BoxDecoration(
                       borderRadius: widget.borderRadius,
+                      // Keep artwork and control interiors unchanged. Pressed
+                      // feedback comes from scale and the tighter outer glow.
+                      color: Colors.transparent,
                       border: Border.all(
-                        color: highlighted
+                        color: focusRingVisible
                             ? palette.focusRing
                             : Colors.transparent,
                         width: 3,
@@ -300,12 +329,13 @@ class _TvFocusableState extends State<TvFocusable> {
                         fit: StackFit.passthrough,
                         children: [
                           widget.child,
-                          if (widget.showFocusContrastKeyline)
+                          if (widget.showFocusContrastKeyline &&
+                              widget.showFocusRing)
                             Positioned.fill(
                               child: IgnorePointer(
                                 child: AnimatedOpacity(
-                                  opacity: highlighted ? 1 : 0,
-                                  duration: const Duration(milliseconds: 80),
+                                  opacity: focusRingVisible ? 1 : 0,
+                                  duration: focusDuration,
                                   child: Padding(
                                     padding: const EdgeInsets.all(3),
                                     child: DecoratedBox(

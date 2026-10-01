@@ -43,7 +43,9 @@ void main() {
         child: MaterialApp(
           theme: AppTheme.darkFor(palette),
           home: TetoTopLevelShell(
-            preferences: const SettingsPreferences(),
+            preferences: const SettingsPreferences(
+              expandNavigationLabelsOnFocus: false,
+            ),
             activeDestination: TopNavigationDestination.discover,
             firstContentFocusNode: firstContentFocus,
             autofocusRail: true,
@@ -302,7 +304,7 @@ void main() {
 
           final expected = homeNavigationRailMetrics(size);
           final railFinder = find.byKey(const ValueKey('main-navigation'));
-          final rail = tester.widget<Container>(railFinder);
+          final rail = tester.widget<AnimatedContainer>(railFinder);
           final decoration = rail.decoration! as BoxDecoration;
           final border = decoration.border! as Border;
           final contentRegion = tester.widget<Positioned>(
@@ -643,6 +645,7 @@ void main() {
           home: TetoTopLevelShell(
             preferences: const SettingsPreferences(
               settingsEntryPlacement: SettingsEntryPlacement.profileMenu,
+              showSettings: false,
             ),
             activeDestination: TopNavigationDestination.settings,
             firstContentFocusNode: contentFocus,

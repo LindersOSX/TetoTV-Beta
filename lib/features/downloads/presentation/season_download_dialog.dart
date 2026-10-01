@@ -1,3 +1,4 @@
+import 'package:anime_tv/core/widgets/teto_dialog.dart';
 import 'package:anime_tv/core/localization/teto_localizations.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
 import 'package:anime_tv/features/downloads/domain/season_download_plan.dart';
@@ -7,7 +8,7 @@ Future<SeasonDownloadSelection?> showSeasonDownloadDialog(
   BuildContext context, {
   required bool directTorrentAvailable,
 }) {
-  return showDialog<SeasonDownloadSelection>(
+  return showTetoDialog<SeasonDownloadSelection>(
     context: context,
     builder: (_) =>
         _SeasonDownloadDialog(directTorrentAvailable: directTorrentAvailable),
@@ -15,7 +16,7 @@ Future<SeasonDownloadSelection?> showSeasonDownloadDialog(
 }
 
 Future<bool> confirmDirectSeasonDownload(BuildContext context) async {
-  return await showDialog<bool>(
+  return await showTetoDialog<bool>(
         context: context,
         barrierDismissible: false,
         builder: (dialogContext) => AlertDialog(

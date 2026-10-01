@@ -21,6 +21,8 @@ class CatalogGrid extends StatefulWidget {
     this.firstFocusNode,
     this.onNavigateLeftFromFirstColumn,
     this.onNavigateUpFromFirstRow,
+    this.onEndReached,
+    this.onNavigateDownFromLastRow,
     this.onLongPress,
     this.itemBadgeText,
     super.key,
@@ -32,6 +34,8 @@ class CatalogGrid extends StatefulWidget {
   final FocusNode? firstFocusNode;
   final VoidCallback? onNavigateLeftFromFirstColumn;
   final VoidCallback? onNavigateUpFromFirstRow;
+  final VoidCallback? onEndReached;
+  final VoidCallback? onNavigateDownFromLastRow;
   final ValueChanged<AnimeSummary>? onLongPress;
   final String? Function(AnimeSummary anime)? itemBadgeText;
 
@@ -302,6 +306,8 @@ class _CatalogGridState extends State<CatalogGrid> {
           crossAxisCount: crossAxisCount,
           cardMainAxisExtent: cardMainAxisExtent,
         );
+      } else {
+        widget.onNavigateDownFromLastRow?.call();
       }
       return KeyEventResult.handled;
     }
@@ -491,6 +497,16 @@ class _CatalogGridState extends State<CatalogGrid> {
                 if (focused) {
                   _lastFocusedIndex = index;
                   _lastFocusedIdentity = _itemIdentities[index];
+                  if (index >= crossAxisCount &&
+                      index >= widget.items.length - 2 * crossAxisCount) {
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      if (mounted &&
+                          index < _renderedFocusNodes.length &&
+                          _focusNodeAt(index).hasFocus) {
+                        widget.onEndReached?.call();
+                      }
+                    });
+                  }
                 }
               },
               onKeyEvent: (_, event) => _handleCardKey(
@@ -530,9 +546,13 @@ class _CatalogGridState extends State<CatalogGrid> {
                             if (animeAiringStatusLabel(anime.status) != null)
                               Positioned(
                                 left: 5,
+                                right: 5,
                                 top: 5,
-                                child: PosterAiringStatusBadge(
-                                  status: anime.status,
+                                child: Align(
+                                  alignment: AlignmentDirectional.topStart,
+                                  child: PosterAiringStatusBadge(
+                                    status: anime.status,
+                                  ),
                                 ),
                               ),
                             if (itemBadgeText != null &&

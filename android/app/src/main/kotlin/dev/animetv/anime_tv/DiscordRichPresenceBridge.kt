@@ -21,6 +21,8 @@ import java.util.Locale
 @Keep
 object DiscordRichPresenceBridge {
     private const val APPLICATION_ID = 1536801401710055474L
+    private const val CONNECTION_TIMEOUT_MS = 20_000L
+    private const val REFRESH_TIMEOUT_MS = 20_000L
     private val mainHandler = Handler(Looper.getMainLooper())
     private val operationLock = Any()
 
@@ -32,8 +34,13 @@ object DiscordRichPresenceBridge {
     private var canLaunchAuthorization = false
     private var connectionState = "disconnected"
     private var pendingAuth: MethodChannel.Result? = null
-    private var pendingRefresh: MethodChannel.Result? = null
+    private data class RefreshOperation(val requestId: Long, val result: MethodChannel.Result)
+    private val pendingRefresh = PendingOperationSlot<RefreshOperation>()
+    private var refreshRequestId = 0L
+    private var refreshTimeout: Runnable? = null
     private val pendingConnect = PendingOperationSlot<MethodChannel.Result>()
+    private var connectionTimeout: Runnable? = null
+    @Volatile private var connectionGeneration = 0L
     private var pendingRevoke: MethodChannel.Result? = null
 
     fun attach(activity: Activity, channel: MethodChannel) {
@@ -117,15 +124,48 @@ object DiscordRichPresenceBridge {
                 if (refreshToken.isBlank()) {
                     result.error("DISCORD_REFRESH_TOKEN", "Discord needs to be linked again.", null)
                 } else {
-                    synchronized(operationLock) {
-                        if (pendingRefresh != null) {
-                            result.error("DISCORD_REFRESH_BUSY", "Discord is already refreshing.", null)
-                        } else {
-                            pendingRefresh = result
-                            nativeRefreshToken(refreshToken)
+                    val operation = RefreshOperation(++refreshRequestId, result)
+                    if (!pendingRefresh.trySet(operation)) {
+                        result.error("DISCORD_REFRESH_BUSY", "Discord is already refreshing. Use Retry in Settings.", null)
+                    } else {
+                        val timeout = Runnable {
+                            val expired = pendingRefresh.takeIf(operation) ?: return@Runnable
+                            refreshTimeout = null
+                            expired.result.error(
+                                "DISCORD_REFRESH_TIMEOUT",
+                                "Discord token refresh timed out. Your saved account is unchanged. Use Retry in Settings.",
+                                null,
+                            )
+                        }
+                        refreshTimeout = timeout
+                        mainHandler.postDelayed(timeout, REFRESH_TIMEOUT_MS)
+                        try {
+                            nativeRefreshToken(refreshToken, operation.requestId)
+                        } catch (_: Exception) {
+                            mainHandler.removeCallbacks(timeout)
+                            refreshTimeout = null
+                            pendingRefresh.takeIf(operation)?.result?.error(
+                                "DISCORD_REFRESH_FAILED",
+                                "Discord could not start the token refresh. Use Retry in Settings.",
+                                null,
+                            )
                         }
                     }
                 }
+                true
+            }
+            "discordCancelRefreshToken" -> {
+                // Cancellation is local to this request slot. Never disconnect
+                // the socket, revoke an account, or mutate stored credentials.
+                val canceled = pendingRefresh.take()
+                refreshTimeout?.let(mainHandler::removeCallbacks)
+                refreshTimeout = null
+                canceled?.result?.error(
+                    "DISCORD_REFRESH_CANCELED",
+                    "Discord token refresh was canceled. Use Retry in Settings.",
+                    null,
+                )
+                result.success(null)
                 true
             }
             "discordConnect" -> {
@@ -137,8 +177,40 @@ object DiscordRichPresenceBridge {
                     if (!pendingConnect.trySet(result)) {
                         result.error("DISCORD_CONNECT_BUSY", "Discord is already connecting.", null)
                     } else {
+                        connectionGeneration++
                         connectionState = "connecting"
-                        nativeConnect(accessToken, tokenType)
+                        val timeout = Runnable {
+                            // Clearing is conditional on identity: a delayed
+                            // timeout cannot disconnect a replacement Retry.
+                            val expired = pendingConnect.takeIf(result)
+                                ?: return@Runnable
+                            connectionTimeout = null
+                            connectionGeneration++
+                            nativeDisconnect()
+                            connectionState = "disconnected"
+                            val message =
+                                "Discord is linked, but the connection timed out. Use Retry to connect Rich Presence."
+                            expired.error("DISCORD_CONNECT_TIMEOUT", message, null)
+                            channel?.invokeMethod(
+                                "discordConnectionState",
+                                mapOf("status" to "disconnected", "error" to message),
+                            )
+                        }
+                        connectionTimeout = timeout
+                        mainHandler.postDelayed(timeout, CONNECTION_TIMEOUT_MS)
+                        try {
+                            nativeConnect(accessToken, tokenType)
+                        } catch (_: Exception) {
+                            mainHandler.removeCallbacks(timeout)
+                            connectionTimeout = null
+                            connectionGeneration++
+                            connectionState = "disconnected"
+                            pendingConnect.takeIf(result)?.error(
+                                "DISCORD_CONNECT_FAILED",
+                                "Discord could not start the connection. Use Retry in Settings.",
+                                null,
+                            )
+                        }
                     }
                 }
                 true
@@ -204,6 +276,9 @@ object DiscordRichPresenceBridge {
                 // native Discord to disconnect. A subsequent Retry can claim
                 // a fresh slot instead of receiving DISCORD_CONNECT_BUSY.
                 val canceledConnect = pendingConnect.take()
+                connectionTimeout?.let(mainHandler::removeCallbacks)
+                connectionTimeout = null
+                connectionGeneration++
                 nativeDisconnect()
                 connectionState = "disconnected"
                 canceledConnect?.error(
@@ -282,6 +357,7 @@ object DiscordRichPresenceBridge {
 
     @JvmStatic
     fun onRefreshResult(
+        requestId: Long,
         success: Boolean,
         accessToken: String,
         refreshToken: String,
@@ -291,20 +367,26 @@ object DiscordRichPresenceBridge {
         error: String,
     ) {
         mainHandler.post {
-            val pending = synchronized(operationLock) {
-                pendingRefresh.also { pendingRefresh = null }
-            }
+            // The ID originates at nativeRefreshToken and is captured by its
+            // SDK callback, not guessed when a late callback reaches Android.
+            val pending = pendingRefresh.takeMatching { it.requestId == requestId }
+                ?: return@post
+            refreshTimeout?.let(mainHandler::removeCallbacks)
+            refreshTimeout = null
             if (success) {
-                pending?.success(tokenPayload(accessToken, refreshToken, tokenType, expiresIn, scopes))
+                pending.result.success(tokenPayload(accessToken, refreshToken, tokenType, expiresIn, scopes))
             } else {
-                pending?.error("DISCORD_REFRESH_FAILED", friendly(error), null)
+                pending.result.error("DISCORD_REFRESH_FAILED", friendly(error), null)
             }
         }
     }
 
     @JvmStatic
     fun onConnectionState(status: String, error: String) {
+        val generation = connectionGeneration
         mainHandler.post {
+            // Discard a status queued before explicit cancellation or Retry.
+            if (generation != connectionGeneration) return@post
             connectionState = status
             channel?.invokeMethod(
                 "discordConnectionState",
@@ -313,6 +395,10 @@ object DiscordRichPresenceBridge {
             val pending = when (status) {
                 "ready", "error", "disconnected" -> pendingConnect.take()
                 else -> null
+            }
+            if (pending != null) {
+                connectionTimeout?.let(mainHandler::removeCallbacks)
+                connectionTimeout = null
             }
             when (status) {
                 "ready" -> pending?.success(mapOf("status" to "ready"))
@@ -392,7 +478,7 @@ object DiscordRichPresenceBridge {
     private external fun nativeSdkVersion(): String
     private external fun nativeAuthenticate(useDeviceFlow: Boolean)
     private external fun nativeCancelAuthentication(useDeviceFlow: Boolean)
-    private external fun nativeRefreshToken(refreshToken: String)
+    private external fun nativeRefreshToken(refreshToken: String, requestId: Long)
     private external fun nativeConnect(accessToken: String, tokenType: Int)
     private external fun nativeRevoke(token: String)
     private external fun nativeUpdatePlaybackPresence(

@@ -3,6 +3,7 @@ import 'dart:async';
 
 import 'package:anime_tv/core/preferences/title_language_preference.dart';
 import 'package:anime_tv/core/theme/app_theme.dart';
+import 'package:anime_tv/core/theme/teto_box_style.dart';
 import 'package:anime_tv/core/tv/tv_focusable.dart';
 import 'package:anime_tv/core/widgets/network_artwork.dart';
 import 'package:anime_tv/core/widgets/teto_top_level_shell.dart';
@@ -562,13 +563,7 @@ class _PartyPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => DecoratedBox(
-    decoration: BoxDecoration(
-      color: context.appPalette.surface.withValues(alpha: .82),
-      borderRadius: BorderRadius.circular(18),
-      border: Border.all(
-        color: context.appPalette.accent.withValues(alpha: .35),
-      ),
-    ),
+    decoration: TetoBoxStyle.decoration(context.appPalette),
     child: Padding(padding: const EdgeInsets.all(22), child: child),
   );
 }
@@ -606,16 +601,13 @@ class _PartyButton extends StatelessWidget {
             }
             return KeyEventResult.ignored;
           },
-    borderRadius: BorderRadius.circular(12),
+    borderRadius: BorderRadius.circular(TetoBoxStyle.radius),
     child: AnimatedOpacity(
       duration: const Duration(milliseconds: 120),
       opacity: onPressed == null ? .45 : 1,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        decoration: BoxDecoration(
-          color: context.appPalette.selectableSurface,
-          borderRadius: BorderRadius.circular(12),
-        ),
+        decoration: TetoBoxStyle.decoration(context.appPalette),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [

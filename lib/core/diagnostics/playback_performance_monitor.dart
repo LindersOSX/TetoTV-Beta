@@ -506,6 +506,20 @@ const playbackPerformanceProperties = <String>[
 /// Media3 reports rendered output buffers through its adapter. This counter is
 /// optional and must not be presented as a measured physical display FPS.
 const media3PlaybackPerformanceProperties = <String>[
+  'tetotv-video-surface-type',
+  'tetotv-codec-queueing-mode',
+  'tetotv-codec-queueing-compatibility',
+  'tetotv-android-sdk',
+  'tetotv-color-space',
+  'tetotv-color-range',
+  'tetotv-color-transfer',
+  'tetotv-dolby-vision',
+  'tetotv-hdr-static-metadata',
+  'tetotv-audio-underrun-count',
+  'tetotv-audio-sink-error-count',
+  'tetotv-video-codec-error-count',
+  'tetotv-audio-sample-rate',
+  'tetotv-audio-channel-count',
   ...playbackPerformanceProperties,
   'tetotv-rendered-frame-count',
   'tetotv-external-audio-fallback',
@@ -545,14 +559,33 @@ const _mpvMetricFields = {
   ..._mpvBooleanFields,
 };
 
-const _media3NumberFields = {'tetotv-rendered-frame-count': 'renderedFrames'};
+const _media3NumberFields = {
+  'tetotv-android-sdk': 'androidSdk',
+  'tetotv-rendered-frame-count': 'renderedFrames',
+  'tetotv-color-space': 'colorSpace',
+  'tetotv-color-range': 'colorRange',
+  'tetotv-color-transfer': 'colorTransfer',
+  'tetotv-audio-sample-rate': 'audioSampleRate',
+  'tetotv-audio-channel-count': 'audioChannelCount',
+  'tetotv-audio-underrun-count': 'audioUnderruns',
+  'tetotv-audio-sink-error-count': 'audioSinkErrors',
+  'tetotv-video-codec-error-count': 'videoCodecErrors',
+};
+const _media3StringFields = {
+  'tetotv-video-surface-type': 'surfaceType',
+  'tetotv-codec-queueing-mode': 'codecQueueingMode',
+};
 const _media3BooleanFields = {
+  'tetotv-codec-queueing-compatibility': 'codecQueueingCompatibility',
   'tetotv-external-audio-fallback': 'externalAudioFallback',
+  'tetotv-dolby-vision': 'dolbyVision',
+  'tetotv-hdr-static-metadata': 'hdrStaticMetadata',
 };
 
 Map<String, String> _metricFieldsForEngine(String engine) => {
   ..._mpvMetricFields,
   if (engine == 'media3') ..._media3NumberFields,
+  if (engine == 'media3') ..._media3StringFields,
   if (engine == 'media3') ..._media3BooleanFields,
 };
 
@@ -566,7 +599,10 @@ Map<String, Object?> playbackPerformanceMetricsFromProperties(
 }) {
   if (engine != 'mpv' && engine != 'media3') return {};
   final result = <String, Object?>{};
-  for (final field in _mpvStringFields.entries) {
+  for (final field in {
+    ..._mpvStringFields,
+    if (engine == 'media3') ..._media3StringFields,
+  }.entries) {
     final value = properties[field.key];
     if (value != null && value.length <= 64) result[field.value] = value;
   }

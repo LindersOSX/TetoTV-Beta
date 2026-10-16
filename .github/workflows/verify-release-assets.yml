@@ -26,7 +26,7 @@ jobs:
       RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release_tag }}
       EXPECTED_TAG_COMMIT: ${{ inputs.expected_tag_commit }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ format('refs/tags/{0}', github.event.release.tag_name || inputs.release_tag) }}
           fetch-depth: 0

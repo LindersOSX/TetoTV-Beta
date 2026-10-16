@@ -10,7 +10,7 @@
   "dependencies": {
     "crypto-js": "4.2.0",
     "linkedom": "0.18.12",
-    "sucrase": "3.35.0"
+    "sucrase": "3.35.1"
   },
   "devDependencies": {
     "esbuild": "0.25.11"
